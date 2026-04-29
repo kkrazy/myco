@@ -142,9 +142,64 @@ function renderSessionList() {
       <span class="session-title">${escHtml(dirName)}</span>
       ${desc}
       <span class="session-meta">${escHtml(idShort)} · ${timeAgo(s.created_at)}</span>
+      <button class="session-delete" aria-label="Delete session">×</button>
     `;
     li.addEventListener('click', () => openSession(s.id));
+    const delBtn = li.querySelector('.session-delete');
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteSessionWithConfirm(s);
+    });
+    attachLongPressDeleteToggle(li);
     ul.appendChild(li);
+  }
+}
+
+// On touch devices, long-press a card to reveal the × on every card.
+// On hover-capable devices a CSS hover rule already shows it, so this is a
+// no-op there.
+function attachLongPressDeleteToggle(li) {
+  let timer = null;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  li.addEventListener('touchstart', () => {
+    cancel();
+    timer = setTimeout(() => {
+      document.getElementById('session-list').classList.add('show-delete');
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 500);
+  }, { passive: true });
+  li.addEventListener('touchend', cancel);
+  li.addEventListener('touchmove', cancel, { passive: true });
+  li.addEventListener('touchcancel', cancel);
+}
+
+// Tap outside any card or × button exits delete-mode on mobile.
+document.addEventListener('click', (e) => {
+  const list = document.getElementById('session-list');
+  if (!list || !list.classList.contains('show-delete')) return;
+  if (e.target.closest('.session-delete')) return;
+  if (e.target.closest('.session-item')) return;
+  list.classList.remove('show-delete');
+});
+
+async function deleteSessionWithConfirm(s) {
+  const label = s.cwd || s.id;
+  if (!window.confirm(`Delete session "${label}"?\n\nThis closes the session in mycod. The Claude transcript on disk is kept; you can resume it later by creating a new session in the same directory.`)) return;
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (state.activeId === s.id) {
+      try { state.ws && state.ws.close(); } catch {}
+      state.ws = null;
+      if (state.term) { try { state.term.dispose(); } catch {} state.term = null; }
+      state.activeId = null;
+      document.getElementById('terminal-wrap').hidden = true;
+      document.getElementById('no-session').hidden = false;
+    }
+    document.getElementById('session-list').classList.remove('show-delete');
+    await refreshSessions();
+  } catch (err) {
+    alert(`Could not delete session: ${err.message || err}`);
   }
 }
 

@@ -127,6 +127,38 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 .empty { padding: 16px; color: var(--muted); font-size: .85rem; }
 
+/* Delete (×) button on a card. Hidden by default. Revealed on hover for
+   pointer devices, and when the list has .show-delete for touch devices
+   (toggled by a long-press in app.js). */
+.session-item { position: relative; }
+.session-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 107, 107, 0.20);
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, transform .08s, background .12s;
+  z-index: 3;
+}
+.session-delete:hover { background: var(--danger); color: #fff; }
+.session-delete:active { transform: scale(.9); }
+@media (hover: hover) {
+  .session-item:hover .session-delete { opacity: 1; pointer-events: auto; }
+}
+#session-list.show-delete .session-delete { opacity: 1; pointer-events: auto; }
+
 /* ── terminal pane ────────────────────────────────────────────── */
 
 #terminal-pane {
@@ -461,8 +493,9 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   }
 
   /* Prevent iOS auto-linkification (URLs/IPs in description) from
-     hijacking taps that should open the session. */
-  .session-item > * { pointer-events: none; }
+     hijacking taps that should open the session. Scope this to text spans —
+     the .session-delete button must remain tappable. */
+  .session-item > span { pointer-events: none; }
 
   /* JS-rendered cards use these classes */
   .session-title {
