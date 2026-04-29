@@ -106,7 +106,9 @@ server.on('upgrade', (req, socket, head) => {
 
 app.delete('/sessions/:id', requireAuth, (req, res) => {
   const id = req.params.id;
-  if (!sessionBelongsToUser(id, req.user)) return res.status(403).json({ error: 'forbidden' });
+  if (AUTH_REQUIRED && !sessionBelongsToUser(id, req.user)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
   deleteSession(id);
   res.json({ ok: true });
 });
