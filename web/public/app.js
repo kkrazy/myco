@@ -155,6 +155,15 @@ async function init() {
   await refreshSessions();
   setInterval(refreshSessions, 3000);
 
+  // Auto-attach: prefer the session this browser was last on (so a mycod
+  // restart + page reload lands you back where you were). If it's gone,
+  // fall back to the most-recently-active session on the server.
+  if (!state.activeId && state.sessions.length) {
+    const persisted = localStorage.getItem('myco_active_id');
+    const target = (persisted && state.sessions.find((s) => s.id === persisted))
+      || mostRecentSession(state.sessions);
+    if (target) openSession(target.id);
+  }
 
   document.getElementById('btn-spawn').addEventListener('click', openSpawnModal);
   document.getElementById('spawn-cancel').addEventListener('click', closeSpawnModal);
@@ -202,6 +211,19 @@ async function refreshSessions() {
     state.sessions = await res.json();
     renderSessionList();
   } catch {}
+}
+
+function mostRecentSession(sessions) {
+  // Server returns ISO timestamps; lexicographic sort is fine. Sessions with
+  // no last_activity fall back to created_at so a freshly-spawned session
+  // (no claude output yet) still wins over older idle ones.
+  let best = null;
+  let bestKey = '';
+  for (const s of sessions) {
+    const k = s.last_activity || s.created_at || '';
+    if (k > bestKey) { best = s; bestKey = k; }
+  }
+  return best;
 }
 
 function renderSessionList() {
@@ -317,7 +339,7 @@ async function shareSession(s) {
   }
 }
 
-function openInVscode(s) {
+async function openInVscode(s) {
   // Files live on the mycod server, not on the device clicking this button —
   // a plain vscode://file/... URL would point at a path that doesn't exist
   // locally. Always use Remote-SSH so the laptop's VS Code connects to the
@@ -333,12 +355,25 @@ function openInVscode(s) {
       'SSH host for VS Code Remote-SSH\n\n' +
       'Enter the host alias from this device\'s ~/.ssh/config (e.g. "myserver") ' +
       'or user@host. VS Code\'s Remote-SSH extension must already be set up for it.',
-      ''
+      `kkrazy@${window.location.hostname}`
     );
     if (host == null) return;
     host = host.trim();
     if (!host) return;
     localStorage.setItem('myco_vscode_host', host);
+  }
+
+  if (!host.includes('@')) host = `kkrazy@${host}`;
+
+  // Drop a .vscode/tasks.json into the session's cwd so VS Code auto-runs
+  // `myco attach <id>` in a terminal on folder open. Best-effort: if it
+  // fails (e.g. permission), still open the folder; the user can attach
+  // manually with `myco attach <id>`.
+  try {
+    const r = await authedFetch(`/sessions/${encodeURIComponent(s.id)}/vscode-prep`, { method: 'POST' });
+    if (!r.ok) console.warn('[myco] vscode-prep failed', r.status);
+  } catch (err) {
+    console.warn('[myco] vscode-prep failed', err);
   }
 
   const encoded = absPath.split('/').map(encodeURIComponent).join('/');
@@ -377,6 +412,7 @@ async function deleteSessionWithConfirm(s) {
       state.ws = null;
       if (state.term) { try { state.term.dispose(); } catch {} state.term = null; }
       state.activeId = null;
+      try { localStorage.removeItem('myco_active_id'); } catch {}
       document.getElementById('terminal-wrap').hidden = true;
       document.getElementById('no-session').hidden = false;
     }
@@ -402,6 +438,7 @@ function openSession(id) {
   if (state.term) { state.term.dispose(); state.term = null; }
 
   state.activeId = id;
+  try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
 
   // On mobile, collapse the (full-width) sidebar so the terminal is visible

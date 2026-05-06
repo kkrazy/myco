@@ -1,8 +1,10 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const path = require('path');
-const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts } = require('./sessions');
+const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore } = require('./sessions');
 const { attachWebSocket } = require('./pty');
 const {
   AUTH_REQUIRED, userFromRequest, userFromToken,
@@ -49,6 +51,73 @@ app.get('/auth/check', (req, res) => {
   }
   const user = userFromRequest(req);
   res.json({ ok: !!user, required: AUTH_REQUIRED, user: user || null });
+});
+
+// Drop a .vscode/tasks.json into the session's cwd that auto-runs
+// `myco attach <id>` in a terminal when VS Code opens the folder. Together
+// with the vscode-remote URL the frontend builds, this gives a one-click
+// "open folder + reattach to claude" experience (modulo the one-time VS Code
+// prompts for workspace trust + "allow automatic tasks").
+const MYCO_BIN = path.resolve(__dirname, '../../myco');
+app.post('/sessions/:id/vscode-prep', requireAuth, (req, res) => {
+  const id = req.params.id;
+  if (AUTH_REQUIRED && !sessionBelongsToUser(id, req.user)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const rec = loadStore().sessions[id];
+  if (!rec) return res.status(404).json({ error: 'unknown session' });
+  if (!rec.absCwd || !fs.existsSync(rec.absCwd)) {
+    return res.status(400).json({ error: 'session cwd missing' });
+  }
+
+  const dotVscode = path.join(rec.absCwd, '.vscode');
+  const tasksPath = path.join(dotVscode, 'tasks.json');
+
+  let doc = { version: '2.0.0', tasks: [] };
+  try {
+    if (fs.existsSync(tasksPath)) {
+      const raw = fs.readFileSync(tasksPath, 'utf8');
+      // Tolerate JSONC // comments by stripping them — tasks.json is JSONC.
+      const stripped = raw.replace(/^\s*\/\/.*$/gm, '');
+      const parsed = JSON.parse(stripped);
+      if (parsed && typeof parsed === 'object') {
+        doc = parsed;
+        if (!doc.version) doc.version = '2.0.0';
+        if (!Array.isArray(doc.tasks)) doc.tasks = [];
+      }
+    }
+  } catch (err) {
+    return res.status(500).json({ error: `existing tasks.json is malformed: ${err.message}` });
+  }
+
+  const TASK_LABEL = 'myco: attach';
+  const ourTask = {
+    label: TASK_LABEL,
+    type: 'shell',
+    command: `${MYCO_BIN} attach ${id}`,
+    presentation: {
+      echo: false,
+      reveal: 'always',
+      focus: true,
+      panel: 'shared',
+      showReuseMessage: false,
+      clear: false,
+    },
+    runOptions: { runOn: 'folderOpen' },
+    problemMatcher: [],
+  };
+  const idx = doc.tasks.findIndex((t) => t && t.label === TASK_LABEL);
+  if (idx >= 0) doc.tasks[idx] = ourTask;
+  else doc.tasks.unshift(ourTask);
+
+  try {
+    fs.mkdirSync(dotVscode, { recursive: true });
+    fs.writeFileSync(tasksPath, JSON.stringify(doc, null, 2) + '\n');
+  } catch (err) {
+    return res.status(500).json({ error: redact(err.message) });
+  }
+
+  res.json({ ok: true, path: tasksPath });
 });
 
 app.post('/sessions/:id/share', requireAuth, (req, res) => {
@@ -101,7 +170,16 @@ app.get('/workspace', requireAuth, (req, res) => {
   });
 });
 
-const server = http.createServer(app);
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH || '';
+const TLS_KEY_PATH = process.env.TLS_KEY_PATH || '';
+const tlsEnabled = !!(TLS_CERT_PATH && TLS_KEY_PATH);
+
+const server = tlsEnabled
+  ? https.createServer({
+      cert: fs.readFileSync(TLS_CERT_PATH),
+      key: fs.readFileSync(TLS_KEY_PATH),
+    }, app)
+  : http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, clientTracking: false });
 
 const PING_INTERVAL_MS = 30000;
@@ -202,9 +280,13 @@ app.get('/logs', requireAuth, (req, res) => {
   res.json(logCapture.getRecent(n));
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '127.0.0.1', async () => {
-  console.log(`mycod running at http://localhost:${PORT}`);
+const PORT = parseInt(process.env.PORT, 10) || (tlsEnabled ? 443 : 3000);
+const HOST = process.env.HOST || (tlsEnabled ? '0.0.0.0' : '127.0.0.1');
+const HTTP_REDIRECT_PORT = parseInt(process.env.HTTP_REDIRECT_PORT, 10) || (tlsEnabled ? 80 : 0);
+
+server.listen(PORT, HOST, async () => {
+  const proto = tlsEnabled ? 'https' : 'http';
+  console.log(`mycod running at ${proto}://${HOST}:${PORT}`);
   try {
     const n = await importExistingTranscripts();
     if (n) console.log(`[migrate] imported ${n} existing transcript(s) as resumable sessions`);
@@ -213,3 +295,13 @@ server.listen(PORT, '127.0.0.1', async () => {
   }
   startSummaryWatcher();
 });
+
+if (tlsEnabled && HTTP_REDIRECT_PORT) {
+  http.createServer((req, res) => {
+    const host = (req.headers.host || '').replace(/:\d+$/, '');
+    res.writeHead(301, { Location: `https://${host}${req.url}` });
+    res.end();
+  }).listen(HTTP_REDIRECT_PORT, HOST, () => {
+    console.log(`http→https redirect on ${HOST}:${HTTP_REDIRECT_PORT}`);
+  });
+}

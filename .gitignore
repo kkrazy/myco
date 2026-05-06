@@ -5,3 +5,5 @@ node_modules/
 .env
 ._*
 nohup.out
+.tls/
+.tls.bak.*
