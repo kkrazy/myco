@@ -2,53 +2,99 @@
 
 ## Overview
 
-Mycelium is a web UI to monitor and control Claude Code agent sessions running on remote workstations over SSH. It is mobile-first, with a custom keyboard tuned for Claude Code's interaction patterns.
+myco (codename: Mycelium) is a web UI to monitor, control, and discuss Claude Code sessions running locally on the same host as the server. Mobile-first, with a custom keyboard tuned for Claude Code's interaction patterns.
 
 ```mermaid
 graph LR
-    Browser["Browser"]
+    Phone["Browser (phone)"]
+    Laptop["Browser (laptop)"]
+    VSCode["VS Code Remote-SSH"]
+    CLI["myco attach (terminal)"]
     Server["mycod (Node.js)"]
-    WS["workstation N\ntmux: claude"]
+    Pty["pty: claude --resume"]
+    Helper["pty: claude -p (chat)"]
 
-    Browser <-->|"HTTP / WS"| Server
-    Server <-->|SSH| WS
+    Phone <-->|HTTPS / WSS| Server
+    Laptop <-->|HTTPS / WSS| Server
+    VSCode -.opens.-> CLI
+    CLI <-->|WSS| Server
+    Server <-->|node-pty| Pty
+    Server -.spawns on chat ?.-> Helper
 ```
+
+A single mycod process owns the pty for each running `claude` session. Multiple viewers (phone, laptop, VS Code via the bundled CLI) attach to the same pty over WebSocket; bytes are fanned out to every connected viewer.
 
 ---
 
 ## Components
 
-### 1. Server (`server/`)
+### Server (`server/`)
 
-A single Node.js process that bridges workstations and browsers.
+A single Node.js process. No external services, no SSH, no database — state is a JSON file.
 
-**Responsibilities:**
-- Reads `config.json` listing workstations (`[{ id, host, user, port?, identityFile? }]`)
-- Maintains one persistent SSH connection per workstation via the `ssh2` npm package; reconnects with exponential backoff
-- Proxies pty bytes between browser WebSockets and remote tmux sessions via `ssh exec`
-- Tracks known sessions in memory — no database
+| File | Lines | Responsibility |
+|------|------:|---------------|
+| `src/index.js` | 308 | Express + ws bootstrap; HTTP/HTTPS listen, route handlers, WS upgrade auth |
+| `src/sessions.js` | 439 | Session store (`~/.myco/store.json`), spawn/list/delete, transcript import, chat history |
+| `src/pty.js` | 216 | `PtySession` wrapper around node-pty; WS attach handler; chat broadcast; `/btw` trigger |
+| `src/auth.js` | 90 | Bearer-token auth (`MYCO_TOKEN` / `MYCO_TOKENS`); read-only share tokens |
+| `src/btw.js` | 117 | Spawns `claude -p` for chat replies; ANSI-strip; question-detection heuristic |
+| `src/summarizer.js` | 164 | Background watcher that calls Anthropic API to title sessions from their transcripts |
+| `src/logCapture.js` | 57 | Tees `console.log`/`error` so `/logs` (HTTP + WS) can stream them to the UI |
 
-**Source files:**
+### Web (`web/public/`)
 
-| File | Responsibility |
-|------|---------------|
-| `src/index.js` | Express + ws bootstrap (~80 lines) |
-| `src/ssh.js` | SSH connection manager (~120 lines) |
-| `src/pty.js` | WebSocket-to-pty bridge (~50 lines) |
+Static SPA — Express serves it with `Cache-Control: no-store`, so a tab refresh always picks up the latest.
 
-### 2. Web (`web/public/`)
+| File | Lines | Responsibility |
+|------|------:|---------------|
+| `index.html` | — | Shell: sidebar (sessions), terminal pane, chat pane, modals |
+| `app.js` | 962 | State, auth, session list, terminal attach, chat, log panel, share-link viewer |
+| `keyboard.js` | 135 | Mobile soft keyboard (Esc / Esc-Esc / 1-3 / Enter, native-input toggle) |
+| `styles.css` | — | Mobile-first layout, dark theme, mutually-exclusive sidebar/chatpane on mobile |
+| `vendor/xterm/*` | — | xterm.js + WebGL/Canvas/Fit addons (vendored from `node_modules` at install time) |
 
-A static single-page application using xterm.js for terminal rendering.
+### CLI (`cli/`)
 
-**Source files:**
+| File | Lines | Responsibility |
+|------|------:|---------------|
+| `index.js` | 144 | Headless WS client over `/attach/<id>`; raw-mode stdin/stdout proxy; `Ctrl-] q` to detach |
 
-| File | Responsibility |
-|------|---------------|
-| `index.html` | Shell: sessions list + terminal view |
-| `app.js` | Router and state (~150 lines) |
-| `keyboard.js` | Claude Code-aware custom keyboard (~200 lines) |
-| `styles.css` | Mobile-first styles |
-| `vendor/xterm.js` | Terminal renderer |
+The shipped `myco` shell shim re-exports `server/node_modules` so the CLI uses the server's `ws` install.
+
+---
+
+## State
+
+### `~/.myco/store.json`
+
+The single source of truth. Shape:
+
+```json
+{
+  "sessions": {
+    "myco-kkrazy-abcd1234": {
+      "id": "myco-kkrazy-abcd1234",
+      "user": "kkrazy",
+      "cwd": "myco",
+      "absCwd": "/home/kkrazy/myco",
+      "claudeSessionId": "9f1a...",
+      "createdAt": "2026-05-07T08:00:00.000Z",
+      "aiSummary": "Wiring TLS for myco.labxnow.ai",
+      "summaryGeneratedAt": "2026-05-07T08:30:00.000Z",
+      "chat": [{ "user": "kkrazy", "text": "hi", "ts": "..." }, ...]
+    }
+  },
+  "shareTokens": { "<tok>": { "sessionId": "...", "expiresAt": ..., "issuedBy": "..." } },
+  "dismissed": [ /* cwds the user told us not to auto-import */ ]
+}
+```
+
+`claudeSessionId` is the cached id of the *first* transcript jsonl observed after spawn; at attach time, `ensureLiveSession` ignores it and resumes whichever jsonl is newest in `~/.claude/projects/<encoded-cwd>/`. That makes `/clear` and `/resume` survive a server restart.
+
+### `~/.claude/projects/<encoded-cwd>/*.jsonl`
+
+Owned by Claude Code, not us. We poll mtimes here to derive `last_activity` and `status` (active / recent / stale / idle), to find the resume target, and to import sessions that exist in Claude's history but aren't yet in our store.
 
 ---
 
@@ -56,54 +102,68 @@ A static single-page application using xterm.js for terminal rendering.
 
 ### HTTP
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/sessions` | Returns in-memory union of sessions across all workstations |
-| `POST` | `/sessions` | Spawn a new session: `{ workstation, cwd, prompt? }` → SSH runs `tmux new-session`, returns new uuid |
+| Method | Path                      | Description                                                                |
+|--------|---------------------------|----------------------------------------------------------------------------|
+| `GET`  | `/auth/check`             | Token check; returns `{ ok, user }` or `{ share, sessionId }` for `?s=`.   |
+| `GET`  | `/sessions`               | List sessions (filtered by user when auth is on).                          |
+| `POST` | `/sessions`               | Spawn: `{ cwd, cols?, rows? }` → `{ session_id, cwd }`. Auto-creates dir.  |
+| `DELETE` | `/sessions/:id`         | Kill the pty + remove from store. Transcript on disk is preserved.         |
+| `POST` | `/sessions/:id/share`     | Issue a read-only share token; returns `{ url, expires_at }`.              |
+| `POST` | `/sessions/:id/vscode-prep` | Drop a `.vscode/tasks.json` in the cwd that auto-runs `myco attach <id>` on folder open. |
+| `GET`  | `/workspace`              | `{ name, entries, user, vscode_host }` for the spawn modal.                |
+| `GET`  | `/logs?count=N`           | Recent server log lines.                                                   |
 
-### WebSockets
+### WebSocket
 
-**`/attach/:session_id`** — terminal proxy
+#### `/attach/:session_id` — terminal + chat
+
+Auth: `?token=<bearer>` for normal users, `?s=<share-token>` for read-only viewers.
 
 ```
 client → server:
-  { "t": "input", "data": "<base64 bytes>" }
+  { "t": "input",  "data": "<base64 utf-8 bytes>" }
   { "t": "resize", "cols": 80, "rows": 24 }
+  { "t": "ping" }
+  { "t": "chat",   "text": "hello" }
 
 server → client:
-  { "t": "output", "data": "<base64 bytes>" }
-  { "t": "exit", "code": 0 }
+  { "t": "output",       "data": "<base64 utf-8 bytes>" }
+  { "t": "exit",         "code": 0 }
+  { "t": "pong" }
+  { "t": "chat-history", "messages": [...] }   // sent once on attach
+  { "t": "chat",         "message": { user, text, ts } }
+  { "t": "error",        "message": "..." }
 ```
 
-One SSH channel per browser viewer. Multiple browsers can attach simultaneously — tmux handles multiplexing at the session level.
+The server fans `output` and `chat` to every WS attached to the same session id. Read-only (share-link) viewers get `output`, `exit`, `chat-history`, `chat`, and `pong`, but their `input` / `resize` / `chat` messages are dropped.
+
+#### `/logs`
+
+Same auth, server pushes `{ t: "log", level, ts, msg }` for each captured server-side log line.
 
 ---
 
 ## Mobile Keyboard
 
-The custom keyboard is the primary product surface.
+The custom keyboard is the primary product surface on phones — the OS soft keyboard is suppressed by default (`inputmode="none"` on xterm's hidden textarea), and key chords are tap-encoded.
 
 ### Byte Mappings
 
 | Button | Bytes |
 |--------|-------|
+| Esc | `\x1b` |
+| Esc-Esc (double-tap within 280ms) | `\x1b\x1b` (one frame) |
 | 1 / 2 / 3 | `1` `2` `3` |
 | Enter | `\r` |
-| Esc | `\x1b` |
-| Esc-Esc | `\x1b\x1b` (one frame) |
-| ↑ | `\x1b[A` |
-| ↓ | `\x1b[B` |
-| Tab | `\t` |
-| Ctrl+C | `\x03` |
-| Shift+Enter | `\x1b\r` |
 
-Each tap is its own WebSocket frame — no debouncing, no auto-Enter on digits.
+The "ABC" toggle swaps to a native `<input>` that buffers locally and ships on Enter — typing in this mode raises the OS keyboard but feels responsive (no per-keystroke RTT).
 
 ### UX Rules
 
-- `inputmode="none"` on the focused element — OS soft keyboard suppressed by default
-- Haptic feedback on every tap via `navigator.vibrate(10)`
-- Portrait locked in chat view; landscape allowed in terminal-only view
+- Each tap is its own WS frame — no debouncing.
+- Haptic feedback per tap via `navigator.vibrate(10)`.
+- Sidebar and discussion pane are **mutually exclusive on mobile** (≤900px) and both visible alongside the terminal on desktop.
+- After bare `Esc` (or `Esc-Esc`), the client briefly toggles the pty rows (rows-1 → rows over ~32ms) to force claude to repaint the full viewport — works around occasional stale-bottom-row artifacts.
 
 ---
 
@@ -114,53 +174,68 @@ Each tap is its own WebSocket frame — no debouncing, no auto-Enter on digits.
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant S as Server
-    participant W as Workstation
+    participant S as mycod
+    participant P as pty (claude)
 
-    B->>S: WS /attach/:session_id
-    S->>W: ssh exec: tmux attach -t &lt;id&gt; (pty)
-    B->>S: { t:"input", data }
-    S->>W: stdin bytes
-    W-->>S: stdout bytes
-    S-->>B: { t:"output", data }
+    B->>S: WS /attach/:id?token=…
+    S->>S: ensureLiveSession(id)
+    Note over S: getSession(id) ?? spawnClaude(--resume newest jsonl)
+    S->>B: { t:output } (replay ring buffer)
+    S->>B: { t:chat-history }
+    B->>S: { t:resize, cols, rows }
+    S->>P: pty.resize(cols, rows)
+    B->>S: { t:input }
+    S->>P: pty.write
+    P-->>S: stdout
+    S-->>B: { t:output }
 ```
+
+### Discussion + `/btw`
+
+```mermaid
+sequenceDiagram
+    participant U as User WS
+    participant V as Other viewer WS
+    participant S as mycod
+    participant H as claude -p (helper)
+
+    U->>S: { t:chat, text:"is this error real?" }
+    S->>S: appendChatMessage + emit('chat')
+    S-->>U: { t:chat, message: { user, text } }
+    S-->>V: { t:chat, message: { user, text } }
+    Note over S: shouldAskAssistant(text) — text ends in '?'
+    S->>H: spawn claude -p (cwd, env: process.env)
+    Note right of H: stdin = chat history + scrollback + question
+    H-->>S: stdout (reply)
+    S->>S: appendChatMessage + emit('chat')
+    S-->>U: { t:chat, message: { user:"claude", text } }
+    S-->>V: { t:chat, message: { user:"claude", text } }
+```
+
+The chat helper inherits `process.env`, so it uses whichever auth (`ANTHROPIC_API_KEY` or `claude.ai` subscription token in `~/.claude/`) the main interactive `claude` session uses.
 
 ### Session Spawn
 
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant S as Server
-    participant W as Workstation
+    participant S as mycod
+    participant P as pty
 
-    B->>S: POST /sessions { workstation, cwd }
-    S->>W: ssh: tmux new-session -d -s myco-&lt;uuid&gt; 'claude'
-    W->>W: claude starts
-    S-->>B: { session_id }
+    B->>S: POST /sessions { cwd }
+    S->>S: resolveCwd, dedupe by absCwd
+    S->>P: pty.spawn('claude', [], { cwd, env, cols, rows })
+    S->>S: store.sessions[id] = record
+    S-->>B: { session_id, cwd }
+    Note over S: poll ~/.claude/projects/<cwd>/ for first jsonl → cache claudeSessionId
 ```
-
----
-
-## Stage 2 (Deferred)
-
-### Hook (`hook/`)
-
-A Bash script invoked by Claude Code's hook system on every lifecycle event. Writes `~/.myco/sessions/<session_id>/state.json` on the workstation, enabling the server to track session status and the keyboard to switch modes automatically.
-
-**Constraints:**
-- Must complete in <50ms
-- Must never block Claude
-- Exits 0 on any error (fail-silent)
-- Uses `jq` for JSON manipulation and `flock` for atomic writes
-
-**Installed files:**
-- `hook.sh` — main event handler
-- `install.sh` — copies to `~/.myco/`, merges hooks into `~/.claude/settings.json`
 
 ---
 
 ## Operational Notes
 
-- **No auth in v1** — run on localhost or behind Tailscale
-- **No daemon on workstation** — sessions run as plain tmux sessions
-- **SSH resilience** — reconnect with exponential backoff
+- **Auth disabled by default.** When neither `MYCO_TOKEN` nor `MYCO_TOKENS` is set, every request is user `default`. Don't expose unauthenticated mycod to the public internet.
+- **TLS in-process.** When `TLS_CERT_PATH` + `TLS_KEY_PATH` are set, mycod terminates HTTPS itself and runs an HTTP→HTTPS redirect on `:80`. The shipped `myco.service` grants `CAP_NET_BIND_SERVICE` so this works as a non-root user.
+- **One pty per session, shared by all viewers.** When a small viewport (phone) and a large one (laptop) attach the same session, the last-resize wins — claude renders for whichever client most recently sent `{ t: resize }`. Per-viewer rendering is not supported.
+- **Liveness.** Server WS-pings every 30s with a 30s grace. Browser pings on `visibilitychange → visible` / `focus` / `pageshow` and every 15s while visible — closing + reconnecting if no pong in 2s.
+- **Persistence.** All durable state lives in `MYCO_STATE_DIR/store.json` (default `~/.myco/`). The Claude transcripts under `~/.claude/projects/` are owned by Claude itself and are never written to by mycod.
