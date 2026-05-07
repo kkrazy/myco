@@ -307,15 +307,27 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   return { id, cwd: record.cwd };
 }
 
-function ensureLiveSession(sessionId) {
+async function ensureLiveSession(sessionId) {
   const live = ptyMod.getSession(sessionId);
   if (live && live.alive) return live;
   const rec = getSessionRecord(sessionId);
   if (!rec) throw new Error(`unknown session: ${sessionId}`);
-  console.log(`[ensureLive] spawning claude for ${sessionId} cwd=${rec.absCwd} resume=${rec.claudeSessionId || 'none'}`);
+
+  // Resolve to the *newest* transcript in this cwd's claude project dir.
+  // /clear and /resume inside claude switch the active transcript, but the
+  // cached rec.claudeSessionId is set once at spawn and never updated — so
+  // a server restart followed by `--resume <stale id>` would land the user
+  // on the first transcript instead of the one they were last on.
+  const dir = path.join(projectsDir(), encodeCwdForClaude(rec.absCwd));
+  const newest = await findNewestJsonl(dir);
+  const resumeId = newest
+    ? newest.file.replace(/\.jsonl$/, '')
+    : (rec.claudeSessionId || null);
+
+  console.log(`[ensureLive] spawning claude for ${sessionId} cwd=${rec.absCwd} resume=${resumeId || 'none'}`);
   return ptyMod.spawnClaude(sessionId, {
     cwd: rec.absCwd,
-    resumeId: rec.claudeSessionId || null,
+    resumeId,
     cols: 120,
     rows: 30,
   });

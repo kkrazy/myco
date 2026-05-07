@@ -117,9 +117,16 @@ function attachWebSocket(session, ws, opts = {}) {
   session.on('exit', onExit);
 
   ws.on('message', (raw) => {
-    if (readOnly) return; // share-link viewers can watch but not type / resize
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    // Liveness probe — clients send this on visibility-visible to detect a
+    // silently-dead WS (mobile background suspension, NAT timeout). Allowed
+    // for read-only viewers too; pong reveals nothing they couldn't infer.
+    if (msg.t === 'ping') {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'pong' }));
+      return;
+    }
+    if (readOnly) return; // share-link viewers can watch but not type / resize
     if (msg.t === 'input' && typeof msg.data === 'string') {
       session.write(Buffer.from(msg.data, 'base64').toString('utf8'));
     } else if (msg.t === 'resize' && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {

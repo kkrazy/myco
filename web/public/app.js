@@ -113,6 +113,8 @@ function openShareViewer(id) {
       const msg = JSON.parse(ev.data);
       if (msg.t === 'output') {
         state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
+      } else if (msg.t === 'pong') {
+        state.lastPongAt = Date.now();
       } else if (msg.t === 'exit') {
         state.term.writeln('\r\n[session ended]');
       }
@@ -509,6 +511,8 @@ function openSession(id) {
       const msg = JSON.parse(ev.data);
       if (msg.t === 'output') {
         state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
+      } else if (msg.t === 'pong') {
+        state.lastPongAt = Date.now();
       } else if (msg.t === 'exit') {
         state.term.writeln('\r\n[session ended]');
       }
@@ -644,6 +648,35 @@ function sendInput(data) {
   if (state.ws?.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify({ t: 'input', data: btoa(data) }));
   }
+  // Esc occasionally leaves the bottom of the viewport with stale glyphs from
+  // a dismissed overlay (claude's TUI doesn't always repaint those rows). A
+  // brief rows toggle right after generates two SIGWINCHes and forces a full
+  // redraw — the same fix as resizing the window by hand.
+  if (data === '\x1b' || data === '\x1b\x1b') scheduleEscRedraw();
+}
+
+let pendingEscRedraw = null;
+function scheduleEscRedraw() {
+  if (pendingEscRedraw) clearTimeout(pendingEscRedraw);
+  pendingEscRedraw = setTimeout(() => {
+    pendingEscRedraw = null;
+    forcePtyRedraw();
+  }, 80);
+}
+
+function forcePtyRedraw() {
+  const ws = state.ws;
+  const term = state.term;
+  if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
+  const cols = term.cols;
+  const rows = term.rows;
+  if (cols < 4 || rows < 4) return;
+  ws.send(JSON.stringify({ t: 'resize', cols, rows: rows - 1 }));
+  setTimeout(() => {
+    if (state.ws === ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ t: 'resize', cols, rows }));
+    }
+  }, 32);
 }
 
 // ── spawn modal ───────────────────────────────────────────────────────────────
@@ -750,6 +783,58 @@ function renderLogEntries() {
   }).join('');
   el.scrollTop = el.scrollHeight;
 }
+
+// Mobile browsers may suspend a backgrounded tab and let the WS go silently
+// dead — the OS doesn't surface the failure, so the client thinks it's still
+// OPEN. On foreground, send a ping; if no pong within 2s, close the WS so
+// the existing reconnect loop refreshes the terminal.
+let lastProbeAt = 0;
+function probeWsLiveness() {
+  const now = Date.now();
+  if (now - lastProbeAt < 1000) return; // debounce: visibility+focus+pageshow can all fire
+  lastProbeAt = now;
+
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  state.lastPongAt = 0;
+  try { ws.send(JSON.stringify({ t: 'ping' })); }
+  catch { try { ws.close(); } catch {} return; }
+  setTimeout(() => {
+    if (state.ws !== ws) return;       // already moved to a new WS
+    if (state.lastPongAt) return;      // pong arrived in time
+    try { ws.close(); } catch {}       // force reconnect
+  }, 2000);
+}
+
+// While the tab is visible, also probe periodically so a silently-dead WS
+// in the foreground is caught in ~15s instead of waiting up to 30-60s for
+// the server-side ping to terminate it. Browsers throttle setInterval in
+// background tabs, so we still gate on visibility for a clean lifecycle.
+let visibilityProbeTimer = null;
+function startVisibilityProbing() {
+  if (visibilityProbeTimer) return;
+  visibilityProbeTimer = setInterval(probeWsLiveness, 15000);
+}
+function stopVisibilityProbing() {
+  if (visibilityProbeTimer) { clearInterval(visibilityProbeTimer); visibilityProbeTimer = null; }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    probeWsLiveness();
+    startVisibilityProbing();
+  } else {
+    stopVisibilityProbing();
+  }
+});
+window.addEventListener('focus', probeWsLiveness);
+window.addEventListener('pageshow', () => {
+  probeWsLiveness();
+  if (document.visibilityState === 'visible') startVisibilityProbing();
+});
+window.addEventListener('pagehide', stopVisibilityProbing);
+
+if (document.visibilityState === 'visible') startVisibilityProbing();
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('login-ok').addEventListener('click', doLogin);

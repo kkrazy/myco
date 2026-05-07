@@ -250,11 +250,11 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   console.log(`[ws] upgrade request for session ${sessionId} readOnly=${readOnly}`);
-  wss.handleUpgrade(req, socket, head, (ws) => {
+  wss.handleUpgrade(req, socket, head, async (ws) => {
     startPing(ws);
     let session;
     try {
-      session = ensureLiveSession(sessionId);
+      session = await ensureLiveSession(sessionId);
     } catch (err) {
       console.error(`[ws] ensureLiveSession failed: ${err.message}`);
       try { ws.send(JSON.stringify({ t: 'error', message: err.message })); } catch {}
