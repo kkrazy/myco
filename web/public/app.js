@@ -190,20 +190,52 @@ function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Minimal markdown → HTML for conversation view (bold, italic, code, lists, links)
+// Full markdown rendering for conversation view via marked library
 function renderMd(text) {
-  let html = escHtml(text);
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bold
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Links [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // Numbered list items
-  html = html.replace(/^(\d+)\.\s/gm, '<span class="md-li-num">$1.</span> ');
-  return html;
+  if (typeof marked !== 'undefined' && marked.parse) {
+    const renderer = new marked.Renderer();
+    renderer.code = function(arg) {
+      const code = (typeof arg === 'object' && arg.text !== undefined) ? arg.text : arg;
+      const lang = (typeof arg === 'object' && arg.lang) ? arg.lang : '';
+      if (lang === 'mermaid') {
+        return '<pre><code class="language-mermaid">' + escHtml(code) + '</code></pre>';
+      }
+      if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+        try {
+          const highlighted = hljs.highlight(code, { language: lang }).value;
+          return '<pre><code class="hljs language-' + escHtml(lang) + '">' + highlighted + '</code></pre>';
+        } catch {}
+      }
+      if (typeof hljs !== 'undefined') {
+        try {
+          const highlighted = hljs.highlightAuto(code).value;
+          return '<pre><code class="hljs">' + highlighted + '</code></pre>';
+        } catch {}
+      }
+      return '<pre><code>' + escHtml(code) + '</code></pre>';
+    };
+    return marked.parse(text, { breaks: true, gfm: true, renderer });
+  }
+  return escHtml(text);
+}
+
+// Render any ```mermaid code blocks into SVG diagrams
+async function renderMermaidInContainer(container) {
+  if (typeof mermaid === 'undefined') return;
+  const blocks = container.querySelectorAll('pre code.language-mermaid');
+  for (const block of blocks) {
+    const pre = block.parentElement;
+    const id = 'mermaid-' + Math.random().toString(36).slice(2, 10);
+    try {
+      const { svg } = await mermaid.render(id, block.textContent);
+      const div = document.createElement('div');
+      div.className = 'conv-mermaid';
+      div.innerHTML = svg;
+      pre.replaceWith(div);
+    } catch {
+      // Leave as raw code block if mermaid fails
+    }
+  }
 }
 
 function scrollConvToBottom() {
@@ -220,19 +252,44 @@ function renderTranscriptMessages(messages) {
   showConversationView();
   const container = document.getElementById('conv-messages');
   container.innerHTML = '';
+  let turnEl = null;
   for (const m of messages) {
-    container.appendChild(renderConvMessage(m));
+    const el = renderConvMessage(m);
+    // Start a new turn on user messages
+    if (m.role === 'user' || m.role === 'title') {
+      turnEl = document.createElement('div');
+      turnEl.className = 'conv-turn';
+      container.appendChild(turnEl);
+    }
+    if (turnEl) {
+      turnEl.appendChild(el);
+    } else {
+      container.appendChild(el);
+    }
   }
   scrollConvToBottom();
+  renderMermaidInContainer(container);
 }
 
 function appendTranscriptMessages(messages) {
   const wasAtBottom = isConvAtBottom();
   const container = document.getElementById('conv-messages');
+  let turnEl = container.lastElementChild;
   for (const m of messages) {
-    container.appendChild(renderConvMessage(m));
+    const el = renderConvMessage(m);
+    if (m.role === 'user' || m.role === 'title') {
+      turnEl = document.createElement('div');
+      turnEl.className = 'conv-turn';
+      container.appendChild(turnEl);
+    }
+    if (turnEl) {
+      turnEl.appendChild(el);
+    } else {
+      container.appendChild(el);
+    }
   }
   if (wasAtBottom) scrollConvToBottom();
+  renderMermaidInContainer(container);
 }
 
 function renderConvMessage(m) {

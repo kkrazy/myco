@@ -40,6 +40,9 @@ app.use('/vendor/xterm-css', express.static(path.join(__dirname, '../node_module
 app.use('/vendor/xterm-fit', express.static(path.join(__dirname, '../node_modules/@xterm/addon-fit/lib')));
 app.use('/vendor/xterm-webgl', express.static(path.join(__dirname, '../node_modules/@xterm/addon-webgl/lib')));
 app.use('/vendor/xterm-canvas', express.static(path.join(__dirname, '../node_modules/@xterm/addon-canvas/lib')));
+app.use('/vendor/marked', express.static(path.join(__dirname, '../node_modules/marked/lib')));
+app.use('/vendor/highlight.js', express.static(path.join(__dirname, '../node_modules/highlight.js/lib')));
+app.use('/vendor/highlight.js-css', express.static(path.join(__dirname, '../node_modules/highlight.js/styles')));
 
 app.get('/auth/check', (req, res) => {
   // Share-token viewers don't have a user; they get scoped access
