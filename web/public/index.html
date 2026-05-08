@@ -48,10 +48,10 @@
         <h2>Discussion</h2>
         <button id="chatpane-close" title="Close">×</button>
       </header>
-      <div id="chat-empty" class="chat-empty">No discussion yet. Claude will reply to questions automatically — end your message with <code>?</code> or mention <code>@claude</code>.</div>
+      <div id="chat-empty" class="chat-empty">Use <code>@claude</code> to send a prompt to the running session. Other messages are discussion.</div>
       <div id="chat-messages"></div>
       <form id="chat-form" autocomplete="off">
-        <input id="chat-input" type="text" placeholder="Message…  (questions get a Claude reply)" autocomplete="off" />
+        <input id="chat-input" type="text" placeholder="Message…  (@claude sends to session)" autocomplete="off" />
         <button type="submit" id="chat-send">Send</button>
       </form>
     </aside>

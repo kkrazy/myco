@@ -247,6 +247,17 @@ function handleChatMessage(sessionId, session, user, text) {
   // response happened to end in '?'.
   if (user === ASSISTANT_USER) return;
 
+  // @claude → send the message to the running Claude PTY session
+  const claudeMatch = text.match(/^@claude\s+(.+)/i);
+  if (claudeMatch && session.alive) {
+    const input = claudeMatch[1].trim();
+    if (input) {
+      console.log(`[chat→pty] ${user}: ${input.substring(0, 80)}`);
+      session.write(input + '\r');
+    }
+    return;
+  }
+
   if (shouldAskAssistant(text)) {
     runAssistant(sessionId, session, message).catch((err) => {
       console.error(`[chat-assistant] ${err.message}`);
