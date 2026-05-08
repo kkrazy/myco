@@ -148,15 +148,21 @@ app.post('/sessions/:id/share', requireAuth, (req, res) => {
   });
 });
 
-app.get('/sessions', requireAuth, async (req, res) => {
+app.get('/sessions', async (req, res) => {
+  const user = userFromRequest(req);
+  // Allow unauthenticated access if share tokens are provided
+  if (!user && !req.query.share) return res.status(401).json({ error: 'unauthorized' });
   try {
     const all = req.query.all === '1';
-    const own = await listSessions(all ? null : (AUTH_REQUIRED ? req.user : null));
-    // Tag owned sessions
-    for (const s of own) {
-      if (!AUTH_REQUIRED) { s.owned = true; continue; }
-      const rec = getSessionRecord(s.id);
-      s.owned = rec && rec.user === req.user;
+    let own = [];
+    if (user) {
+      own = await listSessions(all ? null : (AUTH_REQUIRED ? user : null));
+      // Tag owned sessions
+      for (const s of own) {
+        if (!AUTH_REQUIRED) { s.owned = true; continue; }
+        const rec = getSessionRecord(s.id);
+        s.owned = rec && rec.user === user;
+      }
     }
     // Also include sessions the user has accessed via share tokens.
     const shareToks = req.query.share || [];
@@ -167,7 +173,7 @@ app.get('/sessions', requireAuth, async (req, res) => {
       if (!info) continue;
       const rec = getSessionRecord(info.sessionId);
       if (!rec) continue;
-      const meta = await readDescriptionForCwdPublic(rec);
+      const meta = await readDescriptionForCwdPublic(rec.absCwd, rec);
       sharedSessions.push({
         id: rec.id,
         cwd: rec.cwd,

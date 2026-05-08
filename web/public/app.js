@@ -14,7 +14,7 @@ const state = {
   chatMessages: [],
   chatUser: null,
   chatPaneVisible: window.innerWidth > 900,
-  shareMode: false,
+  shareMode: false, // kept for compat — no longer gates UI
 };
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -66,41 +66,31 @@ async function tryToken(token) {
 }
 
 async function bootstrap() {
-  // Share-link viewer: ?s=<token> bypasses login and attaches read-only.
   const shareTok = new URL(window.location.href).searchParams.get('s');
-  if (shareTok) return enterShareMode(shareTok);
 
+  // Share-link: validate, persist, then fall through to normal init.
+  // The shared session appears as a card in the sidebar alongside owned sessions.
+  if (shareTok) {
+    let info;
+    try {
+      const res = await fetch(`/auth/check?s=${encodeURIComponent(shareTok)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      info = await res.json();
+    } catch {
+      return showShareError('This share link is invalid or expired.');
+    }
+    if (!info || !info.ok || !info.sessionId) {
+      return showShareError('This share link is invalid or expired.');
+    }
+    state.shareToken = shareTok;
+    saveShareToken(shareTok, info.sessionId, info.cwd);
+    state._pendingShareId = info.sessionId;
+  }
+
+  // Normal auth flow — share link just adds a card, doesn't bypass login.
   const ok = await tryToken(state.token);
   if (ok) { init(); }
   else    { showLogin(); }
-}
-
-async function enterShareMode(shareTok) {
-  state.shareMode = true;
-  state.shareToken = shareTok;
-  document.body.classList.add('share-mode');
-  // If the user isn't authenticated, prompt for a display name for chat.
-  if (!state.token) {
-    const ok = await tryToken('');
-    if (!ok) {
-      const name = window.prompt('Enter your name for this session:', '');
-      if (name) state.shareName = name.trim().slice(0, 24);
-    }
-  }
-  let info;
-  try {
-    const res = await fetch(`/auth/check?s=${encodeURIComponent(shareTok)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    info = await res.json();
-  } catch {
-    return showShareError('This share link is invalid or expired.');
-  }
-  if (!info || !info.ok || !info.sessionId) {
-    return showShareError('This share link is invalid or expired.');
-  }
-  // Persist the share token so this session appears on the home screen.
-  saveShareToken(shareTok, info.sessionId, info.cwd);
-  openShareViewer(info.sessionId);
 }
 
 function showShareError(msg) {
@@ -115,12 +105,6 @@ function openShareViewer(id) {
   state.viewerMode = false;
   state.transcriptMessages = [];
   document.getElementById('no-session').hidden = true;
-
-  // Don't create xterm yet — wait for server to tell us the mode
-
-  // Set up chat UI for share mode
-  bindChatUi();
-  setChatPane(window.innerWidth > 900);
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   let reconnectDelay = 1000;
@@ -162,7 +146,7 @@ function openShareViewer(id) {
       }
     });
     ws.addEventListener('close', () => {
-      setTimeout(() => { if (state.shareMode) connectShare(); }, reconnectDelay);
+      setTimeout(() => { if (state.activeId === id) connectShare(); }, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
     });
   }
@@ -347,13 +331,21 @@ async function init() {
   await refreshSessions();
   setInterval(refreshSessions, 3000);
 
-  // Auto-attach: prefer the session this browser was last on (so a mycod
-  // restart + page reload lands you back where you were). If it's gone,
-  // fall back to the most-recently-active session on the server.
+  // Auto-attach: if a share link is pending, open that session as viewer.
+  // Otherwise prefer the last active session, or the most recent one.
   if (!state.activeId && state.sessions.length) {
-    const persisted = localStorage.getItem('myco_active_id');
-    const target = (persisted && state.sessions.find((s) => s.id === persisted))
-      || mostRecentSession(state.sessions);
+    let target;
+    if (state._pendingShareId) {
+      target = state.sessions.find((s) => s.id === state._pendingShareId);
+      delete state._pendingShareId;
+      // Collapse sidebar so the viewer content is front and center
+      if (window.innerWidth <= 900) setSidebar(true);
+    }
+    if (!target) {
+      const persisted = localStorage.getItem('myco_active_id');
+      target = (persisted && state.sessions.find((s) => s.id === persisted))
+        || mostRecentSession(state.sessions);
+    }
     if (target) openSession(target.id);
   }
 
@@ -408,8 +400,17 @@ async function refreshSessions() {
     const params = new URLSearchParams();
     params.set('all', '1');
     for (const s of shares) params.append('share', s.shareToken);
-    const res = await authedFetch(`/sessions?${params.toString()}`);
-    state.sessions = await res.json();
+    const fetchFn = state.token ? authedFetch : fetch;
+    const res = await fetchFn(`/sessions?${params.toString()}`);
+    if (!res.ok) return;
+    let sessions = await res.json();
+    // Deduplicate: prefer shared entry for non-owned sessions
+    const byId = new Map();
+    for (const s of sessions) {
+      const existing = byId.get(s.id);
+      if (!existing || (s.shared && !s.owned)) byId.set(s.id, s);
+    }
+    state.sessions = [...byId.values()];
     renderSessionList();
   } catch {}
 }
@@ -458,41 +459,35 @@ function renderSessionList() {
     `;
     li.addEventListener('click', () => {
       if (li.classList.contains('show-delete')) return;
-      if (s.shared && s.shareToken) {
-        // Re-enter share mode for this session
-        state.shareMode = true;
-        state.shareToken = s.shareToken;
-        document.body.classList.add('share-mode');
-        openShareViewer(s.id);
-      } else if (!s.owned) {
-        // Non-owned session → viewer mode via openSession
-        // The server will send viewer-mode on WS upgrade
-        openSession(s.id);
-      } else {
-        openSession(s.id);
-      }
+      openSession(s.id);
     });
     const delBtn = li.querySelector('.session-delete');
-    delBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (s.shared) {
-        removeShareToken(s.shareToken);
-        refreshSessions();
-      } else {
-        deleteSessionWithConfirm(s);
-      }
-    });
+    if (delBtn) {
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (s.shared) {
+          removeShareToken(s.shareToken);
+          refreshSessions();
+        } else {
+          deleteSessionWithConfirm(s);
+        }
+      });
+    }
     if (!s.shared) {
       const shareBtn = li.querySelector('.session-share');
-      shareBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        shareSession(s);
-      });
+      if (shareBtn) {
+        shareBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          shareSession(s);
+        });
+      }
       const codeBtn = li.querySelector('.session-vscode');
-      codeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openInVscode(s);
-      });
+      if (codeBtn) {
+        codeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openInVscode(s);
+        });
+      }
     }
     attachLongPressDeleteToggle(li);
     ul.appendChild(li);
@@ -656,77 +651,89 @@ function openSession(id) {
   // tear down previous
   if (state.ws) { state.ws.close(); state.ws = null; }
   if (state.term) { state.term.dispose(); state.term = null; }
+  state.viewerMode = false;
+  state.transcriptMessages = [];
+  document.getElementById('terminal').innerHTML = '';
+  document.getElementById('terminal-wrap').hidden = true;
+  document.getElementById('conversation-wrap').hidden = true;
+  document.getElementById('conv-messages').innerHTML = '';
 
   state.activeId = id;
+  state.viewerMode = false;
+  state.transcriptMessages = [];
   try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
-  // Wipe chat for the previous session — server will replay this one's
-  // history via {t:"chat-history"} once the WS opens.
   clearChat();
   updateChatButton();
 
-  // On mobile, collapse the (full-width) sidebar so the terminal is visible
   if (window.innerWidth <= 900) setSidebar(true);
 
+  // Check if this is a shared session (not owned by current user)
+  const session = state.sessions.find((s) => s.id === id);
+  const isShared = session && !session.owned;
+
   document.getElementById('no-session').hidden = true;
-  const wrap = document.getElementById('terminal-wrap');
-  wrap.hidden = false;
 
-  state.term = new Terminal({ scrollback: 5000, fontSize: 13 });
-  state.fitAddon = new FitAddon.FitAddon();
-  state.term.loadAddon(state.fitAddon);
-  const el = document.getElementById('terminal');
-  el.innerHTML = '';
-  state.term.open(el);
-  state.fitAddon.fit();
+  // Only create xterm for owned sessions. Shared sessions wait for
+  // the server to send viewer-mode, then show conversation view.
+  if (!isShared) {
+    const wrap = document.getElementById('terminal-wrap');
+    wrap.hidden = false;
 
-  // GPU/canvas renderer — the default DOM renderer is too slow for Claude's
-  // styled output. Try WebGL first, fall back to 2D canvas if it fails
-  // (e.g. WebGL blocked, low-end mobile GPU).
-  try {
-    const webgl = new WebglAddon.WebglAddon();
-    webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
-    state.term.loadAddon(webgl);
-  } catch {
-    try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
-  }
-
-  setupTouchScroll(state.term);
-
-  // Suppress iOS soft keyboard. xterm keeps a hidden <textarea> focused; on iOS,
-  // tapping any button blurs+refocuses it, which raises the OS keyboard. Setting
-  // inputmode="none" tells iOS not to show the keyboard. The Keyboard component
-  // can flip this when the user explicitly wants native typing.
-  state.xtermTextarea = el.querySelector('.xterm-helper-textarea');
-  if (state.xtermTextarea) state.xtermTextarea.setAttribute('inputmode', 'none');
-
-  // resize observer
-  const ro = new ResizeObserver(() => {
+    state.term = new Terminal({ scrollback: 5000, fontSize: 13 });
+    state.fitAddon = new FitAddon.FitAddon();
+    state.term.loadAddon(state.fitAddon);
+    const el = document.getElementById('terminal');
+    el.innerHTML = '';
+    state.term.open(el);
     state.fitAddon.fit();
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
-    }
-  });
-  ro.observe(el);
 
-  // keyboard
-  if (!state.keyboard) {
-    state.keyboard = new Keyboard(document.getElementById('keyboard-bar'), sendInput);
+    try {
+      const webgl = new WebglAddon.WebglAddon();
+      webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
+      state.term.loadAddon(webgl);
+    } catch {
+      try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+    }
+
+    setupTouchScroll(state.term);
+
+    state.xtermTextarea = el.querySelector('.xterm-helper-textarea');
+    if (state.xtermTextarea) state.xtermTextarea.setAttribute('inputmode', 'none');
+
+    const ro = new ResizeObserver(() => {
+      state.fitAddon.fit();
+      if (state.ws?.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
+      }
+    });
+    ro.observe(el);
+
+    if (!state.keyboard) {
+      state.keyboard = new Keyboard(document.getElementById('keyboard-bar'), sendInput);
+    }
+
+    state.term.writeln('\r\n[connecting...]');
   }
 
   // websocket with auto-reconnect
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const tokParam = state.token ? `?token=${encodeURIComponent(state.token)}` : '';
+  const tokParam = state.token ? `token=${encodeURIComponent(state.token)}` : '';
+  const shareParam = isShared && state.shareToken ? `s=${encodeURIComponent(state.shareToken)}` : '';
+  const queryParams = [tokParam, shareParam].filter(Boolean).join('&');
+  const qs = queryParams ? `?${queryParams}` : '';
   let reconnectDelay = 1000;
   const maxDelay = 15000;
 
   function connect() {
-    const ws = new WebSocket(`${proto}://${location.host}/attach/${encodeURIComponent(id)}${tokParam}`);
+    const ws = new WebSocket(`${proto}://${location.host}/attach/${encodeURIComponent(id)}${qs}`);
     state.ws = ws;
 
     ws.addEventListener('open', () => {
       reconnectDelay = 1000;
-      ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
+      if (state.term) {
+        ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
+      }
     });
 
     ws.addEventListener('message', (ev) => {
@@ -767,14 +774,17 @@ function openSession(id) {
     });
   }
 
-  state.term.writeln('\r\n[connecting...]');
+  if (state.term) state.term.writeln('\r\n[connecting...]');
+  console.log('[myco] openSession', id, 'isShared=', isShared, 'qs=', qs);
   connect();
 
   // forward xterm keyboard input; auto-collapse sidebar on first keystroke
-  state.term.onData((data) => {
-    setSidebar(true);
-    sendInput(data);
-  });
+  if (state.term) {
+    state.term.onData((data) => {
+      setSidebar(true);
+      sendInput(data);
+    });
+  }
 }
 
 function setSidebar(collapsed) {

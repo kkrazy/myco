@@ -341,11 +341,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
               0 0 0 1px rgba(255, 255, 255, .12) inset;
 }
 
-/* Share-link viewer mode: hide sidebar chrome but keep terminal + chat. */
-body.share-mode #sidebar,
-body.share-mode #btn-expand,
-body.share-mode #btn-spawn { display: none !important; }
-body.share-mode #terminal-pane { padding-top: var(--safe-top); }
+/* Share-link cards in the sidebar */
+.session-item.shared .session-title { color: #8cc5ff; }
 
 /* Toast (used by "Link copied" feedback). */
 .toast {
@@ -1034,9 +1031,6 @@ body.share-mode #terminal-pane { padding-top: var(--safe-top); }
     border-left: none;
   }
 }
-
-/* Share-mode: show chat pane and chat button so collaborators can discuss. */
-body.share-mode #btn-chat { display: inline-flex !important; align-items: center; justify-content: center; }
 
 /* ── conversation view (viewer mode) ──────────────────────────────────────── */
 
