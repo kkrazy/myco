@@ -149,7 +149,6 @@ function openShareViewer(id) {
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
       } else if (msg.t === 'output') {
-        // Fallback: if server didn't send viewer-mode, use xterm
         if (!state.viewerMode) ensureXtermForFallback();
         if (state.term) state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
       } else if (msg.t === 'pong') {
@@ -206,45 +205,41 @@ function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function scrollConvToBottom() {
+  const wrap = document.getElementById('conversation-wrap');
+  requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
+}
+
+function isConvAtBottom() {
+  const wrap = document.getElementById('conversation-wrap');
+  return wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 60;
+}
+
 function renderTranscriptMessages(messages) {
   showConversationView();
   const container = document.getElementById('conv-messages');
   container.innerHTML = '';
-  _lastConvRole = null;
   for (const m of messages) {
     container.appendChild(renderConvMessage(m));
   }
-  container.scrollTop = container.scrollHeight;
+  scrollConvToBottom();
 }
 
 function appendTranscriptMessages(messages) {
+  const wasAtBottom = isConvAtBottom();
   const container = document.getElementById('conv-messages');
-  const wasAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 40;
   for (const m of messages) {
     container.appendChild(renderConvMessage(m));
   }
-  if (wasAtBottom) container.scrollTop = container.scrollHeight;
+  if (wasAtBottom) scrollConvToBottom();
 }
 
-let _lastConvRole = null;
-
 function renderConvMessage(m) {
-  const frag = document.createDocumentFragment();
-
-  // Add a small spacer before user messages to separate turns
-  if (m.role === 'user' && _lastConvRole && _lastConvRole !== 'user') {
-    const spacer = document.createElement('div');
-    spacer.className = 'conv-msg-user-spacer';
-    frag.appendChild(spacer);
-  }
-
   if (m.role === 'title') {
     const div = document.createElement('div');
     div.className = 'conv-msg conv-msg-title';
     div.textContent = m.text;
-    frag.appendChild(div);
-    _lastConvRole = 'title';
-    return frag;
+    return div;
   }
 
   if (m.role === 'user') {
@@ -254,21 +249,18 @@ function renderConvMessage(m) {
     textEl.className = 'conv-text';
     textEl.textContent = m.text;
     div.appendChild(textEl);
-    frag.appendChild(div);
-    _lastConvRole = 'user';
-    return frag;
+    return div;
   }
 
   if (m.role === 'assistant') {
     const div = document.createElement('div');
     div.className = 'conv-msg conv-msg-assistant';
-
     if (m.toolCalls && m.toolCalls.length) {
       for (const tc of m.toolCalls) {
         const details = document.createElement('details');
         details.className = 'conv-tool-call';
         const summary = document.createElement('summary');
-        summary.innerHTML = `<span class="conv-tool-marker">●</span><span class="conv-tool-name">${escHtml(tc.name)}</span> <span class="conv-tool-summary">${escHtml(tc.summary)}</span>`;
+        summary.innerHTML = `<span class="conv-tool-name">${escHtml(tc.name)}</span> <span class="conv-tool-summary">${escHtml(tc.summary)}</span>`;
         details.appendChild(summary);
         const body = document.createElement('div');
         body.className = 'conv-tool-body';
@@ -277,48 +269,53 @@ function renderConvMessage(m) {
         div.appendChild(details);
       }
     }
-
     if (m.text) {
       const textEl = document.createElement('div');
       textEl.className = 'conv-text';
       textEl.textContent = m.text;
       div.appendChild(textEl);
     }
-
-    frag.appendChild(div);
-    _lastConvRole = 'assistant';
-    return frag;
+    return div;
   }
 
   if (m.role === 'tool_result') {
     const div = document.createElement('div');
-    div.className = 'conv-msg';
+    div.className = 'conv-msg conv-msg-result';
     if (m.results) {
       for (const r of m.results) {
+        const content = (r.content || '').substring(0, 2000);
+        const firstLine = content.split('\n')[0] || '';
+        const rest = content.includes('\n') ? content.substring(content.indexOf('\n') + 1) : '';
         const details = document.createElement('details');
         details.className = 'conv-tool-result';
-        details.open = false;
         const summary = document.createElement('summary');
-        summary.textContent = 'Result';
+        summary.textContent = '';
+        const prefix = document.createElement('span');
+        prefix.className = 'conv-result-prefix';
+        prefix.textContent = '└─';
+        summary.appendChild(prefix);
+        const firstLineEl = document.createElement('span');
+        firstLineEl.className = 'conv-result-first-line';
+        firstLineEl.textContent = ' ' + firstLine;
+        if (r.isError) firstLineEl.classList.add('conv-result-error');
+        summary.appendChild(firstLineEl);
         details.appendChild(summary);
-        const body = document.createElement('div');
-        body.className = 'conv-tool-body';
-        body.textContent = (r.content || '').substring(0, 2000);
-        if (r.isError) body.style.color = '#ff6b6b';
-        details.appendChild(body);
+        if (rest) {
+          const body = document.createElement('div');
+          body.className = 'conv-tool-body';
+          body.textContent = rest;
+          if (r.isError) body.classList.add('conv-result-error');
+          details.appendChild(body);
+        }
         div.appendChild(details);
       }
     }
-    frag.appendChild(div);
-    _lastConvRole = 'tool_result';
-    return frag;
+    return div;
   }
 
   const div = document.createElement('div');
   div.className = 'conv-msg';
-  frag.appendChild(div);
-  _lastConvRole = 'other';
-  return frag;
+  return div;
 }
 
 async function doLogin() {
@@ -735,7 +732,6 @@ function openSession(id) {
     ws.addEventListener('message', (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.t === 'viewer-mode') {
-        // Non-owner viewing this session — switch to conversation view
         state.viewerMode = true;
         if (state.term) { state.term.dispose(); state.term = null; }
         document.getElementById('terminal-wrap').hidden = true;

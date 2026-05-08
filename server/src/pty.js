@@ -187,21 +187,16 @@ function attachViewerWebSocket(session, ws, opts = {}) {
 
   ws.send(JSON.stringify({ t: 'viewer-mode' }));
 
-  // Resolve and stream transcript
+  // Stream structured transcript (clean content from Claude's JSONL)
   const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
   if (!transcriptPath) {
     ws.send(JSON.stringify({ t: 'transcript-waiting' }));
-    // Poll until transcript appears
     const pollInterval = setInterval(() => {
       if (ws.readyState !== ws.OPEN) { clearInterval(pollInterval); return; }
       const p = transcriptMod.resolveTranscriptPath(sessionId);
-      if (p) {
-        clearInterval(pollInterval);
-        streamTranscript(p);
-      }
+      if (p) { clearInterval(pollInterval); streamTranscript(p); }
     }, 2000);
-    const cleanupPoll = () => clearInterval(pollInterval);
-    ws.on('close', () => { cleanupPoll(); session.off('chat', onChat); if (unwatch) unwatch(); });
+    ws.on('close', () => { clearInterval(pollInterval); session.off('chat', onChat); if (unwatch) unwatch(); });
     ws.on('message', handleViewerInbound);
     return;
   }
@@ -212,7 +207,6 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
       if (ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
-      // Start watching for new content
       unwatch = transcriptMod.watchTranscript(filePath, (newMsgs) => {
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));

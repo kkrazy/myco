@@ -1049,8 +1049,10 @@ body.share-mode #btn-chat { display: inline-flex !important; }
   font-family: 'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace;
   font-size: 13px;
   line-height: 1.45;
-  color: #ccc;
-  padding: 4px;
+  color: #d4d4d4;
+  padding: 16px 20px 80px 20px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .conv-msg {
@@ -1060,30 +1062,22 @@ body.share-mode #btn-chat { display: inline-flex !important; }
   background: none;
 }
 
-/* User messages: blue chevron prefix like Claude's prompt */
 .conv-msg-user {
   color: #4a9eff;
-  padding-bottom: 1px;
+  margin-top: 6px;
 }
 
 .conv-msg-user .conv-text::before {
-  content: '❯ ';
+  content: '> ';
   color: #4a9eff;
 }
 
-/* Blank line before user message to separate turns */
-.conv-msg-user-spacer {
-  height: 8px;
-}
-
-/* Assistant text: matches Claude's white response text */
 .conv-msg-assistant {
   color: #d4d4d4;
 }
 
 .conv-msg-assistant .conv-text {
   color: #d4d4d4;
-  padding-bottom: 2px;
 }
 
 .conv-msg-title {
@@ -1091,8 +1085,6 @@ body.share-mode #btn-chat { display: inline-flex !important; }
   padding: 6px 0 4px;
   font-size: 0.9em;
   color: #888;
-  border-bottom: 1px solid #222;
-  margin-bottom: 4px;
 }
 
 .conv-text {
@@ -1101,17 +1093,8 @@ body.share-mode #btn-chat { display: inline-flex !important; }
   color: inherit;
 }
 
-.conv-ts {
-  display: none;
-}
-
-/* Tool calls: match Claude's ⏺ style */
 .conv-tool-call {
-  margin: 1px 0;
-}
-
-.conv-tool-result {
-  margin: 0;
+  margin: 2px 0;
 }
 
 .conv-tool-call summary {
@@ -1124,36 +1107,58 @@ body.share-mode #btn-chat { display: inline-flex !important; }
   list-style: none;
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
 }
 
 .conv-tool-call summary::marker { content: ''; }
 
-.conv-tool-call .conv-tool-marker {
-  color: #d4a0ff;
-  margin-right: 2px;
+.conv-tool-call summary::before {
+  content: '\25B8';
+  font-size: 0.7em;
+  transition: transform 0.15s;
 }
 
-.conv-tool-call[open] .conv-tool-marker {
-  color: #b080e0;
+.conv-tool-call[open] summary::before {
+  transform: rotate(90deg);
 }
 
-.conv-tool-call .conv-tool-name {
+.conv-tool-name {
   color: #e0a050;
 }
 
-.conv-tool-call .conv-tool-summary {
+.conv-tool-summary {
   color: #888;
 }
 
 .conv-tool-result summary {
-  display: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  list-style: none;
+  padding: 0;
+  background: none;
 }
 
-.conv-tool-call .conv-tool-body,
-.conv-tool-result .conv-tool-body {
+.conv-result-prefix {
+  color: #555;
+}
+
+.conv-result-first-line {
+  color: #888;
+}
+
+.conv-result-error {
+  color: #ff6b6b;
+}
+
+.conv-msg-result {
   margin: 0;
-  padding: 2px 0 2px 18px;
+}
+
+.conv-tool-body {
+  margin: 0;
+  padding: 2px 0 2px 16px;
   background: none;
   font-family: inherit;
   font-size: 0.95em;
