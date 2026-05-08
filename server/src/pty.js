@@ -4,6 +4,7 @@ const { EventEmitter } = require('events');
 // time would capture undefined values from the partial export.
 const sessionsMod = require('./sessions');
 const { askAssistant, shouldAskAssistant, stripAnsi, tailLines, ASSISTANT_USER } = require('./btw');
+const transcriptMod = require('./transcript');
 
 const MAX_BUFFER = 1024 * 1024;
 const CHAT_TEXT_LIMIT = 4000;
@@ -169,6 +170,76 @@ function attachWebSocket(session, ws, opts = {}) {
   });
 }
 
+function attachViewerWebSocket(session, ws, opts = {}) {
+  const user = opts.user || null;
+  const sessionId = session.sessionId;
+  let unwatch = null;
+
+  // Chat relay (same as owner connection)
+  const history = sessionsMod.getChatHistory(sessionId);
+  if (history.length) {
+    ws.send(JSON.stringify({ t: 'chat-history', messages: history }));
+  }
+  const onChat = (message) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'chat', message }));
+  };
+  session.on('chat', onChat);
+
+  ws.send(JSON.stringify({ t: 'viewer-mode' }));
+
+  // Resolve and stream transcript
+  const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
+  if (!transcriptPath) {
+    ws.send(JSON.stringify({ t: 'transcript-waiting' }));
+    // Poll until transcript appears
+    const pollInterval = setInterval(() => {
+      if (ws.readyState !== ws.OPEN) { clearInterval(pollInterval); return; }
+      const p = transcriptMod.resolveTranscriptPath(sessionId);
+      if (p) {
+        clearInterval(pollInterval);
+        streamTranscript(p);
+      }
+    }, 2000);
+    const cleanupPoll = () => clearInterval(pollInterval);
+    ws.on('close', () => { cleanupPoll(); session.off('chat', onChat); if (unwatch) unwatch(); });
+    ws.on('message', handleViewerInbound);
+    return;
+  }
+
+  streamTranscript(transcriptPath);
+
+  function streamTranscript(filePath) {
+    transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
+      // Start watching for new content
+      unwatch = transcriptMod.watchTranscript(filePath, (newMsgs) => {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
+        }
+      });
+    }).catch(() => {});
+  }
+
+  function handleViewerInbound(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    if (msg.t === 'ping' && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ t: 'pong' }));
+    }
+    if (msg.t === 'chat' && typeof msg.text === 'string' && user) {
+      const text = msg.text.trim();
+      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT));
+    }
+  }
+
+  ws.on('message', handleViewerInbound);
+  ws.on('close', () => {
+    session.off('chat', onChat);
+    if (unwatch) unwatch();
+  });
+}
+
 function handleChatMessage(sessionId, session, user, text) {
   const message = {
     user,
@@ -213,4 +284,5 @@ module.exports = {
   getSession,
   killSession,
   attachWebSocket,
+  attachViewerWebSocket,
 };

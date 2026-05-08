@@ -112,40 +112,11 @@ function showShareError(msg) {
 
 function openShareViewer(id) {
   state.activeId = id;
+  state.viewerMode = false;
+  state.transcriptMessages = [];
   document.getElementById('no-session').hidden = true;
-  document.getElementById('terminal-wrap').hidden = false;
 
-  state.term = new Terminal({ scrollback: 5000, fontSize: 13 });
-  state.fitAddon = new FitAddon.FitAddon();
-  state.term.loadAddon(state.fitAddon);
-  const el = document.getElementById('terminal');
-  el.innerHTML = '';
-  state.term.open(el);
-  state.fitAddon.fit();
-  try {
-    const webgl = new WebglAddon.WebglAddon();
-    webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
-    state.term.loadAddon(webgl);
-  } catch {
-    try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
-  }
-  setupTouchScroll(state.term);
-
-  // Suppress iOS soft keyboard (same as openSession).
-  state.xtermTextarea = el.querySelector('.xterm-helper-textarea');
-  if (state.xtermTextarea) state.xtermTextarea.setAttribute('inputmode', 'none');
-
-  new ResizeObserver(() => {
-    state.fitAddon.fit();
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
-    }
-  }).observe(el);
-
-  // Set up keyboard
-  if (!state.keyboard) {
-    state.keyboard = new Keyboard(document.getElementById('keyboard-bar'), sendInput);
-  }
+  // Don't create xterm yet — wait for server to tell us the mode
 
   // Set up chat UI for share mode
   bindChatUi();
@@ -162,12 +133,25 @@ function openShareViewer(id) {
     state.ws = ws;
     ws.addEventListener('open', () => {
       reconnectDelay = 1000;
-      ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
     });
     ws.addEventListener('message', (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.t === 'output') {
-        state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
+      if (msg.t === 'viewer-mode') {
+        state.viewerMode = true;
+        showConversationView();
+      } else if (msg.t === 'transcript-init') {
+        state.transcriptMessages = msg.messages || [];
+        renderTranscriptMessages(state.transcriptMessages);
+      } else if (msg.t === 'transcript-delta') {
+        const newMsgs = msg.messages || [];
+        state.transcriptMessages.push(...newMsgs);
+        appendTranscriptMessages(newMsgs);
+      } else if (msg.t === 'transcript-waiting') {
+        showTranscriptWaiting();
+      } else if (msg.t === 'output') {
+        // Fallback: if server didn't send viewer-mode, use xterm
+        if (!state.viewerMode) ensureXtermForFallback();
+        if (state.term) state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
       } else if (msg.t === 'pong') {
         state.lastPongAt = Date.now();
       } else if (msg.t === 'chat-history') {
@@ -175,21 +159,122 @@ function openShareViewer(id) {
       } else if (msg.t === 'chat') {
         appendChatMessage(msg.message);
       } else if (msg.t === 'exit') {
-        state.term.writeln('\r\n[session ended]');
+        if (state.term) state.term.writeln('\r\n[session ended]');
       }
     });
     ws.addEventListener('close', () => {
-      state.term?.writeln('\r\n[reconnecting...]');
       setTimeout(() => { if (state.shareMode) connectShare(); }, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
     });
   }
   connectShare();
+}
 
-  // Forward xterm keyboard input
-  state.term.onData((data) => {
-    sendInput(data);
-  });
+function ensureXtermForFallback() {
+  if (state.term) return;
+  document.getElementById('terminal-wrap').hidden = false;
+  state.term = new Terminal({ scrollback: 5000, fontSize: 13 });
+  state.fitAddon = new FitAddon.FitAddon();
+  state.term.loadAddon(state.fitAddon);
+  const el = document.getElementById('terminal');
+  el.innerHTML = '';
+  state.term.open(el);
+  state.fitAddon.fit();
+  try {
+    const webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
+    state.term.loadAddon(webgl);
+  } catch {
+    try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+  }
+  setupTouchScroll(state.term);
+}
+
+function showConversationView() {
+  document.getElementById('terminal-wrap').hidden = true;
+  document.getElementById('conversation-wrap').hidden = false;
+  updateChatButton();
+}
+
+function showTranscriptWaiting() {
+  showConversationView();
+  const container = document.getElementById('conv-messages');
+  container.innerHTML = '<div class="conv-waiting">Waiting for session to start...</div>';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderTranscriptMessages(messages) {
+  showConversationView();
+  const container = document.getElementById('conv-messages');
+  container.innerHTML = '';
+  for (const m of messages) {
+    container.appendChild(renderConvMessage(m));
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function appendTranscriptMessages(messages) {
+  const container = document.getElementById('conv-messages');
+  const wasAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 40;
+  for (const m of messages) {
+    container.appendChild(renderConvMessage(m));
+  }
+  if (wasAtBottom) container.scrollTop = container.scrollHeight;
+}
+
+function renderConvMessage(m) {
+  if (m.role === 'title') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-title';
+    div.textContent = m.text;
+    return div;
+  }
+
+  if (m.role === 'user') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-user';
+    div.innerHTML = `<div class="conv-text">${escHtml(m.text)}</div>`
+      + (m.ts ? `<div class="conv-ts">${m.ts.replace(/T.*$/, '')}</div>` : '');
+    return div;
+  }
+
+  if (m.role === 'assistant') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-assistant';
+    let html = '';
+    if (m.text) {
+      html += `<div class="conv-text">${escHtml(m.text)}</div>`;
+    }
+    if (m.toolCalls && m.toolCalls.length) {
+      for (const tc of m.toolCalls) {
+        html += `<details class="conv-tool-call"><summary><span class="conv-tool-name">${escHtml(tc.name)}</span> ${escHtml(tc.summary)}</summary><div class="conv-tool-body">${escHtml(tc.summary)}</div></details>`;
+      }
+    }
+    if (m.ts) html += `<div class="conv-ts">${m.ts.replace(/T.*$/, '')}</div>`;
+    div.innerHTML = html;
+    return div;
+  }
+
+  if (m.role === 'tool_result') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg';
+    let html = '';
+    if (m.results) {
+      for (const r of m.results) {
+        const preview = (r.content || '').substring(0, 2000);
+        html += `<details class="conv-tool-result"><summary>Result${r.isError ? ' (error)' : ''}</summary><div class="conv-tool-body">${escHtml(preview)}</div></details>`;
+      }
+    }
+    div.innerHTML = html;
+    return div;
+  }
+
+  const div = document.createElement('div');
+  div.className = 'conv-msg';
+  return div;
 }
 
 async function doLogin() {
@@ -280,9 +365,9 @@ async function refreshSessions() {
   try {
     const shares = loadShareTokens();
     const params = new URLSearchParams();
+    params.set('all', '1');
     for (const s of shares) params.append('share', s.shareToken);
-    const qs = params.toString() ? `&${params.toString()}` : '';
-    const res = await authedFetch(`/sessions?${qs}`);
+    const res = await authedFetch(`/sessions?${params.toString()}`);
     state.sessions = await res.json();
     renderSessionList();
   } catch {}
@@ -326,9 +411,9 @@ function renderSessionList() {
       <span class="session-title">${escHtml(dirName)}${sharedBadge}</span>
       ${summary}
       <span class="session-meta">${escHtml(idShort)} · ${timeAgo(s.last_activity || s.created_at)}</span>
-      ${!s.shared ? '<button class="session-share" aria-label="Share session">↗</button>' : ''}
-      ${!s.shared ? '<button class="session-vscode" aria-label="Open in VS Code">{·}</button>' : ''}
-      <button class="session-delete" aria-label="${s.shared ? 'Remove shared session' : 'Delete session'}">×</button>
+      ${s.owned && !s.shared ? '<button class="session-share" aria-label="Share session">↗</button>' : ''}
+      ${s.owned && !s.shared ? '<button class="session-vscode" aria-label="Open in VS Code">{·}</button>' : ''}
+      ${s.owned || s.shared ? '<button class="session-delete" aria-label="' + (s.shared ? 'Remove shared session' : 'Delete session') + '">×</button>' : ''}
     `;
     li.addEventListener('click', () => {
       if (li.classList.contains('show-delete')) return;
@@ -338,6 +423,10 @@ function renderSessionList() {
         state.shareToken = s.shareToken;
         document.body.classList.add('share-mode');
         openShareViewer(s.id);
+      } else if (!s.owned) {
+        // Non-owned session → viewer mode via openSession
+        // The server will send viewer-mode on WS upgrade
+        openSession(s.id);
       } else {
         openSession(s.id);
       }
@@ -601,8 +690,22 @@ function openSession(id) {
 
     ws.addEventListener('message', (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.t === 'output') {
-        state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
+      if (msg.t === 'viewer-mode') {
+        // Non-owner viewing this session — switch to conversation view
+        state.viewerMode = true;
+        if (state.term) { state.term.dispose(); state.term = null; }
+        document.getElementById('terminal-wrap').hidden = true;
+      } else if (msg.t === 'transcript-init') {
+        state.transcriptMessages = msg.messages || [];
+        renderTranscriptMessages(state.transcriptMessages);
+      } else if (msg.t === 'transcript-delta') {
+        const newMsgs = msg.messages || [];
+        state.transcriptMessages.push(...newMsgs);
+        appendTranscriptMessages(newMsgs);
+      } else if (msg.t === 'transcript-waiting') {
+        showTranscriptWaiting();
+      } else if (msg.t === 'output') {
+        state.term?.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
       } else if (msg.t === 'pong') {
         state.lastPongAt = Date.now();
       } else if (msg.t === 'chat-history') {
@@ -610,7 +713,7 @@ function openSession(id) {
       } else if (msg.t === 'chat') {
         appendChatMessage(msg.message);
       } else if (msg.t === 'exit') {
-        state.term.writeln('\r\n[session ended]');
+        state.term?.writeln('\r\n[session ended]');
       }
     });
 
@@ -838,9 +941,6 @@ async function doSpawn() {
 
 // ── utils ─────────────────────────────────────────────────────────────────────
 
-function escHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function timeAgo(iso) {
   const sec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);

@@ -5,7 +5,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic } = require('./sessions');
-const { attachWebSocket } = require('./pty');
+const { attachWebSocket, attachViewerWebSocket } = require('./pty');
 const {
   AUTH_REQUIRED, userFromRequest, userFromToken,
   createShareToken, shareTokenInfo, revokeShareTokensForSession,
@@ -150,7 +150,14 @@ app.post('/sessions/:id/share', requireAuth, (req, res) => {
 
 app.get('/sessions', requireAuth, async (req, res) => {
   try {
-    const own = await listSessions(AUTH_REQUIRED ? req.user : null);
+    const all = req.query.all === '1';
+    const own = await listSessions(all ? null : (AUTH_REQUIRED ? req.user : null));
+    // Tag owned sessions
+    for (const s of own) {
+      if (!AUTH_REQUIRED) { s.owned = true; continue; }
+      const rec = getSessionRecord(s.id);
+      s.owned = rec && rec.user === req.user;
+    }
     // Also include sessions the user has accessed via share tokens.
     const shareToks = req.query.share || [];
     const shares = Array.isArray(shareToks) ? shareToks : [shareToks];
@@ -272,6 +279,7 @@ server.on('upgrade', (req, socket, head) => {
       socket.destroy();
       return;
     }
+    readOnly = true;
     // Prefer the viewer's own auth identity if they provided a token.
     const viewerTok = url.searchParams.get('token') || '';
     const viewerUser = viewerTok ? userFromToken(viewerTok) : null;
@@ -291,9 +299,8 @@ server.on('upgrade', (req, socket, head) => {
       return;
     }
     if (AUTH_REQUIRED && !sessionBelongsToUser(sessionId, user)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-      socket.destroy();
-      return;
+      // Non-owner authenticated user → viewer (readOnly)
+      readOnly = true;
     }
   }
 
@@ -309,7 +316,11 @@ server.on('upgrade', (req, socket, head) => {
       ws.close();
       return;
     }
-    attachWebSocket(session, ws, { readOnly, user });
+    if (readOnly) {
+      attachViewerWebSocket(session, ws, { user });
+    } else {
+      attachWebSocket(session, ws, { readOnly, user });
+    }
   });
 });
 
