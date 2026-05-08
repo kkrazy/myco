@@ -802,8 +802,8 @@ function setChatPane(visible) {
 function updateChatButton() {
   const btn = document.getElementById('btn-chat');
   if (!btn) return;
-  const terminalVisible = !document.getElementById('terminal-wrap').hidden;
-  btn.hidden = !state.activeId || state.chatPaneVisible || !terminalVisible;
+  const hasContent = !document.getElementById('terminal-wrap').hidden || !document.getElementById('conversation-wrap').hidden;
+  btn.hidden = !state.activeId || state.chatPaneVisible || !hasContent;
 }
 
 // Replace native viewport scroll with a JS-driven scroll that calls
@@ -1052,12 +1052,14 @@ function bindChatUi() {
   const form = document.getElementById('chat-form');
   const input = document.getElementById('chat-input');
   if (!form || !input) return;
+  if (form.dataset.bound) return;
+  form.dataset.bound = '1';
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     if (sendChatMessage(input.value)) input.value = '';
   });
 
-  document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(true));
+  document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(!state.chatPaneVisible));
   document.getElementById('chatpane-close')?.addEventListener('click', () => setChatPane(false));
 }
 

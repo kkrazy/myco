@@ -1013,6 +1013,9 @@ body.share-mode #terminal-pane { padding-top: var(--safe-top); }
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, .08);
   font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
@@ -1033,7 +1036,7 @@ body.share-mode #terminal-pane { padding-top: var(--safe-top); }
 }
 
 /* Share-mode: show chat pane and chat button so collaborators can discuss. */
-body.share-mode #btn-chat { display: inline-flex !important; }
+body.share-mode #btn-chat { display: inline-flex !important; align-items: center; justify-content: center; }
 
 /* ── conversation view (viewer mode) ──────────────────────────────────────── */
 
