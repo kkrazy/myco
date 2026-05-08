@@ -8,9 +8,11 @@ RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
 # --- Runtime stage ---
 FROM node:20-alpine
 
-RUN apk add --no-cache ca-certificates curl nss-tools && \
+RUN apk add --no-cache bash git openssh ca-certificates curl nss-tools && \
     curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=amd64" -o /usr/bin/caddy && \
-    chmod +x /usr/bin/caddy
+    chmod +x /usr/bin/caddy && \
+    mkdir -p /usr/share/fonts/truetype && \
+    curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.3.0/JetBrainsMono.tar.xz" | tar -xJ -C /usr/share/fonts/truetype
 
 WORKDIR /app
 
@@ -20,13 +22,17 @@ COPY --from=builder /usr/local/bin/claude /usr/local/bin/claude
 COPY server/src ./server/src
 COPY web/public ./web/public
 COPY Caddyfile /etc/caddy/Caddyfile
+RUN mkdir -p /app/web/public/fonts && \
+    cp /usr/share/fonts/truetype/JetBrainsMonoNerdFont-Regular.ttf /app/web/public/fonts/ && \
+    cp /usr/share/fonts/truetype/JetBrainsMonoNerdFont-Bold.ttf /app/web/public/fonts/ 2>/dev/null; true
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 ENV MYCO_DATA=/data \
     HOST=127.0.0.1 \
-    PORT=3000
+    PORT=3000 \
+    SHELL=/bin/bash
 
 EXPOSE 80 443
 

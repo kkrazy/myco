@@ -31,6 +31,14 @@ if [ ! -L "$HOME/.claude" ]; then
     ln -s "$DATA/.claude" "$HOME/.claude"
 fi
 
+# Persist ~/.local for claude-code native install
+mkdir -p "$DATA/.local/bin" "$DATA/.local/share"
+if [ ! -L "$HOME/.local" ]; then
+    rm -rf "$HOME/.local" 2>/dev/null
+    ln -s "$DATA/.local" "$HOME/.local"
+fi
+export PATH="$HOME/.local/bin:$PATH"
+
 # Migrate legacy .jsonl transcripts to directory-based sessions (claude >= 2.1)
 for jsonl in $(find "$DATA/.claude/projects" -name "*.jsonl" 2>/dev/null); do
     dir="${jsonl%.jsonl}"
