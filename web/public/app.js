@@ -210,6 +210,7 @@ function renderTranscriptMessages(messages) {
   showConversationView();
   const container = document.getElementById('conv-messages');
   container.innerHTML = '';
+  _lastConvRole = null;
   for (const m of messages) {
     container.appendChild(renderConvMessage(m));
   }
@@ -225,56 +226,99 @@ function appendTranscriptMessages(messages) {
   if (wasAtBottom) container.scrollTop = container.scrollHeight;
 }
 
+let _lastConvRole = null;
+
 function renderConvMessage(m) {
+  const frag = document.createDocumentFragment();
+
+  // Add a small spacer before user messages to separate turns
+  if (m.role === 'user' && _lastConvRole && _lastConvRole !== 'user') {
+    const spacer = document.createElement('div');
+    spacer.className = 'conv-msg-user-spacer';
+    frag.appendChild(spacer);
+  }
+
   if (m.role === 'title') {
     const div = document.createElement('div');
     div.className = 'conv-msg conv-msg-title';
     div.textContent = m.text;
-    return div;
+    frag.appendChild(div);
+    _lastConvRole = 'title';
+    return frag;
   }
 
   if (m.role === 'user') {
     const div = document.createElement('div');
     div.className = 'conv-msg conv-msg-user';
-    div.innerHTML = `<div class="conv-text">${escHtml(m.text)}</div>`
-      + (m.ts ? `<div class="conv-ts">${m.ts.replace(/T.*$/, '')}</div>` : '');
-    return div;
+    const textEl = document.createElement('div');
+    textEl.className = 'conv-text';
+    textEl.textContent = m.text;
+    div.appendChild(textEl);
+    frag.appendChild(div);
+    _lastConvRole = 'user';
+    return frag;
   }
 
   if (m.role === 'assistant') {
     const div = document.createElement('div');
     div.className = 'conv-msg conv-msg-assistant';
-    let html = '';
-    if (m.text) {
-      html += `<div class="conv-text">${escHtml(m.text)}</div>`;
-    }
+
     if (m.toolCalls && m.toolCalls.length) {
       for (const tc of m.toolCalls) {
-        html += `<details class="conv-tool-call"><summary><span class="conv-tool-name">${escHtml(tc.name)}</span> ${escHtml(tc.summary)}</summary><div class="conv-tool-body">${escHtml(tc.summary)}</div></details>`;
+        const details = document.createElement('details');
+        details.className = 'conv-tool-call';
+        const summary = document.createElement('summary');
+        summary.innerHTML = `<span class="conv-tool-marker">●</span><span class="conv-tool-name">${escHtml(tc.name)}</span> <span class="conv-tool-summary">${escHtml(tc.summary)}</span>`;
+        details.appendChild(summary);
+        const body = document.createElement('div');
+        body.className = 'conv-tool-body';
+        body.textContent = tc.summary;
+        details.appendChild(body);
+        div.appendChild(details);
       }
     }
-    if (m.ts) html += `<div class="conv-ts">${m.ts.replace(/T.*$/, '')}</div>`;
-    div.innerHTML = html;
-    return div;
+
+    if (m.text) {
+      const textEl = document.createElement('div');
+      textEl.className = 'conv-text';
+      textEl.textContent = m.text;
+      div.appendChild(textEl);
+    }
+
+    frag.appendChild(div);
+    _lastConvRole = 'assistant';
+    return frag;
   }
 
   if (m.role === 'tool_result') {
     const div = document.createElement('div');
     div.className = 'conv-msg';
-    let html = '';
     if (m.results) {
       for (const r of m.results) {
-        const preview = (r.content || '').substring(0, 2000);
-        html += `<details class="conv-tool-result"><summary>Result${r.isError ? ' (error)' : ''}</summary><div class="conv-tool-body">${escHtml(preview)}</div></details>`;
+        const details = document.createElement('details');
+        details.className = 'conv-tool-result';
+        details.open = false;
+        const summary = document.createElement('summary');
+        summary.textContent = 'Result';
+        details.appendChild(summary);
+        const body = document.createElement('div');
+        body.className = 'conv-tool-body';
+        body.textContent = (r.content || '').substring(0, 2000);
+        if (r.isError) body.style.color = '#ff6b6b';
+        details.appendChild(body);
+        div.appendChild(details);
       }
     }
-    div.innerHTML = html;
-    return div;
+    frag.appendChild(div);
+    _lastConvRole = 'tool_result';
+    return frag;
   }
 
   const div = document.createElement('div');
   div.className = 'conv-msg';
-  return div;
+  frag.appendChild(div);
+  _lastConvRole = 'other';
+  return frag;
 }
 
 async function doLogin() {

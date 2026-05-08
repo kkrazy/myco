@@ -9,30 +9,56 @@ const sessionsMod = require('./sessions');
 function resolveTranscriptPath(sessionId) {
   const rec = sessionsMod.getSessionRecord(sessionId);
   if (!rec || !rec.absCwd) return null;
-  // Resolve symlinks — Claude uses the real path for directory naming.
-  let absCwd = rec.absCwd;
-  try { absCwd = fs.realpathSync(absCwd) || absCwd; } catch {}
+  const absCwd = rec.absCwd;
   const dir = path.join(sessionsMod.projectsDir(), sessionsMod.encodeCwdForClaude(absCwd));
-  // Recursive scan — Claude stores transcripts in <sessionId>/transcript.jsonl
-  try {
-    let best = null;
-    function walk(d) {
-      let entries;
-      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        const full = path.join(d, e.name);
-        if (e.isDirectory()) { walk(full); continue; }
-        if (!e.name.endsWith('.jsonl')) continue;
-        let st;
-        try { st = fs.statSync(full); } catch { continue; }
-        if (!best || st.mtimeMs > best.mtimeMs) best = full;
-      }
-    }
-    walk(dir);
-    return best;
-  } catch {
-    return null;
+
+  // If we have a cached claudeSessionId, find that specific transcript
+  if (rec.claudeSessionId) {
+    const specific = findTranscriptForSession(dir, rec.claudeSessionId);
+    if (specific) return specific;
   }
+
+  // Fall back to newest
+  return findNewestTranscript(dir);
+}
+
+function findTranscriptForSession(dir, claudeSessionId) {
+  const sessionDir = path.join(dir, claudeSessionId);
+  if (!fs.existsSync(sessionDir)) return null;
+  let best = null;
+  function walk(d) {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!e.name.endsWith('.jsonl')) continue;
+      let st;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (!best || st.mtimeMs > best.mtimeMs) best = full;
+    }
+  }
+  walk(sessionDir);
+  return best;
+}
+
+function findNewestTranscript(dir) {
+  let best = null;
+  let bestMtime = 0;
+  function walk(d) {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!e.name.endsWith('.jsonl')) continue;
+      let st;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (st.mtimeMs > bestMtime) { best = full; bestMtime = st.mtimeMs; }
+    }
+  }
+  walk(dir);
+  return best;
 }
 
 function summarizeToolInput(name, input) {
