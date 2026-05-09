@@ -77,6 +77,53 @@ grep -q 'mermaid.initialize' web/public/index.html && pass "mermaid init" || fai
 grep -q 'highlight.min.js' web/public/index.html && pass "highlight.js loaded" || fail "highlight.js loaded"
 
 echo ""
+echo "── Feature checks ──"
+
+# Syntax highlighting
+grep -q 'hljs.highlight(' web/public/app.js && pass "hljs.highlight() invoked" || fail "hljs.highlight() invoked"
+grep -q 'hljs.highlightAuto(' web/public/app.js && pass "hljs.highlightAuto() invoked" || fail "hljs.highlightAuto() invoked"
+grep -q 'hljs.getLanguage(' web/public/app.js && pass "hljs language detection" || fail "hljs language detection"
+grep -q 'github-dark.min.css' web/public/index.html && pass "highlight theme CSS linked" || fail "highlight theme CSS linked"
+grep -q 'class="hljs' web/public/app.js && pass "hljs class emitted" || fail "hljs class emitted"
+
+# Mermaid diagrams
+grep -q 'mermaid.render(' web/public/app.js && pass "mermaid.render() invoked" || fail "mermaid.render() invoked"
+grep -q 'language-mermaid' web/public/app.js && pass "mermaid code-block detection" || fail "mermaid code-block detection"
+grep -q 'querySelectorAll.*language-mermaid' web/public/app.js && pass "mermaid block scan" || fail "mermaid block scan"
+grep -q "class.*=.*'conv-mermaid'" web/public/app.js && pass "conv-mermaid container created" || fail "conv-mermaid container created"
+grep -q '\.conv-mermaid' web/public/styles.css && pass "conv-mermaid styled" || fail "conv-mermaid styled"
+
+# Read-only / viewer session
+grep -q 'attachViewerWebSocket' server/src/pty.js && pass "viewer WS handler exported" || fail "viewer WS handler"
+grep -q 'readOnly' server/src/pty.js && pass "readOnly flag in pty" || fail "readOnly flag"
+grep -q "t: 'viewer-mode'" server/src/pty.js && pass "viewer-mode signal sent" || fail "viewer-mode signal"
+grep -q 'viewer-mode' web/public/app.js && pass "viewer-mode handled in client" || fail "viewer-mode client"
+# Server must drop write-side messages (PTY input/resize) for viewers
+grep -Pzoq '(?s)readOnly\s*\)\s*return.*?session\.write|session\.write.*?readOnly' server/src/pty.js \
+  && pass "viewer drops PTY writes" \
+  || fail "viewer drops PTY writes"
+
+# Chat window
+grep -q 'id="chatpane"' web/public/index.html && pass "#chatpane element" || fail "#chatpane element"
+grep -q 'id="chat-input"' web/public/index.html && pass "#chat-input element" || fail "#chat-input element"
+grep -q 'id="chat-send"' web/public/index.html && pass "#chat-send element" || fail "#chat-send element"
+grep -q 'id="chat-form"' web/public/index.html && pass "#chat-form element" || fail "#chat-form element"
+grep -q 'function sendChatMessage' web/public/app.js && pass "sendChatMessage() defined" || fail "sendChatMessage() defined"
+grep -q "t: 'chat'" server/src/pty.js && pass "chat WS frame format" || fail "chat WS frame"
+grep -q "t: 'chat-history'" server/src/pty.js && pass "chat-history replay" || fail "chat-history replay"
+grep -q "msg.t === 'chat-history'" web/public/app.js && pass "chat-history client handler" || fail "chat-history client handler"
+grep -q 'chatpane-close' web/public/app.js && pass "chatpane close binding" || fail "chatpane close binding"
+
+# Layout
+grep -q -- '--sidebar-w' web/public/styles.css && pass "sidebar width var" || fail "sidebar width var"
+grep -q -- '--chatpane-w' web/public/styles.css && pass "chatpane width var" || fail "chatpane width var"
+grep -q '#sidebar' web/public/styles.css && pass "#sidebar styling" || fail "#sidebar styling"
+grep -q '#chatpane' web/public/styles.css && pass "#chatpane styling" || fail "#chatpane styling"
+grep -q '@media' web/public/styles.css && pass "responsive @media rule" || fail "responsive @media rule"
+grep -q 'id="sidebar"' web/public/index.html && pass "sidebar in HTML" || fail "sidebar in HTML"
+grep -q 'conversation-wrap' web/public/index.html && pass "conversation-wrap in HTML" || fail "conversation-wrap in HTML"
+
+echo ""
 echo "── Server smoke test ──"
 
 # 13. Server starts and responds
@@ -108,6 +155,17 @@ echo "$RESP" | grep -q '"ok"' && pass "GET /auth/check" || fail "GET /auth/check
 curl -sf "http://127.0.0.1:$TEST_PORT/vendor/highlight.min.js" -o /dev/null 2>/dev/null && pass "highlight.min.js served" || fail "highlight.min.js served"
 curl -sf "http://127.0.0.1:$TEST_PORT/vendor/github-dark.min.css" -o /dev/null 2>/dev/null && pass "github-dark.css served" || fail "github-dark.css served"
 curl -sf "http://127.0.0.1:$TEST_PORT/vendor/mermaid.min.js" -o /dev/null 2>/dev/null && pass "mermaid.min.js served" || fail "mermaid.min.js served"
+
+# 17. Index HTML actually serves the chat pane and conversation wrapper
+INDEX=$(curl -sf "http://127.0.0.1:$TEST_PORT/" 2>/dev/null || echo "")
+echo "$INDEX" | grep -q 'id="chatpane"' && pass "index serves chatpane" || fail "index serves chatpane"
+echo "$INDEX" | grep -q 'conversation-wrap' && pass "index serves conversation-wrap" || fail "index serves conversation-wrap"
+echo "$INDEX" | grep -q 'mermaid.min.js' && pass "index includes mermaid script" || fail "index includes mermaid script"
+echo "$INDEX" | grep -q 'highlight.min.js' && pass "index includes highlight script" || fail "index includes highlight script"
+
+# 18. Invalid share token is rejected (read-only path returns share=false / not ok)
+SHARE_RESP=$(curl -s "http://127.0.0.1:$TEST_PORT/auth/check?s=bogus-token-xyz" 2>/dev/null || echo '{}')
+echo "$SHARE_RESP" | grep -q '"share":true' && fail "invalid share token rejected" || pass "invalid share token rejected"
 
 # Cleanup
 kill $SERVER_PID 2>/dev/null || true

@@ -1258,6 +1258,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 /* ── tool calls: terminal command blocks ── */
 .conv-tool-call {
   margin: 4px 0;
+  position: relative; /* anchor for the tool-name decorator */
 }
 
 .conv-tool-call summary {
@@ -1266,6 +1267,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   font-size: 0.9em;
   color: #8b949e;
   padding: 5px 10px;
+  padding-right: 78px; /* reserve space for top-right tool-name chip */
   background: rgba(255,255,255,0.04);
   border-radius: 4px;
   list-style: none;
@@ -1291,14 +1293,32 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   background: rgba(255,255,255,0.06);
 }
 
+/* Tool name floats as a small chip in the top-right corner of the pane,
+   freeing the summary line to use the full width for the call summary. */
 .conv-tool-name {
+  position: absolute;
+  top: 0;
+  right: 0;
   color: #e0a050;
   font-weight: 600;
+  font-size: 0.7em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  background: rgba(224, 160, 80, 0.12);
+  border-radius: 0 4px 0 4px;
+  pointer-events: none;
+  line-height: 1.4;
 }
 
 .conv-tool-summary {
   color: #8b949e;
   font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .conv-tool-body {

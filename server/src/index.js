@@ -188,6 +188,7 @@ app.get('/sessions', async (req, res) => {
         created_at: rec.createdAt,
         shared: true,
         shareToken: tok,
+        owner: rec.user || null,
       });
     }
     res.json([...own, ...sharedSessions]);

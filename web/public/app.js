@@ -521,7 +521,9 @@ function renderSessionList() {
       ? `<span class="session-summary">${escHtml(s.summary)}</span>`
       : (s.description ? `<span class="session-desc">${escHtml(s.description)}</span>` : '');
     const statusDot = s.status ? `<span class="session-status session-status-${s.status}" aria-label="Status: ${s.status}"></span>` : '';
-    const sharedBadge = s.shared ? '<span class="shared-badge">shared</span>' : '';
+    const sharedBadge = s.shared
+      ? `<span class="shared-badge" title="Shared by ${escHtml(s.owner || 'unknown')} — read-only">${escHtml(s.owner || 'shared')}</span>`
+      : '';
     li.innerHTML = `
       ${statusDot}
       <span class="session-title">${escHtml(dirName)}${sharedBadge}</span>
