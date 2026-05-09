@@ -176,6 +176,127 @@ echo "── Docker build ──"
 docker build -t myco-test . --quiet 2>&1 && pass "Docker build" || fail "Docker build"
 
 echo ""
+echo "── Persistence: claude config / auth / sessions survive restart ──"
+
+# Set up an isolated data dir with seeded auth + sessions + claude config
+PERSIST_DIR=$(mktemp -d)
+PERSIST_HOME=$(mktemp -d)
+PERSIST_WKS=$(mktemp -d)
+PERSIST_TOKEN="t-$(date +%s%N | tail -c 12)"
+PERSIST_SID="myco-persist-test-$(date +%s%N | tail -c 8)"
+PERSIST_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+PERSIST_NAME="myco-persist-$$"
+
+# 1. .env: auth token that mycod should load
+cat > "$PERSIST_DIR/.env" <<EOF
+MYCO_TOKENS=alice:$PERSIST_TOKEN
+EOF
+
+# 2. sessions.json: a hand-rolled session that should appear post-restart
+cat > "$PERSIST_DIR/sessions.json" <<EOF
+{"sessions":{"$PERSIST_SID":{"id":"$PERSIST_SID","user":"alice","cwd":"persist-test","absCwd":"/wks/alice/persist-test","claudeSessionId":null,"createdAt":"2026-01-01T00:00:00.000Z"}},"dismissed":[]}
+EOF
+
+# 3. .claude.json + .claude/ — entrypoint should migrate these into /root
+echo '{"persistMarker":true,"version":42}' > "$PERSIST_DIR/.claude.json"
+mkdir -p "$PERSIST_DIR/.claude"
+echo '{"persistMarker":"settings"}' > "$PERSIST_DIR/.claude/settings.json"
+
+# 4. Test Caddyfile — no ACME, accepts any host (Caddy still proxies to node:3000)
+cat > "$PERSIST_DIR/Caddyfile" <<EOF
+:80 {
+    reverse_proxy localhost:3000
+}
+EOF
+
+# 5. Pre-create the workspace dir mycod expects (mirrors the absCwd above)
+mkdir -p "$PERSIST_WKS/alice/persist-test"
+
+docker rm -f "$PERSIST_NAME" >/dev/null 2>&1 || true
+docker run -d --name "$PERSIST_NAME" \
+  -p "$PERSIST_PORT:80" \
+  -v "$PERSIST_DIR:/data" \
+  -v "$PERSIST_HOME:/root" \
+  -v "$PERSIST_WKS:/wks" \
+  -v "$PERSIST_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  myco-test >/dev/null 2>&1 && pass "container started" || fail "container started"
+
+# Wait for ready (Caddy + node both up)
+PERSIST_READY=0
+for i in $(seq 1 30); do
+  if curl -sf "http://127.0.0.1:$PERSIST_PORT/auth/check" -H "Authorization: Bearer $PERSIST_TOKEN" -o /dev/null 2>/dev/null; then
+    PERSIST_READY=1; break
+  fi
+  sleep 0.5
+done
+[ "$PERSIST_READY" = "1" ] && pass "container ready" || fail "container ready"
+
+# Pre-restart checks
+RESP1=$(curl -s "http://127.0.0.1:$PERSIST_PORT/auth/check" -H "Authorization: Bearer $PERSIST_TOKEN" 2>/dev/null)
+echo "$RESP1" | grep -q '"ok":true' && pass "auth token from .env works" || fail "auth from .env (got: $RESP1)"
+
+SESS1=$(curl -s "http://127.0.0.1:$PERSIST_PORT/sessions?all=1" -H "Authorization: Bearer $PERSIST_TOKEN" 2>/dev/null)
+echo "$SESS1" | grep -q "$PERSIST_SID" && pass "seeded session visible" || fail "seeded session visible"
+
+docker exec "$PERSIST_NAME" test -f /root/.claude.json && pass ".claude.json migrated to /root" || fail ".claude.json migrated"
+docker exec "$PERSIST_NAME" test -d /root/.claude && pass ".claude/ migrated to /root" || fail ".claude/ migrated"
+docker exec "$PERSIST_NAME" grep -q 'persistMarker' /root/.claude.json && pass ".claude.json contents preserved" || fail ".claude.json contents"
+
+# Restart and re-check the same things
+docker restart "$PERSIST_NAME" >/dev/null 2>&1
+PERSIST_READY=0
+for i in $(seq 1 30); do
+  if curl -sf "http://127.0.0.1:$PERSIST_PORT/auth/check" -H "Authorization: Bearer $PERSIST_TOKEN" -o /dev/null 2>/dev/null; then
+    PERSIST_READY=1; break
+  fi
+  sleep 0.5
+done
+[ "$PERSIST_READY" = "1" ] && pass "container ready after restart" || fail "container ready after restart"
+
+RESP2=$(curl -s "http://127.0.0.1:$PERSIST_PORT/auth/check" -H "Authorization: Bearer $PERSIST_TOKEN" 2>/dev/null)
+echo "$RESP2" | grep -q '"ok":true' && pass "auth survives restart" || fail "auth survives restart"
+
+SESS2=$(curl -s "http://127.0.0.1:$PERSIST_PORT/sessions?all=1" -H "Authorization: Bearer $PERSIST_TOKEN" 2>/dev/null)
+echo "$SESS2" | grep -q "$PERSIST_SID" && pass "session survives restart" || fail "session survives restart"
+
+docker exec "$PERSIST_NAME" grep -q 'persistMarker' /root/.claude.json && pass "claude config survives restart" || fail "claude config survives restart"
+
+# Redeploy: stop, remove, run a fresh container against the same data dir
+docker rm -f "$PERSIST_NAME" >/dev/null 2>&1
+docker run -d --name "$PERSIST_NAME" \
+  -p "$PERSIST_PORT:80" \
+  -v "$PERSIST_DIR:/data" \
+  -v "$PERSIST_HOME:/root" \
+  -v "$PERSIST_WKS:/wks" \
+  -v "$PERSIST_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  myco-test >/dev/null 2>&1
+
+PERSIST_READY=0
+for i in $(seq 1 30); do
+  if curl -sf "http://127.0.0.1:$PERSIST_PORT/auth/check" -H "Authorization: Bearer $PERSIST_TOKEN" -o /dev/null 2>/dev/null; then
+    PERSIST_READY=1; break
+  fi
+  sleep 0.5
+done
+[ "$PERSIST_READY" = "1" ] && pass "container ready after redeploy" || fail "container ready after redeploy"
+
+RESP3=$(curl -s "http://127.0.0.1:$PERSIST_PORT/auth/check" -H "Authorization: Bearer $PERSIST_TOKEN" 2>/dev/null)
+echo "$RESP3" | grep -q '"ok":true' && pass "auth survives redeploy" || fail "auth survives redeploy"
+
+SESS3=$(curl -s "http://127.0.0.1:$PERSIST_PORT/sessions?all=1" -H "Authorization: Bearer $PERSIST_TOKEN" 2>/dev/null)
+echo "$SESS3" | grep -q "$PERSIST_SID" && pass "session survives redeploy" || fail "session survives redeploy"
+
+docker exec "$PERSIST_NAME" grep -q 'persistMarker' /root/.claude.json && pass "claude config survives redeploy" || fail "claude config survives redeploy"
+
+# Cleanup — entrypoint writes as root inside the container, so use a one-shot
+# container to remove the bind-mounted contents, then rm the empty dirs as us.
+docker rm -f "$PERSIST_NAME" >/dev/null 2>&1
+docker run --rm \
+  -v "$PERSIST_DIR:/d" -v "$PERSIST_HOME:/h" -v "$PERSIST_WKS:/w" \
+  alpine sh -c 'rm -rf /d/* /d/.* /h/* /h/.* /w/* /w/.* 2>/dev/null; true' >/dev/null 2>&1 || true
+rmdir "$PERSIST_DIR" "$PERSIST_HOME" "$PERSIST_WKS" 2>/dev/null || true
+
+echo ""
 echo "─────────────────────────"
 echo "  Passed: $PASS"
 echo "  Failed: $FAIL"
