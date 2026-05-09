@@ -1,6 +1,25 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 
+/* Nerd Font for Claude's ASCII/box-drawing logo and other glyphs.
+   Files served by the container at /fonts/. Without these @font-face
+   rules the browser silently falls through to Menlo, which lacks the
+   Nerd Font private-use codepoints — Claude's icon then renders as tofu. */
+@font-face {
+  font-family: 'JetBrains Mono Nerd Font';
+  src: url('/fonts/JetBrainsMonoNerdFont-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono Nerd Font';
+  src: url('/fonts/JetBrainsMonoNerdFont-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #0d0d0d;
   --surface: #1a1a1a;

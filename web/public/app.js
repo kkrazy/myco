@@ -1,5 +1,31 @@
 /* global Terminal, FitAddon, WebglAddon, CanvasAddon, Keyboard */
 
+// Kick off font load as soon as the script runs. The browser doesn't fetch
+// @font-face fonts until something references them, and xterm's WebGL/Canvas
+// renderer caches glyphs at terminal init — if we open xterm before the
+// Nerd Font is loaded, the atlas is built with the fallback font and box
+// drawing characters render at the wrong widths, scrambling Claude's splash.
+const fontsReady = (typeof document !== 'undefined' && document.fonts)
+  ? Promise.all([
+      document.fonts.load("13px 'JetBrains Mono Nerd Font'"),
+      document.fonts.load("bold 13px 'JetBrains Mono Nerd Font'"),
+    ]).catch(() => {})
+  : Promise.resolve();
+
+// Force xterm to rebuild its glyph atlas once the font is actually loaded.
+// Setting fontFamily to itself triggers an internal re-measure; refresh()
+// repaints the visible buffer with the new atlas.
+function refreshXtermAfterFontLoad(term) {
+  if (!term || !fontsReady) return;
+  fontsReady.then(() => {
+    try {
+      const ff = term.options.fontFamily;
+      term.options.fontFamily = ff;
+      term.refresh(0, Math.max(0, (term.rows || 1) - 1));
+    } catch {}
+  });
+}
+
 const state = {
   sessions: [],
   activeId: null,
@@ -144,9 +170,13 @@ function openShareViewer(id) {
         appendChatMessage(msg.message);
       } else if (msg.t === 'exit') {
         if (state.term) state.term.writeln('\r\n[session ended]');
+      } else if (msg.t === 'error') {
+        if (state.term) state.term.writeln('\r\n[error: ' + (msg.message || 'unknown') + ']');
+        state.activeId = null; // stop the reconnect loop on stale share
       }
     });
     ws.addEventListener('close', () => {
+      if (state.activeId !== id) return;
       setTimeout(() => { if (state.activeId === id) connectShare(); }, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
     });
@@ -157,7 +187,7 @@ function openShareViewer(id) {
 function ensureXtermForFallback() {
   if (state.term) return;
   document.getElementById('terminal-wrap').hidden = false;
-  state.term = new Terminal({ scrollback: 5000, fontSize: 13 });
+  state.term = new Terminal({ scrollback: 5000, fontSize: 13, fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace" });
   state.fitAddon = new FitAddon.FitAddon();
   state.term.loadAddon(state.fitAddon);
   const el = document.getElementById('terminal');
@@ -172,6 +202,7 @@ function ensureXtermForFallback() {
     try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
   }
   setupTouchScroll(state.term);
+  refreshXtermAfterFontLoad(state.term);
 }
 
 function showConversationView() {
@@ -756,7 +787,7 @@ function openSession(id) {
     const wrap = document.getElementById('terminal-wrap');
     wrap.hidden = false;
 
-    state.term = new Terminal({ scrollback: 5000, fontSize: 13 });
+    state.term = new Terminal({ scrollback: 5000, fontSize: 13, fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace" });
     state.fitAddon = new FitAddon.FitAddon();
     state.term.loadAddon(state.fitAddon);
     const el = document.getElementById('terminal');
@@ -773,6 +804,7 @@ function openSession(id) {
     }
 
     setupTouchScroll(state.term);
+    refreshXtermAfterFontLoad(state.term);
 
     state.xtermTextarea = el.querySelector('.xterm-helper-textarea');
     if (state.xtermTextarea) state.xtermTextarea.setAttribute('inputmode', 'none');
@@ -837,11 +869,21 @@ function openSession(id) {
         appendChatMessage(msg.message);
       } else if (msg.t === 'exit') {
         state.term?.writeln('\r\n[session ended]');
+      } else if (msg.t === 'error') {
+        // Server rejected the attach — typically because the session id is
+        // stale (e.g. localStorage still pointing at a deleted session after
+        // a state-dir migration). Stop the reconnect loop, clear the stale
+        // pointer, and let the next refreshSessions/click pick something real.
+        state.term?.writeln('\r\n[error: ' + (msg.message || 'unknown') + ']');
+        if (/unknown session/i.test(msg.message || '')) {
+          try { localStorage.removeItem('myco_active_id'); } catch {}
+        }
+        state.activeId = null; // close handler's reconnect check then fails
       }
     });
 
     ws.addEventListener('close', () => {
-      if (state.activeId !== id) return; // switched to another session
+      if (state.activeId !== id) return; // switched session OR error cleared activeId
       state.term?.writeln('\r\n[reconnecting...]');
       setTimeout(() => {
         if (state.activeId === id) connect();
