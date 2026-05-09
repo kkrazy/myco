@@ -29,6 +29,10 @@ RUN mkdir -p /app/web/public/fonts && \
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
+# Build timestamp — UI fetches /build.txt and shows it in the status bar.
+# Always re-runs (date is unique each build) but the layer is cheap.
+RUN date -u +%Y-%m-%dT%H:%M:%SZ > /app/web/public/build.txt
+
 ENV MYCO_DATA=/data \
     HOST=127.0.0.1 \
     PORT=3000 \

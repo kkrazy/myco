@@ -7,7 +7,7 @@ const path = require('path');
 const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic } = require('./sessions');
 const { attachWebSocket, attachViewerWebSocket } = require('./pty');
 const {
-  AUTH_REQUIRED, userFromRequest, userFromToken,
+  isAuthRequired, userFromRequest, userFromToken,
   createShareToken, shareTokenInfo, revokeShareTokensForSession,
   reloadFromEnv,
 } = require('./auth');
@@ -62,7 +62,7 @@ app.get('/auth/check', (req, res) => {
     return res.status(401).json({ ok: false });
   }
   const user = userFromRequest(req);
-  res.json({ ok: !!user, required: AUTH_REQUIRED, user: user || null });
+  res.json({ ok: !!user, required: isAuthRequired(), user: user || null });
 });
 
 app.post('/auth/reload', requireAuth, (req, res) => {
@@ -78,7 +78,7 @@ app.post('/auth/reload', requireAuth, (req, res) => {
 const MYCO_BIN = path.resolve(__dirname, '../../myco');
 app.post('/sessions/:id/vscode-prep', requireAuth, (req, res) => {
   const id = req.params.id;
-  if (AUTH_REQUIRED && !sessionBelongsToUser(id, req.user)) {
+  if (isAuthRequired() && !sessionBelongsToUser(id, req.user)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const rec = loadStore().sessions[id];
@@ -139,7 +139,7 @@ app.post('/sessions/:id/vscode-prep', requireAuth, (req, res) => {
 
 app.post('/sessions/:id/share', requireAuth, (req, res) => {
   const id = req.params.id;
-  if (AUTH_REQUIRED && !sessionBelongsToUser(id, req.user)) {
+  if (isAuthRequired() && !sessionBelongsToUser(id, req.user)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const { token, expiresAt } = createShareToken(id, req.user || 'default');
@@ -159,10 +159,10 @@ app.get('/sessions', async (req, res) => {
     const all = req.query.all === '1';
     let own = [];
     if (user) {
-      own = await listSessions(all ? null : (AUTH_REQUIRED ? user : null));
+      own = await listSessions(all ? null : (isAuthRequired() ? user : null));
       // Tag owned sessions
       for (const s of own) {
-        if (!AUTH_REQUIRED) { s.owned = true; continue; }
+        if (!isAuthRequired()) { s.owned = true; continue; }
         const rec = getSessionRecord(s.id);
         s.owned = rec && rec.user === user;
       }
@@ -258,7 +258,7 @@ server.on('upgrade', (req, socket, head) => {
   // Log streaming WebSocket
   if (url.pathname === '/logs') {
     const tok = url.searchParams.get('token') || '';
-    const user = AUTH_REQUIRED ? userFromToken(tok) : 'default';
+    const user = isAuthRequired() ? userFromToken(tok) : 'default';
     if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
@@ -302,13 +302,13 @@ server.on('upgrade', (req, socket, head) => {
     }
   } else {
     const tok = url.searchParams.get('token') || '';
-    user = AUTH_REQUIRED ? userFromToken(tok) : 'default';
+    user = isAuthRequired() ? userFromToken(tok) : 'default';
     if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
-    if (AUTH_REQUIRED && !sessionBelongsToUser(sessionId, user)) {
+    if (isAuthRequired() && !sessionBelongsToUser(sessionId, user)) {
       // Non-owner authenticated user → viewer (readOnly)
       readOnly = true;
     }
@@ -336,7 +336,7 @@ server.on('upgrade', (req, socket, head) => {
 
 app.delete('/sessions/:id', requireAuth, (req, res) => {
   const id = req.params.id;
-  if (AUTH_REQUIRED && !sessionBelongsToUser(id, req.user)) {
+  if (isAuthRequired() && !sessionBelongsToUser(id, req.user)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   deleteSession(id);

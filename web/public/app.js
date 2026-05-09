@@ -471,6 +471,24 @@ async function init() {
   // session sidebar).
   setChatPane(window.innerWidth > 900);
   connectLogWs();
+  showBuildStamp();
+}
+
+// /build.txt is written by the Dockerfile (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+// In dev (no docker build) the file is missing and the stamp stays empty.
+async function showBuildStamp() {
+  const el = document.getElementById('build-stamp');
+  if (!el) return;
+  try {
+    const res = await fetch('/build.txt', { cache: 'no-store' });
+    if (!res.ok) return;
+    const stamp = (await res.text()).trim();
+    if (!stamp) return;
+    // Render as "build YYYY-MM-DD HH:MMZ" (drop seconds for compactness).
+    const short = stamp.replace('T', ' ').replace(/:\d{2}Z$/, 'Z');
+    el.textContent = `build ${short}`;
+    el.title = `Build timestamp: ${stamp}`;
+  } catch {}
 }
 
 async function refreshWorkspace() {

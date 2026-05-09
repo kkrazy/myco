@@ -855,6 +855,15 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   min-width: 0;
 }
 
+/* Build timestamp pulled from /build.txt — empty in dev (no docker build). */
+#build-stamp {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .65rem;
+  color: #555;
+  flex-shrink: 0;
+}
+#build-stamp:empty { display: none; }
+
 /* ── log panel ────────────────────────────────────────────────── */
 
 #log-panel {
@@ -1081,7 +1090,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   font-size: 13px;
   line-height: 1.45;
   color: #c9d1d9;
-  padding: 24px 24px 120px;
+  padding: 8px 8px 40px;
   max-width: 860px;
   margin: 0 auto;
   user-select: text;
@@ -1090,8 +1099,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 /* ── turn divider ── */
 .conv-turn {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 5px;
+  padding-top: 5px;
   border-top: 1px solid #21262d;
 }
 .conv-turn:first-child {
@@ -1112,7 +1121,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .conv-msg-user {
   color: #58d5e0;
   font-weight: 600;
-  padding: 6px 0;
+  padding: 2px 0;
 }
 
 .conv-msg-user .conv-text::before {
@@ -1123,7 +1132,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 /* ── assistant messages: green-accented block ── */
 .conv-msg-assistant {
-  margin-top: 6px;
+  margin-top: 2px;
 }
 
 .conv-msg-assistant .conv-text {
@@ -1276,7 +1285,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 /* ── tool calls: terminal command blocks ── */
 .conv-tool-call {
-  margin: 4px 0;
+  margin: 1px 0;
   position: relative; /* anchor for the tool-name decorator */
 }
 

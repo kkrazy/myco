@@ -38,7 +38,12 @@ function loadTokens() {
 
 loadTokens();
 
-const AUTH_REQUIRED = TOKENS.size > 0;
+// Dynamic so hot-reload of MYCO_TOKENS via reloadFromEnv() actually flips auth
+// on/off. Was previously a `const` captured at module load — meaning a server
+// started with no tokens stayed wide-open even after tokens were reloaded.
+function isAuthRequired() {
+  return TOKENS.size > 0;
+}
 
 function reloadFromEnv() {
   const envFile = path.join(STATE_DIR, '.env');
@@ -52,12 +57,12 @@ function reloadFromEnv() {
 }
 
 function userFromToken(tok) {
-  if (!AUTH_REQUIRED) return 'default';
+  if (!isAuthRequired()) return 'default';
   return TOKENS.get(tok) || null;
 }
 
 function userFromRequest(req) {
-  if (!AUTH_REQUIRED) return 'default';
+  if (!isAuthRequired()) return 'default';
   const auth = req.headers.authorization || '';
   const headerTok = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   const queryTok = (req.query && req.query.token) || '';
@@ -83,7 +88,7 @@ function shareTokenInfo(tok) {
 function revokeShareTokensForSession() {}
 
 module.exports = {
-  AUTH_REQUIRED,
+  isAuthRequired,
   userFromToken,
   userFromRequest,
   createShareToken,
