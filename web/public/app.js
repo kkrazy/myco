@@ -1895,10 +1895,16 @@ function renderInlineCommentEditor(draft) {
   // <textarea rows="1"> + JS auto-grow gives a single-line feel that expands
   // as the user types newlines. Enter inserts a newline (default textarea
   // behavior); Cmd/Ctrl+Enter saves; Esc cancels.
+  // Username attribution prefix — shown in the editor's prefix label so the
+  // user sees "// alice: " before they type. buildCommentLines also injects
+  // this on the saved first line.
+  const userTagText = draft.userTag ? `${draft.userTag}: ` : '';
   ed.innerHTML =
     `<div class="ce-gutter">+</div>` +
     `<div class="ce-prefix-wrap">` +
-      `<span class="ce-prefix">${escHtml(draft.indent + draft.prefix)}</span>` +
+      `<span class="ce-prefix">${escHtml(draft.indent + draft.prefix)}` +
+      (userTagText ? `<span class="ce-usertag">${escHtml(userTagText)}</span>` : '') +
+      `</span>` +
       `<textarea class="ce-input" rows="1" placeholder="comment text — ↵ for newline, ⌘↵ to save" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>` +
       (draft.suffix ? `<span class="ce-suffix">${escHtml(draft.suffix)}</span>` : '') +
     `</div>` +
@@ -1947,26 +1953,28 @@ function renderInlineCommentEditor(draft) {
 //   visually align under the prefix opening so the block reads cleanly.
 function buildCommentLines(draft, text) {
   const userLines = String(text || '').split(/\r?\n/);
-  const { indent, prefix, suffix } = draft;
+  const { indent, prefix, suffix, userTag } = draft;
+  const tag = userTag ? `${userTag}: ` : '';
   const isBlock = !!suffix;
   if (isBlock) {
     if (userLines.length === 1) {
-      return [`${indent}${prefix}${userLines[0]}${suffix}`];
+      return [`${indent}${prefix}${tag}${userLines[0]}${suffix}`];
     }
     const aligner = ' '.repeat(prefix.length);
-    const out = [`${indent}${prefix}${userLines[0]}`];
+    const out = [`${indent}${prefix}${tag}${userLines[0]}`];
     for (let i = 1; i < userLines.length - 1; i++) {
       out.push(`${indent}${aligner}${userLines[i]}`);
     }
     out.push(`${indent}${aligner}${userLines[userLines.length - 1]}${suffix}`);
     return out;
   }
-  // Line-comment style — one comment per user line. Empty user lines become
-  // a bare comment marker with the trailing space trimmed (so they look
-  // intentional rather than trailing-whitespace).
-  return userLines.map((ln) => {
-    if (ln === '') return `${indent}${prefix.replace(/\s+$/, '')}`;
-    return `${indent}${prefix}${ln}`;
+  // Line-comment style — one comment per user line. The username tag goes
+  // on the first line only; subsequent lines get the bare comment marker
+  // (typical "first author, continuation" pattern in source code).
+  return userLines.map((ln, idx) => {
+    const linePrefix = idx === 0 ? `${prefix}${tag}` : prefix;
+    if (ln === '') return `${indent}${linePrefix.replace(/\s+$/, '')}`;
+    return `${indent}${linePrefix}${ln}`;
   });
 }
 
@@ -2155,6 +2163,7 @@ function startInlineCommentEditor(anchor) {
   v.commentDraft = {
     targetLine: anchor.startLine,
     indent, prefix, suffix,
+    userTag: state.chatUser || '',     // attribution prefix shown in editor + commit
     text: '',
   };
   renderFileViewerWithCards(v.content, v.path, v.cards || []);

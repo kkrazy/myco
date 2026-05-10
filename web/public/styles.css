@@ -1526,6 +1526,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   user-select: none;
   flex-shrink: 0;
 }
+.inline-comment-editor .ce-usertag {
+  color: rgba(180, 200, 255, .9);
+  font: inherit;
+  font-weight: 600;
+}
 .inline-comment-editor .ce-input {
   flex: 1 1 auto;
   min-width: 0;
