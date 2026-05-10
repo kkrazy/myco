@@ -195,23 +195,51 @@ function openShareViewer(id) {
 function ensureXtermForFallback() {
   if (state.term) return;
   document.getElementById('terminal-wrap').hidden = false;
-  state.term = new Terminal({ scrollback: 5000, fontSize: 13, fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace" });
+  state.term = new Terminal({
+    scrollback: IS_TOUCH_DEVICE ? 1500 : 5000,  // smaller buffer on mobile = less GC pressure
+    fontSize: 13,
+    fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace",
+    cursorBlink: false,                           // idle blinks force needless repaints
+    smoothScrollDuration: 0,                      // we drive scroll ourselves
+  });
   state.fitAddon = new FitAddon.FitAddon();
   state.term.loadAddon(state.fitAddon);
   const el = document.getElementById('terminal');
   el.innerHTML = '';
   state.term.open(el);
   state.fitAddon.fit();
-  try {
-    const webgl = new WebglAddon.WebglAddon();
-    webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
-    state.term.loadAddon(webgl);
-  } catch {
+  // Renderer choice: Canvas on mobile, WebGL on desktop. WebGL on mobile
+  // Safari is expensive — every scroll dirties the canvas, and the
+  // GPU/CPU sync penalty on tile-based mobile GPUs makes scroll feel
+  // chunky. CanvasAddon does direct pixel writes, which is genuinely
+  // faster for terminal-style content on phones.
+  if (IS_TOUCH_DEVICE) {
     try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+  } else {
+    try {
+      const webgl = new WebglAddon.WebglAddon();
+      webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
+      state.term.loadAddon(webgl);
+    } catch {
+      try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+    }
   }
+  // Custom touch handler on both mobile and desktop — native scroll doesn't
+  // reach .xterm-viewport because .xterm-screen overlays it in the DOM.
   setupTouchScroll(state.term);
   refreshXtermAfterFontLoad(state.term);
 }
+
+// Touch device detection: narrow viewport OR coarse pointer (matchMedia)
+// OR a touch-capable navigator. Computed once at script load.
+const IS_TOUCH_DEVICE = (() => {
+  try {
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return true;
+    if ('ontouchstart' in window) return true;
+    if (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) return true;
+    return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  } catch { return false; }
+})();
 
 function showConversationView() {
   document.getElementById('terminal-wrap').hidden = true;
@@ -842,7 +870,13 @@ function openSession(id) {
     const wrap = document.getElementById('terminal-wrap');
     wrap.hidden = false;
 
-    state.term = new Terminal({ scrollback: 5000, fontSize: 13, fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace" });
+    state.term = new Terminal({
+      scrollback: IS_TOUCH_DEVICE ? 1500 : 5000,
+      fontSize: 13,
+      fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace",
+      cursorBlink: false,
+      smoothScrollDuration: 0,
+    });
     state.fitAddon = new FitAddon.FitAddon();
     state.term.loadAddon(state.fitAddon);
     const el = document.getElementById('terminal');
@@ -850,14 +884,23 @@ function openSession(id) {
     state.term.open(el);
     state.fitAddon.fit();
 
-    try {
-      const webgl = new WebglAddon.WebglAddon();
-      webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
-      state.term.loadAddon(webgl);
-    } catch {
+    // See createTerm — Canvas on mobile, WebGL on desktop.
+    if (IS_TOUCH_DEVICE) {
       try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+    } else {
+      try {
+        const webgl = new WebglAddon.WebglAddon();
+        webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
+        state.term.loadAddon(webgl);
+      } catch {
+        try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+      }
     }
 
+    // Custom touch handler on both mobile and desktop. Native viewport scroll
+    // doesn't work on mobile because .xterm-screen sits on top of
+    // .xterm-viewport in the DOM and absorbs touch events; the JS handler is
+    // the only thing that reliably reaches term.scrollLines.
     setupTouchScroll(state.term);
     refreshXtermAfterFontLoad(state.term);
 
@@ -876,7 +919,7 @@ function openSession(id) {
       state.keyboard = new Keyboard(document.getElementById('keyboard-bar'), sendInput);
     }
 
-    showConnOverlay('Connecting…');
+    showConnOverlay('Connecting', null, 'Establishing session…');
     // updateChatButton was called earlier when both panes were still hidden,
     // so the toggle was hidden too. Now that terminal-wrap is visible, the
     // toggle should reappear (mobile only — desktop keeps the chat pane open).
@@ -948,7 +991,7 @@ function openSession(id) {
 
     ws.addEventListener('close', () => {
       if (state.activeId !== id) return; // switched session OR error cleared activeId
-      showConnOverlay('Reconnecting…');
+      showConnOverlay('Reconnecting', null, 'Restoring session…');
       setTimeout(() => {
         if (state.activeId === id) connect();
       }, reconnectDelay);
@@ -956,7 +999,7 @@ function openSession(id) {
     });
   }
 
-  showConnOverlay('Connecting…');
+  showConnOverlay('Connecting', null, 'Establishing session…');
   console.log('[myco] openSession', id, 'isShared=', isShared, 'qs=', qs);
   connect();
 
@@ -1006,103 +1049,152 @@ function updateChatButton() {
   if (fbtn) fbtn.hidden = !state.activeId || !hasContent;
 }
 
-// Replace native viewport scroll with a JS-driven scroll that calls
-// term.scrollLines() each frame. This keeps the WebGL canvas position and
-// the scroll position in lockstep — native iOS momentum scrolls on the
-// compositor while WebGL repaints on the main thread, which desyncs.
+// Touch scroll handler. Synthesizes WheelEvents from finger deltas + has a
+// commit-threshold so taps / long-press / horizontal swipes pass through to
+// the OS. iOS-style window-sampled fling velocity drives the momentum tick.
+//
+// Note (re: native iOS scroll feel): the only architectural way to get real
+// GPU-composited momentum is to make .xterm-viewport the top touch target,
+// but its black background then covers the canvas (xterm.js#594). Until
+// upstream solves this, the JS-driven scroll below is the fallback.
 function setupTouchScroll(term) {
   const root = term.element;
   if (!root) return;
 
-  const SENSITIVITY = 1.6;
+  const SENSITIVITY = IS_TOUCH_DEVICE ? 8.0 : 1.6;
+  const SCROLL_COMMIT_PX = 6;
+  const VERTICAL_RATIO = 1.4;
 
-  let active = false;
+  let touchActive = false;
+  let scrolling = false;
   let moved = false;
   let dismissedKbd = false;
-  let startY = 0;
-  let lastY = 0;
-  let lastTime = 0;
-  let velocity = 0;     // pixels per ms (positive = scroll toward newer)
-  let pixelDebt = 0;    // sub-line-height pixels not yet applied
-  let raf = null;
+  let startX = 0, startY = 0, lastY = 0, lastTime = 0;
+  let pixelDebt = 0, pendingDy = 0;
+  let scrollRaf = null, momentumRaf = null;
+  let cachedCellHeight = 17;
 
-  // If the soft keyboard is up (native-input mode), dismiss it once a
-  // real scroll gesture starts so the terminal can use the full screen.
+  const SAMPLE_WINDOW_MS = 120;
+  const samples = [];
+  const pruneSamples = (now) => {
+    const cutoff = now - SAMPLE_WINDOW_MS;
+    while (samples.length > 0 && samples[0].t < cutoff) samples.shift();
+  };
+  const flingVelocity = () => {
+    if (samples.length < 2) return 0;
+    const first = samples[0], last = samples[samples.length - 1];
+    const dt = last.t - first.t;
+    if (dt < 8) return 0;
+    return (first.y - last.y) / dt;
+  };
+
   const dismissSoftKeyboard = () => {
     const ae = document.activeElement;
-    if (ae && ae.classList && ae.classList.contains('kbd-native-input')) {
-      ae.blur();
-    }
+    if (ae && ae.classList && ae.classList.contains('kbd-native-input')) ae.blur();
   };
-
-  const cellHeight = () => {
+  const recomputeCellHeight = () => {
     const rows = term.rows || 0;
-    return rows > 0 ? root.clientHeight / rows : 17;
+    cachedCellHeight = rows > 0 ? root.clientHeight / rows : 17;
   };
 
-  const applyPx = (dy) => {
-    pixelDebt += dy * SENSITIVITY;
-    const ch = cellHeight();
-    const lines = (pixelDebt > 0 ? Math.floor : Math.ceil)(pixelDebt / ch);
-    if (lines !== 0) {
-      term.scrollLines(lines);
-      pixelDebt -= lines * ch;
+  const flushScroll = () => {
+    scrollRaf = null;
+    if (pendingDy === 0) return;
+    const dy = pendingDy * SENSITIVITY;
+    pendingDy = 0;
+    try {
+      const wheelEvent = new WheelEvent('wheel', {
+        deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true,
+      });
+      root.dispatchEvent(wheelEvent);
+    } catch {
+      pixelDebt += dy;
+      const ch = cachedCellHeight;
+      if (ch > 0) {
+        const lines = (pixelDebt > 0 ? Math.floor : Math.ceil)(pixelDebt / ch);
+        if (lines !== 0) { term.scrollLines(lines); pixelDebt -= lines * ch; }
+      }
     }
   };
-
-  const cancelMomentum = () => {
-    if (raf) { cancelAnimationFrame(raf); raf = null; }
+  const queueScroll = (dy) => {
+    pendingDy += dy;
+    if (scrollRaf == null) scrollRaf = requestAnimationFrame(flushScroll);
   };
+  const cancelMomentum = () => {
+    if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = null; }
+    if (scrollRaf)   { cancelAnimationFrame(scrollRaf);   scrollRaf = null;   }
+  };
+
+  let ro = null;
+  try { ro = new ResizeObserver(recomputeCellHeight); ro.observe(root); } catch {}
 
   root.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) return;
     cancelMomentum();
-    active = true;
-    moved = false;
-    dismissedKbd = false;
-    pixelDebt = 0;
-    velocity = 0;
-    startY = lastY = e.touches[0].clientY;
-    lastTime = performance.now();
+    recomputeCellHeight();
+    touchActive = true; scrolling = false; moved = false; dismissedKbd = false;
+    pixelDebt = 0; pendingDy = 0; samples.length = 0;
+    const now = performance.now();
+    const t0 = e.touches[0];
+    startX = t0.clientX;
+    startY = lastY = t0.clientY;
+    lastTime = now;
+    samples.push({ t: now, y: startY });
   }, { passive: true });
 
   root.addEventListener('touchmove', (e) => {
-    if (!active || e.touches.length !== 1) return;
-    const y = e.touches[0].clientY;
+    if (!touchActive || e.touches.length !== 1) return;
+    const t0 = e.touches[0];
+    const y = t0.clientY, x = t0.clientX;
     const now = performance.now();
-    const dy = lastY - y;                       // swipe up => positive => scroll down
-    const dt = Math.max(1, now - lastTime);
-    if (Math.abs(dy) > 0) moved = true;
-    if (!dismissedKbd && Math.abs(y - startY) > 8) {
-      dismissedKbd = true;
-      dismissSoftKeyboard();
+    const dy = lastY - y;
+    const totalDy = startY - y, totalDx = startX - x;
+
+    if (!scrolling) {
+      const absDy = Math.abs(totalDy), absDx = Math.abs(totalDx);
+      if (absDy < SCROLL_COMMIT_PX && absDx < SCROLL_COMMIT_PX) {
+        samples.push({ t: now, y }); pruneSamples(now);
+        lastY = y; lastTime = now; return;
+      }
+      if (absDy < absDx * VERTICAL_RATIO) { touchActive = false; return; }
+      scrolling = true;
+      if (!dismissedKbd) { dismissedKbd = true; dismissSoftKeyboard(); }
     }
-    velocity = velocity * 0.4 + (dy / dt) * 0.6; // EWMA for stable kickoff
-    applyPx(dy);
-    lastY = y;
-    lastTime = now;
+
+    if (Math.abs(dy) > 0) moved = true;
+    samples.push({ t: now, y }); pruneSamples(now);
+    queueScroll(dy);
+    lastY = y; lastTime = now;
   }, { passive: true });
 
   root.addEventListener('touchend', () => {
-    if (!active) return;
-    active = false;
-    if (!moved || Math.abs(velocity) < 0.05) return;
-    let v = velocity;
+    if (!touchActive) return;
+    touchActive = false;
+    if (!scrolling) return;
+    scrolling = false;
+    flushScroll();
+    if (!moved) return;
+    let v = flingVelocity();
+    if (Math.abs(v) < 0.10) return;
+    if (v > 6)  v = 6;
+    if (v < -6) v = -6;
     let prev = performance.now();
     const tick = () => {
-      if (!root.isConnected) { raf = null; return; }
+      if (!root.isConnected) { momentumRaf = null; return; }
       const now = performance.now();
-      const dt = now - prev;
-      prev = now;
-      applyPx(v * dt);
-      v *= Math.pow(0.94, dt / 16);
-      if (Math.abs(v) > 0.02) raf = requestAnimationFrame(tick);
-      else raf = null;
+      const dt = now - prev; prev = now;
+      pendingDy += v * dt;
+      flushScroll();
+      v *= Math.pow(0.96, dt / 16);
+      if (Math.abs(v) > 0.04) momentumRaf = requestAnimationFrame(tick);
+      else momentumRaf = null;
     };
-    raf = requestAnimationFrame(tick);
+    momentumRaf = requestAnimationFrame(tick);
   });
 
-  root.addEventListener('touchcancel', () => { active = false; cancelMomentum(); }, { passive: true });
+  root.addEventListener('touchcancel', () => {
+    touchActive = false; scrolling = false; cancelMomentum();
+  }, { passive: true });
 }
 
 function sendInput(data) {
@@ -1506,16 +1598,17 @@ function setHidden(id, val) {
   if (el) el.hidden = val;
 }
 
-// Floating "Connecting…" / "Reconnecting…" pill over the terminal area.
-// Shown while the WebSocket is establishing or after a disconnect; hidden
-// once the socket opens. Replaces the previous inline `[connecting...]`
-// xterm writes so the indicator doesn't pollute the scrollback.
-function showConnOverlay(text, kind) {
+// Floating "Connecting" / "Reconnecting" card over the terminal area.
+// The spinner is the activity indicator; title text omits the trailing
+// ellipsis. Sub-line is updated to match the title's mode.
+function showConnOverlay(text, kind, sub) {
   const overlay = document.getElementById('conn-overlay');
   if (!overlay) return;
   const pill = overlay.querySelector('.conn-pill');
   const txt = overlay.querySelector('.conn-text');
-  if (txt) txt.textContent = text || 'Connecting…';
+  const subEl = overlay.querySelector('.conn-sub');
+  if (txt) txt.textContent = text || 'Connecting';
+  if (subEl && sub) subEl.textContent = sub;
   if (pill) pill.classList.toggle('error', kind === 'error');
   overlay.hidden = false;
 }
@@ -1569,42 +1662,11 @@ function renderViewerHeader(relPath) {
     });
   });
 
-  // Language badge.
-  const langEl = document.getElementById('files-view-lang');
-  const ext = (relPath.split('.').pop() || '').toLowerCase();
-  const langLabel = LANG_BADGE_FOR_EXT[ext] || ext.toUpperCase().slice(0, 4);
-  if (langLabel) {
-    langEl.textContent = langLabel;
-    langEl.hidden = false;
-  } else {
-    langEl.hidden = true;
-  }
-
-  // Size badge.
-  const sizeEl = document.getElementById('files-view-size');
-  const v = state.files.viewing;
-  if (v && typeof v.size === 'number') {
-    sizeEl.textContent = humanBytes(v.size);
-    sizeEl.hidden = false;
-  } else {
-    sizeEl.hidden = true;
-  }
-
   // Action buttons visible only when we have content.
+  const v = state.files.viewing;
   document.getElementById('files-copy').hidden = !(v && v.content);
   document.getElementById('files-wrap-toggle').hidden = !(v && v.content);
 }
-
-const LANG_BADGE_FOR_EXT = {
-  js: 'JS', mjs: 'JS', cjs: 'JS', jsx: 'JSX',
-  ts: 'TS', tsx: 'TSX',
-  json: 'JSON', md: 'MD', html: 'HTML', xml: 'XML', svg: 'SVG',
-  css: 'CSS', scss: 'SCSS', sh: 'SH', bash: 'SH', zsh: 'SH',
-  py: 'PY', rb: 'RB', go: 'GO', rs: 'RS',
-  yml: 'YML', yaml: 'YML', toml: 'TOML', sql: 'SQL',
-  c: 'C', h: 'H', cpp: 'C++', hpp: 'H++', java: 'JAVA', kt: 'KT', swift: 'SW',
-  ini: 'INI', txt: 'TXT', log: 'LOG',
-};
 
 function showFileViewerMessage(msg) {
   document.getElementById('files-view-body').innerHTML = '';
