@@ -1361,11 +1361,13 @@ function sendChatMessage(text) {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({ t: 'chat', text: trimmed }));
-  // @myco messages get injected into the running Claude session — auto-close
-  // the chat pane so the user can immediately see Claude's response in the
-  // terminal (owner) or transcript-stream conversation pane (read-only viewer).
+  // @myco messages get injected into the running Claude session. On mobile
+  // the chat pane is a full-screen overlay, so close it so the user can
+  // immediately see Claude's response in the session pane behind it. On
+  // desktop the chat pane is a side column that doesn't cover the session
+  // view — leave it open so the user can keep chatting.
   if (/^@myco\s+/i.test(trimmed)) {
-    setChatPane(false);
+    if (window.innerWidth <= 900) setChatPane(false);
     showMycoWaiting();
   }
   return true;
@@ -1402,6 +1404,66 @@ function bindChatUi() {
 
   document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(!state.chatPaneVisible));
   document.getElementById('chatpane-close')?.addEventListener('click', () => setChatPane(false));
+  bindChatpaneResize();
+}
+
+// Desktop chatpane resize: drag the left-edge handle to grow/shrink. Width
+// is held in the --chatpane-w CSS variable and persisted in localStorage so
+// the choice survives reloads. No-op on mobile (overlay layout).
+function bindChatpaneResize() {
+  const handle = document.getElementById('chatpane-resize');
+  const pane = document.getElementById('chatpane');
+  if (!handle || !pane || handle.dataset.bound) return;
+  handle.dataset.bound = '1';
+
+  const MIN_W = 240;
+
+  // Restore last-saved width.
+  const saved = parseInt(localStorage.getItem('myco_chatpane_w') || '', 10);
+  if (Number.isFinite(saved) && saved >= MIN_W && saved <= 1200) {
+    document.documentElement.style.setProperty('--chatpane-w', saved + 'px');
+  }
+
+  let dragging = false;
+  const onDown = (e) => {
+    if (window.innerWidth <= 900) return;       // mobile overlay → no resize
+    if (e.button != null && e.button !== 0) return;
+    e.preventDefault();
+    dragging = true;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    // chatpane sits at viewport's right edge; new width = distance from cursor to right edge.
+    const max = Math.max(MIN_W, Math.floor(window.innerWidth * 0.7));
+    const newW = Math.max(MIN_W, Math.min(max, window.innerWidth - e.clientX));
+    document.documentElement.style.setProperty('--chatpane-w', newW + 'px');
+  };
+  const onUp = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try { handle.releasePointerCapture(e.pointerId); } catch {}
+    const cur = getComputedStyle(document.documentElement).getPropertyValue('--chatpane-w').trim();
+    const px = parseInt(cur, 10);
+    if (Number.isFinite(px)) localStorage.setItem('myco_chatpane_w', String(px));
+  };
+
+  handle.addEventListener('pointerdown', onDown);
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', onUp);
+  handle.addEventListener('pointercancel', onUp);
+  handle.addEventListener('dblclick', () => {
+    // Double-click to reset to default width.
+    document.documentElement.style.setProperty('--chatpane-w', '320px');
+    localStorage.removeItem('myco_chatpane_w');
+  });
 }
 
 // ── per-session file explorer ───────────────────────────────────────────────

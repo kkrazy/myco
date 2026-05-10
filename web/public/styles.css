@@ -1073,6 +1073,28 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--surface);
+  position: relative;            /* anchor for #chatpane-resize handle */
+}
+
+/* Drag handle on the chatpane's left edge — desktop only. Drag left to grow,
+   right to shrink. Width persisted to localStorage as --chatpane-w. */
+#chatpane-resize {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 15;
+  transition: background-color .12s;
+  touch-action: none;
+}
+#chatpane-resize:hover,
+#chatpane-resize.dragging { background: rgba(120, 160, 230, .35); }
+@media (max-width: 900px) {
+  /* Mobile chatpane is a full-screen overlay — no resizing. */
+  #chatpane-resize { display: none; }
 }
 
 #chatpane header {
