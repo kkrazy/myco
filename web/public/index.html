@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.json" />
   <title>myco</title>
   <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=54" />
+  <link rel="stylesheet" href="styles.css?v=61" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -41,6 +41,12 @@
       <div id="terminal-wrap" hidden>
         <div id="terminal"></div>
         <div id="keyboard-bar"></div>
+        <div id="conn-overlay" hidden>
+          <div class="conn-pill">
+            <span class="conn-dot"></span>
+            <span class="conn-text">Connecting…</span>
+          </div>
+        </div>
       </div>
       <div id="conversation-wrap" hidden>
         <div id="conv-messages"></div>
@@ -58,15 +64,11 @@
           <header id="files-view-header">
             <button id="files-view-back" title="Back to tree">‹</button>
             <span id="files-view-crumbs"></span>
-            <span id="files-view-lang" class="lang-badge" hidden></span>
-            <span id="files-view-size" class="size-badge" hidden></span>
-            <span id="files-view-dirty" hidden>●</span>
             <span class="header-spacer"></span>
             <button id="files-wrap-toggle" title="Toggle wrap" hidden>⏎</button>
             <button id="files-copy" title="Copy" hidden>📋</button>
-            <button id="files-edit" title="Edit" hidden>✎</button>
-            <button id="files-save" title="Save" hidden>Save</button>
-            <button id="files-cancel" title="Cancel" hidden>×</button>
+            <span id="files-view-lang" class="lang-badge" hidden></span>
+            <span id="files-view-size" class="size-badge" hidden></span>
           </header>
           <div id="files-action-bar" hidden>
             <span id="files-action-label">L—</span>
@@ -143,6 +145,6 @@
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
   <script src="keyboard.js?v=7"></script>
-  <script src="app.js?v=79"></script>
+  <script src="app.js?v=81"></script>
 </body>
 </html>

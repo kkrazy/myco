@@ -876,7 +876,7 @@ function openSession(id) {
       state.keyboard = new Keyboard(document.getElementById('keyboard-bar'), sendInput);
     }
 
-    state.term.writeln('\r\n[connecting...]');
+    showConnOverlay('Connecting…');
     // updateChatButton was called earlier when both panes were still hidden,
     // so the toggle was hidden too. Now that terminal-wrap is visible, the
     // toggle should reappear (mobile only — desktop keeps the chat pane open).
@@ -898,6 +898,7 @@ function openSession(id) {
 
     ws.addEventListener('open', () => {
       reconnectDelay = 1000;
+      hideConnOverlay();
       if (state.term) {
         ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
       }
@@ -947,7 +948,7 @@ function openSession(id) {
 
     ws.addEventListener('close', () => {
       if (state.activeId !== id) return; // switched session OR error cleared activeId
-      state.term?.writeln('\r\n[reconnecting...]');
+      showConnOverlay('Reconnecting…');
       setTimeout(() => {
         if (state.activeId === id) connect();
       }, reconnectDelay);
@@ -955,7 +956,7 @@ function openSession(id) {
     });
   }
 
-  if (state.term) state.term.writeln('\r\n[connecting...]');
+  showConnOverlay('Connecting…');
   console.log('[myco] openSession', id, 'isShared=', isShared, 'qs=', qs);
   connect();
 
@@ -1470,12 +1471,12 @@ async function openFileInViewer(relPath) {
   if (res.status === 415) {
     state.files.viewing.binary = true;
     showFileViewerMessage(`Binary file (${humanBytes(body.size)}) — not viewable.`);
-    document.getElementById('files-edit').hidden = true;
+    setHidden('files-edit', true);
     return;
   }
   if (res.status === 413) {
     showFileViewerMessage(`File too large to view (${humanBytes(body.size)}).`);
-    document.getElementById('files-edit').hidden = true;
+    setHidden('files-edit', true);
     return;
   }
   if (!res.ok) {
@@ -1496,17 +1497,45 @@ async function openFileInViewer(relPath) {
   }).catch(() => {});
 }
 
+// Defensive helper — no-op if the element no longer exists. Several edit-mode
+// elements (#files-edit, #files-save, #files-cancel, #files-view-dirty) were
+// removed when whole-file edit mode was retired; the leftover references in
+// the (unreachable) edit functions stay safe via this helper.
+function setHidden(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.hidden = val;
+}
+
+// Floating "Connecting…" / "Reconnecting…" pill over the terminal area.
+// Shown while the WebSocket is establishing or after a disconnect; hidden
+// once the socket opens. Replaces the previous inline `[connecting...]`
+// xterm writes so the indicator doesn't pollute the scrollback.
+function showConnOverlay(text, kind) {
+  const overlay = document.getElementById('conn-overlay');
+  if (!overlay) return;
+  const pill = overlay.querySelector('.conn-pill');
+  const txt = overlay.querySelector('.conn-text');
+  if (txt) txt.textContent = text || 'Connecting…';
+  if (pill) pill.classList.toggle('error', kind === 'error');
+  overlay.hidden = false;
+}
+function hideConnOverlay() {
+  const overlay = document.getElementById('conn-overlay');
+  if (overlay) overlay.hidden = true;
+}
+
 function showFileViewerPane(relPath) {
   document.getElementById('files-view-pane').hidden = false;
   renderViewerHeader(relPath);
-  document.getElementById('files-view-msg').hidden = true;
-  document.getElementById('files-view-msg').textContent = '';
-  document.getElementById('files-view-dirty').hidden = true;
-  document.getElementById('files-edit').hidden = false;
-  document.getElementById('files-save').hidden = true;
-  document.getElementById('files-cancel').hidden = true;
-  document.getElementById('files-edit-area').hidden = true;
-  document.getElementById('files-action-bar').hidden = true;
+  setHidden('files-view-msg', true);
+  const msg = document.getElementById('files-view-msg');
+  if (msg) msg.textContent = '';
+  setHidden('files-view-dirty', true);
+  setHidden('files-edit', false);
+  setHidden('files-save', true);
+  setHidden('files-cancel', true);
+  setHidden('files-edit-area', true);
+  setHidden('files-action-bar', true);
   // On mobile, hide the tree to give the viewer the full width.
   if (window.innerWidth <= 900) {
     document.getElementById('files-tree-pane').hidden = true;

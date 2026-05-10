@@ -30,6 +30,14 @@
   --accent: #4caf82;
   --danger: #ff6b6b;
   --sidebar-w: 280px;
+  /* Shared height for all pane headers (sidebar, file tree, file viewer,
+     chat). Keeps the four banded rows visually aligned when all four are
+     open side-by-side. Bumped on mobile to clear the floating chrome
+     buttons (☰ / 📁 / 💬). */
+  --pane-header-h: 52px;
+  /* Shared size for all chrome buttons (sidebar +/‹, back-to-home ☰,
+     files 📁, chat 💬, chat-close ×) so the chrome reads as one set. */
+  --chrome-btn-size: 32px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -74,7 +82,10 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: calc(14px + var(--safe-top)) calc(16px + var(--safe-right)) 14px calc(16px + var(--safe-left));
+  padding: 8px calc(16px + var(--safe-right)) 8px calc(16px + var(--safe-left));
+  padding-top: calc(8px + var(--safe-top));
+  min-height: calc(var(--pane-header-h) + var(--safe-top));
+  box-sizing: border-box;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   position: sticky;
@@ -89,35 +100,39 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: var(--text);
   border: none;
   border-radius: 8px;
-  width: 36px; height: 36px;
-  font-size: 1.1rem;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
+  font-size: .95rem;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   transition: transform .08s, background .15s;
 }
-#btn-spawn { background: var(--accent); color: #000; font-size: 1.4rem; font-weight: 600; }
+#btn-spawn { background: var(--accent); color: #000; font-size: 1.2rem; font-weight: 600; }
 #btn-spawn:active, #btn-collapse:active { transform: scale(.92); }
 
+/* "Back to home / sessions" toggle. Matches the look-and-feel of #btn-files
+   and #btn-chat (rounded square, blurred dark glass, subtle white border)
+   so the three top-chrome buttons feel like one cluster. Sized to fit
+   within the 52px shared pane header with breathing room above + below. */
 #btn-expand {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
-  left: calc(env(safe-area-inset-left, 0px) + 12px);
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
   z-index: 50;
-  width: 40px; height: 40px;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
   padding: 0;
-  background: rgba(36, 36, 36, .85);
-  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  background: rgba(40, 40, 40, .85);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  font-size: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, .08);
+  font-size: .95rem;
   line-height: 1;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(0,0,0,.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   transition: transform .08s;
 }
 #btn-expand:active { transform: scale(.92); }
@@ -411,6 +426,56 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;          /* anchor for #conn-overlay */
+}
+
+/* ── connection-state floating pill ───────────────────────────────────────
+   Sits centered over the terminal area while the WebSocket is establishing
+   or reconnecting. Replaces the old inline `[connecting...]` text in xterm. */
+#conn-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 30;
+}
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(20, 24, 34, .88);
+  border: 1px solid rgba(120, 160, 230, .40);
+  color: #d8e6ff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font: 12px 'JetBrains Mono', monospace;
+  letter-spacing: .03em;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+  pointer-events: auto;
+  animation: conn-fade-in .18s ease-out;
+}
+.conn-pill.error {
+  border-color: rgba(255, 130, 130, .45);
+  color: #ffd0d0;
+}
+.conn-pill.error .conn-dot { background: #f88; }
+.conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #ffd56b;
+  animation: conn-pulse 1.2s infinite;
+}
+@keyframes conn-pulse {
+  0%, 100% { opacity: .35; transform: scale(.75); }
+  50%      { opacity: 1.0; transform: scale(1.25); }
+}
+@keyframes conn-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 #terminal {
@@ -650,23 +715,15 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     inset: 0;
     width: 100%;
     min-width: 0;
-    z-index: 40;
+    /* Above the floating chrome buttons (z-50) so the full-screen sidebar
+       cleanly covers ☰ / 📁 / 💬 instead of letting them leak through. */
+    z-index: 60;
     border-right: none;
   }
   #sidebar header h1 { font-size: 1.4rem; }
   #btn-collapse { display: none; }
-
-  /* Header + button sized to match the title text */
-  #btn-spawn {
-    position: static;
-    width: auto;
-    height: 1.6rem;
-    padding: 0 12px;
-    border-radius: 8px;
-    font-size: 1.2rem;
-    line-height: 1;
-    box-shadow: none;
-  }
+  /* #btn-spawn keeps the shared chrome-button square shape on mobile too,
+     instead of the previous pill — see :root --chrome-btn-size. */
 
   #session-list {
     display: grid;
@@ -792,7 +849,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     padding-top: calc(var(--safe-top) + 60px);
   }
 
-  #btn-expand { width: 44px; height: 44px; border-radius: 50%; }
+  /* (#btn-expand size is unified via --chrome-btn-size; no per-button
+     override needed here.) */
 
   /* Bottom-sheet modal on phones */
   #spawn-modal { align-items: flex-end; padding: 0; }
@@ -943,18 +1001,29 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: calc(14px + var(--safe-top)) 16px 14px 16px;
+  padding: 8px 16px;
+  padding-top: calc(8px + var(--safe-top));
+  min-height: calc(var(--pane-header-h) + var(--safe-top));
+  box-sizing: border-box;
   border-bottom: 1px solid var(--border);
 }
 #chatpane h2 { flex: 1; font-size: 1rem; font-weight: 600; color: var(--accent); letter-spacing: .05em; }
 #chatpane-close {
-  background: none;
+  background: var(--border);
+  color: var(--text);
   border: none;
-  color: var(--muted);
-  font-size: 1.4rem;
+  border-radius: 8px;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
+  font-size: 1.05rem;
   line-height: 1;
-  padding: 4px 8px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .08s, background .15s;
 }
+#chatpane-close:hover { background: rgba(255, 255, 255, .12); }
+#chatpane-close:active { transform: scale(.92); }
 
 .chat-empty {
   padding: 18px 16px;
@@ -1044,19 +1113,20 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #chat-send:disabled { opacity: .4; cursor: not-allowed; }
 
 /* Floating toggle on the terminal pane (always available when a session
-   is open). Position it top-right so it doesn't collide with btn-expand. */
+   is open). Position it top-right so it doesn't collide with btn-expand.
+   Sized to fit within the 52px shared pane header. */
 #btn-chat {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
-  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  right: calc(env(safe-area-inset-right, 0px) + 10px);
   z-index: 50;
-  width: 40px; height: 40px;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
   padding: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(40, 40, 40, .85);
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, .08);
-  font-size: 1.1rem;
+  font-size: .95rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1068,16 +1138,17 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 /* Files toggle sits left of #btn-chat in the same fixed cluster. */
 #btn-files {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
-  right: calc(env(safe-area-inset-right, 0px) + 60px);
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  /* 10 + chrome-btn-size + 8 gap from right edge — desktop value; mobile bumps in @media */
+  right: calc(env(safe-area-inset-right, 0px) + 10px + var(--chrome-btn-size) + 8px);
   z-index: 50;
-  width: 40px; height: 40px;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
   padding: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(40, 40, 40, .85);
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, .08);
-  font-size: 1.05rem;
+  font-size: .9rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1107,11 +1178,16 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   flex-direction: column;
   background: #0a0e14;
 }
+/* Both pane headers (tree + viewer) share the same min-height so the split
+   reads as one banded row, and reserve enough horizontal space for the
+   floating chrome buttons (☰ / 📁 / 💬) that overlay the top edge. */
 #files-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 8px 12px;
+  min-height: var(--pane-header-h);
+  box-sizing: border-box;
   border-bottom: 1px solid rgba(255, 255, 255, .06);
   font: 12px 'JetBrains Mono', monospace;
   color: var(--text);
@@ -1209,12 +1285,15 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 8px 92px 8px 12px;        /* right padding clears #btn-files + #btn-chat (32+8+32+10+10) */
+  min-height: var(--pane-header-h);  /* shared with sidebar / file list / chat */
+  box-sizing: border-box;
   border-bottom: 1px solid rgba(255, 255, 255, .06);
   font: 12px 'JetBrains Mono', monospace;
   background: rgba(255, 255, 255, .02);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;                 /* directory + filename stay on one line */
   flex-shrink: 0;
+  overflow: hidden;                  /* crumbs shrink with ellipsis instead of wrapping */
 }
 #files-view-header button {
   background: transparent;
@@ -1225,6 +1304,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   padding: 3px 8px;
   border-radius: 6px;
   transition: background-color .08s;
+  flex-shrink: 0;
 }
 #files-view-header button:hover { background: rgba(255, 255, 255, .08); }
 #files-view-header .header-spacer { flex: 1; }
@@ -1233,11 +1313,37 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #files-cancel { color: #f88 !important; }
 #files-view-back { font-size: 1.2rem !important; }
 
-#files-view-crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; flex: 1; min-width: 0; }
-#files-view-crumbs .crumb { color: rgba(255,255,255,.55); cursor: pointer; padding: 1px 4px; border-radius: 3px; }
+/* Single-line breadcrumb: directory crumbs are flex-shrinkable with ellipsis;
+   the filename (.crumb.last) and separators are flex-shrink:0 so the
+   filename always stays fully readable, and earlier path segments truncate
+   first if the header is narrow. */
+#files-view-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: nowrap;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+#files-view-crumbs .crumb {
+  color: rgba(255,255,255,.55);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
 #files-view-crumbs .crumb:hover { background: rgba(255,255,255,.06); color: var(--text); }
-#files-view-crumbs .crumb-sep { color: rgba(255,255,255,.25); padding: 0 1px; }
-#files-view-crumbs .crumb.last { color: var(--text); cursor: default; }
+#files-view-crumbs .crumb-sep { color: rgba(255,255,255,.25); padding: 0 1px; flex-shrink: 0; }
+#files-view-crumbs .crumb.last {
+  color: var(--text);
+  cursor: default;
+  flex-shrink: 0;          /* filename never truncates */
+}
 #files-view-crumbs .crumb.last:hover { background: transparent; }
 
 .lang-badge {
@@ -1249,11 +1355,14 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: #8ab8ff;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  flex-shrink: 0;
 }
 .size-badge {
   font: 10.5px 'JetBrains Mono', monospace;
   color: rgba(255,255,255,.45);
   padding: 0 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 #files-view-dirty { color: #fb8; padding: 0 4px; }
 
@@ -1579,6 +1688,19 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     border-bottom: 1px solid rgba(255, 255, 255, .06);
     max-height: 40vh;
   }
+  /* Bump the shared header height + chrome-button size on mobile (single
+     variable cascade — no per-button overrides needed). */
+  :root {
+    --pane-header-h: 56px;
+    --chrome-btn-size: 36px;
+  }
+  /* On mobile, ☰ (left) and 📁 + 💬 (right) overlay whichever pane is
+     at the top. Reserve room on both sides of both file-pane headers. */
+  #files-header,
+  #files-view-header {
+    padding-left: 54px;     /* clear #btn-expand (10 + 36 + ~8 gap) */
+    padding-right: 100px;   /* clear #btn-files + #btn-chat (10 + 36 + 8 + 36 + 10) */
+  }
   /* Prevent iOS Safari focus auto-zoom by keeping textarea ≥16px. */
   #files-edit-area { font-size: 16px; }
   .code-chunk { font-size: 12.5px; }
@@ -1602,7 +1724,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     inset: 0;
     width: 100%;
     min-width: 0;
-    z-index: 40;
+    /* Match #sidebar — full-screen overlay must cover the floating buttons. */
+    z-index: 60;
     border-left: none;
   }
 }
