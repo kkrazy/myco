@@ -46,7 +46,7 @@ const state = {
     visible: false,
     currentPath: '.',
     history: [],         // back-stack of dir paths for the up-button
-    viewing: null,       // { path, mtimeMs, content, dirty, editing, binary }
+    viewing: null,       // { path, mtimeMs, content, binary, cards, selection, pending, commentDraft, wrap, size }
     prevView: null,      // 'terminal' | 'conversation' — what to restore on toggle off
   },
 };
@@ -165,6 +165,10 @@ function openShareViewer(id) {
         const newMsgs = msg.messages || [];
         state.transcriptMessages.push(...newMsgs);
         appendTranscriptMessages(newMsgs);
+        // Only hide on an actual assistant reply — the first transcript-delta
+        // after @myco is the user message Claude echoes back, which doesn't
+        // count as "response returned".
+        if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
       } else if (msg.t === 'output') {
@@ -964,6 +968,7 @@ function openSession(id) {
         const newMsgs = msg.messages || [];
         state.transcriptMessages.push(...newMsgs);
         appendTranscriptMessages(newMsgs);
+        if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
       } else if (msg.t === 'output') {
@@ -1061,9 +1066,17 @@ function setupTouchScroll(term) {
   const root = term.element;
   if (!root) return;
 
-  const SENSITIVITY = IS_TOUCH_DEVICE ? 8.0 : 1.6;
   const SCROLL_COMMIT_PX = 6;
   const VERTICAL_RATIO = 1.4;
+  // Discrete-tick scrolling — used on touch only. Emit one wheel tick per
+  // PX_PER_TICK pixels of finger travel, sized to one xterm wheel tick.
+  // This avoids the line-quantization jitter that fractional smoothing
+  // produced on small/slow scrolls (Claude's TUI scrolls in whole lines,
+  // so fractional wheel deltaY rounds inconsistently and visibly chops).
+  // Larger PX_PER_TICK = less sensitive; DELTA_PER_TICK matches xterm's
+  // built-in expectation of ~100px/tick.
+  const PX_PER_TICK = 28;
+  const DELTA_PER_TICK = 50;
 
   let touchActive = false;
   let scrolling = false;
@@ -1097,17 +1110,24 @@ function setupTouchScroll(term) {
     cachedCellHeight = rows > 0 ? root.clientHeight / rows : 17;
   };
 
+  // Discrete-tick scroll: emit a whole number of xterm wheel ticks per
+  // PX_PER_TICK of accumulated finger movement, holding the sub-tick
+  // residual until enough has built up. Eliminates the line-quantization
+  // jitter that fractional wheel events produced on small/slow scrolls.
   const flushScroll = () => {
     scrollRaf = null;
     if (pendingDy === 0) return;
-    const dy = pendingDy * SENSITIVITY;
-    pendingDy = 0;
+    const ticks = (pendingDy > 0 ? Math.floor : Math.ceil)(pendingDy / PX_PER_TICK);
+    if (ticks === 0) return;            // not enough finger travel for a tick
+    pendingDy -= ticks * PX_PER_TICK;
+    const dy = ticks * DELTA_PER_TICK;
     try {
       const wheelEvent = new WheelEvent('wheel', {
         deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true,
       });
       root.dispatchEvent(wheelEvent);
     } catch {
+      // WheelEvent constructor unavailable — scroll xterm's buffer directly.
       pixelDebt += dy;
       const ch = cachedCellHeight;
       if (ch > 0) {
@@ -1341,7 +1361,32 @@ function sendChatMessage(text) {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({ t: 'chat', text: trimmed }));
+  // @myco messages get injected into the running Claude session — auto-close
+  // the chat pane so the user can immediately see Claude's response in the
+  // terminal (owner) or transcript-stream conversation pane (read-only viewer).
+  if (/^@myco\s+/i.test(trimmed)) {
+    setChatPane(false);
+    showMycoWaiting();
+  }
   return true;
+}
+
+// Floating "waiting for Claude" pill — shown after sending @myco, auto-hides
+// on the next transcript-delta (or after a safety timeout). Pure UI; the
+// server does not send an explicit ack.
+let _mycoWaitingTimer = null;
+function showMycoWaiting() {
+  const el = document.getElementById('myco-waiting');
+  if (!el) return;
+  el.hidden = false;
+  if (_mycoWaitingTimer) clearTimeout(_mycoWaitingTimer);
+  // Safety fallback in case Claude never replies (e.g. session is paused).
+  _mycoWaitingTimer = setTimeout(hideMycoWaiting, 90000);
+}
+function hideMycoWaiting() {
+  const el = document.getElementById('myco-waiting');
+  if (el) el.hidden = true;
+  if (_mycoWaitingTimer) { clearTimeout(_mycoWaitingTimer); _mycoWaitingTimer = null; }
 }
 
 function bindChatUi() {
@@ -1372,9 +1417,6 @@ function bindFilesUi() {
     loadFileTree(prev);
   });
   document.getElementById('files-view-back')?.addEventListener('click', closeFileViewer);
-  document.getElementById('files-edit')?.addEventListener('click', enterEditMode);
-  document.getElementById('files-cancel')?.addEventListener('click', cancelEdit);
-  document.getElementById('files-save')?.addEventListener('click', () => { saveFile().catch(() => {}); });
   document.getElementById('files-copy')?.addEventListener('click', copyFileContents);
   document.getElementById('files-wrap-toggle')?.addEventListener('click', toggleWrap);
 
@@ -1550,10 +1592,8 @@ async function openFileInViewer(relPath) {
 
   // Initialize viewing state up-front so showFileViewerPane has metadata.
   state.files.viewing = {
-    path: relPath, mtimeMs: body.mtimeMs, content: '',
-    dirty: false, editing: false, binary: false,
-    cards: [], selection: null, pending: null,
-    commentDraft: null,
+    path: relPath, mtimeMs: body.mtimeMs, content: '', binary: false,
+    cards: [], selection: null, pending: null, commentDraft: null,
     wrap: /\.(md|markdown|txt|log)$/i.test(relPath),
     size: body.size,
   };
@@ -1563,12 +1603,10 @@ async function openFileInViewer(relPath) {
   if (res.status === 415) {
     state.files.viewing.binary = true;
     showFileViewerMessage(`Binary file (${humanBytes(body.size)}) — not viewable.`);
-    setHidden('files-edit', true);
     return;
   }
   if (res.status === 413) {
     showFileViewerMessage(`File too large to view (${humanBytes(body.size)}).`);
-    setHidden('files-edit', true);
     return;
   }
   if (!res.ok) {
@@ -1587,15 +1625,6 @@ async function openFileInViewer(relPath) {
       renderFileViewerWithCards(state.files.viewing.content, body.path, cards);
     }
   }).catch(() => {});
-}
-
-// Defensive helper — no-op if the element no longer exists. Several edit-mode
-// elements (#files-edit, #files-save, #files-cancel, #files-view-dirty) were
-// removed when whole-file edit mode was retired; the leftover references in
-// the (unreachable) edit functions stay safe via this helper.
-function setHidden(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.hidden = val;
 }
 
 // Floating "Connecting" / "Reconnecting" card over the terminal area.
@@ -1620,15 +1649,10 @@ function hideConnOverlay() {
 function showFileViewerPane(relPath) {
   document.getElementById('files-view-pane').hidden = false;
   renderViewerHeader(relPath);
-  setHidden('files-view-msg', true);
   const msg = document.getElementById('files-view-msg');
-  if (msg) msg.textContent = '';
-  setHidden('files-view-dirty', true);
-  setHidden('files-edit', false);
-  setHidden('files-save', true);
-  setHidden('files-cancel', true);
-  setHidden('files-edit-area', true);
-  setHidden('files-action-bar', true);
+  msg.hidden = true;
+  msg.textContent = '';
+  document.getElementById('files-action-bar').hidden = true;
   // On mobile, hide the tree to give the viewer the full width.
   if (window.innerWidth <= 900) {
     document.getElementById('files-tree-pane').hidden = true;
@@ -1657,7 +1681,7 @@ function renderViewerHeader(relPath) {
       const p = el.dataset.path;
       if (p === '' || el.classList.contains('last')) return;
       // Navigate back to directory and close viewer.
-      closeFileViewer(true);
+      closeFileViewer();
       loadFileTree(p || '.');
     });
   });
@@ -1675,10 +1699,7 @@ function showFileViewerMessage(msg) {
   m.hidden = false;
 }
 
-function closeFileViewer(skipDirtyPrompt) {
-  if (!skipDirtyPrompt && state.files.viewing && state.files.viewing.dirty) {
-    if (!confirm('Discard unsaved edits?')) return;
-  }
+function closeFileViewer() {
   document.getElementById('files-view-pane').hidden = true;
   document.getElementById('files-tree-pane').hidden = false;
   document.getElementById('files-action-bar').hidden = true;
@@ -2199,7 +2220,7 @@ function onSelectionChange() {
   // popover is hidden anyway).
   if (v && v.commentDraft) return;
 
-  if (!v || v.editing || v.binary || !v.content) {
+  if (!v || v.binary || !v.content) {
     hideActionBar();
     return;
   }
@@ -2323,130 +2344,6 @@ function hljsLangForExt(ext) {
     sql: 'sql', dockerfile: 'dockerfile', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
   };
   return map[ext] || null;
-}
-
-function enterEditMode() {
-  const v = state.files.viewing;
-  if (!v || v.binary) return;
-  // Cancel any inline comment draft before switching to whole-file edit.
-  v.commentDraft = null;
-  const ta = document.getElementById('files-edit-area');
-  ta.value = v.content;
-  ta.hidden = false;
-  document.getElementById('files-view-body').innerHTML = '';
-  document.getElementById('files-view-body').hidden = true;
-  document.getElementById('files-action-bar').hidden = true;
-  document.getElementById('files-edit').hidden = true;
-  document.getElementById('files-save').hidden = false;
-  document.getElementById('files-cancel').hidden = false;
-  v.editing = true;
-  v.dirty = false;
-  if (!ta.dataset.bound) {
-    ta.dataset.bound = '1';
-    ta.addEventListener('input', () => {
-      const cv = state.files.viewing;
-      if (!cv) return;
-      cv.dirty = (ta.value !== cv.content);
-      document.getElementById('files-view-dirty').hidden = !cv.dirty;
-    });
-  }
-  ta.focus();
-}
-
-function cancelEdit() {
-  const v = state.files.viewing;
-  if (!v) return;
-  if (v.dirty && !confirm('Discard unsaved edits?')) return;
-  v.editing = false;
-  v.dirty = false;
-  document.getElementById('files-edit-area').hidden = true;
-  document.getElementById('files-edit-area').value = '';
-  document.getElementById('files-view-body').hidden = false;
-  document.getElementById('files-edit').hidden = false;
-  document.getElementById('files-save').hidden = true;
-  document.getElementById('files-cancel').hidden = true;
-  document.getElementById('files-view-dirty').hidden = true;
-  renderFileViewerWithCards(v.content, v.path, v.cards || []);
-}
-
-async function saveFile() {
-  const v = state.files.viewing;
-  if (!v || !v.editing) return;
-  const ta = document.getElementById('files-edit-area');
-  const newContent = ta.value;
-  const id = state.activeId;
-  const res = await authedFetch(`/sessions/${encodeURIComponent(id)}/file`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: v.path, content: newContent, expectedMtimeMs: v.mtimeMs }),
-  });
-  if (res.status === 409) {
-    await handleSaveConflict(newContent);
-    return;
-  }
-  if (!res.ok) {
-    let body = {};
-    try { body = await res.json(); } catch {}
-    alert(`Save failed: ${body.error || res.status}`);
-    return;
-  }
-  const out = await res.json();
-  v.content = newContent;
-  v.mtimeMs = out.mtimeMs;
-  v.dirty = false;
-  v.editing = false;
-  document.getElementById('files-edit-area').hidden = true;
-  document.getElementById('files-view-body').hidden = false;
-  document.getElementById('files-edit').hidden = false;
-  document.getElementById('files-save').hidden = true;
-  document.getElementById('files-cancel').hidden = true;
-  document.getElementById('files-view-dirty').hidden = true;
-  renderFileViewerWithCards(newContent, v.path, v.cards || []);
-}
-
-async function handleSaveConflict(newContent) {
-  const choice = window.prompt(
-    'File changed on disk since you opened it.\n' +
-    'Type "reload" to discard your edits and load the new content.\n' +
-    'Type "overwrite" to overwrite the disk version with your edits.\n' +
-    'Anything else cancels.',
-    'reload'
-  );
-  if (choice === 'reload') {
-    const v = state.files.viewing;
-    await openFileInViewer(v.path);
-    return;
-  }
-  if (choice === 'overwrite') {
-    // Re-fetch to capture the new mtime, then re-PUT with that mtime.
-    const v = state.files.viewing;
-    const id = state.activeId;
-    const r = await authedFetch(`/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(v.path)}`);
-    if (!r.ok) { alert('Re-fetch failed'); return; }
-    const fresh = await r.json();
-    const r2 = await authedFetch(`/sessions/${encodeURIComponent(id)}/file`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: v.path, content: newContent, expectedMtimeMs: fresh.mtimeMs }),
-    });
-    if (!r2.ok) {
-      let b = {}; try { b = await r2.json(); } catch {}
-      alert(`Overwrite failed: ${b.error || r2.status}`);
-      return;
-    }
-    const out = await r2.json();
-    v.content = newContent;
-    v.mtimeMs = out.mtimeMs;
-    v.dirty = false;
-    v.editing = false;
-    document.getElementById('files-edit-area').hidden = true;
-    document.getElementById('files-view-body').hidden = false;
-    document.getElementById('files-edit').hidden = false;
-    document.getElementById('files-save').hidden = true;
-    document.getElementById('files-cancel').hidden = true;
-    document.getElementById('files-view-dirty').hidden = true;
-    renderFileViewerWithCards(newContent, v.path, v.cards || []);
-  }
 }
 
 function humanBytes(n) {

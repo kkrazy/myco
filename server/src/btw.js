@@ -1,10 +1,11 @@
-// Chat-assistant helper. Claude is a participant in the discussion pane —
-// any message that looks like it wants a reply (ends with ?, mentions
-// @claude, or starts with /btw) is forwarded to a fresh `claude -p` run
-// in the session's cwd. The subprocess inherits `process.env`, which
-// systemd populates from /home/kkrazy/myco/.env, plus the user's
-// ~/.claude/ config — so whatever auth (API key or claude.ai subscription)
-// is set up for the main interactive session works here too.
+// Chat-assistant helper. Claude is a participant in the discussion pane:
+// messages starting with `/btw` are forwarded to a fresh `claude -p` run
+// in the session's cwd. (Messages starting with `@myco …` go a different
+// route — they're injected into the running Claude PTY by handleChatMessage
+// in pty.js, not into a fresh subprocess.) The subprocess inherits
+// `process.env`, plus the user's ~/.claude/ config — so whatever auth
+// (API key or claude.ai subscription) is set up for the main interactive
+// session works here too.
 
 const { spawn } = require('child_process');
 
@@ -24,10 +25,10 @@ const ASSISTANT_INSTRUCTIONS = [
 ].join('\n');
 
 // Only fire the assistant when the user *explicitly* asks for it. Plain chat
-// stays as plain chat — no PTY write (that's the @claude path in pty.js) and
+// stays as plain chat — no PTY write (that's the @myco path in pty.js) and
 // no auto-reply. Previous behaviour treated any message ending in '?' as an
 // assistant trigger, which made every casual question look like claude was
-// answering even though the user never typed @claude.
+// answering even though the user never typed /btw.
 function shouldAskAssistant(text) {
   if (typeof text !== 'string') return false;
   return /^\/btw\b/i.test(text);
@@ -66,9 +67,11 @@ function buildPrompt({ chatHistory, scrollback, lastMessage }) {
   ].join('\n');
 }
 
-function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {
-  const promptBody = buildPrompt({ chatHistory, scrollback, lastMessage });
-
+// Spawn `claude -p` with `promptBody` on stdin, with a 60s timeout. Always
+// resolves to a string (Claude's reply, or an error stand-in) — never rejects.
+// Shared between askAssistant (chat-pane /btw) and askAboutFile (file-viewer
+// inline review).
+function runClaudeP(cwd, promptBody) {
   return new Promise((resolve) => {
     let proc;
     try {
@@ -97,7 +100,7 @@ function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {
       clearTimeout(timer);
       const text = stdout.trim();
       if (text) { resolve(text); return; }
-      // Code 143 = SIGTERM (timeout), 137 = SIGKILL. Don't surface noise.
+      // 143 = SIGTERM (timeout), 137 = SIGKILL. Don't surface noise.
       if (code === 143 || code === 137) { resolve('(claude timed out)'); return; }
       const err = stderr.trim().slice(0, 300);
       resolve(`(claude exited ${code}${err ? `: ${err}` : ''})`);
@@ -110,6 +113,10 @@ function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {
       resolve(`(claude stdin write failed: ${err.message})`);
     }
   });
+}
+
+function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {
+  return runClaudeP(cwd, buildPrompt({ chatHistory, scrollback, lastMessage }));
 }
 
 // ─── file-viewer Claude integration ─────────────────────────────────────────
@@ -233,52 +240,8 @@ function buildFilePrompt({ filePath, fileContent, anchor, history, question }) {
   ].filter(Boolean).join('\n');
 }
 
-// Spawn `claude -p` with the file-review prompt. Same timeout/error contract
-// as askAssistant: always resolves to a string (Claude's reply or an error
-// stand-in), never rejects.
 function askAboutFile({ cwd, filePath, fileContent, anchor, history, question }) {
-  const promptBody = buildFilePrompt({ filePath, fileContent, anchor, history, question });
-
-  return new Promise((resolve) => {
-    let proc;
-    try {
-      proc = spawn('claude', ['-p'], {
-        cwd: cwd || process.cwd(),
-        env: process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      resolve(`(claude failed to start: ${err.message})`);
-      return;
-    }
-
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('error', (err) => resolve(`(claude error: ${err.message})`));
-
-    const timer = setTimeout(() => {
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 2000);
-    }, TIMEOUT_MS);
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      const text = stdout.trim();
-      if (text) { resolve(text); return; }
-      if (code === 143 || code === 137) { resolve('(claude timed out)'); return; }
-      const err = stderr.trim().slice(0, 300);
-      resolve(`(claude exited ${code}${err ? `: ${err}` : ''})`);
-    });
-
-    try {
-      proc.stdin.write(promptBody);
-      proc.stdin.end();
-    } catch (err) {
-      resolve(`(claude stdin write failed: ${err.message})`);
-    }
-  });
+  return runClaudeP(cwd, buildFilePrompt({ filePath, fileContent, anchor, history, question }));
 }
 
 module.exports = {

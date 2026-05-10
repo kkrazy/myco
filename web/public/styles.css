@@ -410,6 +410,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   flex-direction: column;
   min-width: 0;
   background: #000;
+  position: relative;        /* anchor for #myco-waiting + other overlays */
 }
 
 #no-session {
@@ -427,6 +428,39 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   flex-direction: column;
   min-height: 0;
   position: relative;          /* anchor for #conn-overlay */
+}
+
+/* ── @myco "waiting" indicator — minimalist three-dot typing animation.
+   No text, no pill background — just three small dots fading in/out at the
+   bottom of the session pane. As unobtrusive as possible while still
+   signaling activity. */
+#myco-waiting {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  gap: 5px;
+  padding: 0;
+  pointer-events: none;
+  animation: conn-fade-in .25s cubic-bezier(.22, .9, .3, 1);
+}
+.mw-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .55);
+  /* Soft halo so dots stay readable over both terminal black and the
+     conv pane gradient, without needing a pill background. */
+  box-shadow: 0 0 4px rgba(0, 0, 0, .5);
+  animation: mw-pulse 1.3s infinite ease-in-out;
+}
+.mw-dot:nth-child(2) { animation-delay: .15s; }
+.mw-dot:nth-child(3) { animation-delay: .30s; }
+@keyframes mw-pulse {
+  0%, 70%, 100% { opacity: .2;  transform: translateY(0);    }
+  35%           { opacity: 1.0; transform: translateY(-2px); }
 }
 
 /* ── connection-state floating card ───────────────────────────────────────
@@ -1683,22 +1717,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .claude-card.error { border-left-color: #f88; }
 .claude-card.error .cc-anchor { background: rgba(255, 100, 100, .10); color: #ffd0d0; }
 
-/* ── edit textarea (unchanged surface) ──────────────────────────────────── */
-#files-edit-area {
-  flex: 1;
-  overflow: auto;
-  margin: 0;
-  padding: 12px;
-  font: 13px 'JetBrains Mono', monospace;
-  background: #0d1117;
-  color: #c9d1d9;
-  white-space: pre;
-  border: 0;
-  resize: none;
-  outline: none;
-  -webkit-text-fill-color: var(--text);
-  caret-color: var(--text);
-}
 #files-view-msg {
   padding: 12px;
   font: 12px 'JetBrains Mono', monospace;
@@ -1727,8 +1745,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     padding-left: 54px;     /* clear #btn-expand (10 + 36 + ~8 gap) */
     padding-right: 100px;   /* clear #btn-files + #btn-chat (10 + 36 + 8 + 36 + 10) */
   }
-  /* Prevent iOS Safari focus auto-zoom by keeping textarea ≥16px. */
-  #files-edit-area { font-size: 16px; }
   .code-chunk { font-size: 12.5px; }
   #files-action-bar { padding: 5px 6px; gap: 3px; max-width: calc(100vw - 16px); }
   .files-action-btn { padding: 6px 8px; font-size: 11.5px; }

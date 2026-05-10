@@ -87,19 +87,19 @@ test_conv_view_js() {
   grep -q 'function renderTranscriptMessages' web/public/app.js && pass "renderTranscriptMessages" || fail "renderTranscriptMessages"
 }
 
-test_at_claude_chat_handler() {
-  grep -q '@claude' server/src/pty.js && pass "@claude handler" || fail "@claude handler"
-  grep -q 'session.write' server/src/pty.js && pass "PTY write for @claude" || fail "PTY write"
-  # Plain chat (no @claude prefix, no /btw) must NOT trigger the assistant.
+test_at_myco_chat_handler() {
+  grep -q '@myco' server/src/pty.js && pass "@myco handler" || fail "@myco handler"
+  grep -q 'session.write' server/src/pty.js && pass "PTY write for @myco" || fail "PTY write"
+  # Plain chat (no @myco prefix, no /btw) must NOT trigger the assistant.
   # Regression guard: the old shouldAskAssistant treated any '?'-ending
   # message as an assistant trigger, making every question look like claude
-  # was replying even without an @claude prefix.
+  # was replying even without a /btw prefix.
   node -e "
     const { shouldAskAssistant } = require('./server/src/btw');
     const cases = [
       ['hello', false],
       ['is this on?', false],
-      ['@claude what time is it', false],
+      ['@myco what time is it', false],
       ['/btw whats up', true],
     ];
     for (const [text, want] of cases) {
@@ -222,7 +222,7 @@ run_static_checks() {
   test_cache_busters
   test_conv_view_css
   test_conv_view_js
-  test_at_claude_chat_handler
+  test_at_myco_chat_handler
   test_viewer_ws_handler_wired
   test_chat_user_capture
   test_session_switching_clears_panes

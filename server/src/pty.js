@@ -223,10 +223,10 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     }
     if (msg.t === 'chat' && typeof msg.text === 'string' && user) {
       const text = msg.text.trim();
-      // readOnly: viewers can chat with each other and run /btw (which spawns
-      // a fresh `claude -p` and doesn't touch session state), but they MUST
-      // NOT be able to drive the owner's running PTY via @claude.
-      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT), { readOnly: true });
+      // Viewers (read-only) get the same chat surface as the owner, including
+      // @myco to address the running Claude session — chat is the
+      // collaborative steering channel and viewers can participate.
+      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT));
     }
   }
 
@@ -237,8 +237,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   });
 }
 
-function handleChatMessage(sessionId, session, user, text, opts = {}) {
-  const { readOnly = false } = opts;
+function handleChatMessage(sessionId, session, user, text /* opts = {} */) {
   const message = {
     user,
     text,
@@ -251,19 +250,12 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   // response happened to end in '?'.
   if (user === ASSISTANT_USER) return;
 
-  // @claude → send the message to the running Claude PTY session
-  const claudeMatch = text.match(/^@claude\s+(.+)/i);
-  if (claudeMatch && session.alive) {
-    // Read-only viewers must not drive the owner's running PTY.
-    if (readOnly) {
-      session.emit('chat', {
-        user: ASSISTANT_USER,
-        text: '(read-only viewers can\'t send to the running Claude session)',
-        ts: new Date().toISOString(),
-      });
-      return;
-    }
-    const input = claudeMatch[1].trim();
+  // @myco → send the message to the running Claude PTY session. Open to all
+  // chat participants (owner + read-only viewers), since the chat is the
+  // collaborative steering channel for the session.
+  const mycoMatch = text.match(/^@myco\s+(.+)/i);
+  if (mycoMatch && session.alive) {
+    const input = mycoMatch[1].trim();
     if (input) {
       // Reject Claude's interactive slash-commands. They aren't meaningful
       // when delivered via chat — Claude responds "Unknown command: /<x>"
@@ -271,7 +263,7 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
       if (input.startsWith('/')) {
         session.emit('chat', {
           user: ASSISTANT_USER,
-          text: '(slash commands like `/' + input.split(/\s+/)[0].slice(1) + '` only work in the interactive Claude CLI, not via @claude in chat)',
+          text: '(slash commands like `/' + input.split(/\s+/)[0].slice(1) + '` only work in the interactive Claude CLI, not via @myco in chat)',
           ts: new Date().toISOString(),
         });
         return;
