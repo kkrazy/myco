@@ -1711,35 +1711,82 @@ function renderFileViewerWithCards(content, relPath, cards) {
 function renderInlineCommentEditor(draft) {
   const ed = document.createElement('div');
   ed.className = 'inline-comment-editor';
+  // <textarea rows="1"> + JS auto-grow gives a single-line feel that expands
+  // as the user types newlines. Enter inserts a newline (default textarea
+  // behavior); Cmd/Ctrl+Enter saves; Esc cancels.
   ed.innerHTML =
     `<div class="ce-gutter">+</div>` +
     `<div class="ce-prefix-wrap">` +
       `<span class="ce-prefix">${escHtml(draft.indent + draft.prefix)}</span>` +
-      `<input type="text" class="ce-input" placeholder="comment text — Enter to save, Esc to cancel" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />` +
+      `<textarea class="ce-input" rows="1" placeholder="comment text — ↵ for newline, ⌘↵ to save" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>` +
       (draft.suffix ? `<span class="ce-suffix">${escHtml(draft.suffix)}</span>` : '') +
     `</div>` +
+    `<span class="ce-hint">⌘↵ save · esc cancel</span>` +
     `<div class="ce-actions">` +
-      `<button class="ce-save" title="Save (Enter)">✓</button>` +
-      `<button class="ce-cancel" title="Cancel (Esc)">×</button>` +
+      `<button class="ce-save" title="Save (⌘↵)">✓</button>` +
+      `<button class="ce-cancel" title="Cancel (esc)">×</button>` +
     `</div>`;
 
   const input = ed.querySelector('.ce-input');
   const saveBtn = ed.querySelector('.ce-save');
   const cancelBtn = ed.querySelector('.ce-cancel');
 
-  // Mirror typing into draft so a re-render mid-edit could preserve text
-  // (currently we don't re-render mid-edit, but it's cheap insurance).
-  input.addEventListener('input', () => { draft.text = input.value; });
   input.value = draft.text || '';
+
+  function autoGrow() {
+    input.style.height = 'auto';
+    input.style.height = Math.max(input.scrollHeight, 21) + 'px';
+  }
+
+  input.addEventListener('input', () => {
+    draft.text = input.value;
+    autoGrow();
+  });
 
   const submit = () => commitInlineCommentEditor(input.value);
   saveBtn.addEventListener('click', submit);
   cancelBtn.addEventListener('click', cancelInlineCommentEditor);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); cancelInlineCommentEditor(); }
+    // Cmd+Enter (mac) / Ctrl+Enter (win/linux) → save. Plain Enter falls
+    // through to the textarea and inserts a newline.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault(); submit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); cancelInlineCommentEditor();
+    }
   });
+  // Initial sizing in case draft.text was carried over.
+  setTimeout(autoGrow, 0);
   return ed;
+}
+
+// Build the actual lines that get spliced into the file. Per language style:
+// - line-comment (//, #, --): each user line becomes its own comment line.
+// - block-comment (<!-- -->, /* */): wrap the whole block; subsequent lines
+//   visually align under the prefix opening so the block reads cleanly.
+function buildCommentLines(draft, text) {
+  const userLines = String(text || '').split(/\r?\n/);
+  const { indent, prefix, suffix } = draft;
+  const isBlock = !!suffix;
+  if (isBlock) {
+    if (userLines.length === 1) {
+      return [`${indent}${prefix}${userLines[0]}${suffix}`];
+    }
+    const aligner = ' '.repeat(prefix.length);
+    const out = [`${indent}${prefix}${userLines[0]}`];
+    for (let i = 1; i < userLines.length - 1; i++) {
+      out.push(`${indent}${aligner}${userLines[i]}`);
+    }
+    out.push(`${indent}${aligner}${userLines[userLines.length - 1]}${suffix}`);
+    return out;
+  }
+  // Line-comment style — one comment per user line. Empty user lines become
+  // a bare comment marker with the trailing space trimmed (so they look
+  // intentional rather than trailing-whitespace).
+  return userLines.map((ln) => {
+    if (ln === '') return `${indent}${prefix.replace(/\s+$/, '')}`;
+    return `${indent}${prefix}${ln}`;
+  });
 }
 
 const ASSISTANT_USER_NAME = 'claude';
@@ -1951,19 +1998,20 @@ function cancelInlineCommentEditor() {
 async function commitInlineCommentEditor(text) {
   const v = state.files.viewing;
   if (!v || !v.commentDraft) return;
-  const trimmed = String(text || '').trim();
-  if (!trimmed) { cancelInlineCommentEditor(); return; }
+  // Trim only trailing whitespace; preserve internal newlines so multi-line
+  // input is honored. If the entire input is empty, treat as cancel.
+  const cleaned = String(text || '').replace(/[ \t]+$/gm, '').replace(/^\s+|\s+$/g, '');
+  if (!cleaned) { cancelInlineCommentEditor(); return; }
   const draft = v.commentDraft;
   // Mark editor busy while we PUT.
   const editor = document.querySelector('.inline-comment-editor');
   if (editor) editor.classList.add('busy');
 
-  const flat = trimmed.replace(/\r?\n+/g, ' ');
-  const commentLine = `${draft.indent}${draft.prefix}${flat}${draft.suffix}`;
+  const insertLines = buildCommentLines(draft, cleaned);
   const lines = String(v.content || '').split('\n');
   const targetIdx = Math.max(0, Math.min(lines.length - 1, draft.targetLine - 1));
   const newLines = lines.slice();
-  newLines.splice(targetIdx, 0, commentLine);
+  newLines.splice(targetIdx, 0, ...insertLines);
   const newContent = newLines.join('\n');
 
   const id = state.activeId;

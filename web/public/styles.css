@@ -1348,10 +1348,27 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   caret-color: #fff;
   -webkit-user-select: text;
   user-select: text;
+  /* Multi-line via <textarea>: no resize handle, auto-grow handled in JS */
+  resize: none;
+  overflow: hidden;
+  line-height: 1.5;
+  min-height: 1.5em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  vertical-align: top;
 }
 .inline-comment-editor .ce-input::placeholder {
   color: rgba(255, 255, 255, .25);
   font-style: italic;
+}
+.inline-comment-editor .ce-hint {
+  flex-shrink: 0;
+  align-self: center;
+  color: rgba(255, 255, 255, .30);
+  font: 10.5px 'JetBrains Mono', monospace;
+  padding: 0 8px;
+  white-space: nowrap;
+  user-select: none;
 }
 .inline-comment-editor .ce-actions {
   flex-shrink: 0;
@@ -1384,6 +1401,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   .inline-comment-editor .ce-prefix,
   .inline-comment-editor .ce-suffix { font-size: 16px; }
   .inline-comment-editor .ce-actions button { padding: 6px 14px; font-size: 16px; }
+  /* Mobile keyboards have no Cmd/Ctrl — hide the desktop hint. */
+  .inline-comment-editor .ce-hint { display: none; }
 }
 #files-action-clear {
   background: transparent;
