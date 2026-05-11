@@ -490,7 +490,7 @@ test_chat_window() {
       d('Read', '/x', 'allow');
       d('Bash', 'git status', 'allow');
       d('Bash', 'rm -rf', 'deny');
-      d('Bash', 'curl evil', 'deny');  // not in allow → conservative deny
+      d('Bash', 'curl evil', 'ask');  // not in allow/deny → broadcast to chat for /decide
       const tgt = p.extractPermissionTarget('Allow Bash command?\n> git status\n1. Yes\n2. No');
       if (tgt.tool !== 'Bash' || tgt.input !== 'git status') throw new Error('extractPermissionTarget failed: ' + JSON.stringify(tgt));
     " && pass "permissions.matchesPattern + decide + extract" \

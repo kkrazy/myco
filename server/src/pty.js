@@ -513,9 +513,10 @@ function handleSessionMenu(sessionId, session, menu) {
         autoRespondToMenu(sessionId, session, menu, denyOpt, 'deny', target);
         return;
       }
-      // 'ask' falls through to broadcast (currently unreachable because
-      // decide() returns 'allow' or 'deny' only — kept for the future
-      // when /allowmode pause is added).
+      // decision === 'ask' → broadcast the full menu with permission-
+      // tailored wording so the user can /decide AND optionally /allow.
+      broadcastMenuToChat(sessionId, session, menu, target);
+      return;
     }
   }
   broadcastMenuToChat(sessionId, session, menu);
@@ -545,21 +546,37 @@ function autoRespondToMenu(sessionId, session, menu, optionN, verb, target) {
   console.log(`[menu] ${sessionId} auto-${verb} ${tgt}`);
 }
 
-function broadcastMenuToChat(sessionId, session, menu) {
-  const lines = ['🤔 Claude is waiting on a decision:'];
+function broadcastMenuToChat(sessionId, session, menu, target) {
+  const lines = [];
+  if (target) {
+    const summary = `${target.tool}(${target.input || ''})`.slice(0, 200);
+    lines.push(`🤔 Claude wants permission to run \`${summary}\` (not in this session's allow/deny lists).`);
+  } else {
+    lines.push('🤔 Claude is waiting on a decision:');
+  }
   if (menu.question) lines.push('> ' + menu.question);
   for (const opt of menu.options) lines.push(`[${opt.n}] ${opt.label}`);
   lines.push('');
-  lines.push('Reply with `/decide <n>` to pick an option.');
+  if (target) {
+    // Suggest a sensible /allow pattern: the tool plus the first word of
+    // its input (so `Bash(curl example.com)` → suggest `Bash(curl)`).
+    const firstTok = String(target.input || '').trim().split(/\s+/)[0];
+    const suggest = target.tool === 'Bash' && firstTok
+      ? `${target.tool}(${firstTok})`
+      : target.tool;
+    lines.push(`Reply with \`/decide <n>\` to answer this one, or \`/allow ${suggest}\` to auto-allow similar tools in future. \`/allowlist\` shows the current lists.`);
+  } else {
+    lines.push('Reply with `/decide <n>` to pick an option.');
+  }
   const msg = {
     user: ASSISTANT_USER,
     text: lines.join('\n'),
     ts: new Date().toISOString(),
-    meta: { kind: 'menu', menu },
+    meta: { kind: 'menu', menu, target: target || null },
   };
   sessionsMod.appendChatMessage(sessionId, msg);
   session.emit('chat', msg);
-  console.log(`[menu] ${sessionId} fired ${menu.kind} with ${menu.options.length} options: ${JSON.stringify(menu.question).slice(0, 80)}`);
+  console.log(`[menu] ${sessionId} broadcast ${menu.kind} with ${menu.options.length} options: ${JSON.stringify(menu.question).slice(0, 80)}`);
 }
 
 // Read the bottom rows of the session's headless terminal and decide what

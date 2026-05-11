@@ -52,8 +52,12 @@ function ensureSessionLists(rec) {
 }
 
 // Decide what to do with a (tool, input) pair on a given session.
-// Returns 'allow' | 'deny' | 'ask'. 'ask' means we surface the dialog to
-// the user via chat — they can /allow + retry, or /decide manually.
+// Returns 'allow' | 'deny' | 'ask'.
+//   allow / deny → auto-respond, brief chat note
+//   ask          → broadcast the full menu to chat, user picks via /decide
+// We default unmatched tools to 'ask' (not auto-deny) so the user can
+// actually decide per-dialog instead of having to /allow-then-retry
+// every novel tool Claude wants to run.
 function decide(rec, tool, input) {
   if (!rec || !tool) return 'ask';
   ensureSessionLists(rec);
@@ -65,7 +69,7 @@ function decide(rec, tool, input) {
   for (const p of rec.allowList) {
     if (matchesPattern(p, tool, input)) return 'allow';
   }
-  return 'deny';   // conservative: no match → reject. user can /allow.
+  return 'ask';   // no match → user decides via /decide (or /allow + retry)
 }
 
 // Match a pattern against (tool, input). See module header for syntax.
