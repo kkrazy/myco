@@ -938,19 +938,10 @@ function openSession(id) {
 
   document.getElementById('no-session').hidden = true;
 
-  // For viewer sessions (non-owned same-host or share-link), show the
-  // conversation pane right away with a loading placeholder so the user
-  // never sees an empty <main> while the WS handshake + first transcript
-  // frame arrive. Owner sessions skip this and create xterm instead.
-  if (isShared) {
-    showConversationView();
-    document.getElementById('conv-messages').innerHTML =
-      '<div class="conv-waiting">Loading session…</div>';
-  }
-
-  // Only create xterm for owned sessions. Shared sessions wait for
-  // the server to send viewer-mode, then show conversation view.
-  if (!isShared) {
+  // Both owners and read-only viewers get the live xterm — viewers see the
+  // same intermediate output (alt-screen, ANSI, prompts) the owner sees,
+  // they just can't type. The "read-only" WS message will pop the banner.
+  {
     const wrap = document.getElementById('terminal-wrap');
     wrap.hidden = false;
 
