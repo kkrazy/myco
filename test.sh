@@ -438,6 +438,26 @@ test_chat_window() {
   grep -q "artifact/refresh"  server/src/index.js && pass "POST /artifact/refresh route" || fail "POST /artifact/refresh route"
   grep -q "artifact/run"      server/src/index.js && pass "POST /artifact/run route"     || fail "POST /artifact/run route"
   grep -q "artifact/mark"     server/src/index.js && pass "POST /artifact/mark route"    || fail "POST /artifact/mark route"
+  # Phase B: extractor module + Anthropic client are wired in.
+  test -f server/src/anthropic.js && pass "anthropic.js exists" || fail "anthropic.js missing"
+  test -f server/src/extractor.js && pass "extractor.js exists" || fail "extractor.js missing"
+  grep -q "extractArtifact" server/src/index.js && pass "extractArtifact wired into index.js" || fail "extractArtifact wired"
+  grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
+  grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
+  # Regression: parseStringArray must tolerate code fences + non-JSON.
+  if have_node; then
+    node -e "
+      const ex = require('./server/src/extractor');
+      const t = (got, want) => { if (JSON.stringify(got) !== JSON.stringify(want)) { console.error('mismatch', JSON.stringify(got), 'vs', JSON.stringify(want)); process.exit(1); } };
+      t(ex.parseStringArray('[\"a\"]'), ['a']);
+      t(ex.parseStringArray('\`\`\`json\n[\"b\"]\n\`\`\`'), ['b']);
+      t(ex.parseStringArray('not json'), []);
+      t(ex.parseStringArray('[\"  \", \"real\"]'), ['real']);
+    " && pass "extractor.parseStringArray tolerates fences + bad input" \
+      || fail "extractor.parseStringArray tolerates fences + bad input"
+  else
+    skip "parseStringArray (no host node)"
+  fi
 }
 
 test_layout() {

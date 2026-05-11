@@ -1,51 +1,12 @@
-const https = require('https');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 
 const { loadStore, saveStore, projectsDir, encodeCwdForClaude } = require('./sessions');
+const { callAnthropic } = require('./anthropic');
 
 const DEBOUNCE_MS = 30000;
 const MAX_INPUT_TURNS = 20;
-const API_TIMEOUT_MS = 10000;
-
-// ─── Anthropic API client (raw https, no SDK) ────────────────────────────────
-
-function callAnthropic(systemPrompt, userMessage) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return Promise.resolve(null);
-
-  return new Promise((resolve) => {
-    const body = JSON.stringify({
-      model: 'claude-haiku-4-20250506',
-      max_tokens: 60,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-    });
-    const req = https.request('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', (d) => { data += d; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          const text = parsed.content && parsed.content[0] && parsed.content[0].text;
-          resolve(text || null);
-        } catch { resolve(null); }
-      });
-    });
-    req.on('error', () => resolve(null));
-    req.setTimeout(API_TIMEOUT_MS, () => { req.destroy(); resolve(null); });
-    req.write(body);
-    req.end();
-  });
-}
 
 const SYSTEM_PROMPT =
   'Summarize this Claude Code session in 1-2 sentences, max 80 characters. ' +
@@ -112,7 +73,12 @@ async function generateAndStore(sessionId, rec) {
   const excerpt = await extractRecentTurns(transcriptPath);
   if (!excerpt) return;
 
-  const summary = await callAnthropic(SYSTEM_PROMPT, excerpt);
+  const summary = await callAnthropic({
+    system: SYSTEM_PROMPT,
+    userMessage: excerpt,
+    maxTokens: 60,
+    timeoutMs: 10000,
+  });
   if (!summary) return;
 
   const store = loadStore();

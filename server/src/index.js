@@ -4,14 +4,15 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = require('./sessions');
+const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = require('./sessions');
 const filesApi = require('./files');
 const { askAboutFile, ASSISTANT_USER } = require('./btw');
 const githubMod = require('./github');
 const slashcmds = require('./slashcmds');
 const oauth = require('./oauth');
 const crypto = require('crypto');
-const { attachWebSocket, attachViewerWebSocket } = require('./pty');
+const { attachWebSocket, attachViewerWebSocket, getSession: getPtySession, handleChatMessage } = require('./pty');
+const { extractArtifact } = require('./extractor');
 const {
   isAuthRequired, userFromRequest, userFromToken,
   profileFromToken, listUsernames,
@@ -730,16 +731,29 @@ app.delete('/sessions/:id/file-chat', async (req, res) => {
 });
 
 // ─── Plan / Arch / Test artifacts ────────────────────────────────────────────
-// The discussion pane has 3 extra tabs that render artifacts extracted from
-// the running session's transcript. Phase A returns an empty artifact so the
-// UI layout can be reviewed; Phase B will plug in a real Anthropic-based
-// extractor here.
+// Server-side extraction of pending todos, architectural notes, and test
+// plans from the running session's JSONL transcript via the Anthropic API.
+// Stored under rec.artifacts[type] alongside the rest of the session record.
+// Checking a Plan item dispatches it back to the running Claude session as
+// `@myco <text>` through the canonical chat-message path.
 
 const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
 
 function emptyArtifact(type) {
   if (type === 'arch') return { markdown: '', updatedAt: null };
   return { items: [], updatedAt: null };
+}
+
+function persistArtifact(rec, type, artifact) {
+  if (!rec.artifacts) rec.artifacts = {};
+  rec.artifacts[type] = artifact;
+  saveStore();
+}
+
+function findItem(rec, type, itemId) {
+  const artifact = rec.artifacts && rec.artifacts[type];
+  if (!artifact || !Array.isArray(artifact.items)) return null;
+  return artifact.items.find((it) => it.id === itemId) || null;
 }
 
 app.get('/sessions/:id/artifact', async (req, res) => {
@@ -756,10 +770,16 @@ app.post('/sessions/:id/artifact/refresh', async (req, res) => {
   if (!ctx) return;
   const type = String(req.query.type || '');
   if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
-  // Phase A: no extraction yet. Return empty so the client can confirm the
-  // refresh round-trip and render the empty state. Phase B replaces this with
-  // a real call to the extractor module.
-  res.json({ artifact: emptyArtifact(type), pending: true });
+
+  let artifact;
+  try {
+    artifact = await extractArtifact(ctx.rec, type);
+  } catch (err) {
+    console.error(`[artifact] extract failed for ${type}: ${err.message}`);
+    return res.status(500).json({ error: 'extraction failed', detail: err.message });
+  }
+  persistArtifact(ctx.rec, type, artifact);
+  res.json({ artifact });
 });
 
 app.post('/sessions/:id/artifact/run', async (req, res) => {
@@ -769,10 +789,31 @@ app.post('/sessions/:id/artifact/run', async (req, res) => {
   const itemId = String(req.query.itemId || '');
   if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
   if (!itemId) return res.status(400).json({ error: 'itemId required' });
-  // Phase A stub: no stored items yet, so we can't dispatch. Phase B looks
-  // up the item, writes `@myco <text>` into the running PTY via the same
-  // path handleChatPostfixes() uses, then flips done=true.
-  res.status(404).json({ error: 'no such item (extraction not implemented)' });
+  if (type === 'arch') return res.status(400).json({ error: 'arch is not actionable' });
+
+  const item = findItem(ctx.rec, type, itemId);
+  if (!item) return res.status(404).json({ error: 'no such item' });
+
+  // Route through the existing chat pipeline so the action shows up in the
+  // discussion history and broadcasts to read-only viewers, AND so the same
+  // @myco handler we just hardened (bare \r submit, auto-mode toggle) is
+  // exercised.
+  const session = getPtySession(ctx.id);
+  if (!session) return res.status(409).json({ error: 'session not running' });
+
+  const user = req.user || ctx.rec.user || 'unknown';
+  const text = `@myco ${item.text}`;
+  try {
+    handleChatMessage(ctx.id, session, user, text);
+  } catch (err) {
+    console.error(`[artifact] run failed: ${err.message}`);
+    return res.status(500).json({ error: 'dispatch failed', detail: err.message });
+  }
+
+  item.done = true;
+  item.ranAt = new Date().toISOString();
+  persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+  res.json({ ok: true, item, artifact: ctx.rec.artifacts[type] });
 });
 
 app.post('/sessions/:id/artifact/mark', async (req, res) => {
@@ -780,9 +821,16 @@ app.post('/sessions/:id/artifact/mark', async (req, res) => {
   if (!ctx) return;
   const type = String(req.query.type || '');
   const itemId = String(req.query.itemId || '');
+  const done = String(req.query.done || '') === '1';
   if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
   if (!itemId) return res.status(400).json({ error: 'itemId required' });
-  res.status(404).json({ error: 'no such item (extraction not implemented)' });
+  if (type === 'arch') return res.status(400).json({ error: 'arch has no items' });
+
+  const item = findItem(ctx.rec, type, itemId);
+  if (!item) return res.status(404).json({ error: 'no such item' });
+  item.done = done;
+  persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+  res.json({ ok: true, item });
 });
 
 // ─── autocomplete data ──────────────────────────────────────────────────────

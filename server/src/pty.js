@@ -492,4 +492,5 @@ module.exports = {
   killSession,
   attachWebSocket,
   attachViewerWebSocket,
+  handleChatMessage,
 };

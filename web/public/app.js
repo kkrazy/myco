@@ -1622,6 +1622,28 @@ function setChatpaneTab(name) {
   document.querySelectorAll('.chatpane-body').forEach((b) => {
     b.hidden = b.dataset.tab !== name;
   });
+  // Load the persisted artifact for Plan/Arch/Test so the user sees the last
+  // refresh result without having to click Refresh on every reload.
+  if (ARTIFACT_TYPES.includes(name)) loadArtifact(name).catch(() => {});
+}
+
+async function loadArtifact(type) {
+  if (!ARTIFACT_TYPES.includes(type)) return;
+  const sid = state.activeId;
+  if (!sid) return;
+  const body = document.getElementById(`artifact-body-${type}`);
+  if (!body) return;
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/artifact?type=${encodeURIComponent(type)}`);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    const artifact = data.artifact || data;
+    // Only render if there's actually persisted content; leaving the empty-
+    // state copy in place is friendlier than overwriting it with a blank.
+    const hasContent = (type === 'arch' && artifact && artifact.markdown && artifact.markdown.trim())
+      || (type !== 'arch' && artifact && Array.isArray(artifact.items) && artifact.items.length);
+    if (hasContent) renderArtifact(type, artifact);
+  } catch {}
 }
 
 async function refreshArtifact(type) {
