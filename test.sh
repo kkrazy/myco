@@ -340,6 +340,11 @@ test_readonly_viewer() {
 
 test_chat_window() {
   grep -q 'id="chatpane"' web/public/index.html && pass "#chatpane element" || fail "#chatpane element"
+  # Regression: chat history must allow text selection so users can copy
+  # messages. body { user-select:none } would otherwise inherit down.
+  grep -qE '#chat-messages.*user-select|user-select.*chat-messages' web/public/styles.css \
+    && pass "#chat-messages re-enables user-select" \
+    || fail "#chat-messages re-enables user-select"
   grep -q 'id="chat-input"' web/public/index.html && pass "#chat-input element" || fail "#chat-input element"
   grep -q 'id="chat-send"' web/public/index.html && pass "#chat-send element" || fail "#chat-send element"
   grep -q 'id="chat-form"' web/public/index.html && pass "#chat-form element" || fail "#chat-form element"

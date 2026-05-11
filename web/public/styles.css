@@ -60,6 +60,21 @@ html, body {
 
 input, textarea { user-select: text; -webkit-user-select: text; }
 
+/* Re-enable text selection inside readable content panes (chat history,
+   conversation transcript, inline Claude cards). The body-wide
+   user-select: none keeps terminal/UI taps clean, but it also blocks
+   "long-press → Copy" on chat messages, which the user expects to work.
+   Scoped to the content containers so the surrounding chrome (headers,
+   buttons, sidebar) still ignores accidental drags. */
+#chat-messages, #chat-messages *,
+#chat-empty,
+#conv-messages, #conv-messages *,
+.claude-card .cc-q, .claude-card .cc-a,
+.claude-card .cc-a * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 /* ── layout ───────────────────────────────────────────────────── */
