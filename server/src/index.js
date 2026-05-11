@@ -729,6 +729,62 @@ app.delete('/sessions/:id/file-chat', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ─── Plan / Arch / Test artifacts ────────────────────────────────────────────
+// The discussion pane has 3 extra tabs that render artifacts extracted from
+// the running session's transcript. Phase A returns an empty artifact so the
+// UI layout can be reviewed; Phase B will plug in a real Anthropic-based
+// extractor here.
+
+const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
+
+function emptyArtifact(type) {
+  if (type === 'arch') return { markdown: '', updatedAt: null };
+  return { items: [], updatedAt: null };
+}
+
+app.get('/sessions/:id/artifact', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  const stored = ctx.rec.artifacts && ctx.rec.artifacts[type];
+  res.json({ artifact: stored || emptyArtifact(type) });
+});
+
+app.post('/sessions/:id/artifact/refresh', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  // Phase A: no extraction yet. Return empty so the client can confirm the
+  // refresh round-trip and render the empty state. Phase B replaces this with
+  // a real call to the extractor module.
+  res.json({ artifact: emptyArtifact(type), pending: true });
+});
+
+app.post('/sessions/:id/artifact/run', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  const itemId = String(req.query.itemId || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  // Phase A stub: no stored items yet, so we can't dispatch. Phase B looks
+  // up the item, writes `@myco <text>` into the running PTY via the same
+  // path handleChatPostfixes() uses, then flips done=true.
+  res.status(404).json({ error: 'no such item (extraction not implemented)' });
+});
+
+app.post('/sessions/:id/artifact/mark', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  const itemId = String(req.query.itemId || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  res.status(404).json({ error: 'no such item (extraction not implemented)' });
+});
+
 // ─── autocomplete data ──────────────────────────────────────────────────────
 // /commands and /users back the chat-input dropdown. /users sources the
 // `@`-mention list from session-active users plus everyone on the allowlist

@@ -1176,6 +1176,118 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   border-bottom: 1px solid var(--border);
 }
 #chatpane h2 { flex: 1; font-size: 1rem; font-weight: 600; color: var(--accent); letter-spacing: .05em; }
+
+/* Tab bar inside the chatpane header. Holds Discussion / Plan / Arch / Test. */
+#chatpane-tabs {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+.chatpane-tab {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 500;
+  letter-spacing: .03em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.chatpane-tab:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+.chatpane-tab.is-active {
+  background: rgba(80, 120, 200, .22);
+  color: var(--accent);
+}
+
+/* Tab bodies fill the leftover vertical space. Only one is visible at a time. */
+.chatpane-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header strip inside Plan/Arch/Test bodies: title on the left, Refresh on the right. */
+.artifact-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: .78rem;
+  color: var(--muted);
+}
+.artifact-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-refresh {
+  background: rgba(80, 120, 200, .22);
+  color: var(--text);
+  border: 1px solid rgba(120, 160, 230, .35);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: .76rem;
+  cursor: pointer;
+  transition: background .12s, transform .08s;
+}
+.artifact-refresh:hover { background: rgba(80, 120, 200, .35); }
+.artifact-refresh:active { transform: scale(.95); }
+.artifact-refresh:disabled { opacity: .5; cursor: progress; }
+
+/* Scrollable body for the extracted artifact content. */
+.artifact-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-size: .9rem;
+  line-height: 1.45;
+}
+.artifact-empty {
+  color: var(--muted);
+  font-size: .85rem;
+  text-align: center;
+  padding: 24px 8px;
+}
+.artifact-empty code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.artifact-updated {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: .72rem;
+  text-align: right;
+}
+
+/* Plan/Test todo list with checkboxes. Checking a Plan item injects it back
+   into the running Claude session as `@myco <text>`. */
+.artifact-items { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.artifact-items li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.artifact-items li.is-done { opacity: .55; }
+.artifact-items li.is-done .artifact-item-text { text-decoration: line-through; }
+.artifact-item-checkbox {
+  margin-top: 2px;
+  width: 16px; height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.artifact-item-text { flex: 1; white-space: pre-wrap; word-break: break-word; }
+
 #chatpane-close {
   background: var(--border);
   color: var(--text);

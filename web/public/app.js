@@ -1582,6 +1582,130 @@ function bindChatUi() {
   document.getElementById('chatpane-close')?.addEventListener('click', () => setChatPane(false));
   bindChatpaneResize();
   bindChatAutocomplete();
+  bindChatpaneTabs();
+}
+
+// ─── Chatpane tabs (Discussion / Plan / Arch / Test) ─────────────────────────
+//
+// Discussion is the live chat; the other three render artifacts extracted from
+// the running session's transcript via a server-side Anthropic call. The
+// extraction is on-demand: each tab has a Refresh button that POSTs to
+// /sessions/:id/artifact/refresh?type=… and re-renders.
+//
+// In Phase A (this commit) the server returns an empty artifact so the layout
+// can be reviewed without spending API tokens. Phase B replaces the stub with
+// real extraction.
+const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
+
+function bindChatpaneTabs() {
+  const tabBar = document.getElementById('chatpane-tabs');
+  if (!tabBar || tabBar.dataset.bound) return;
+  tabBar.dataset.bound = '1';
+  tabBar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.chatpane-tab');
+    if (!btn) return;
+    setChatpaneTab(btn.dataset.tab);
+  });
+  document.querySelectorAll('.artifact-refresh').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => refreshArtifact(btn.dataset.type));
+  });
+}
+
+function setChatpaneTab(name) {
+  if (!name) name = 'discussion';
+  state.chatpaneTab = name;
+  document.querySelectorAll('.chatpane-tab').forEach((t) => {
+    t.classList.toggle('is-active', t.dataset.tab === name);
+  });
+  document.querySelectorAll('.chatpane-body').forEach((b) => {
+    b.hidden = b.dataset.tab !== name;
+  });
+}
+
+async function refreshArtifact(type) {
+  if (!ARTIFACT_TYPES.includes(type)) return;
+  const sid = state.activeId;
+  if (!sid) return;
+  const btn = document.querySelector(`.artifact-refresh[data-type="${type}"]`);
+  const body = document.getElementById(`artifact-body-${type}`);
+  if (!body) return;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/refresh?type=${encodeURIComponent(type)}`,
+      { method: 'POST' }
+    );
+    if (!res || !res.ok) {
+      body.innerHTML = `<div class="artifact-empty">Refresh failed (HTTP ${res ? res.status : '?'}).</div>`;
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    renderArtifact(type, data.artifact || data);
+  } catch (err) {
+    body.innerHTML = `<div class="artifact-empty">Refresh failed: ${escHtml(err.message || String(err))}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderArtifact(type, artifact) {
+  const body = document.getElementById(`artifact-body-${type}`);
+  if (!body) return;
+  if (type === 'arch') {
+    const md = artifact && artifact.markdown ? artifact.markdown.trim() : '';
+    if (!md) {
+      body.innerHTML = '<div class="artifact-empty">Nothing to show yet. The session may not have any architectural decisions in its recent activity.</div>';
+      return;
+    }
+    body.innerHTML = `<div class="artifact-md">${renderMd ? renderMd(md) : escHtml(md)}</div>` +
+      (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
+    return;
+  }
+  // plan / test → checkbox list
+  const items = (artifact && Array.isArray(artifact.items)) ? artifact.items : [];
+  if (!items.length) {
+    body.innerHTML = '<div class="artifact-empty">Nothing extracted. The recent session activity may not contain todos.</div>';
+    return;
+  }
+  const rows = items.map((it) => {
+    const cls = it.done ? 'is-done' : '';
+    return `<li class="${cls}" data-id="${escHtml(it.id)}">
+      <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
+      <span class="artifact-item-text">${escHtml(it.text || '')}</span>
+    </li>`;
+  }).join('');
+  body.innerHTML = `<ul class="artifact-items">${rows}</ul>` +
+    (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
+  body.querySelectorAll('.artifact-item-checkbox').forEach((cb) => {
+    cb.addEventListener('change', () => onArtifactItemToggle(cb));
+  });
+}
+
+async function onArtifactItemToggle(cb) {
+  const type = cb.dataset.type;
+  const id = cb.dataset.id;
+  const sid = state.activeId;
+  if (!type || !id || !sid) return;
+  const li = cb.closest('li');
+  // For 'plan' items, checking the box also dispatches the todo back to the
+  // running Claude session as `@myco <text>`. The server is the source of
+  // truth — we POST and let the response confirm.
+  const action = (type === 'plan' && cb.checked) ? 'run' : 'mark';
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/${action}?type=${encodeURIComponent(type)}&itemId=${encodeURIComponent(id)}&done=${cb.checked ? '1' : '0'}`,
+      { method: 'POST' }
+    );
+    if (!res || !res.ok) {
+      cb.checked = !cb.checked;
+      return;
+    }
+    if (li) li.classList.toggle('is-done', cb.checked);
+  } catch {
+    cb.checked = !cb.checked;
+  }
 }
 
 // Slash-command + @-mention dropdown for the chat input.

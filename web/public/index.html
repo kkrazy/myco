@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.json" />
   <title>myco</title>
   <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=93" />
+  <link rel="stylesheet" href="styles.css?v=94" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -103,16 +103,54 @@
     <aside id="chatpane" hidden>
       <div id="chatpane-resize" title="Drag to resize"></div>
       <header>
-        <h2>Discussion</h2>
+        <div id="chatpane-tabs" role="tablist">
+          <button class="chatpane-tab is-active" data-tab="discussion" role="tab">Discussion</button>
+          <button class="chatpane-tab" data-tab="plan" role="tab">Plan</button>
+          <button class="chatpane-tab" data-tab="arch" role="tab">Arch</button>
+          <button class="chatpane-tab" data-tab="test" role="tab">Test</button>
+        </div>
         <button id="chatpane-close" title="Close">×</button>
       </header>
-      <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
-      <div id="chat-messages"></div>
-      <div id="chat-autocomplete" hidden></div>
-      <form id="chat-form" autocomplete="off">
-        <textarea id="chat-input" rows="3" placeholder="Message…  (Ctrl/⌘+Enter to send · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>
-        <button type="submit" id="chat-send">Send</button>
-      </form>
+
+      <div class="chatpane-body" id="tab-discussion" data-tab="discussion">
+        <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
+        <div id="chat-messages"></div>
+        <div id="chat-autocomplete" hidden></div>
+        <form id="chat-form" autocomplete="off">
+          <textarea id="chat-input" rows="3" placeholder="Message…  (Ctrl/⌘+Enter to send · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>
+          <button type="submit" id="chat-send">Send</button>
+        </form>
+      </div>
+
+      <div class="chatpane-body" id="tab-plan" data-tab="plan" hidden>
+        <div class="artifact-header">
+          <span class="artifact-title">Plan — todos extracted from session</span>
+          <button class="artifact-refresh" data-type="plan" title="Re-extract from the latest session activity">↻ Refresh</button>
+        </div>
+        <div class="artifact-body" id="artifact-body-plan">
+          <div class="artifact-empty">No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo's box to send it back to Claude as <code>@myco</code>.</div>
+        </div>
+      </div>
+
+      <div class="chatpane-body" id="tab-arch" data-tab="arch" hidden>
+        <div class="artifact-header">
+          <span class="artifact-title">Arch — guidelines and decisions</span>
+          <button class="artifact-refresh" data-type="arch" title="Re-extract from the latest session activity">↻ Refresh</button>
+        </div>
+        <div class="artifact-body" id="artifact-body-arch">
+          <div class="artifact-empty">No architecture notes yet. Click <strong>Refresh</strong> to extract them from the latest session activity.</div>
+        </div>
+      </div>
+
+      <div class="chatpane-body" id="tab-test" data-tab="test" hidden>
+        <div class="artifact-header">
+          <span class="artifact-title">Test — verification plan</span>
+          <button class="artifact-refresh" data-type="test" title="Re-extract from the latest session activity">↻ Refresh</button>
+        </div>
+        <div class="artifact-body" id="artifact-body-test">
+          <div class="artifact-empty">No test plans yet. Click <strong>Refresh</strong> to extract them from the latest session activity.</div>
+        </div>
+      </div>
     </aside>
   </div>
 
@@ -175,6 +213,6 @@
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
   <script src="keyboard.js?v=7"></script>
-  <script src="app.js?v=124"></script>
+  <script src="app.js?v=125"></script>
 </body>
 </html>

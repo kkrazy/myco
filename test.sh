@@ -426,6 +426,18 @@ test_chat_window() {
   grep -q "t: 'chat-history'" server/src/pty.js && pass "chat-history replay" || fail "chat-history replay"
   grep -q "msg.t === 'chat-history'" web/public/app.js && pass "chat-history client handler" || fail "chat-history client handler"
   grep -q 'chatpane-close' web/public/app.js && pass "chatpane close binding" || fail "chatpane close binding"
+  # Chatpane tabs: Discussion / Plan / Arch / Test
+  for tab in discussion plan arch test; do
+    grep -q "data-tab=\"$tab\"" web/public/index.html \
+      && pass "chatpane tab #$tab"                              \
+      || fail "chatpane tab #$tab"
+  done
+  grep -q 'id="chatpane-tabs"' web/public/index.html && pass "#chatpane-tabs container" || fail "#chatpane-tabs container"
+  grep -q 'function setChatpaneTab'  web/public/app.js && pass "setChatpaneTab()"  || fail "setChatpaneTab()"
+  grep -q 'function refreshArtifact' web/public/app.js && pass "refreshArtifact()" || fail "refreshArtifact()"
+  grep -q "artifact/refresh"  server/src/index.js && pass "POST /artifact/refresh route" || fail "POST /artifact/refresh route"
+  grep -q "artifact/run"      server/src/index.js && pass "POST /artifact/run route"     || fail "POST /artifact/run route"
+  grep -q "artifact/mark"     server/src/index.js && pass "POST /artifact/mark route"    || fail "POST /artifact/mark route"
 }
 
 test_layout() {
