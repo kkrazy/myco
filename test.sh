@@ -456,6 +456,13 @@ test_chat_window() {
   grep -q 'auto-toggle on discussion' server/src/pty.js \
     && pass "pty toggles auto-mode on plain discussion" \
     || fail "pty toggles auto-mode on plain discussion"
+  # Regression: Claude must be spawned with --dangerously-skip-permissions
+  # so unattended @myco / Plan-checkbox dispatches don't stall on tool-use
+  # permission prompts. The toggle above only covers accept-edits mode;
+  # this flag is needed for Bash/MCP/etc. permissions too.
+  grep -q "'--dangerously-skip-permissions'" server/src/pty.js \
+    && pass "claude spawned with --dangerously-skip-permissions" \
+    || fail "claude spawned with --dangerously-skip-permissions"
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: parseStringArray must tolerate code fences + non-JSON.

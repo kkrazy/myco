@@ -108,7 +108,13 @@ class PtySession extends EventEmitter {
 const sessions = new Map(); // sessionId -> PtySession
 
 function buildClaudeArgs({ resumeId } = {}) {
-  const args = [];
+  // Spawn Claude with permissions fully bypassed so every tool call (Edit,
+  // Bash, MCP, …) runs without a y/n prompt. Mycelium drives Claude from
+  // the discussion panel; pausing for keypress permission breaks the @myco
+  // and Plan-checkbox flows because nobody is sitting at the terminal.
+  // Multi-choice questions Claude asks conversationally still appear in the
+  // transcript — the user replies via @myco the normal way.
+  const args = ['--dangerously-skip-permissions'];
   if (resumeId) args.push('--resume', resumeId);
   return args;
 }
