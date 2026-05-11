@@ -187,6 +187,7 @@ function attachWebSocket(session, ws, opts = {}) {
   const readOnly = !!opts.readOnly;
   const user = opts.user || null;
   const sessionId = session.sessionId;
+  let unwatchTranscript = null;
 
   // Replay ring buffer first so reconnects see prior context.
   const replay = Buffer.concat(session.buffer.map((d) => Buffer.from(d, 'utf8')));
@@ -198,6 +199,23 @@ function attachWebSocket(session, ws, opts = {}) {
   const history = sessionsMod.getChatHistory(sessionId);
   if (history.length) {
     ws.send(JSON.stringify({ t: 'chat-history', messages: history }));
+  }
+
+  // Owners also receive the structured transcript so they can flip to a
+  // "preview as viewer" mode in the UI without re-fetching. Cheap to keep
+  // open: one fs.watch + tail-read per session. Skipped when the JSONL
+  // path isn't resolvable yet (first attach before claude has spawned).
+  const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
+  if (transcriptPath) {
+    transcriptMod.readNewMessages(transcriptPath, 0).then(({ messages, bytesRead }) => {
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
+      unwatchTranscript = transcriptMod.watchTranscript(transcriptPath, (newMsgs) => {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
+        }
+      });
+    }).catch(() => {});
   }
 
   const onData = (data) => {
@@ -246,6 +264,7 @@ function attachWebSocket(session, ws, opts = {}) {
     session.off('data', onData);
     session.off('exit', onExit);
     session.off('chat', onChat);
+    if (unwatchTranscript) unwatchTranscript();
   });
 }
 

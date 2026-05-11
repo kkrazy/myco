@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.json" />
   <title>myco</title>
   <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=98" />
+  <link rel="stylesheet" href="styles.css?v=99" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -36,6 +36,7 @@
 
     <main id="terminal-pane">
       <button id="btn-files" title="Files" hidden>📁</button>
+      <button id="btn-preview-readonly" title="Preview as a read-only viewer" hidden>👁</button>
       <button id="btn-chat" title="Toggle discussion" hidden>💬</button>
       <div id="no-session">Select a session</div>
       <div id="myco-waiting" hidden aria-label="myco is thinking">
@@ -213,6 +214,6 @@
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
   <script src="keyboard.js?v=7"></script>
-  <script src="app.js?v=138"></script>
+  <script src="app.js?v=139"></script>
 </body>
 </html>

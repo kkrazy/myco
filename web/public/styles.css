@@ -1652,6 +1652,32 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #btn-files:active { transform: scale(.92); }
 #btn-files.active { background: rgba(80, 120, 200, .35); }
 
+/* Preview-as-viewer toggle for session owners. Same fixed-cluster styling
+   as #btn-files / #btn-chat; sits between them. When toggled on the owner
+   sees the structured transcript + read-only banner instead of the live
+   PTY — useful for sanity-checking what shared viewers see. */
+#btn-preview-readonly {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  /* 10 + 2*(chrome-btn-size + 8) from right edge: third button slot. */
+  right: calc(env(safe-area-inset-right, 0px) + 10px + 2 * (var(--chrome-btn-size) + 8px));
+  z-index: 50;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
+  padding: 0;
+  border-radius: 8px;
+  background: rgba(40, 40, 40, .85);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, .08);
+  font-size: .95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+#btn-preview-readonly:active { transform: scale(.92); }
+#btn-preview-readonly.active { background: rgba(80, 120, 200, .35); }
+
 /* ── per-session file explorer (code-review polish) ──────────────────────── */
 
 #files-wrap {

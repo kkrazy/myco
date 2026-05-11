@@ -274,6 +274,14 @@ function showConversationView() {
   updateChatButton();
 }
 
+function showTerminalView() {
+  document.getElementById('conversation-wrap').hidden = true;
+  document.getElementById('terminal-wrap').hidden = false;
+  updateChatButton();
+  // xterm canvas needs a refit after being unhidden since clientWidth was 0.
+  if (state.fitAddon) requestAnimationFrame(() => state.fitAddon.fit());
+}
+
 function showTranscriptWaiting() {
   showConversationView();
   const content = document.getElementById('conv-content');
@@ -1023,6 +1031,8 @@ function openSession(id) {
   state.activeId = id;
   state.viewerMode = false;
   state.transcriptMessages = [];
+  state.previewAsViewer = false;             // reset preview toggle on session switch
+  document.getElementById('btn-preview-readonly')?.classList.remove('active');
   try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
   clearChat();
@@ -1247,6 +1257,16 @@ function updateChatButton() {
   // of the discussion overlay).
   const fbtn = document.getElementById('btn-files');
   if (fbtn) fbtn.hidden = !state.activeId || !hasContent;
+  // Preview-as-viewer toggle: only show for the actual session owner, since
+  // a shared viewer is already in viewer mode and a "preview" is meaningless
+  // for them.
+  const pbtn = document.getElementById('btn-preview-readonly');
+  if (pbtn) {
+    const session = state.activeId && state.sessions
+      ? state.sessions.find((s) => s.id === state.activeId) : null;
+    const isOwner = !!(session && session.owned);
+    pbtn.hidden = !state.activeId || !isOwner || !hasContent;
+  }
 }
 
 // Touch scroll handler. Synthesizes WheelEvents from finger deltas + has a
@@ -1617,6 +1637,35 @@ function sendChatMessage(text) {
 // identifies the session owner. The transcript pane renders the JSONL
 // (user/assistant/tool messages); the live terminal-tail pane below it
 // surfaces interactive PTY prompts (which never make it into the JSONL).
+// Owner-only "preview as viewer" toggle. Flips between the live PTY terminal
+// view and the structured-transcript + read-only banner view that shared
+// viewers see. Doesn't change actual permissions — the owner's WS still
+// allows input + chat + everything else; this is a pure presentation swap
+// so the owner can sanity-check what's visible to viewers.
+function toggleOwnerReadonlyPreview() {
+  state.previewAsViewer = !state.previewAsViewer;
+  const btn = document.getElementById('btn-preview-readonly');
+  if (btn) btn.classList.toggle('active', state.previewAsViewer);
+  if (state.previewAsViewer) {
+    // Re-render the transcript from state in case the conv-content was
+    // wiped by a session switch since we last viewed it.
+    if (Array.isArray(state.transcriptMessages) && state.transcriptMessages.length) {
+      renderTranscriptMessages(state.transcriptMessages);
+    } else {
+      showConversationView();
+      const content = document.getElementById('conv-content');
+      if (content && !content.innerHTML.trim()) {
+        content.innerHTML = '<div class="conv-waiting">Waiting for transcript… (Claude may not have produced any output yet)</div>';
+      }
+    }
+    applyReadOnly(state.chatUser || 'you');
+  } else {
+    clearReadOnly();
+    showTerminalView();
+  }
+  updateChatButton();
+}
+
 function applyReadOnly(owner) {
   state.readOnly = true;
   state.sessionOwner = owner || null;
@@ -1703,6 +1752,7 @@ function bindChatUi() {
   });
 
   document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(!state.chatPaneVisible));
+  document.getElementById('btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview);
   document.getElementById('chatpane-close')?.addEventListener('click', () => setChatPane(false));
   bindChatpaneResize();
   bindChatAutocomplete();
