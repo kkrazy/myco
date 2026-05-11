@@ -447,6 +447,10 @@ test_chat_window() {
   # running PTY session), NOT a raw Anthropic API call.
   grep -q "callClaudeCli" server/src/extractor.js && pass "extractor uses claude-cli" || fail "extractor uses claude-cli"
   grep -q "callAnthropic" server/src/extractor.js && fail "extractor still imports callAnthropic (regression)" || pass "extractor no longer imports callAnthropic"
+  # Regression: extractor pulls from BOTH the JSONL transcript AND the
+  # discussion-panel chat (rec.chat) so non-@myco messages still feed Plan.
+  grep -q "getChatHistory" server/src/extractor.js && pass "extractor reads chat history" || fail "extractor reads chat history"
+  grep -q "readChatTail"   server/src/extractor.js && pass "extractor has readChatTail helper" || fail "extractor has readChatTail helper"
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: parseStringArray must tolerate code fences + non-JSON.
