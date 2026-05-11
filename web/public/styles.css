@@ -1323,9 +1323,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   font: inherit;
   line-height: 1.4;
   min-width: 0;
-  /* multi-line: grow with content via JS up to max-height, then scroll */
+  /* multi-line: always show ~3 lines (min-height), grow with content via JS
+     up to max-height, then scroll. */
   resize: none;
   overflow-y: auto;
+  min-height: 5.2em;     /* ~3 lines at line-height:1.4 plus the 8px padding */
   max-height: 200px;
 }
 #chat-input:focus { outline: none; border-color: var(--accent); }
