@@ -2,6 +2,7 @@ const pty = require('@homebridge/node-pty-prebuilt-multiarch');
 const { EventEmitter } = require('events');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { MenuInterceptor } = require('./menu-interceptor');
+const permissions = require('./permissions');
 // Late-bound: sessions.js requires this module, so destructuring at load
 // time would capture undefined values from the partial export.
 const sessionsMod = require('./sessions');
@@ -135,13 +136,12 @@ class PtySession extends EventEmitter {
 const sessions = new Map(); // sessionId -> PtySession
 
 function buildClaudeArgs({ resumeId } = {}) {
-  // Spawn Claude with permissions fully bypassed so every tool call (Edit,
-  // Bash, MCP, …) runs without a y/n prompt. Mycelium drives Claude from
-  // the discussion panel; pausing for keypress permission breaks the @myco
-  // and Plan-checkbox flows because nobody is sitting at the terminal.
-  // Multi-choice questions Claude asks conversationally still appear in the
-  // transcript — the user replies via @myco the normal way.
-  const args = ['--dangerously-skip-permissions'];
+  // We used to pass --dangerously-skip-permissions here, but the Claude CLI
+  // refuses that flag when running as root (which is our container's user).
+  // Instead, permission dialogs flow through MenuInterceptor + permissions.js:
+  // matched-allow → auto-pick "Yes", matched-deny → auto-pick "No", no match
+  // → conservative auto-deny with a chat note (user runs /allow then retries).
+  const args = [];
   if (resumeId) args.push('--resume', resumeId);
   return args;
 }
@@ -164,7 +164,7 @@ function spawnClaude(sessionId, { cwd, resumeId, cols = 120, rows = 30 }) {
   });
   const wrapped = new PtySession(sessionId, proc);
   sessions.set(sessionId, wrapped);
-  wrapped.on('menu', (menu) => broadcastMenuToChat(sessionId, wrapped, menu));
+  wrapped.on('menu', (menu) => handleSessionMenu(sessionId, wrapped, menu));
   wrapped.on('exit', () => {
     setTimeout(() => {
       const cur = sessions.get(sessionId);
@@ -489,11 +489,62 @@ async function runAssistant(sessionId, session, lastMessage) {
   session.emit('chat', reply);
 }
 
-// When MenuInterceptor fires for a session, post the dialog into the
-// discussion panel so the user can pick an option via `/decide <n>`. We
-// route through the existing chat-broadcast path (appendChatMessage +
-// emit('chat')) so the message shows up for read-only viewers too and is
-// persisted in rec.chat for replay across reconnects.
+// When MenuInterceptor fires for a session, decide what to do with the
+// dialog:
+//   - permission dialogs → check the session's allow/deny lists. Match
+//     allow → auto-pick the "Yes" option. Match deny (or no match in
+//     conservative mode) → auto-pick the "No" option. Post a brief
+//     chat note either way so the user can see what happened.
+//   - plan / generic dialogs → broadcast the full menu to chat so the
+//     user can /decide manually.
+function handleSessionMenu(sessionId, session, menu) {
+  if (menu.kind === 'permission') {
+    const target = permissions.extractPermissionTarget(menu.rawText);
+    if (target) {
+      const rec = sessionsMod.loadStore().sessions[sessionId];
+      const decision = permissions.decide(rec, target.tool, target.input);
+      const allowOpt = pickOptionByLabel(menu.options, /^yes|allow|approve/i, 1);
+      const denyOpt  = pickOptionByLabel(menu.options, /^no|don'?t|deny|reject/i, 2);
+      if (decision === 'allow') {
+        autoRespondToMenu(sessionId, session, menu, allowOpt, 'allow', target);
+        return;
+      }
+      if (decision === 'deny') {
+        autoRespondToMenu(sessionId, session, menu, denyOpt, 'deny', target);
+        return;
+      }
+      // 'ask' falls through to broadcast (currently unreachable because
+      // decide() returns 'allow' or 'deny' only — kept for the future
+      // when /allowmode pause is added).
+    }
+  }
+  broadcastMenuToChat(sessionId, session, menu);
+}
+
+function pickOptionByLabel(options, regex, fallback) {
+  const hit = options.find((o) => regex.test(o.label));
+  return hit ? hit.n : fallback;
+}
+
+function autoRespondToMenu(sessionId, session, menu, optionN, verb, target) {
+  if (!session || !session.alive) return;
+  session.write(String(optionN) + '\r');
+  session.pendingMenu = null;
+  const tgt = target ? `${target.tool}(${target.input || ''})`.slice(0, 120) : 'permission';
+  const text = verb === 'allow'
+    ? `✓ auto-allowed \`${tgt}\` (matched allow list — option ${optionN}).`
+    : `🚫 auto-denied \`${tgt}\` (not in allow list — option ${optionN}). Run \`/allow <pattern>\` then \`@myco try again\` to retry.`;
+  const msg = {
+    user: ASSISTANT_USER,
+    text,
+    ts: new Date().toISOString(),
+    meta: { kind: 'menu-auto', menu, verb, target },
+  };
+  sessionsMod.appendChatMessage(sessionId, msg);
+  session.emit('chat', msg);
+  console.log(`[menu] ${sessionId} auto-${verb} ${tgt}`);
+}
+
 function broadcastMenuToChat(sessionId, session, menu) {
   const lines = ['🤔 Claude is waiting on a decision:'];
   if (menu.question) lines.push('> ' + menu.question);

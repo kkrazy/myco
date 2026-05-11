@@ -7,6 +7,11 @@
 // reply as a chat message tagged with the assistant user.
 
 const github = require('./github');
+const permissions = require('./permissions');
+// Lazy property access on sessionsMod — pty.js → slashcmds.js → sessions.js
+// is a circular chain. sessions.js exports its API via Object.assign AFTER
+// the initial module.exports, so destructuring at require-time gets undefined.
+const sessionsMod = require('./sessions');
 
 const ASSISTANT_USER = 'claude';
 
@@ -29,6 +34,24 @@ const COMMANDS = [
     summary: 'Answer Claude\'s currently-pending dialog (e.g. plan-mode "what next" menu)',
     usage: '/decide <n>',
     handler: handleDecide,
+  },
+  {
+    names: ['allow'],
+    summary: 'Add a tool pattern to the session\'s permission allow list',
+    usage: '/allow <pattern>   e.g. /allow Bash(curl)',
+    handler: handleAllow,
+  },
+  {
+    names: ['deny'],
+    summary: 'Add a tool pattern to the session\'s permission deny list',
+    usage: '/deny <pattern>    e.g. /deny Bash(rm)',
+    handler: handleDeny,
+  },
+  {
+    names: ['allowlist'],
+    summary: 'Show this session\'s current allow + deny lists',
+    usage: '/allowlist',
+    handler: handleAllowList,
   },
   {
     names: ['help'],
@@ -150,6 +173,50 @@ async function handleDecide(ctx) {
   session.write(String(n) + '\r');
   session.pendingMenu = null;
   ctx.reply(`✓ picked option ${n}: ${matched.label}`);
+}
+
+function validatePattern(pattern) {
+  if (!pattern) return 'pattern is empty';
+  const m = pattern.match(/^([A-Za-z_]\w*)(?:\(([^)]*)\))?$/);
+  if (!m) return 'pattern must look like `Tool` or `Tool(arg)` or `Tool(arg:*)`';
+  return null;
+}
+
+async function handleAllow(ctx) {
+  const pattern = (ctx.args || '').trim();
+  const err = validatePattern(pattern);
+  if (err) { ctx.reply(`Usage: \`/allow <pattern>\` — ${err}.`); return; }
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(no session record found)'); return; }
+  permissions.addAllow(rec, pattern);
+  ctx.reply(`✓ added \`${pattern}\` to the allow list. Run \`@myco try again\` to retry the previously-denied tool.`);
+}
+
+async function handleDeny(ctx) {
+  const pattern = (ctx.args || '').trim();
+  const err = validatePattern(pattern);
+  if (err) { ctx.reply(`Usage: \`/deny <pattern>\` — ${err}.`); return; }
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(no session record found)'); return; }
+  permissions.addDeny(rec, pattern);
+  ctx.reply(`🚫 added \`${pattern}\` to the deny list.`);
+}
+
+async function handleAllowList(ctx) {
+  const lists = permissions.getSessionLists(ctx.sessionId);
+  const out = ['**Permission lists for this session:**'];
+  out.push('');
+  out.push('Allow:');
+  if (lists.allowList.length) out.push(...lists.allowList.map((p) => `  • \`${p}\``));
+  else out.push('  (empty)');
+  out.push('');
+  out.push('Deny:');
+  if (lists.denyList.length) out.push(...lists.denyList.map((p) => `  • \`${p}\``));
+  else out.push('  (empty)');
+  out.push('');
+  out.push('Anything not matching allow (and not matching deny) is auto-rejected.');
+  out.push('Use `/allow <pattern>` or `/deny <pattern>` to mutate.');
+  ctx.reply(out.join('\n'));
 }
 
 function handleHelp(ctx) {

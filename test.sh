@@ -456,13 +456,48 @@ test_chat_window() {
   grep -q 'auto-toggle on discussion' server/src/pty.js \
     && pass "pty toggles auto-mode on plain discussion" \
     || fail "pty toggles auto-mode on plain discussion"
-  # Regression: Claude must be spawned with --dangerously-skip-permissions
-  # so unattended @myco / Plan-checkbox dispatches don't stall on tool-use
-  # permission prompts. The toggle above only covers accept-edits mode;
-  # this flag is needed for Bash/MCP/etc. permissions too.
+  # Regression: --dangerously-skip-permissions was removed because Claude
+  # CLI refuses it when running as root. Tool-permission dialogs now flow
+  # through MenuInterceptor → permissions.decide → auto-allow / auto-deny.
   grep -q "'--dangerously-skip-permissions'" server/src/pty.js \
-    && pass "claude spawned with --dangerously-skip-permissions" \
-    || fail "claude spawned with --dangerously-skip-permissions"
+    && fail "--dangerously-skip-permissions came back (claude CLI refuses it under root)" \
+    || pass "--dangerously-skip-permissions removed (refused under root)"
+  test -f server/src/permissions.js && pass "permissions.js exists" || fail "permissions.js missing"
+  grep -q "permissions.decide" server/src/pty.js && pass "pty uses permissions.decide" || fail "pty uses permissions.decide"
+  grep -q "extractPermissionTarget" server/src/permissions.js && pass "permissions exports extractPermissionTarget" || fail "permissions exports extractPermissionTarget"
+  grep -q "names: \['allow'" server/src/slashcmds.js && pass "/allow command registered" || fail "/allow missing"
+  grep -q "names: \['deny'" server/src/slashcmds.js && pass "/deny command registered" || fail "/deny missing"
+  grep -q "names: \['allowlist'" server/src/slashcmds.js && pass "/allowlist command registered" || fail "/allowlist missing"
+  if have_node; then
+    node -e "
+      const p = require('./server/src/permissions');
+      const t = (pat, tool, input, want) => {
+        const got = p.matchesPattern(pat, tool, input);
+        if (got !== want) throw new Error('matchesPattern(' + JSON.stringify(pat) + ', ' + tool + ', ' + JSON.stringify(input) + ') = ' + got + ' want ' + want);
+      };
+      t('Read', 'Read', '/x', true);
+      t('Read', 'Edit', '/x', false);
+      t('Bash(git)', 'Bash', 'git status', true);
+      t('Bash(git)', 'Bash', 'github cli', false);
+      t('Bash(git:*)', 'Bash', 'git log', true);
+      t('Bash(*)', 'Bash', 'anything', true);
+      t('Bash(./test.sh)', 'Bash', './test.sh --skip-tests', true);
+      const rec = { allowList: ['Read', 'Bash(git)'], denyList: ['Bash(rm)'] };
+      const d = (tool, input, want) => {
+        const got = p.decide(rec, tool, input);
+        if (got !== want) throw new Error('decide(' + tool + ', ' + JSON.stringify(input) + ') = ' + got + ' want ' + want);
+      };
+      d('Read', '/x', 'allow');
+      d('Bash', 'git status', 'allow');
+      d('Bash', 'rm -rf', 'deny');
+      d('Bash', 'curl evil', 'deny');  // not in allow → conservative deny
+      const tgt = p.extractPermissionTarget('Allow Bash command?\n> git status\n1. Yes\n2. No');
+      if (tgt.tool !== 'Bash' || tgt.input !== 'git status') throw new Error('extractPermissionTarget failed: ' + JSON.stringify(tgt));
+    " && pass "permissions.matchesPattern + decide + extract" \
+      || fail "permissions.matchesPattern + decide + extract"
+  else
+    skip "permissions runtime (no host node)"
+  fi
   # Regression: TUI-menu interception is wired so plan-mode dialogs (and
   # any other numbered menu Claude displays) reach the web GUI via chat.
   test -f server/src/menu-interceptor.js && pass "menu-interceptor.js exists" || fail "menu-interceptor.js missing"
