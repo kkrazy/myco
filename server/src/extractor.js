@@ -104,31 +104,36 @@ function buildItems(strings) {
 
 async function extractArtifact(rec, type) {
   if (!PROMPTS[type]) throw new Error(`unknown artifact type: ${type}`);
+  const sid = rec && rec.id ? rec.id : '?';
   const tail = await readTranscriptTail(rec);
   if (!tail) {
+    console.log(`[extractor] ${sid} type=${type} → no transcript (cwd=${rec.absCwd} claudeSessionId=${rec.claudeSessionId})`);
     return type === 'arch'
       ? { markdown: '', updatedAt: new Date().toISOString(), note: 'no transcript available' }
       : { items: [], updatedAt: new Date().toISOString(), note: 'no transcript available' };
   }
-  // Use the `claude` CLI in print mode so extraction inherits the same auth
-  // and config (model, account, MCP servers) as the running PTY session.
-  // cwd matches the session so any project-local Claude config is honoured.
+  console.log(`[extractor] ${sid} type=${type} tail=${tail.length}ch → invoking claude CLI…`);
+  const t0 = Date.now();
   const text = await callClaudeCli({
     system: PROMPTS[type].system,
     userMessage: tail,
     cwd: rec.absCwd,
     timeoutMs: EXTRACTOR_TIMEOUT_MS,
   });
+  const elapsed = Date.now() - t0;
   if (text === null) {
+    console.log(`[extractor] ${sid} type=${type} → CLI returned null in ${elapsed}ms`);
     return type === 'arch'
       ? { markdown: '', updatedAt: new Date().toISOString(), note: 'extraction call failed (claude CLI errored or missing — check server logs)' }
       : { items: [], updatedAt: new Date().toISOString(), note: 'extraction call failed (claude CLI errored or missing — check server logs)' };
   }
+  console.log(`[extractor] ${sid} type=${type} → CLI returned ${text.length}ch in ${elapsed}ms; head=${JSON.stringify(text.slice(0, 200))}`);
   if (type === 'arch') {
     return { markdown: text.trim(), updatedAt: new Date().toISOString() };
   }
-  const items = buildItems(parseStringArray(text));
-  return { items, updatedAt: new Date().toISOString() };
+  const parsed = parseStringArray(text);
+  console.log(`[extractor] ${sid} type=${type} → parsed ${parsed.length} item(s)`);
+  return { items: buildItems(parsed), updatedAt: new Date().toISOString() };
 }
 
 module.exports = { extractArtifact, PROMPTS, readTranscriptTail, parseStringArray };
