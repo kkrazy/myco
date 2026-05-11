@@ -1961,6 +1961,17 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #readonly-banner .ro-owner:not(:empty)::before { content: "owned by "; opacity: .6; }
 
 #conv-messages {
+  /* The single scroller for the conversation pane. flex:1 so it fills
+     #conversation-wrap below the read-only banner; overflow-y:auto so
+     long transcripts get a scrollbar; min-height:0 so flex doesn't
+     stretch us past the parent's height (without it, content grows
+     beyond the viewport with no scroll). scrollConvToBottom() targets
+     this element to keep the latest message in view. */
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   font-family: 'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace;
   font-size: 13px;
   line-height: 1.45;
