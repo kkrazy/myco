@@ -304,6 +304,21 @@ function handleChatMessage(sessionId, session, user, text /* opts = {} */) {
   // response happened to end in '?'.
   if (user === ASSISTANT_USER) return;
 
+  // Any human chat in the discussion panel is a signal that someone is
+  // about to drive the session — make sure Claude is in auto-accept-edits
+  // mode so the next @myco (or Plan-tab checkbox dispatch) runs without
+  // a permission prompt. We skip @myco messages because their own send
+  // path (handleChatPostfixes) prepends the toggle bytes atomically with
+  // the prompt, which avoids a stale-detection race. Slash commands also
+  // skip — they don't drive Claude.
+  if (session && session.alive && !text.startsWith('@myco') && !text.startsWith('/')) {
+    const toggle = autoAcceptToggleBytes(session);
+    if (toggle) {
+      console.log(`[chat→pty] auto-toggle on discussion (${toggle.length / SHIFT_TAB.length} cycle)`);
+      session.write(toggle);
+    }
+  }
+
   // Registered slash commands (/feature, /bug, /help, …) are handled by
   // the slashcmds dispatcher. /btw is intentionally NOT in the registry —
   // it's the existing claude-in-chat trigger handled below by btw.js.

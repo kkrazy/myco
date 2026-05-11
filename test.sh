@@ -451,6 +451,11 @@ test_chat_window() {
   # discussion-panel chat (rec.chat) so non-@myco messages still feed Plan.
   grep -q "getChatHistory" server/src/extractor.js && pass "extractor reads chat history" || fail "extractor reads chat history"
   grep -q "readChatTail"   server/src/extractor.js && pass "extractor has readChatTail helper" || fail "extractor has readChatTail helper"
+  # Regression: any non-@myco, non-slash chat must trigger the auto-accept-
+  # edits toggle so the next @myco / Plan checkbox runs without a prompt.
+  grep -q 'auto-toggle on discussion' server/src/pty.js \
+    && pass "pty toggles auto-mode on plain discussion" \
+    || fail "pty toggles auto-mode on plain discussion"
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: parseStringArray must tolerate code fences + non-JSON.
