@@ -450,9 +450,18 @@ function detectClaudeMode(session) {
       if (line) tail.push(line.translateToString(true));
     }
     const blob = tail.join('\n').toLowerCase();
-    if (/accept edits|auto-accept/.test(blob)) return 'accept';
-    if (/plan mode/.test(blob)) return 'plan';
-    return 'default';
+    let mode;
+    // Patterns updated to match Claude Code's actual status bar variants:
+    // ⏵⏵ auto-accept edits on (shift+tab to cycle)
+    // ⏸ plan mode on (shift+tab to cycle)
+    // (no mode label) → default mode
+    if (/accept edits|auto-accept|auto edit/i.test(blob)) mode = 'accept';
+    else if (/plan mode/i.test(blob)) mode = 'plan';
+    else mode = 'default';
+    // Log the detected mode + a tiny tail snippet so we can confirm the
+    // patterns are matching reality. Short enough not to flood logs.
+    console.log(`[auto-mode] detected=${mode} tail=${JSON.stringify(blob.slice(-160))}`);
+    return mode;
   } catch { return 'unknown'; }
 }
 
