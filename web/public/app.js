@@ -306,23 +306,49 @@ function renderMd(text) {
   return escHtml(text);
 }
 
-// Render any ```mermaid code blocks into SVG diagrams
+// Render any ```mermaid code blocks into SVG diagrams.
+//
+// mermaid.render() appends a temp <div id="d{id}"> to <body> to measure
+// layout. It tidies the temp div on success, but on parse failure (which
+// happens often when Claude scribbles a near-mermaid sketch) it leaves
+// the "Syntax error in text, mermaid version 11.14.0" SVG behind. Without
+// cleanup these stack up at the bottom of the page, especially for
+// read-only viewers replaying long transcripts. We always purge the
+// temp div in a finally block — and as a belt-and-braces, sweep any
+// orphan d-prefixed nodes once per call.
 async function renderMermaidInContainer(container) {
   if (typeof mermaid === 'undefined') return;
   const blocks = container.querySelectorAll('pre code.language-mermaid');
   for (const block of blocks) {
     const pre = block.parentElement;
     const id = 'mermaid-' + Math.random().toString(36).slice(2, 10);
+    let svg = null;
     try {
-      const { svg } = await mermaid.render(id, block.textContent);
+      const r = await mermaid.render(id, block.textContent);
+      svg = r && r.svg;
+    } catch {
+      // Leave as raw code block if mermaid fails
+    } finally {
+      try {
+        const orphan = document.getElementById('d' + id) || document.getElementById(id);
+        if (orphan) orphan.remove();
+      } catch {}
+    }
+    if (svg) {
       const div = document.createElement('div');
       div.className = 'conv-mermaid';
       div.innerHTML = svg;
       pre.replaceWith(div);
-    } catch {
-      // Leave as raw code block if mermaid fails
     }
   }
+  // Final sweep: any leftover mermaid temp/error nodes from earlier calls
+  // (race, page-load before this fix shipped, …). Scoped to direct
+  // children of body so we don't accidentally yank anything legitimate.
+  try {
+    for (const node of document.body.querySelectorAll(':scope > [id^="dmermaid-"], :scope > [id^="mermaid-"]')) {
+      node.remove();
+    }
+  } catch {}
 }
 
 function scrollConvToBottom() {

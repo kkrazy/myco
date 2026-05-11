@@ -110,6 +110,13 @@ test_conv_view_js() {
   grep -q 'function renderConvMessage' web/public/app.js && pass "renderConvMessage" || fail "renderConvMessage"
   grep -q 'function renderMd' web/public/app.js && pass "renderMd" || fail "renderMd"
   grep -q 'function renderMermaidInContainer' web/public/app.js && pass "renderMermaidInContainer" || fail "renderMermaidInContainer"
+  # Regression: mermaid.render leaks an error <div id="dmermaid-…"> when
+  # parse fails (the "Syntax error in text, mermaid version X" SVG).
+  # renderMermaidInContainer must clean those temp/orphan nodes so they
+  # don't stack up at the bottom of the read-only viewer's page.
+  grep -q "document.getElementById('d' + id)" web/public/app.js \
+    && pass "mermaid temp-div orphan cleanup" \
+    || fail "mermaid temp-div orphan cleanup"
   grep -q 'function openSession' web/public/app.js && pass "openSession" || fail "openSession"
   grep -q 'function renderTranscriptMessages' web/public/app.js && pass "renderTranscriptMessages" || fail "renderTranscriptMessages"
 }
