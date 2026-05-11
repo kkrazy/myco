@@ -1210,6 +1210,10 @@ function setChatPane(visible) {
   }
   updateChatButton();
   if (state.fitAddon) requestAnimationFrame(() => state.fitAddon.fit());
+  // When the pane is unhidden, scroll the chat list to the latest — the
+  // list may have rendered while hidden (zero-height), so its scrollTop
+  // was a no-op then. Now that it has dimensions, pin to the bottom.
+  if (visible) scrollChatToLatest();
 }
 
 function updateChatButton() {
@@ -1479,7 +1483,10 @@ function timeAgo(iso) {
 
 function applyChatHistory(messages) {
   state.chatMessages = Array.isArray(messages) ? messages.slice() : [];
-  renderChatPane();
+  // Always land on the latest message — applyChatHistory fires on initial
+  // connect and on every reconnect, and the user expects to see the most
+  // recent activity, not the start of the thread.
+  renderChatPane(/*scrollToBottom*/ true);
 }
 
 function appendChatMessage(message) {
@@ -1493,6 +1500,16 @@ function clearChat() {
   renderChatPane();
 }
 
+// Scroll the chat list to the bottom, deferred to the next frame so layout
+// has settled. Without rAF, scrollTop=scrollHeight is a no-op when the
+// chat pane is still display:none / 0-height (initial mobile load, or
+// while a session-switch is in progress).
+function scrollChatToLatest() {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+}
+
 function renderChatPane(scrollToBottom = false) {
   const list = document.getElementById('chat-messages');
   const empty = document.getElementById('chat-empty');
@@ -1504,7 +1521,7 @@ function renderChatPane(scrollToBottom = false) {
   }
   if (empty) empty.hidden = true;
   list.innerHTML = state.chatMessages.map(renderChatMessage).join('');
-  if (scrollToBottom) list.scrollTop = list.scrollHeight;
+  if (scrollToBottom) scrollChatToLatest();
 }
 
 function renderChatMessage(m) {
@@ -1714,6 +1731,9 @@ function setChatpaneTab(name) {
   // Load the persisted artifact for Plan/Arch/Test so the user sees the last
   // refresh result without having to click Refresh on every reload.
   if (ARTIFACT_TYPES.includes(name)) loadArtifact(name).catch(() => {});
+  // Switching back to Discussion: scroll to the latest so a long chat
+  // history doesn't show the oldest message on tab return.
+  if (name === 'discussion') scrollChatToLatest();
 }
 
 // Per-tab empty-state copy, mirrored from index.html. Centralised so a
