@@ -400,7 +400,11 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
       //   default → accept-edits → plan → default
       const toggle = autoAcceptToggleBytes(session);
       console.log(`[chat→pty] ${user}: ${input.substring(0, 80)}${toggle ? ' (+auto-toggle)' : ''}`);
-      session.write(toggle + input + '\r');
+      // Send: <toggle?> <text> <\n = Ctrl+J inserts literal newline> <\r submits>
+      // The \n leaves a trailing newline in Claude Code's input box so the
+      // submitted prompt visually ends with a blank line — matches what
+      // pressing Enter naturally does in a multi-line text editor.
+      session.write(toggle + input + '\n\r');
     }
     return;
   }
