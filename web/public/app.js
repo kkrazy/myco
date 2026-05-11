@@ -1838,7 +1838,12 @@ function renderArtifact(type, artifact) {
   }
   const me = state.chatUser || '';
   const supportsVoting = (type === 'plan');
-  const rows = items.map((it) => {
+  // Plan items are grouped by their `layer` field (assigned by the extractor;
+  // e.g. "Frontend", "Backend", "Tests"). Items keep their extraction order
+  // within each layer, and layers appear in the first-seen order so the
+  // top-down structure the model intends is preserved. Test items don't have
+  // layers and render as a flat list.
+  const renderItem = (it) => {
     const cls = it.done ? 'is-done' : '';
     const voters = Array.isArray(it.voters) ? it.voters : [];
     const points = voters.length;
@@ -1876,8 +1881,31 @@ function renderArtifact(type, artifact) {
       </div>
       ${commentsBlock}
     </li>`;
-  }).join('');
-  body.innerHTML = `<ul class="artifact-items">${rows}</ul>` +
+  };
+
+  let bodyHtml;
+  if (supportsVoting) {
+    // Group plan items by layer; preserve extraction order within each layer
+    // AND first-seen layer order overall. A single shared layer ("Other" by
+    // default) means the UI still degrades cleanly when the model returns the
+    // legacy untagged shape.
+    const layers = [];
+    const buckets = new Map();
+    for (const it of items) {
+      const layer = (it.layer && String(it.layer).trim()) || 'Other';
+      if (!buckets.has(layer)) { layers.push(layer); buckets.set(layer, []); }
+      buckets.get(layer).push(it);
+    }
+    bodyHtml = layers.map((layer) => `
+      <div class="artifact-layer-group">
+        <h4 class="artifact-layer-name">${escHtml(layer)}</h4>
+        <ul class="artifact-items">${buckets.get(layer).map(renderItem).join('')}</ul>
+      </div>
+    `).join('');
+  } else {
+    bodyHtml = `<ul class="artifact-items">${items.map(renderItem).join('')}</ul>`;
+  }
+  body.innerHTML = bodyHtml +
     (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
   body.querySelectorAll('.artifact-item-checkbox').forEach((cb) => {
     cb.addEventListener('change', () => onArtifactItemToggle(cb));

@@ -44,11 +44,14 @@ const PROMPTS = {
   plan: {
     system:
       'You are running in the project\'s working directory with file-system tools (Read, Glob, Grep) available. You will be given two sources from a software-engineering session: the running Claude Code transcript AND the Mycelium discussion-panel chat (which contains human-to-human messages, including ones that were NOT sent to Claude via @myco). ' +
-      'Extract concrete TODO items that are still PENDING. A "pending" TODO is one the user, a chat participant, or Claude proposed but has not yet been completed. ' +
+      'Extract concrete TODO items that are still PENDING and group them into ARCHITECTURAL LAYERS (e.g. "Frontend / Backend / Database" for a web app, or "Client / Server / PTY" for a CLI-driven app, or "API / Service / Persistence" for a backend service — pick names that match THIS codebase by spot-checking it). ' +
+      'A "pending" TODO is one the user, a chat participant, or Claude proposed but has not yet been completed. ' +
       'BEFORE you answer, spot-check the codebase: if a proposed change is already in the code, drop it from the list. Don\'t over-explore — a few targeted Read/Grep calls is enough. ' +
       'Pure-discussion intent (without @myco) still counts as a real plan item if it isn\'t reflected in the code yet. ' +
-      'OUTPUT FORMAT: a JSON array of strings, each a single short actionable todo, e.g. ["wire the Plan tab to the new endpoint", "add a regression test for the multi-line regex"]. ' +
-      'NO prose, NO markdown, NO code fences. If nothing remains pending, output the empty array [].',
+      'OUTPUT FORMAT: a JSON array of objects, each `{ "layer": "<layer name>", "text": "<short actionable todo>" }`. Order layers top-down (presentation/UI first, persistence/infra last). Example: ' +
+      '[{"layer":"Frontend","text":"wire the Plan tab to the new endpoint"},{"layer":"Backend","text":"add /artifact/vote route"},{"layer":"Tests","text":"add a regression test for the multi-line regex"}]. ' +
+      'Keep layer names short (≤2 words) and consistent across items. ' +
+      'NO prose, NO markdown, NO code fences around the JSON. If nothing remains pending, output the empty array [].',
   },
   arch: {
     system:
@@ -134,33 +137,66 @@ function readChatTail(rec) {
 }
 
 // Strip code fences the model may have added despite the prompt asking it
-// not to, then parse as JSON. Returns [] on any failure — extraction is
-// best-effort, we never throw.
-function parseStringArray(text) {
-  if (!text) return [];
+// not to, then parse as JSON. Shared by parseStringArray + parsePlanItems.
+function _parseFencedJson(text) {
+  if (!text) return null;
   const cleaned = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-  let arr;
-  try { arr = JSON.parse(cleaned); } catch { return []; }
+  try { return JSON.parse(cleaned); } catch { return null; }
+}
+
+// Legacy + Test-tab parser. Returns [string, …]. Best-effort, never throws.
+function parseStringArray(text) {
+  const arr = _parseFencedJson(text);
   if (!Array.isArray(arr)) return [];
   return arr
     .filter((s) => typeof s === 'string' && s.trim())
     .map((s) => s.trim().slice(0, 500));
 }
 
-function buildItems(strings) {
+// Plan-tab parser. Accepts a layered shape and falls back gracefully for
+// model variations:
+//   ["string", "string"]                          → layer = "Other"
+//   [{ "layer": "Frontend", "text": "string" }]   → current preferred shape
+//   [{ "text": "string" }]                        → layer = "Other"
+// Anything else in the array is dropped silently.
+function parsePlanItems(text) {
+  const arr = _parseFencedJson(text);
+  if (!Array.isArray(arr)) return [];
+  return arr.map((entry) => {
+    if (typeof entry === 'string' && entry.trim()) {
+      return { text: entry.trim().slice(0, 500), layer: 'Other' };
+    }
+    if (entry && typeof entry === 'object' && typeof entry.text === 'string' && entry.text.trim()) {
+      const layer = typeof entry.layer === 'string' && entry.layer.trim()
+        ? entry.layer.trim().slice(0, 40)
+        : 'Other';
+      return { text: entry.text.trim().slice(0, 500), layer };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+function buildItems(entries) {
   const now = new Date().toISOString();
-  // voters: array of usernames who've upvoted this item (toggle-on-click in
-  // the UI so re-clicks de-vote). comments: flat thread of {id, user, text, ts}
-  // entries. Both empty at extraction time; they accrue as session
-  // participants engage with each todo.
-  return strings.map((s) => ({
-    id: newId(),
-    text: s,
-    done: false,
-    addedAt: now,
-    voters: [],
-    comments: [],
-  }));
+  // entries: string[] OR [{text, layer}, …]. We normalize either form here
+  // so callers (plan vs test) can stay simple.
+  // voters/comments empty at extraction time; they accrue as participants
+  // engage with the item.
+  return entries.map((e) => {
+    const text = typeof e === 'string' ? e : (e && e.text) || '';
+    const layer = (e && typeof e === 'object' && typeof e.layer === 'string' && e.layer.trim())
+      ? e.layer.trim()
+      : 'Other';
+    return {
+      id: newId(),
+      text,
+      layer,
+      done: false,
+      addedAt: now,
+      voters: [],
+      comments: [],
+    };
+  });
 }
 
 async function extractArtifact(rec, type) {
@@ -207,9 +243,9 @@ async function extractArtifact(rec, type) {
   if (type === 'arch') {
     return { markdown: text.trim(), updatedAt: new Date().toISOString() };
   }
-  const parsed = parseStringArray(text);
+  const parsed = type === 'plan' ? parsePlanItems(text) : parseStringArray(text);
   console.log(`[extractor] ${sid} type=${type} → parsed ${parsed.length} item(s)`);
   return { items: buildItems(parsed), updatedAt: new Date().toISOString() };
 }
 
-module.exports = { extractArtifact, PROMPTS, readTranscriptTail, parseStringArray };
+module.exports = { extractArtifact, PROMPTS, readTranscriptTail, parseStringArray, parsePlanItems };

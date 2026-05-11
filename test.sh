@@ -497,6 +497,23 @@ test_chat_window() {
   grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"
   grep -q "onArtifactComment"     web/public/app.js && pass "onArtifactComment handler"     || fail "onArtifactComment handler"
   grep -q "onArtifactItemDelete"  web/public/app.js && pass "onArtifactItemDelete handler"  || fail "onArtifactItemDelete handler"
+  # Regression: plan items are grouped by `layer` (3-tier-style buckets) and
+  # the extractor's plan prompt asks for {layer, text} objects.
+  grep -q "parsePlanItems"      server/src/extractor.js && pass "parsePlanItems parser exists" || fail "parsePlanItems parser exists"
+  grep -q "artifact-layer-name" web/public/app.js       && pass "Plan tab renders per-layer headers" || fail "Plan tab renders per-layer headers"
+  if have_node; then
+    node -e "
+      const ex = require('./server/src/extractor');
+      const p = ex.parsePlanItems('[{\"layer\":\"Frontend\",\"text\":\"x\"},{\"layer\":\"Backend\",\"text\":\"y\"}]');
+      if (p.length !== 2) throw new Error('want 2, got ' + p.length);
+      if (p[0].layer !== 'Frontend' || p[1].layer !== 'Backend') throw new Error('layer assignment wrong: ' + JSON.stringify(p));
+      const legacy = ex.parsePlanItems('[\"x\",\"y\"]');
+      if (legacy[0].layer !== 'Other') throw new Error('legacy strings should default to Other');
+      const mixed  = ex.parsePlanItems('[{\"text\":\"x\"}]');
+      if (mixed[0].layer !== 'Other') throw new Error('layerless object should default to Other');
+    " && pass "parsePlanItems handles layered + legacy + layerless shapes" \
+      || fail "parsePlanItems handles layered + legacy + layerless shapes"
+  fi
   # Phase B: extractor module + claude-CLI client are wired in.
   test -f server/src/anthropic.js && pass "anthropic.js exists" || fail "anthropic.js missing"
   test -f server/src/extractor.js && pass "extractor.js exists" || fail "extractor.js missing"

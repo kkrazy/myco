@@ -1266,6 +1266,27 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   text-align: right;
 }
 
+/* Plan items are bucketed into named architectural layers (Frontend /
+   Backend / Tests / …) that the extractor assigns. Each bucket has a
+   small header above its list. Test items don't have layers — they
+   render as a flat list (no .artifact-layer-group wrapper). */
+.artifact-layer-group {
+  margin-bottom: 14px;
+}
+.artifact-layer-group:last-child { margin-bottom: 0; }
+.artifact-layer-name {
+  margin: 0 0 6px 0;
+  padding: 4px 8px;
+  font-size: .78rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(80, 120, 200, .12);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
 /* Plan/Test todo list with checkboxes. Checking a Plan item injects it back
    into the running Claude session as `@myco <text>`. Plan items also have
    per-item voting + a flat comment thread; once votes hit the threshold
