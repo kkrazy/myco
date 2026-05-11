@@ -284,9 +284,25 @@ function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Full markdown rendering for conversation view via marked library
+// Full markdown rendering for conversation view via marked library.
+//
+// Wrapped in try/catch so a single bad message (unclosed fence, exotic
+// unicode, hljs hiccup) can't crash the render pipeline. Falls back to
+// escHtml on failure and logs the first time it does so per page — that
+// fingerprint is how we'd diagnose "raw text after @myco" style
+// regressions: if you suddenly see `[renderMd] marked unavailable` or
+// `[renderMd] marked.parse threw` in the console after an event, that
+// pinpoints the cause.
+let _renderMdLoggedUnavailable = false;
 function renderMd(text) {
-  if (typeof marked !== 'undefined' && marked.parse) {
+  if (typeof marked === 'undefined' || !marked.parse) {
+    if (!_renderMdLoggedUnavailable) {
+      console.warn('[renderMd] marked unavailable; falling back to escHtml. typeof marked =', typeof marked);
+      _renderMdLoggedUnavailable = true;
+    }
+    return escHtml(text);
+  }
+  try {
     const renderer = new marked.Renderer();
     renderer.code = function(arg) {
       const code = (typeof arg === 'object' && arg.text !== undefined) ? arg.text : arg;
@@ -308,9 +324,11 @@ function renderMd(text) {
       }
       return '<pre><code>' + escHtml(code) + '</code></pre>';
     };
-    return marked.parse(text, { breaks: true, gfm: true, renderer });
+    return marked.parse(String(text == null ? '' : text), { breaks: true, gfm: true, renderer });
+  } catch (err) {
+    console.error('[renderMd] marked.parse threw:', err && err.message, 'on input head:', String(text).slice(0, 200));
+    return escHtml(text);
   }
-  return escHtml(text);
 }
 
 // Render any ```mermaid code blocks into SVG diagrams.
