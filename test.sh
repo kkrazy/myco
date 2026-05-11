@@ -375,11 +375,18 @@ test_readonly_viewer() {
 test_chat_window() {
   grep -q 'id="chatpane"' web/public/index.html && pass "#chatpane element" || fail "#chatpane element"
   # Regression: chat history must allow text selection so users can copy
-  # messages. body { user-select:none } would otherwise inherit down. The
-  # rule spans multiple lines, so use -Pz for multi-line matching.
-  grep -Pzoq '#chat-messages[^{]*\{[^}]*user-select:\s*text' web/public/styles.css \
-    && pass "#chat-messages re-enables user-select" \
-    || fail "#chat-messages re-enables user-select"
+  # messages. iOS needs ALL THREE of user-select:text, touch-callout:default,
+  # touch-action:auto for the long-press → Copy callout to fire. Without
+  # touch-callout the body's selection-disabled value propagates down.
+  grep -Pzoq '#chat-messages[^{]*\{[^}]*user-select:\s*text\s*!important' web/public/styles.css \
+    && pass "#chat-messages re-enables user-select with !important" \
+    || fail "#chat-messages re-enables user-select with !important"
+  grep -Pzoq '#chat-messages[^{]*\{[^}]*touch-callout:\s*default' web/public/styles.css \
+    && pass "#chat-messages re-enables iOS touch-callout" \
+    || fail "#chat-messages re-enables iOS touch-callout"
+  grep -Pzoq '#chat-messages[^{]*\{[^}]*touch-action:\s*auto' web/public/styles.css \
+    && pass "#chat-messages re-enables touch-action" \
+    || fail "#chat-messages re-enables touch-action"
   grep -q 'id="chat-input"' web/public/index.html && pass "#chat-input element" || fail "#chat-input element"
   grep -q 'id="chat-send"' web/public/index.html && pass "#chat-send element" || fail "#chat-send element"
   grep -q 'id="chat-form"' web/public/index.html && pass "#chat-form element" || fail "#chat-form element"
