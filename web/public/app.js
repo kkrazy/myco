@@ -1460,9 +1460,13 @@ function renderChatMessage(m) {
   let cls = 'chat-msg';
   if (fromClaude) cls += ' from-claude';
   if (fromSelf) cls += ' from-self';
+  // renderMd for the body so menu broadcasts ("Claude wants permission to
+  // run `Bash(...)`"), allow/deny notes, /allowlist output, and any future
+  // server-side markdown all render properly. marked escapes HTML by
+  // default; this is safe for arbitrary chat input.
   return `<div class="${cls}">
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
-    <div class="chat-text">${escHtml(m.text || '')}</div>
+    <div class="chat-text">${renderMd(m.text || '')}</div>
   </div>`;
 }
 

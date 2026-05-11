@@ -130,6 +130,12 @@ test_conv_view_js() {
   grep -Pzoq "m.role === 'user'[\s\S]*?textEl.innerHTML = renderMd" web/public/app.js \
     && pass "user-role transcript messages rendered as markdown" \
     || fail "user-role transcript messages rendered as markdown"
+  # Regression: discussion-panel chat messages must also go through renderMd
+  # so menu broadcasts ("Claude wants to run `Bash(...)`"), allow/deny
+  # notes, and the /allowlist output don't show as raw backticks/markdown.
+  grep -Pzoq 'class="chat-text">\$\{renderMd' web/public/app.js \
+    && pass "discussion chat body rendered as markdown" \
+    || fail "discussion chat body rendered as markdown"
   grep -q 'function openSession' web/public/app.js && pass "openSession" || fail "openSession"
   grep -q 'function renderTranscriptMessages' web/public/app.js && pass "renderTranscriptMessages" || fail "renderTranscriptMessages"
 }

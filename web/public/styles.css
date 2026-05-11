@@ -1338,10 +1338,35 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 .chat-msg .chat-text {
   font-size: .92rem;
-  white-space: pre-wrap;
   word-wrap: break-word;
   line-height: 1.4;
 }
+/* Markdown is rendered inside chat-text via renderMd → marked, which wraps
+   single-line messages in <p>…</p>. Trim the default paragraph margin so
+   single-paragraph bubbles don't get top/bottom whitespace, and tighten
+   spacing between paragraphs/lists for multi-paragraph bubbles. */
+.chat-msg .chat-text > p:first-child { margin-top: 0; }
+.chat-msg .chat-text > p:last-child  { margin-bottom: 0; }
+.chat-msg .chat-text p,
+.chat-msg .chat-text ul,
+.chat-msg .chat-text ol { margin: 6px 0; }
+.chat-msg .chat-text ul,
+.chat-msg .chat-text ol { padding-left: 22px; }
+.chat-msg .chat-text code {
+  background: rgba(255, 255, 255, .08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .88em;
+}
+.chat-msg .chat-text pre {
+  background: rgba(0, 0, 0, .25);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.chat-msg .chat-text pre code { background: transparent; padding: 0; }
 .chat-msg.from-claude .chat-text {
   background: rgba(76, 175, 130, .08);
   border-left: 2px solid var(--accent);
