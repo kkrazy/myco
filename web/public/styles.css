@@ -2006,20 +2006,22 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .vk-key-danger { color: #f85149; border-color: rgba(248,81,73,.3); }
 .vk-key-danger:hover { background: rgba(248,81,73,.12); border-color: #f85149; color: #f85149; }
 .vk-key-flash { background: var(--accent) !important; color: #000 !important; border-color: var(--accent) !important; }
-/* Mini xterm host — sized to the PTY's actual cols/rows so cursor-positioned
-   content lands on the right cells. We let it overflow inside the tail panel
-   (which has max-height: 38vh). xterm renders its own scrollback. */
-#terminal-tail-term {
+/* Snapshot text — server already resolved alt-screen + cursor positioning
+   into a clean per-row plain-text grid, so we just render it in a <pre>
+   that preserves whitespace and lets long lines wrap to the panel width. */
+#terminal-tail-text {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  margin: 0;
+  padding: 8px 12px;
   background: #010409;
-  padding: 6px 0 6px 8px;
-}
-#terminal-tail-term .xterm,
-#terminal-tail-term .xterm-viewport,
-#terminal-tail-term .xterm-screen {
-  background-color: #010409 !important;
+  color: #c9d1d9;
+  font: 12px 'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 #conv-messages {

@@ -1,5 +1,6 @@
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
 const { EventEmitter } = require('events');
+const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 // Late-bound: sessions.js requires this module, so destructuring at load
 // time would capture undefined values from the partial export.
 const sessionsMod = require('./sessions');
@@ -23,8 +24,23 @@ class PtySession extends EventEmitter {
     this.cols = ptyProcess.cols;
     this.rows = ptyProcess.rows;
 
+    // Server-side headless terminal emulator. We mirror every PTY byte
+    // through it so we can hand viewers a clean, layout-resolved snapshot
+    // of the current visible screen — alt-screen, cursor positioning,
+    // wraparound and clears all collapse into plain text per row.
+    // allowProposedApi exposes the buffer reading API; logLevel:'off'
+    // silences xterm's chatty info logs.
+    this.headless = new HeadlessTerminal({
+      cols: this.cols,
+      rows: this.rows,
+      scrollback: 1000,
+      allowProposedApi: true,
+      logLevel: 'off',
+    });
+
     this.pty.onData((data) => {
       this._push(data);
+      try { this.headless.write(data); } catch {}
       this.emit('data', data);
     });
     this.pty.onExit(({ exitCode }) => {
@@ -52,8 +68,28 @@ class PtySession extends EventEmitter {
       this.pty.resize(cols, rows);
       this.cols = cols;
       this.rows = rows;
+      try { this.headless.resize(cols, rows); } catch {}
       this.emit('resize', { cols, rows });
     } catch {}
+  }
+
+  // Read the headless terminal's currently-visible screen as plain text.
+  // One line per row of the active buffer (alt-screen-aware), trailing
+  // whitespace stripped per row, blank rows preserved up to the last
+  // non-empty one (so a "Y/n" prompt with empty rows below it doesn't
+  // grow into pages of blank space).
+  getVisibleText() {
+    const buf = this.headless.buffer.active;
+    const rows = this.headless.rows;
+    const lines = [];
+    for (let i = 0; i < rows; i++) {
+      const line = buf.getLine(buf.viewportY + i);
+      if (!line) { lines.push(''); continue; }
+      lines.push(line.translateToString(true).replace(/\s+$/, ''));
+    }
+    // Trim trailing blank rows for compactness.
+    while (lines.length && !lines[lines.length - 1]) lines.pop();
+    return lines.join('\n');
   }
 
   kill() {
@@ -61,6 +97,8 @@ class PtySession extends EventEmitter {
       try { this.pty.kill(); } catch {}
       this.alive = false;
     }
+    try { this.headless.dispose(); } catch {}
+    this.headless = null;
     this.buffer = [];
     this.bufferSize = 0;
     this.removeAllListeners();
@@ -197,34 +235,30 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const ownerLogin = sessionsMod.getSessionRecord(sessionId)?.user || null;
   ws.send(JSON.stringify({ t: 'viewer-mode', owner: ownerLogin }));
 
-  // Live PTY stream for the viewer's mini xterm. The structured transcript
-  // doesn't capture Claude Code's TUI prompts (alt-screen redraws, cursor
-  // positioning, "Apply this edit? (Y/n)" boxes, dim hint text), so we
-  // forward raw PTY bytes the same way we would to an owner — but tagged
-  // with a different message type ('pty-output') so the client routes them
-  // to the embedded mini terminal in the conversation pane rather than the
-  // main #terminal element. The mini terminal is sized to match the PTY
-  // exactly (cols/rows from the session) so cursor-positioned content
-  // lands where it should.
-  ws.send(JSON.stringify({ t: 'pty-size', cols: session.cols, rows: session.rows }));
-
-  // Replay the recent PTY ring buffer so the viewer's terminal reaches the
-  // current screen state immediately (instead of starting from blank and
-  // missing whatever scrolled before they connected).
-  const replay = Buffer.concat(session.buffer.map((d) => Buffer.from(d, 'utf8')));
-  if (replay.length) {
-    ws.send(JSON.stringify({ t: 'pty-output', data: replay.toString('base64') }));
+  // Live PTY snapshot for the viewer. The structured transcript doesn't
+  // capture Claude Code's TUI prompts ("Apply this edit? (Y/n)" boxes,
+  // hint text, in-flight tool output) — they only exist in the PTY. Run
+  // every PTY byte through a server-side headless xterm, then send the
+  // visible-text snapshot as plain rendered text. The viewer drops it
+  // into the transcript like any other turn — no client-side terminal
+  // emulation, no alt-screen smear.
+  const SNAPSHOT_DEBOUNCE_MS = 200;
+  let snapshotTimer = null;
+  let lastSnapshot = '';
+  function emitSnapshot() {
+    if (ws.readyState !== ws.OPEN) return;
+    let text = '';
+    try { text = session.getVisibleText(); } catch {}
+    if (text === lastSnapshot) return;
+    lastSnapshot = text;
+    ws.send(JSON.stringify({ t: 'terminal-snapshot', text }));
   }
-  const onPtyData = (data) => {
-    if (ws.readyState !== ws.OPEN) return;
-    ws.send(JSON.stringify({ t: 'pty-output', data: Buffer.from(data, 'utf8').toString('base64') }));
-  };
-  const onPtyResize = ({ cols, rows }) => {
-    if (ws.readyState !== ws.OPEN) return;
-    ws.send(JSON.stringify({ t: 'pty-size', cols, rows }));
+  emitSnapshot();                               // initial state on connect
+  const onPtyData = () => {
+    if (snapshotTimer) return;
+    snapshotTimer = setTimeout(() => { snapshotTimer = null; emitSnapshot(); }, SNAPSHOT_DEBOUNCE_MS);
   };
   session.on('data', onPtyData);
-  session.on('resize', onPtyResize);
 
   // Stream structured transcript (clean content from Claude's JSONL)
   const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
@@ -273,7 +307,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   ws.on('close', () => {
     session.off('chat', onChat);
     session.off('data', onPtyData);
-    session.off('resize', onPtyResize);
+    if (snapshotTimer) { clearTimeout(snapshotTimer); snapshotTimer = null; }
     if (unwatch) unwatch();
   });
 }

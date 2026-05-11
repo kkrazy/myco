@@ -342,18 +342,17 @@ test_readonly_viewer() {
   # into the JSONL). Owner login flows in via the viewer-mode message.
   grep -q "t: 'viewer-mode'"      server/src/pty.js     && pass "server emits viewer-mode"          || fail "server emits viewer-mode"
   grep -q "owner: ownerLogin"     server/src/pty.js     && pass "viewer-mode carries owner login"   || fail "viewer-mode carries owner login"
-  # Live-terminal panel: server forwards raw PTY bytes (so an embedded
-  # xterm.js on the client can render alt-screen/cursor positioning/ANSI
-  # exactly as the owner sees them) plus the PTY dimensions.
-  grep -q "t: 'pty-output'"       server/src/pty.js     && pass "server emits pty-output"           || fail "server emits pty-output"
-  grep -q "t: 'pty-size'"         server/src/pty.js     && pass "server emits pty-size"             || fail "server emits pty-size"
+  # Server-side headless xterm strips layout/cursor escapes and exposes a
+  # plain visible-text snapshot; viewer renders it as a transcript card.
+  grep -q "@xterm/headless"       server/src/pty.js     && pass "pty.js uses headless xterm"        || fail "pty.js uses headless xterm"
+  grep -q "getVisibleText"        server/src/pty.js     && pass "PtySession.getVisibleText defined" || fail "PtySession.getVisibleText defined"
+  grep -q "t: 'terminal-snapshot'" server/src/pty.js    && pass "server emits terminal-snapshot"    || fail "server emits terminal-snapshot"
   grep -q "id=\"readonly-banner\"" web/public/index.html && pass "html: #readonly-banner"           || fail "html: #readonly-banner"
   grep -q "id=\"terminal-tail\""   web/public/index.html && pass "html: #terminal-tail"             || fail "html: #terminal-tail"
-  grep -q "id=\"terminal-tail-term\"" web/public/index.html && pass "html: #terminal-tail-term (xterm host)" || fail "html: #terminal-tail-term"
-  grep -q "function applyReadOnly"      web/public/app.js && pass "applyReadOnly() defined"         || fail "applyReadOnly() defined"
-  grep -q "function ensureTailTerm"     web/public/app.js && pass "ensureTailTerm() defined"        || fail "ensureTailTerm() defined"
-  grep -q "function writeTailOutput"    web/public/app.js && pass "writeTailOutput() defined"       || fail "writeTailOutput() defined"
-  grep -q "function bindReadOnlyBanner" web/public/app.js && pass "bindReadOnlyBanner() defined"    || fail "bindReadOnlyBanner() defined"
+  grep -q "id=\"terminal-tail-text\"" web/public/index.html && pass "html: #terminal-tail-text"     || fail "html: #terminal-tail-text"
+  grep -q "function applyReadOnly"        web/public/app.js && pass "applyReadOnly() defined"        || fail "applyReadOnly() defined"
+  grep -q "function applyTerminalSnapshot" web/public/app.js && pass "applyTerminalSnapshot() defined" || fail "applyTerminalSnapshot() defined"
+  grep -q "function bindReadOnlyBanner"   web/public/app.js && pass "bindReadOnlyBanner() defined"   || fail "bindReadOnlyBanner() defined"
   # Special-key shortcuts let viewers answer y/n/Enter/Esc prompts without
   # ever typing into the (rejected) terminal directly.
   grep -qE "SPECIAL_KEYS|'enter':|enter:" server/src/pty.js && pass "special key tokens recognized" || fail "special key tokens recognized"
