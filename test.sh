@@ -501,6 +501,9 @@ test_chat_window() {
   # discussion-panel chat (rec.chat) so non-@myco messages still feed Plan.
   grep -q "getChatHistory" server/src/extractor.js && pass "extractor reads chat history" || fail "extractor reads chat history"
   grep -q "readChatTail"   server/src/extractor.js && pass "extractor has readChatTail helper" || fail "extractor has readChatTail helper"
+  # Regression: extractor prompts must tell Claude to spot-check the
+  # actual codebase via Read/Glob/Grep, not just rely on chat + transcript.
+  grep -q "Read, Glob, Grep" server/src/extractor.js && pass "extractor prompts mention code-inspection tools" || fail "extractor prompts mention code-inspection tools"
   # Regression: any non-@myco, non-slash chat must trigger the auto-accept-
   # edits toggle so the next @myco / Plan checkbox runs without a prompt.
   grep -q 'auto-toggle on discussion' server/src/pty.js \
