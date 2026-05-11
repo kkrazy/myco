@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.json" />
   <title>myco</title>
   <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=88" />
+  <link rel="stylesheet" href="styles.css?v=89" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -66,22 +66,6 @@
                that wipe the transcript via innerHTML don't blow away the
                sibling #terminal-tail card below). -->
           <div id="conv-content"></div>
-          <!-- Live snapshot of Claude's current visible TUI, rendered as
-               plain text. Server-side headless xterm consumes PTY bytes and
-               produces a clean snapshot (alt-screen / cursor positioning
-               resolved); this card just displays it as a transcript entry. -->
-          <div id="terminal-tail" hidden>
-            <div class="tt-header">
-              <span class="tt-label">Live terminal</span>
-              <span class="tt-hint">Reply:</span>
-              <button class="vk-key" data-key="y" title="Send y">y</button>
-              <button class="vk-key" data-key="n" title="Send n">n</button>
-              <button class="vk-key" data-key="enter" title="Send Enter">↵</button>
-              <button class="vk-key" data-key="esc" title="Send Esc">Esc</button>
-              <button class="vk-key vk-key-danger" data-key="ctrl-c" title="Send Ctrl-C">^C</button>
-            </div>
-            <pre id="terminal-tail-text"></pre>
-          </div>
         </div>
       </div>
       <div id="files-wrap" hidden>
@@ -189,6 +173,6 @@
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
   <script src="keyboard.js?v=7"></script>
-  <script src="app.js?v=122"></script>
+  <script src="app.js?v=123"></script>
 </body>
 </html>

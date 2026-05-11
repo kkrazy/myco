@@ -348,17 +348,16 @@ test_readonly_viewer() {
   # into the JSONL). Owner login flows in via the viewer-mode message.
   grep -q "t: 'viewer-mode'"      server/src/pty.js     && pass "server emits viewer-mode"          || fail "server emits viewer-mode"
   grep -q "owner: ownerLogin"     server/src/pty.js     && pass "viewer-mode carries owner login"   || fail "viewer-mode carries owner login"
-  # Server-side headless xterm strips layout/cursor escapes and exposes a
-  # plain visible-text snapshot; viewer renders it as a transcript card.
+  # Server-side headless xterm is still kept for auto-mode detection in
+  # handleChatPostfixes — but we no longer ship per-snapshot WS frames or
+  # render a "live terminal" panel in the viewer pane.
   grep -q "@xterm/headless"       server/src/pty.js     && pass "pty.js uses headless xterm"        || fail "pty.js uses headless xterm"
   grep -q "getVisibleText"        server/src/pty.js     && pass "PtySession.getVisibleText defined" || fail "PtySession.getVisibleText defined"
-  grep -q "t: 'terminal-snapshot'" server/src/pty.js    && pass "server emits terminal-snapshot"    || fail "server emits terminal-snapshot"
+  ! grep -q "t: 'terminal-snapshot'" server/src/pty.js  && pass "terminal-snapshot WS frame removed" || fail "terminal-snapshot WS frame still emitted"
   grep -q "id=\"readonly-banner\"" web/public/index.html && pass "html: #readonly-banner"           || fail "html: #readonly-banner"
-  grep -q "id=\"terminal-tail\""   web/public/index.html && pass "html: #terminal-tail"             || fail "html: #terminal-tail"
-  grep -q "id=\"terminal-tail-text\"" web/public/index.html && pass "html: #terminal-tail-text"     || fail "html: #terminal-tail-text"
+  ! grep -q "id=\"terminal-tail\"" web/public/index.html && pass "html: #terminal-tail removed"     || fail "html: #terminal-tail still present"
   grep -q "function applyReadOnly"        web/public/app.js && pass "applyReadOnly() defined"        || fail "applyReadOnly() defined"
-  grep -q "function applyTerminalSnapshot" web/public/app.js && pass "applyTerminalSnapshot() defined" || fail "applyTerminalSnapshot() defined"
-  grep -q "function bindReadOnlyBanner"   web/public/app.js && pass "bindReadOnlyBanner() defined"   || fail "bindReadOnlyBanner() defined"
+  ! grep -q "applyTerminalSnapshot"       web/public/app.js && pass "applyTerminalSnapshot removed"  || fail "applyTerminalSnapshot still referenced"
   # Special-key shortcuts let viewers answer y/n/Enter/Esc prompts without
   # ever typing into the (rejected) terminal directly.
   grep -qE "SPECIAL_KEYS|'enter':|enter:" server/src/pty.js && pass "special key tokens recognized" || fail "special key tokens recognized"

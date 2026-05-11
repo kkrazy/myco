@@ -235,30 +235,11 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const ownerLogin = sessionsMod.getSessionRecord(sessionId)?.user || null;
   ws.send(JSON.stringify({ t: 'viewer-mode', owner: ownerLogin }));
 
-  // Live PTY snapshot for the viewer. The structured transcript doesn't
-  // capture Claude Code's TUI prompts ("Apply this edit? (Y/n)" boxes,
-  // hint text, in-flight tool output) — they only exist in the PTY. Run
-  // every PTY byte through a server-side headless xterm, then send the
-  // visible-text snapshot as plain rendered text. The viewer drops it
-  // into the transcript like any other turn — no client-side terminal
-  // emulation, no alt-screen smear.
-  const SNAPSHOT_DEBOUNCE_MS = 200;
-  let snapshotTimer = null;
-  let lastSnapshot = '';
-  function emitSnapshot() {
-    if (ws.readyState !== ws.OPEN) return;
-    let text = '';
-    try { text = session.getVisibleText(); } catch {}
-    if (text === lastSnapshot) return;
-    lastSnapshot = text;
-    ws.send(JSON.stringify({ t: 'terminal-snapshot', text }));
-  }
-  emitSnapshot();                               // initial state on connect
-  const onPtyData = () => {
-    if (snapshotTimer) return;
-    snapshotTimer = setTimeout(() => { snapshotTimer = null; emitSnapshot(); }, SNAPSHOT_DEBOUNCE_MS);
-  };
-  session.on('data', onPtyData);
+  // Note: the live PTY snapshot panel was removed at user request — viewers
+  // see only the structured transcript below. The server still runs every
+  // PTY byte through a headless xterm (PtySession.headless) for auto-mode
+  // detection in handleChatPostfixes, but no per-snapshot WS frames are
+  // sent to viewers.
 
   // Stream structured transcript (clean content from Claude's JSONL)
   const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
@@ -306,8 +287,6 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   ws.on('message', handleViewerInbound);
   ws.on('close', () => {
     session.off('chat', onChat);
-    session.off('data', onPtyData);
-    if (snapshotTimer) { clearTimeout(snapshotTimer); snapshotTimer = null; }
     if (unwatch) unwatch();
   });
 }

@@ -187,8 +187,6 @@ function openShareViewer(id) {
         if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
-      } else if (msg.t === 'terminal-snapshot') {
-        applyTerminalSnapshot(msg.text);
       } else if (msg.t === 'output') {
         if (!state.viewerMode) ensureXtermForFallback();
         if (state.term) state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
@@ -1061,8 +1059,6 @@ function openSession(id) {
         if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
-      } else if (msg.t === 'terminal-snapshot') {
-        applyTerminalSnapshot(msg.text);
       } else if (msg.t === 'output') {
         state.term?.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
       } else if (msg.t === 'pong') {
@@ -1516,52 +1512,12 @@ function clearReadOnly() {
     const ownerEl = banner.querySelector('.ro-owner');
     if (ownerEl) ownerEl.textContent = '';
   }
-  disposeTerminalSnapshot();
-}
-
-// Live terminal snapshot: server's headless xterm consumes PTY bytes and
-// sends back a clean visible-text grid (alt-screen / cursor positioning
-// resolved into plain text per row). We just drop it into a <pre>. No
-// client-side terminal emulation — the structured viewer renders the
-// snapshot like any other transcript entry, just monospaced.
-function applyTerminalSnapshot(text) {
-  const panel = document.getElementById('terminal-tail');
-  const pre = document.getElementById('terminal-tail-text');
-  if (!panel || !pre) return;
-  const t = String(text || '').replace(/\s+$/, '');
-  if (!t) {
-    panel.hidden = true;
-    pre.textContent = '';
-    return;
-  }
-  panel.hidden = false;
-  pre.textContent = t;
-  // Keep the snapshot visible — scroll to the bottom of its scrollable area.
-  pre.scrollTop = pre.scrollHeight;
-}
-
-function disposeTerminalSnapshot() {
-  applyTerminalSnapshot('');
 }
 
 function bindReadOnlyBanner() {
-  // The quick-reply key buttons now live inside #terminal-tail (more
-  // contextual to where the prompt is shown). One delegated click handler
-  // covers any .vk-key in the conversation pane.
-  const wrap = document.getElementById('conversation-wrap');
-  if (!wrap || wrap.dataset.vkBound) return;
-  wrap.dataset.vkBound = '1';
-  wrap.addEventListener('click', (e) => {
-    const btn = e.target.closest('.vk-key');
-    if (!btn) return;
-    e.preventDefault();
-    const key = btn.dataset.key;
-    if (!key) return;
-    if (sendChatMessage('@myco ' + key)) {
-      btn.classList.add('vk-key-flash');
-      setTimeout(() => btn.classList.remove('vk-key-flash'), 200);
-    }
-  });
+  // No-op — the live-terminal panel that hosted the .vk-key buttons was
+  // removed. The read-only banner is now display-only; viewers steer the
+  // session via @myco messages typed into the chat input.
 }
 
 // Floating "waiting for Claude" pill — shown after sending @myco, auto-hides
