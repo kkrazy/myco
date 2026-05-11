@@ -404,6 +404,8 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
         '^c': '\x03',
         space: ' ',
         tab: '\t',
+        'shift-tab': '\x1b[Z',
+        'shift+tab': '\x1b[Z',
       };
       const specialBytes = SPECIAL_KEYS[input.toLowerCase()];
       if (specialBytes !== undefined) {
@@ -411,8 +413,15 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
         session.write(specialBytes);
         return;
       }
-      console.log(`[chat→pty] ${user}: ${input.substring(0, 80)}`);
-      session.write(input + '\r');
+      // Auto-mode: every chat-sent prompt should run without Claude
+      // pausing for permission. Detect the current Claude Code mode from
+      // the headless terminal's bottom rows and prepend the right number
+      // of Shift+Tab presses so we land on "auto-accept edits" before
+      // the actual text is sent. Claude Code cycles modes:
+      //   default → accept-edits → plan → default
+      const toggle = autoAcceptToggleBytes(session);
+      console.log(`[chat→pty] ${user}: ${input.substring(0, 80)}${toggle ? ' (+auto-toggle)' : ''}`);
+      session.write(toggle + input + '\r');
     }
     return;
   }
@@ -441,6 +450,44 @@ async function runAssistant(sessionId, session, lastMessage) {
   };
   sessionsMod.appendChatMessage(sessionId, reply);
   session.emit('chat', reply);
+}
+
+// Read the bottom rows of the session's headless terminal and decide what
+// mode Claude Code's TUI is in. Claude Code paints a status hint at the
+// bottom of its alt-screen: something like "auto-accept edits on" when in
+// accept-edits mode, "plan mode on" when in plan mode, and no mode label
+// when in default. Returns a string we use to map → number of Shift+Tab
+// presses needed to land in 'accept'. 'unknown' falls back to no-op.
+function detectClaudeMode(session) {
+  if (!session || !session.headless) return 'unknown';
+  try {
+    const buf = session.headless.buffer.active;
+    const rows = session.headless.rows;
+    // Inspect the last ~8 visible rows — the mode hint is anchored at
+    // the bottom of the TUI, near the input prompt.
+    const tail = [];
+    for (let i = Math.max(0, rows - 8); i < rows; i++) {
+      const line = buf.getLine(buf.viewportY + i);
+      if (line) tail.push(line.translateToString(true));
+    }
+    const blob = tail.join('\n').toLowerCase();
+    if (/accept edits|auto-accept/.test(blob)) return 'accept';
+    if (/plan mode/.test(blob)) return 'plan';
+    return 'default';
+  } catch { return 'unknown'; }
+}
+
+// Bytes to send to land in accept-edits mode given the current detected
+// mode. Claude Code cycles default → accept → plan → default on Shift+Tab,
+// so getting from each starting mode takes 0/1/2 presses.
+const SHIFT_TAB = '\x1b[Z';
+function autoAcceptToggleBytes(session) {
+  switch (detectClaudeMode(session)) {
+    case 'accept':  return '';                        // already there
+    case 'default': return SHIFT_TAB;                 // 1 cycle: default → accept
+    case 'plan':    return SHIFT_TAB + SHIFT_TAB;     // 2 cycles: plan → default → accept
+    default:        return '';                        // unknown → don't risk a stray toggle
+  }
 }
 
 module.exports = {

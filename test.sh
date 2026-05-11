@@ -362,6 +362,14 @@ test_readonly_viewer() {
   # Special-key shortcuts let viewers answer y/n/Enter/Esc prompts without
   # ever typing into the (rejected) terminal directly.
   grep -qE "SPECIAL_KEYS|'enter':|enter:" server/src/pty.js && pass "special key tokens recognized" || fail "special key tokens recognized"
+  # Auto-mode: chat-injected @myco messages should land Claude Code in
+  # auto-accept-edits mode so file edits / tool calls don't pause for
+  # permission. The toggle is detected from the headless terminal tail.
+  grep -q 'function autoAcceptToggleBytes' server/src/pty.js && pass "autoAcceptToggleBytes() defined" || fail "autoAcceptToggleBytes() defined"
+  grep -q 'function detectClaudeMode'      server/src/pty.js && pass "detectClaudeMode() defined"      || fail "detectClaudeMode() defined"
+  grep -q 'shift-tab'                      server/src/pty.js && pass "shift-tab special key registered" || fail "shift-tab special key registered"
+  # Shift+Tab byte sequence (\x1b[Z) is the toggle Claude Code listens for.
+  grep -qF 'SHIFT_TAB'                     server/src/pty.js && pass "shift-tab byte sequence wired"    || fail "shift-tab byte sequence wired"
 }
 
 test_chat_window() {
