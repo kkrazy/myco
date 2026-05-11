@@ -76,7 +76,14 @@ test_frontend_files() {
 }
 
 test_vendor_assets() {
-  for f in web/public/vendor/highlight.min.js web/public/vendor/mermaid.min.js web/public/vendor/github-dark.min.css; do
+  # Regression: marked.umd.js was referenced from index.html but never
+  # vendored into the static dir, so the browser 404'd marked, renderMd
+  # fell back to plain escHtml, and the read-only viewer showed raw
+  # transcript text instead of rendered markdown + syntax highlights.
+  for f in web/public/vendor/highlight.min.js \
+           web/public/vendor/mermaid.min.js \
+           web/public/vendor/marked/marked.umd.js \
+           web/public/vendor/github-dark.min.css; do
     test -f "$f" && pass "$f exists" || fail "$f missing"
   done
 }
