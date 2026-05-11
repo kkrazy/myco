@@ -1,22 +1,11 @@
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
 const { EventEmitter } = require('events');
-const AnsiToHtml = require('ansi-to-html');
 // Late-bound: sessions.js requires this module, so destructuring at load
 // time would capture undefined values from the partial export.
 const sessionsMod = require('./sessions');
 const { askAssistant, shouldAskAssistant, stripAnsi, tailLines, ASSISTANT_USER } = require('./btw');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
-
-// Convert ANSI escape sequences to HTML for the viewer's terminal-tail panel.
-// Github-dark-ish palette so colors land in the expected range against the
-// transcript background. fg/bg are the panel's defaults.
-const ansiToHtml = new AnsiToHtml({
-  fg: '#c9d1d9',
-  bg: '#010409',
-  newline: false,
-  escapeXML: true,
-});
 
 const MAX_BUFFER = 1024 * 1024;
 const CHAT_TEXT_LIMIT = 4000;
@@ -59,7 +48,12 @@ class PtySession extends EventEmitter {
 
   resize(cols, rows) {
     if (!this.alive) return;
-    try { this.pty.resize(cols, rows); this.cols = cols; this.rows = rows; } catch {}
+    try {
+      this.pty.resize(cols, rows);
+      this.cols = cols;
+      this.rows = rows;
+      this.emit('resize', { cols, rows });
+    } catch {}
   }
 
   kill() {
@@ -203,34 +197,34 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const ownerLogin = sessionsMod.getSessionRecord(sessionId)?.user || null;
   ws.send(JSON.stringify({ t: 'viewer-mode', owner: ownerLogin }));
 
-  // Terminal-tail relay: viewers don't see the raw PTY (they see the
-  // structured transcript), but Claude's interactive prompts ("Do you want
-  // me to apply this edit? (y/n)") never make it into the JSONL — they
-  // live only in the PTY. Without a tail, viewers send @myco, Claude pauses
-  // for confirmation, and the session stalls because the viewer can't see
-  // the prompt. The tail is sent as both stripped text (used for headings
-  // and accessibility) and ANSI-rendered HTML (preserves Claude Code's
-  // colored TUI elements), debounced so the network doesn't get sprayed.
-  const TAIL_LINES = 12;
-  const TAIL_DEBOUNCE_MS = 200;
-  let tailTimer = null;
-  function emitTail() {
-    if (ws.readyState !== ws.OPEN) return;
-    const raw = session.buffer.join('');
-    // Take the tail in raw form first so escape sequences aren't truncated
-    // mid-CSI, then convert to HTML. tailLines on the stripped version is
-    // the source of truth for "how many lines is this?".
-    const strippedTail = tailLines(stripAnsi(raw), TAIL_LINES).trimEnd();
-    let html = '';
-    try { html = ansiToHtml.toHtml(tailLines(raw, TAIL_LINES + 4)); } catch { html = strippedTail; }
-    ws.send(JSON.stringify({ t: 'terminal-tail', text: strippedTail, html }));
+  // Live PTY stream for the viewer's mini xterm. The structured transcript
+  // doesn't capture Claude Code's TUI prompts (alt-screen redraws, cursor
+  // positioning, "Apply this edit? (Y/n)" boxes, dim hint text), so we
+  // forward raw PTY bytes the same way we would to an owner — but tagged
+  // with a different message type ('pty-output') so the client routes them
+  // to the embedded mini terminal in the conversation pane rather than the
+  // main #terminal element. The mini terminal is sized to match the PTY
+  // exactly (cols/rows from the session) so cursor-positioned content
+  // lands where it should.
+  ws.send(JSON.stringify({ t: 'pty-size', cols: session.cols, rows: session.rows }));
+
+  // Replay the recent PTY ring buffer so the viewer's terminal reaches the
+  // current screen state immediately (instead of starting from blank and
+  // missing whatever scrolled before they connected).
+  const replay = Buffer.concat(session.buffer.map((d) => Buffer.from(d, 'utf8')));
+  if (replay.length) {
+    ws.send(JSON.stringify({ t: 'pty-output', data: replay.toString('base64') }));
   }
-  emitTail(); // initial state on connect
-  const onPtyData = () => {
-    if (tailTimer) return;
-    tailTimer = setTimeout(() => { tailTimer = null; emitTail(); }, TAIL_DEBOUNCE_MS);
+  const onPtyData = (data) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'pty-output', data: Buffer.from(data, 'utf8').toString('base64') }));
+  };
+  const onPtyResize = ({ cols, rows }) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'pty-size', cols, rows }));
   };
   session.on('data', onPtyData);
+  session.on('resize', onPtyResize);
 
   // Stream structured transcript (clean content from Claude's JSONL)
   const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
@@ -279,7 +273,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   ws.on('close', () => {
     session.off('chat', onChat);
     session.off('data', onPtyData);
-    if (tailTimer) { clearTimeout(tailTimer); tailTimer = null; }
+    session.off('resize', onPtyResize);
     if (unwatch) unwatch();
   });
 }

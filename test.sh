@@ -342,12 +342,17 @@ test_readonly_viewer() {
   # into the JSONL). Owner login flows in via the viewer-mode message.
   grep -q "t: 'viewer-mode'"      server/src/pty.js     && pass "server emits viewer-mode"          || fail "server emits viewer-mode"
   grep -q "owner: ownerLogin"     server/src/pty.js     && pass "viewer-mode carries owner login"   || fail "viewer-mode carries owner login"
-  grep -q "t: 'terminal-tail'"    server/src/pty.js     && pass "server emits terminal-tail"        || fail "server emits terminal-tail"
-  grep -q "ansi-to-html"          server/src/pty.js     && pass "terminal-tail uses ansi-to-html"   || fail "terminal-tail uses ansi-to-html"
+  # Live-terminal panel: server forwards raw PTY bytes (so an embedded
+  # xterm.js on the client can render alt-screen/cursor positioning/ANSI
+  # exactly as the owner sees them) plus the PTY dimensions.
+  grep -q "t: 'pty-output'"       server/src/pty.js     && pass "server emits pty-output"           || fail "server emits pty-output"
+  grep -q "t: 'pty-size'"         server/src/pty.js     && pass "server emits pty-size"             || fail "server emits pty-size"
   grep -q "id=\"readonly-banner\"" web/public/index.html && pass "html: #readonly-banner"           || fail "html: #readonly-banner"
   grep -q "id=\"terminal-tail\""   web/public/index.html && pass "html: #terminal-tail"             || fail "html: #terminal-tail"
+  grep -q "id=\"terminal-tail-term\"" web/public/index.html && pass "html: #terminal-tail-term (xterm host)" || fail "html: #terminal-tail-term"
   grep -q "function applyReadOnly"      web/public/app.js && pass "applyReadOnly() defined"         || fail "applyReadOnly() defined"
-  grep -q "function applyTerminalTail"  web/public/app.js && pass "applyTerminalTail() defined"     || fail "applyTerminalTail() defined"
+  grep -q "function ensureTailTerm"     web/public/app.js && pass "ensureTailTerm() defined"        || fail "ensureTailTerm() defined"
+  grep -q "function writeTailOutput"    web/public/app.js && pass "writeTailOutput() defined"       || fail "writeTailOutput() defined"
   grep -q "function bindReadOnlyBanner" web/public/app.js && pass "bindReadOnlyBanner() defined"    || fail "bindReadOnlyBanner() defined"
   # Special-key shortcuts let viewers answer y/n/Enter/Esc prompts without
   # ever typing into the (rejected) terminal directly.

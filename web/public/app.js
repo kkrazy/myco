@@ -186,8 +186,10 @@ function openShareViewer(id) {
         if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
-      } else if (msg.t === 'terminal-tail') {
-        applyTerminalTail(msg);
+      } else if (msg.t === 'pty-size') {
+        ensureTailTerm(msg.cols, msg.rows);
+      } else if (msg.t === 'pty-output') {
+        writeTailOutput(msg.data);
       } else if (msg.t === 'output') {
         if (!state.viewerMode) ensureXtermForFallback();
         if (state.term) state.term.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
@@ -1049,8 +1051,10 @@ function openSession(id) {
         if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
-      } else if (msg.t === 'terminal-tail') {
-        applyTerminalTail(msg);
+      } else if (msg.t === 'pty-size') {
+        ensureTailTerm(msg.cols, msg.rows);
+      } else if (msg.t === 'pty-output') {
+        writeTailOutput(msg.data);
       } else if (msg.t === 'output') {
         state.term?.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
       } else if (msg.t === 'pong') {
@@ -1476,30 +1480,65 @@ function clearReadOnly() {
     const ownerEl = banner.querySelector('.ro-owner');
     if (ownerEl) ownerEl.textContent = '';
   }
-  applyTerminalTail({ html: '', text: '' });
+  disposeTailTerm();
 }
 
-// Live terminal-tail panel: the server sends the last few lines of PTY
-// output every ~200ms (debounced) as both stripped text and ANSI-rendered
-// HTML. Render the HTML so Claude Code's colored TUI elements (yellow
-// confirm prompts, dim hint text) come through. Hide the panel when the
-// tail is empty so we don't clutter the conversation pane.
-function applyTerminalTail(payload) {
+// Live terminal-tail: a real xterm.js terminal embedded in the conversation
+// pane, fed raw PTY bytes from the server. xterm understands every escape
+// sequence Claude Code emits — alt-screen redraws, cursor positioning, ANSI
+// colors, sgr attributes — so prompts and TUI elements render exactly as
+// they would in a real terminal. The xterm is sized to match the owner's
+// PTY dimensions (cols/rows arrive via pty-size); the panel scrolls if the
+// terminal doesn't fit visually.
+function ensureTailTerm(cols, rows) {
   const panel = document.getElementById('terminal-tail');
-  const pre = document.getElementById('terminal-tail-text');
-  if (!panel || !pre) return;
-  const text = (payload && payload.text) ? String(payload.text).trimEnd() : '';
-  const html = (payload && payload.html) ? String(payload.html) : '';
-  if (!text && !html) {
-    panel.hidden = true;
-    pre.innerHTML = '';
-    return;
-  }
+  const host = document.getElementById('terminal-tail-term');
+  if (!panel || !host) return null;
   panel.hidden = false;
-  // Prefer HTML (ANSI-colored) when present; fall back to text.
-  if (html) pre.innerHTML = html;
-  else pre.textContent = text;
-  pre.scrollTop = pre.scrollHeight;
+  if (state.tailTerm) {
+    if (Number.isFinite(cols) && Number.isFinite(rows)) {
+      try { state.tailTerm.resize(cols, rows); } catch {}
+    }
+    return state.tailTerm;
+  }
+  const term = new Terminal({
+    cols: Number.isFinite(cols) ? cols : 120,
+    rows: Number.isFinite(rows) ? rows : 30,
+    scrollback: 500,
+    fontSize: 11,
+    fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace",
+    cursorBlink: false,
+    disableStdin: true,         // viewer can't type into the mini xterm
+    smoothScrollDuration: 0,
+    convertEol: false,
+    theme: { background: '#010409', foreground: '#c9d1d9' },
+  });
+  term.open(host);
+  // Canvas renderer is plenty for a small read-only viewport — skips WebGL
+  // to keep the mini panel cheap on mobile.
+  try { term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
+  state.tailTerm = term;
+  return term;
+}
+
+function writeTailOutput(b64) {
+  if (!state.tailTerm) ensureTailTerm();
+  if (!state.tailTerm) return;
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    state.tailTerm.write(bytes);
+  } catch {}
+}
+
+function disposeTailTerm() {
+  if (state.tailTerm) {
+    try { state.tailTerm.dispose(); } catch {}
+    state.tailTerm = null;
+  }
+  const panel = document.getElementById('terminal-tail');
+  if (panel) panel.hidden = true;
+  const host = document.getElementById('terminal-tail-term');
+  if (host) host.innerHTML = '';
 }
 
 function bindReadOnlyBanner() {
