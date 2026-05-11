@@ -488,6 +488,15 @@ test_chat_window() {
   grep -q "artifact/refresh"  server/src/index.js && pass "POST /artifact/refresh route" || fail "POST /artifact/refresh route"
   grep -q "artifact/run"      server/src/index.js && pass "POST /artifact/run route"     || fail "POST /artifact/run route"
   grep -q "artifact/mark"     server/src/index.js && pass "POST /artifact/mark route"    || fail "POST /artifact/mark route"
+  grep -q "artifact/vote"     server/src/index.js && pass "POST /artifact/vote route"    || fail "POST /artifact/vote route"
+  grep -q "artifact/comment"  server/src/index.js && pass "/artifact/comment route"      || fail "/artifact/comment route"
+  grep -q "artifact/item"     server/src/index.js && pass "DELETE /artifact/item route"  || fail "DELETE /artifact/item route"
+  grep -q "AUTO_EXECUTE_VOTE_THRESHOLD" server/src/index.js \
+    && pass "vote auto-execute threshold defined" \
+    || fail "vote auto-execute threshold defined"
+  grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"
+  grep -q "onArtifactComment"     web/public/app.js && pass "onArtifactComment handler"     || fail "onArtifactComment handler"
+  grep -q "onArtifactItemDelete"  web/public/app.js && pass "onArtifactItemDelete handler"  || fail "onArtifactItemDelete handler"
   # Phase B: extractor module + claude-CLI client are wired in.
   test -f server/src/anthropic.js && pass "anthropic.js exists" || fail "anthropic.js missing"
   test -f server/src/extractor.js && pass "extractor.js exists" || fail "extractor.js missing"

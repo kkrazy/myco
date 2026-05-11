@@ -149,7 +149,18 @@ function parseStringArray(text) {
 
 function buildItems(strings) {
   const now = new Date().toISOString();
-  return strings.map((s) => ({ id: newId(), text: s, done: false, addedAt: now }));
+  // voters: array of usernames who've upvoted this item (toggle-on-click in
+  // the UI so re-clicks de-vote). comments: flat thread of {id, user, text, ts}
+  // entries. Both empty at extraction time; they accrue as session
+  // participants engage with each todo.
+  return strings.map((s) => ({
+    id: newId(),
+    text: s,
+    done: false,
+    addedAt: now,
+    voters: [],
+    comments: [],
+  }));
 }
 
 async function extractArtifact(rec, type) {

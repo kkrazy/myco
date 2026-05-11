@@ -833,6 +833,148 @@ app.post('/sessions/:id/artifact/mark', async (req, res) => {
   res.json({ ok: true, item });
 });
 
+// ─── Plan-item votes and comments ────────────────────────────────────────
+//
+// Each Plan todo has voters (array of unique usernames) and comments (flat
+// thread). When voters.length crosses AUTO_EXECUTE_THRESHOLD, the item is
+// dispatched into the running Claude session via handleChatMessage exactly
+// the same way the existing checkbox dispatch works. Threshold is a single
+// constant for now; can be promoted to a per-session knob later.
+const AUTO_EXECUTE_VOTE_THRESHOLD = 2;
+const COMMENT_TEXT_MAX = 1000;
+const COMMENTS_PER_ITEM_MAX = 50;
+
+function ensureVoterAndCommentFields(item) {
+  if (!Array.isArray(item.voters)) item.voters = [];
+  if (!Array.isArray(item.comments)) item.comments = [];
+}
+
+function autoFireIfQuorum(ctx, type, item) {
+  if (item.done) return null;
+  if (type !== 'plan') return null;             // only plan items auto-execute
+  if (item.voters.length < AUTO_EXECUTE_VOTE_THRESHOLD) return null;
+  const session = getPtySession(ctx.id);
+  if (!session) return { err: 'session not running, vote stored but not dispatched' };
+  const text = `@myco ${item.text}`;
+  try {
+    handleChatMessage(ctx.id, session, 'auto-quorum', text);
+  } catch (err) {
+    return { err: `dispatch failed: ${err.message}` };
+  }
+  item.done = true;
+  item.ranAt = new Date().toISOString();
+  return { fired: true };
+}
+
+app.post('/sessions/:id/artifact/vote', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  const itemId = String(req.query.itemId || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be voted on' });
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  const user = req.user || ctx.rec.user || 'unknown';
+
+  const item = findItem(ctx.rec, type, itemId);
+  if (!item) return res.status(404).json({ error: 'no such item' });
+  ensureVoterAndCommentFields(item);
+
+  // Toggle: if user is already a voter, remove their vote; otherwise add.
+  const idx = item.voters.indexOf(user);
+  let action;
+  if (idx >= 0) {
+    item.voters.splice(idx, 1);
+    action = 'removed';
+  } else {
+    item.voters.push(user);
+    action = 'added';
+  }
+
+  let autoFired = null;
+  if (action === 'added') autoFired = autoFireIfQuorum(ctx, type, item);
+
+  persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+  res.json({
+    ok: true,
+    item,
+    action,
+    threshold: AUTO_EXECUTE_VOTE_THRESHOLD,
+    autoFired: autoFired && autoFired.fired ? true : false,
+    note: autoFired && autoFired.err ? autoFired.err : null,
+  });
+});
+
+app.post('/sessions/:id/artifact/comment', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  const itemId = String(req.query.itemId || '');
+  const text = String((req.body && req.body.text) || '').trim();
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be commented' });
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  if (!text) return res.status(400).json({ error: 'comment text required' });
+  if (text.length > COMMENT_TEXT_MAX) return res.status(400).json({ error: `comment too long (max ${COMMENT_TEXT_MAX} chars)` });
+
+  const item = findItem(ctx.rec, type, itemId);
+  if (!item) return res.status(404).json({ error: 'no such item' });
+  ensureVoterAndCommentFields(item);
+
+  const user = req.user || ctx.rec.user || 'unknown';
+  const comment = {
+    id: crypto.randomBytes(6).toString('hex'),
+    user,
+    text,
+    ts: new Date().toISOString(),
+  };
+  item.comments.push(comment);
+  if (item.comments.length > COMMENTS_PER_ITEM_MAX) {
+    item.comments = item.comments.slice(-COMMENTS_PER_ITEM_MAX);
+  }
+  persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+  res.json({ ok: true, comment, item });
+});
+
+app.delete('/sessions/:id/artifact/item', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  const itemId = String(req.query.itemId || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  if (type === 'arch') return res.status(400).json({ error: 'arch has no items' });
+  if (!itemId) return res.status(400).json({ error: 'itemId required' });
+  const artifact = ctx.rec.artifacts && ctx.rec.artifacts[type];
+  if (!artifact || !Array.isArray(artifact.items)) return res.status(404).json({ error: 'no items' });
+  const before = artifact.items.length;
+  artifact.items = artifact.items.filter((it) => it.id !== itemId);
+  if (artifact.items.length === before) return res.status(404).json({ error: 'no such item' });
+  persistArtifact(ctx.rec, type, artifact);
+  res.json({ ok: true, artifact });
+});
+
+app.delete('/sessions/:id/artifact/comment', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const type = String(req.query.type || '');
+  const itemId = String(req.query.itemId || '');
+  const commentId = String(req.query.commentId || '');
+  if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+  if (!itemId || !commentId) return res.status(400).json({ error: 'itemId + commentId required' });
+
+  const item = findItem(ctx.rec, type, itemId);
+  if (!item) return res.status(404).json({ error: 'no such item' });
+  ensureVoterAndCommentFields(item);
+  const user = req.user || ctx.rec.user || 'unknown';
+  const isOwner = ctx.rec.user === user;
+  const before = item.comments.length;
+  // Authors can delete their own; session owner can delete any.
+  item.comments = item.comments.filter((c) => !(c.id === commentId && (c.user === user || isOwner)));
+  if (item.comments.length === before) return res.status(403).json({ error: 'not your comment' });
+  persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+  res.json({ ok: true, item });
+});
+
 // ─── autocomplete data ──────────────────────────────────────────────────────
 // /commands and /users back the chat-input dropdown. /users sources the
 // `@`-mention list from session-active users plus everyone on the allowlist

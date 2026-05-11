@@ -1792,17 +1792,51 @@ function renderArtifact(type, artifact) {
       (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
     return;
   }
-  // plan / test → checkbox list
+  // plan / test → checkbox list. Plan items also get vote button + comment thread.
   const items = (artifact && Array.isArray(artifact.items)) ? artifact.items : [];
   if (!items.length) {
     body.innerHTML = '<div class="artifact-empty">Nothing extracted. The recent session activity may not contain todos.</div>';
     return;
   }
+  const me = state.chatUser || '';
+  const supportsVoting = (type === 'plan');
   const rows = items.map((it) => {
     const cls = it.done ? 'is-done' : '';
+    const voters = Array.isArray(it.voters) ? it.voters : [];
+    const points = voters.length;
+    const userHasVoted = !!(me && voters.includes(me));
+    const comments = Array.isArray(it.comments) ? it.comments : [];
+    const voteBlock = supportsVoting ? `
+      <button class="artifact-vote ${userHasVoted ? 'is-voted' : ''}" data-id="${escHtml(it.id)}"
+              title="${userHasVoted ? 'Click to remove your vote' : 'Click to vote — items at 2 votes auto-execute'}">
+        <span class="vote-icon">👍</span><span class="vote-count">${points}</span>
+      </button>
+      <button class="artifact-comment-toggle" data-id="${escHtml(it.id)}" title="Show comments">
+        💬<span class="comment-count">${comments.length || ''}</span>
+      </button>` : '';
+    const commentsBlock = supportsVoting ? `
+      <div class="artifact-comments" data-id="${escHtml(it.id)}" hidden>
+        <div class="artifact-comments-list">${
+          comments.map((c) => `
+            <div class="artifact-comment" data-cid="${escHtml(c.id)}">
+              <span class="comment-user">${escHtml(c.user || '?')}</span>
+              <span class="comment-ts">${escHtml(formatChatTs(c.ts) || '')}</span>
+              <div class="comment-body">${renderMd(c.text || '')}</div>
+            </div>`).join('')
+        }</div>
+        <form class="artifact-comment-form" data-id="${escHtml(it.id)}">
+          <input type="text" class="artifact-comment-input" placeholder="Add a comment…" maxlength="1000" />
+          <button type="submit" class="artifact-comment-send">Post</button>
+        </form>
+      </div>` : '';
     return `<li class="${cls}" data-id="${escHtml(it.id)}">
-      <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
-      <span class="artifact-item-text">${escHtml(it.text || '')}</span>
+      <div class="artifact-item-row">
+        <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
+        <span class="artifact-item-text">${escHtml(it.text || '')}</span>
+        ${voteBlock}
+        <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
+      </div>
+      ${commentsBlock}
     </li>`;
   }).join('');
   body.innerHTML = `<ul class="artifact-items">${rows}</ul>` +
@@ -1810,6 +1844,89 @@ function renderArtifact(type, artifact) {
   body.querySelectorAll('.artifact-item-checkbox').forEach((cb) => {
     cb.addEventListener('change', () => onArtifactItemToggle(cb));
   });
+  body.querySelectorAll('.artifact-item-delete').forEach((btn) => {
+    btn.addEventListener('click', () => onArtifactItemDelete(type, btn.dataset.id));
+  });
+  if (supportsVoting) {
+    body.querySelectorAll('.artifact-vote').forEach((btn) => {
+      btn.addEventListener('click', () => onArtifactVote(type, btn.dataset.id));
+    });
+    body.querySelectorAll('.artifact-comment-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        const panel = body.querySelector(`.artifact-comments[data-id="${CSS.escape(id)}"]`);
+        if (panel) panel.hidden = !panel.hidden;
+      });
+    });
+    body.querySelectorAll('.artifact-comment-form').forEach((form) => {
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const id = form.dataset.id;
+        const input = form.querySelector('.artifact-comment-input');
+        if (input && input.value.trim()) onArtifactComment(type, id, input.value.trim());
+      });
+    });
+  }
+}
+
+async function onArtifactItemDelete(type, itemId) {
+  const sid = state.activeId;
+  if (!sid || !itemId) return;
+  // Confirm so a fat-finger doesn't lose comments + votes silently.
+  if (!confirm('Delete this item? Its votes and comments will be gone too.')) return;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/item?type=${encodeURIComponent(type)}&itemId=${encodeURIComponent(itemId)}`,
+      { method: 'DELETE' }
+    );
+    if (!res || !res.ok) return;
+    await loadArtifact(type);
+  } catch (err) {
+    console.error('item delete failed', err);
+  }
+}
+
+async function onArtifactVote(type, itemId) {
+  const sid = state.activeId;
+  if (!sid || !itemId) return;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/vote?type=${encodeURIComponent(type)}&itemId=${encodeURIComponent(itemId)}`,
+      { method: 'POST' }
+    );
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    // Reload the whole artifact so vote count + done state (after auto-fire)
+    // re-render consistently. Cheap because we already have the items in
+    // memory server-side.
+    await loadArtifact(type);
+    if (data.autoFired) {
+      // Surface a brief note in the chat so participants see why the task
+      // jumped to Claude on its own.
+      const note = data.item ? `🗳️ Plan item "${data.item.text}" hit the auto-execute threshold (${data.threshold} votes) — dispatched to Claude.` : '';
+      // Server already broadcasts the @myco via handleChatMessage, so we
+      // don't need to emit anything client-side; just a console log for
+      // debugging.
+      console.log('[artifact-vote]', note);
+    }
+  } catch (err) {
+    console.error('vote failed', err);
+  }
+}
+
+async function onArtifactComment(type, itemId, text) {
+  const sid = state.activeId;
+  if (!sid || !itemId || !text) return;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/comment?type=${encodeURIComponent(type)}&itemId=${encodeURIComponent(itemId)}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) }
+    );
+    if (!res || !res.ok) return;
+    await loadArtifact(type);
+  } catch (err) {
+    console.error('comment failed', err);
+  }
 }
 
 async function onArtifactItemToggle(cb) {

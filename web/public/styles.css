@@ -1267,12 +1267,14 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 
 /* Plan/Test todo list with checkboxes. Checking a Plan item injects it back
-   into the running Claude session as `@myco <text>`. */
+   into the running Claude session as `@myco <text>`. Plan items also have
+   per-item voting + a flat comment thread; once votes hit the threshold
+   (2 by default) the server auto-dispatches the item. */
 .artifact-items { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .artifact-items li {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 8px;
   border-radius: 6px;
   background: var(--surface-2);
@@ -1280,6 +1282,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 .artifact-items li.is-done { opacity: .55; }
 .artifact-items li.is-done .artifact-item-text { text-decoration: line-through; }
+.artifact-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
 .artifact-item-checkbox {
   margin-top: 2px;
   width: 16px; height: 16px;
@@ -1287,6 +1294,105 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   flex-shrink: 0;
 }
 .artifact-item-text { flex: 1; white-space: pre-wrap; word-break: break-word; }
+
+.artifact-item-delete {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: .55;
+  transition: background .12s, opacity .12s, color .12s;
+}
+.artifact-item-delete:hover {
+  background: rgba(248, 81, 73, .18);
+  border-color: rgba(248, 81, 73, .4);
+  color: #f85149;
+  opacity: 1;
+}
+
+.artifact-vote,
+.artifact-comment-toggle {
+  background: rgba(80, 120, 200, .15);
+  color: var(--text);
+  border: 1px solid rgba(120, 160, 230, .25);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: .76rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background .12s, transform .08s, border-color .12s;
+}
+.artifact-vote:hover,
+.artifact-comment-toggle:hover { background: rgba(80, 120, 200, .28); }
+.artifact-vote.is-voted {
+  background: rgba(76, 175, 130, .25);
+  border-color: rgba(76, 175, 130, .55);
+}
+.artifact-vote .vote-count,
+.artifact-comment-toggle .comment-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 1ch;
+}
+.artifact-comments {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, .18);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.artifact-comments-list { display: flex; flex-direction: column; gap: 4px; }
+.artifact-comment {
+  font-size: .82rem;
+  padding: 4px 6px;
+  border-left: 2px solid rgba(120, 160, 230, .35);
+}
+.artifact-comment .comment-user { font-weight: 600; color: var(--text); }
+.artifact-comment .comment-ts { margin-left: 6px; font-size: .7rem; color: var(--muted); }
+.artifact-comment .comment-body { margin-top: 2px; color: var(--text); }
+.artifact-comment .comment-body p:first-child { margin-top: 0; }
+.artifact-comment .comment-body p:last-child  { margin-bottom: 0; }
+.artifact-comment-form { display: flex; gap: 6px; }
+.artifact-comment-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: .82rem;
+}
+.artifact-comment-input:focus { outline: none; border-color: var(--accent); }
+.artifact-comment-send {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.artifact-comment-send:hover { filter: brightness(1.1); }
 
 #chatpane-close {
   background: var(--border);
