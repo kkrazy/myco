@@ -169,6 +169,13 @@ function openShareViewer(id) {
       _flushOutboundChat();                      // any sends queued during reconnect
     });
     ws.addEventListener('message', (ev) => {
+      // Stale-WS guard: when the user switches sessions, the old WS gets
+      // .close()'d but messages already queued can still arrive on it.
+      // Without this check those messages — including 'chat' broadcasts
+      // from menu interceptors — would land in the freshly-cleared
+      // state.chatMessages for the NEW active session, making it look
+      // like questions are bleeding across sessions.
+      if (state.ws !== ws) return;
       const msg = JSON.parse(ev.data);
       if (msg.t === 'viewer-mode') {
         state.viewerMode = true;
@@ -1070,6 +1077,11 @@ function openSession(id) {
     });
 
     ws.addEventListener('message', (ev) => {
+      // Same stale-WS guard as connectShare: ignore messages that arrive
+      // on a WS we've already moved on from (session switch / reconnect).
+      // Without it, a 'chat' broadcast from session A could land in
+      // session B's chat list during the switchover window.
+      if (state.ws !== ws) return;
       const msg = JSON.parse(ev.data);
       if (msg.t === 'viewer-mode') {
         state.viewerMode = true;

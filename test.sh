@@ -136,6 +136,12 @@ test_conv_view_js() {
   grep -Pzoq 'class="chat-text">\$\{renderMd' web/public/app.js \
     && pass "discussion chat body rendered as markdown" \
     || fail "discussion chat body rendered as markdown"
+  # Regression: each WS message handler must guard against stale-WS
+  # messages so a session A 'chat' frame that lands during a session
+  # switch doesn't end up in session B's chat panel.
+  test "$(grep -c 'if (state.ws !== ws) return;' web/public/app.js)" -ge 2 \
+    && pass "stale-WS guard on both message handlers" \
+    || fail "stale-WS guard on both message handlers"
   grep -q 'function openSession' web/public/app.js && pass "openSession" || fail "openSession"
   grep -q 'function renderTranscriptMessages' web/public/app.js && pass "renderTranscriptMessages" || fail "renderTranscriptMessages"
 }
