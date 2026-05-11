@@ -1008,6 +1008,15 @@ function openSession(id) {
   try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
   clearChat();
+  // Wipe the Plan / Arch / Test panels so the previous session's extracted
+  // content doesn't linger after a switch. If the user is currently on one
+  // of those tabs, re-fetch right away so they see the new session's
+  // persisted artifact (or its empty state). The fetch is best-effort —
+  // failure leaves the empty-state copy in place.
+  clearArtifactBodies();
+  if (ARTIFACT_TYPES.includes(state.chatpaneTab)) {
+    loadArtifact(state.chatpaneTab).catch(() => {});
+  }
   updateChatButton();
 
   if (window.innerWidth <= 900) setSidebar(true);
@@ -1705,6 +1714,24 @@ function setChatpaneTab(name) {
   // Load the persisted artifact for Plan/Arch/Test so the user sees the last
   // refresh result without having to click Refresh on every reload.
   if (ARTIFACT_TYPES.includes(name)) loadArtifact(name).catch(() => {});
+}
+
+// Per-tab empty-state copy, mirrored from index.html. Centralised so a
+// session switch can wipe the rendered body back to the right empty state
+// without scraping the original DOM. Keep these strings in sync with the
+// initial markup in index.html.
+const ARTIFACT_EMPTY_HTML = {
+  plan: 'No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo\'s box to send it back to Claude as <code>@myco</code>.',
+  arch: 'No architecture notes yet. Click <strong>Refresh</strong> to extract them from the latest session activity.',
+  test: 'No test plans yet. Click <strong>Refresh</strong> to extract them from the latest session activity.',
+};
+
+function clearArtifactBodies() {
+  for (const type of ARTIFACT_TYPES) {
+    const body = document.getElementById(`artifact-body-${type}`);
+    if (!body) continue;
+    body.innerHTML = `<div class="artifact-empty">${ARTIFACT_EMPTY_HTML[type] || ''}</div>`;
+  }
 }
 
 async function loadArtifact(type) {

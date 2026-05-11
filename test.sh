@@ -152,6 +152,14 @@ test_conv_view_js() {
   grep -q "TRANSCRIPT_RENDER_CAP" web/public/app.js \
     && pass "transcript-render cap defined" \
     || fail "transcript-render cap defined"
+  # Regression: Plan/Arch/Test panels must be wiped on session switch so
+  # the previous session's extracted content doesn't linger.
+  grep -q "function clearArtifactBodies" web/public/app.js \
+    && pass "clearArtifactBodies() defined" \
+    || fail "clearArtifactBodies() defined"
+  grep -q "clearArtifactBodies()" web/public/app.js \
+    && pass "clearArtifactBodies() called from openSession" \
+    || fail "clearArtifactBodies() called from openSession"
   grep -q 'function openSession' web/public/app.js && pass "openSession" || fail "openSession"
   grep -q 'function renderTranscriptMessages' web/public/app.js && pass "renderTranscriptMessages" || fail "renderTranscriptMessages"
 }
