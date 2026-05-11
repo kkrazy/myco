@@ -134,6 +134,91 @@ t('parens-style options (1) accepted', () => {
   assert.strictEqual(r.menu.options.length, 2);
 });
 
+t('bracketed options [1] accepted', () => {
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('Pick one?\n[1] apple\n[2] banana'));
+  assert.ok(r);
+  assert.strictEqual(r.menu.options.length, 2);
+  assert.strictEqual(r.menu.options[0].n, 1);
+  assert.strictEqual(r.menu.options[0].label, 'apple');
+});
+
+t('paren-wrapped options (1) accepted', () => {
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('Pick one?\n(1) apple\n(2) banana'));
+  assert.ok(r);
+  assert.strictEqual(r.menu.options.length, 2);
+});
+
+t('bracketed menu starting from a non-1 digit is still detected (viewport-cut case)', () => {
+  // "[4] Type something." / "[5] Chat about this" — a real case the user
+  // hit where Claude's dialog scrolled past the start of the menu and only
+  // the trailing options remained on screen.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('What would you like to do?\n[4] Type something.\n[5] Chat about this'));
+  assert.ok(r, 'expected newMenu for bracketed menu starting at 4');
+  assert.strictEqual(r.menu.options.length, 2);
+  assert.strictEqual(r.menu.options[0].n, 4);
+  assert.strictEqual(r.menu.options[1].n, 5);
+});
+
+t('non-contiguous bracketed options ([1] then [3]) still rejected', () => {
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('Pick:\n[1] apple\n[3] cherry'));
+  assert.strictEqual(r, null);
+});
+
+t('mixed shapes in one menu (rare but supported)', () => {
+  // The parser shouldn't choke if Claude mixes "[1]" and "2." across lines —
+  // e.g. a quoted broadcast followed by Claude's actual rephrasing. As long
+  // as the numbers are contiguous and labels >=2 chars, accept.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('Choose?\n[1] apple\n2. banana'));
+  assert.ok(r);
+  assert.strictEqual(r.menu.options.length, 2);
+});
+
+t('multiple options packed on ONE line are all extracted', () => {
+  // The reported case: "[4] Type something. [5] Chat about this" — a
+  // single line with two option markers. Both must be picked up.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('What would you like to do?\n[4] Type something. [5] Chat about this'));
+  assert.ok(r, 'expected newMenu for multi-option line');
+  assert.strictEqual(r.menu.options.length, 2);
+  assert.deepStrictEqual(r.menu.options.map((o) => o.n), [4, 5]);
+  assert.strictEqual(r.menu.options[0].label, 'Type something.');
+  assert.strictEqual(r.menu.options[1].label, 'Chat about this');
+});
+
+t('three options packed on one line', () => {
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('Pick?\n[1] apple [2] banana [3] cherry'));
+  assert.ok(r);
+  assert.strictEqual(r.menu.options.length, 3);
+  assert.deepStrictEqual(r.menu.options.map((o) => o.n), [1, 2, 3]);
+});
+
+t('prose with embedded "[1] foo" reference but no second marker is NOT a menu', () => {
+  // Single marker without a second contiguous one — should not fire.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('I tried [1] foo and it worked fine.\nThen ran more tests.'));
+  assert.strictEqual(r, null);
+});
+
+t('marker without trailing space is NOT recognised (avoid "arr[4]access")', () => {
+  // [4] must be followed by whitespace to count as an option marker.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('I accessed arr[4]access then arr[5]apple\nMore prose.'));
+  assert.strictEqual(r, null);
+});
+
+t('marker preceded by a non-space char is NOT recognised ("v1.0" / "abc1.")', () => {
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless('Version v1. apple v2. banana some prose'));
+  // No real boundary before "1." or "2." — they're glued to "v".
+  assert.strictEqual(r, null);
+});
+
 t('different bullet markers (❯, >, *, •) recognised', () => {
   const i1 = new MenuInterceptor();
   assert.ok(i1.detectChange(fakeHeadless('Pick?\n❯ 1. apple\n  2. banana')));

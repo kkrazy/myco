@@ -11,7 +11,14 @@
 // (question + options) so the same dialog doesn't re-fire on every render
 // tick — only on transitions (new dialog, replaced dialog, dialog cleared).
 
-const NUMBERED_OPT_RE = /^\s*[❯>*•◦·]?\s*([0-9]+)[.)]\s+(.+?)\s*$/;
+// Accepted numbered-option shapes for the marker only:
+//   "1." "1)" "[1]" "(1)"
+// The marker must be flanked by a whitespace boundary (or string edge) so we
+// don't pick up references inside prose ("v1.0", "arr[4]access") or
+// trailing-period numbering inside a sentence ("1. install deps then…").
+// Matched globally so multiple options on a single line are all extracted
+// (e.g. "[4] Type something. [5] Chat about this").
+const OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?=\s)/g;
 
 class MenuInterceptor {
   constructor() {
@@ -58,35 +65,33 @@ class MenuInterceptor {
       }
     } catch { return null; }
 
-    // Collect candidate options. We require two adjacent (or near-adjacent)
-    // numbered lines to count as a real menu — single "1." lines are common
-    // in prose and would cause false positives.
+    // Collect candidate options. Each marker on a line is a candidate, and
+    // its label is the text between this marker and the next one (or the
+    // end of the line). Multi-option-per-line is supported because some
+    // dialogs pack options compactly: "[4] Type something. [5] Chat …".
     const options = [];
     let firstOptIdx = -1;
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(NUMBERED_OPT_RE);
-      if (!m) continue;
-      const n = parseInt(m[1], 10);
-      if (!Number.isFinite(n) || n < 1 || n > 9) continue;
-      const label = m[2].replace(/\s+/g, ' ').trim();
-      if (!label) continue;
-      // Skip stuff that looks like markdown headings or random numerics.
-      if (label.length < 2) continue;
-      options.push({ n, label, lineIdx: i });
-      if (firstOptIdx === -1) firstOptIdx = i;
+      const lineOpts = extractOptionsOnLine(lines[i], i);
+      for (const o of lineOpts) {
+        options.push(o);
+        if (firstOptIdx === -1) firstOptIdx = i;
+      }
     }
     if (options.length < 2) return null;
-    // Options must be roughly contiguous (allow up to 1 blank line gap).
+    // Options must be roughly contiguous in source: allow markers on the
+    // same line (lineIdx delta = 0) or up to 1 blank line gap.
     for (let i = 1; i < options.length; i++) {
       if (options[i].lineIdx - options[i - 1].lineIdx > 2) return null;
     }
-    // Sanity: numbered 1..N in order.
+    // Sanity: numbers must be contiguous (each = previous + 1). We used to
+    // require starting at 1, but some Claude Code dialogs (and any partial
+    // viewport scan) can show menus that start higher — e.g. "[4] foo /
+    // [5] bar" when the viewport cuts off the top of a longer dialog.
     const ns = options.map((o) => o.n);
-    let inOrder = true;
-    for (let i = 0; i < ns.length; i++) {
-      if (ns[i] !== i + 1) { inOrder = false; break; }
+    for (let i = 1; i < ns.length; i++) {
+      if (ns[i] !== ns[i - 1] + 1) return null;
     }
-    if (!inOrder) return null;
 
     // Find the question — look back up to 5 lines from firstOptIdx for a
     // non-empty line. Prefer one with a question mark or recognizable verb.
@@ -116,6 +121,38 @@ class MenuInterceptor {
     const rawText = lines.slice(Math.max(0, firstOptIdx - 5)).join('\n');
     return { hash, kind, question, options: optsForHash, rawText };
   }
+}
+
+// Pull every option marker out of `line` (multiple if present) and pair
+// each with the text running up to the next marker or end-of-line. Returns
+// [] when there are no real options on the line. The "real option" guards:
+//   - marker must be flanked by whitespace boundaries (so we ignore
+//     "v1.0" or in-prose "[1]" references)
+//   - number must be 1..9 (single-digit menus only)
+//   - label must be ≥2 non-whitespace chars after trim (rejects markers
+//     with no body, the most common false-positive shape)
+function extractOptionsOnLine(line, lineIdx) {
+  if (!line) return [];
+  OPT_MARKER_RE.lastIndex = 0;
+  const markers = [];
+  let m;
+  while ((m = OPT_MARKER_RE.exec(line)) !== null) {
+    const n = parseInt(m[1] || m[2] || m[3], 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 9) {
+      markers.push({ n, start: m.index, end: OPT_MARKER_RE.lastIndex });
+    }
+  }
+  if (!markers.length) return [];
+  const opts = [];
+  for (let i = 0; i < markers.length; i++) {
+    const cur = markers[i];
+    const next = markers[i + 1];
+    const labelEnd = next ? next.start : line.length;
+    const label = line.slice(cur.end, labelEnd).replace(/\s+/g, ' ').trim();
+    if (label.length < 2) continue;
+    opts.push({ n: cur.n, label, lineIdx });
+  }
+  return opts;
 }
 
 function hashMenu(question, options) {
