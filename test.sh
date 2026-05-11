@@ -542,6 +542,11 @@ test_chat_window() {
   fi
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
+  # Regression: while a TUI menu is pending in the session, an @myco
+  # message must not just blindly inject text on top of it. A pure digit
+  # picks that option; anything else cancels (Esc) the menu first.
+  grep -q "menu pick" server/src/pty.js && pass "@myco digit shortcuts to menu pick" || fail "@myco digit shortcut missing"
+  grep -q "cancelling pending menu" server/src/pty.js && pass "@myco cancels pending menu for new instructions" || fail "@myco menu-cancel missing"
   # Regression: parseStringArray must tolerate code fences + non-JSON.
   if have_node; then
     node -e "

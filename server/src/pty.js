@@ -444,6 +444,41 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
         session.write(specialBytes);
         return;
       }
+      // If a TUI menu is open in Claude (plan-mode "what next" or a
+      // permission ask that fell through to /decide), short-circuit two
+      // common shapes of @myco message so the user doesn't get stuck:
+      //
+      //   * @myco <digit>  → treat as a direct option pick (same effect
+      //     as /decide N). Most users type "1" / "2" naturally and don't
+      //     discover /decide.
+      //   * @myco <anything else> → cancel the menu first with Esc, then
+      //     send the new instruction. The user's intent is "do this new
+      //     thing"; leaving the stale menu around just wedges Claude.
+      const pendingMenu = session.pendingMenu;
+      if (pendingMenu) {
+        const asDigit = /^[1-9]$/.test(input) ? parseInt(input, 10) : NaN;
+        if (Number.isFinite(asDigit) && pendingMenu.options.find((o) => o.n === asDigit)) {
+          console.log(`[chat→pty] ${user}: menu pick ${asDigit} (via @myco shorthand)`);
+          session.write(String(asDigit) + '\r');
+          session.pendingMenu = null;
+          return;
+        }
+        console.log(`[chat→pty] ${user}: cancelling pending menu (Esc) before new instruction`);
+        session.write('\x1b');
+        session.pendingMenu = null;
+        // Surface what we did so the user understands the menu went away.
+        sessionsMod.appendChatMessage(sessionId, {
+          user: ASSISTANT_USER,
+          text: '(cancelled the pending menu so I can act on your new instruction. Use `/decide <n>` next time if you wanted to answer it.)',
+          ts: new Date().toISOString(),
+        });
+        session.emit('chat', {
+          user: ASSISTANT_USER,
+          text: '(cancelled the pending menu so I can act on your new instruction. Use `/decide <n>` next time if you wanted to answer it.)',
+          ts: new Date().toISOString(),
+        });
+        // fall through to the normal toggle + send below
+      }
       // Auto-mode: every chat-sent prompt should run without Claude
       // pausing for permission. Detect the current Claude Code mode from
       // the headless terminal's bottom rows and prepend the right number
