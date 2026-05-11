@@ -1544,13 +1544,38 @@ function bindChatUi() {
   if (!form || !input) return;
   if (form.dataset.bound) return;
   form.dataset.bound = '1';
+
+  // Auto-grow the textarea with content, up to the CSS max-height (then scroll).
+  // We reset to 'auto' first so shrinking works after a backspace/clear.
+  function autoResize() {
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  }
+  input.addEventListener('input', autoResize);
+  autoResize();
+
+  function submitChat() {
+    if (sendChatMessage(input.value)) {
+      input.value = '';
+      autoResize();
+    }
+  }
+
+  // Plain Enter inserts a newline (textarea default). Ctrl/⌘+Enter sends.
+  // stopImmediatePropagation prevents the autocomplete keydown listener
+  // (registered after us in bindChatAutocomplete) from also running and
+  // picking an item against an already-cleared input.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      submitChat();
+    }
+  });
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    // If the autocomplete is open and the user just hit Enter, the keydown
-    // handler picks the active item instead of submitting. The form-submit
-    // path here only fires on a clean send (no autocomplete, or already
-    // dismissed).
-    if (sendChatMessage(input.value)) input.value = '';
+    submitChat();
   });
 
   document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(!state.chatPaneVisible));

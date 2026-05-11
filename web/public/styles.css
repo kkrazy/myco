@@ -1254,6 +1254,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 #chat-form {
   display: flex;
+  align-items: flex-end;         /* keep Send pinned to bottom as textarea grows */
   gap: 8px;
   padding: 8px 10px calc(10px + var(--safe-bottom));
   border-top: 1px solid var(--border);
@@ -1320,7 +1321,12 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   border-radius: 8px;
   padding: 8px 12px;
   font: inherit;
+  line-height: 1.4;
   min-width: 0;
+  /* multi-line: grow with content via JS up to max-height, then scroll */
+  resize: none;
+  overflow-y: auto;
+  max-height: 200px;
 }
 #chat-input:focus { outline: none; border-color: var(--accent); }
 #chat-input:disabled { opacity: .5; cursor: not-allowed; }

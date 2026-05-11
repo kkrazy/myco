@@ -389,6 +389,15 @@ test_chat_window() {
   grep -q 'id="chat-input"' web/public/index.html && pass "#chat-input element" || fail "#chat-input element"
   grep -q 'id="chat-send"' web/public/index.html && pass "#chat-send element" || fail "#chat-send element"
   grep -q 'id="chat-form"' web/public/index.html && pass "#chat-form element" || fail "#chat-form element"
+  # Regression: the chat input must be a <textarea> so plain Enter inserts a
+  # newline (instead of submitting). Ctrl/⌘+Enter is the send shortcut, wired
+  # in bindChatUi(). Reverting either half breaks the multi-line UX.
+  grep -Pq '<textarea[^>]*id="chat-input"' web/public/index.html \
+    && pass "chat-input is a multi-line textarea" \
+    || fail "chat-input is a multi-line textarea"
+  grep -Pzoq "key === 'Enter'[^}]*ctrlKey[^}]*metaKey" web/public/app.js \
+    && pass "Ctrl/Cmd+Enter sends chat message" \
+    || fail "Ctrl/Cmd+Enter sends chat message"
   grep -q 'function sendChatMessage' web/public/app.js && pass "sendChatMessage() defined" || fail "sendChatMessage() defined"
   # Regression: chat sends issued while the WS is reconnecting must NOT be
   # silently dropped — they should land in an outbound queue and drain on
