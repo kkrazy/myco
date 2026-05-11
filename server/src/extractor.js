@@ -44,13 +44,17 @@ const PROMPTS = {
   plan: {
     system:
       'You are running in the project\'s working directory with file-system tools (Read, Glob, Grep) available. You will be given two sources from a software-engineering session: the running Claude Code transcript AND the Mycelium discussion-panel chat (which contains human-to-human messages, including ones that were NOT sent to Claude via @myco). ' +
-      'Extract concrete TODO items that are still PENDING and group them into ARCHITECTURAL LAYERS (e.g. "Frontend / Backend / Database" for a web app, or "Client / Server / PTY" for a CLI-driven app, or "API / Service / Persistence" for a backend service — pick names that match THIS codebase by spot-checking it). ' +
+      'Extract concrete TODO items that are still PENDING and group them into named buckets. ' +
+      'CHOOSE THE GROUPING THAT FITS THIS CODEBASE: ' +
+      '(a) If the project has a clear tiered architecture (web app, API service, etc.), group by ARCHITECTURAL LAYER — e.g. "Frontend / Backend / Database", "API / Service / Persistence", "Client / Server / PTY". Order layers top-down (presentation first, infra last). ' +
+      '(b) If a layered model doesn\'t fit (CLI tool, library, monorepo of components, mostly-flat codebase), group by COMPONENT / MODULE / FEATURE instead — e.g. "Auth / Sessions / Chat / Transcript" or "Parser / Renderer / CLI". Pick names that match real directories or feature areas in the code. ' +
+      'Either way: spot-check the codebase to pick names that mirror what\'s actually there, and keep names short (≤2 words) and consistent across items. ' +
       'A "pending" TODO is one the user, a chat participant, or Claude proposed but has not yet been completed. ' +
-      'BEFORE you answer, spot-check the codebase: if a proposed change is already in the code, drop it from the list. Don\'t over-explore — a few targeted Read/Grep calls is enough. ' +
+      'BEFORE answering, spot-check that proposed changes aren\'t already in the code. Drop ones that are. Don\'t over-explore — a few targeted Read/Grep calls is enough. ' +
       'Pure-discussion intent (without @myco) still counts as a real plan item if it isn\'t reflected in the code yet. ' +
-      'OUTPUT FORMAT: a JSON array of objects, each `{ "layer": "<layer name>", "text": "<short actionable todo>" }`. Order layers top-down (presentation/UI first, persistence/infra last). Example: ' +
-      '[{"layer":"Frontend","text":"wire the Plan tab to the new endpoint"},{"layer":"Backend","text":"add /artifact/vote route"},{"layer":"Tests","text":"add a regression test for the multi-line regex"}]. ' +
-      'Keep layer names short (≤2 words) and consistent across items. ' +
+      'OUTPUT FORMAT: a JSON array of objects, each `{ "layer": "<group name>", "text": "<short actionable todo>" }`. The field is called "layer" for historical reasons — its value is the group name you chose (layer OR component). Example for a web app: ' +
+      '[{"layer":"Frontend","text":"wire the Plan tab to the new endpoint"},{"layer":"Backend","text":"add /artifact/vote route"}]. Example for a CLI app: ' +
+      '[{"layer":"Parser","text":"accept bracketed [N] markers"},{"layer":"Renderer","text":"trim mermaid error divs"}]. ' +
       'NO prose, NO markdown, NO code fences around the JSON. If nothing remains pending, output the empty array [].',
   },
   arch: {
