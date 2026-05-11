@@ -438,10 +438,15 @@ test_chat_window() {
   grep -q "artifact/refresh"  server/src/index.js && pass "POST /artifact/refresh route" || fail "POST /artifact/refresh route"
   grep -q "artifact/run"      server/src/index.js && pass "POST /artifact/run route"     || fail "POST /artifact/run route"
   grep -q "artifact/mark"     server/src/index.js && pass "POST /artifact/mark route"    || fail "POST /artifact/mark route"
-  # Phase B: extractor module + Anthropic client are wired in.
+  # Phase B: extractor module + claude-CLI client are wired in.
   test -f server/src/anthropic.js && pass "anthropic.js exists" || fail "anthropic.js missing"
   test -f server/src/extractor.js && pass "extractor.js exists" || fail "extractor.js missing"
+  test -f server/src/claude-cli.js && pass "claude-cli.js exists" || fail "claude-cli.js missing"
   grep -q "extractArtifact" server/src/index.js && pass "extractArtifact wired into index.js" || fail "extractArtifact wired"
+  # Regression: extraction goes through the `claude` CLI (same auth as the
+  # running PTY session), NOT a raw Anthropic API call.
+  grep -q "callClaudeCli" server/src/extractor.js && pass "extractor uses claude-cli" || fail "extractor uses claude-cli"
+  grep -q "callAnthropic" server/src/extractor.js && fail "extractor still imports callAnthropic (regression)" || pass "extractor no longer imports callAnthropic"
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: parseStringArray must tolerate code fences + non-JSON.

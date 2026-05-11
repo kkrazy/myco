@@ -10,12 +10,12 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
-const { callAnthropic } = require('./anthropic');
+const { callClaudeCli } = require('./claude-cli');
 const { projectsDir, encodeCwdForClaude } = require('./sessions');
 
 const MAX_INPUT_CHARS = 16000;     // ~ recent 40-80 turns
 const MAX_INPUT_LINES = 400;
-const EXTRACTOR_MAX_TOKENS = 1500;
+const EXTRACTOR_TIMEOUT_MS = 120000;
 
 const PROMPTS = {
   plan: {
@@ -110,15 +110,19 @@ async function extractArtifact(rec, type) {
       ? { markdown: '', updatedAt: new Date().toISOString(), note: 'no transcript available' }
       : { items: [], updatedAt: new Date().toISOString(), note: 'no transcript available' };
   }
-  const text = await callAnthropic({
+  // Use the `claude` CLI in print mode so extraction inherits the same auth
+  // and config (model, account, MCP servers) as the running PTY session.
+  // cwd matches the session so any project-local Claude config is honoured.
+  const text = await callClaudeCli({
     system: PROMPTS[type].system,
     userMessage: tail,
-    maxTokens: EXTRACTOR_MAX_TOKENS,
+    cwd: rec.absCwd,
+    timeoutMs: EXTRACTOR_TIMEOUT_MS,
   });
   if (text === null) {
     return type === 'arch'
-      ? { markdown: '', updatedAt: new Date().toISOString(), note: 'extraction call failed (missing ANTHROPIC_API_KEY?)' }
-      : { items: [], updatedAt: new Date().toISOString(), note: 'extraction call failed (missing ANTHROPIC_API_KEY?)' };
+      ? { markdown: '', updatedAt: new Date().toISOString(), note: 'extraction call failed (claude CLI errored or missing — check server logs)' }
+      : { items: [], updatedAt: new Date().toISOString(), note: 'extraction call failed (claude CLI errored or missing — check server logs)' };
   }
   if (type === 'arch') {
     return { markdown: text.trim(), updatedAt: new Date().toISOString() };
