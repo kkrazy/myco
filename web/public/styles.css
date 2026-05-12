@@ -2133,6 +2133,82 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .code-chunk ::selection { background: rgba(80, 120, 200, .40); }
 #files-view-body .code-chunk:not(:first-child) { border-top: 1px solid rgba(255, 255, 255, .04); }
 
+/* ── Rendered markdown view (file viewer for .md/.markdown) ─────────────── */
+.md-rendered {
+  padding: 18px 28px 32px;
+  max-width: 920px;
+  margin: 0 auto;
+  color: #c9d1d9;
+  font: 14.5px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.md-rendered h1, .md-rendered h2, .md-rendered h3,
+.md-rendered h4, .md-rendered h5, .md-rendered h6 {
+  margin: 1.6em 0 0.6em;
+  line-height: 1.25;
+  color: #e6edf3;
+}
+.md-rendered h1 { font-size: 1.8em; border-bottom: 1px solid rgba(255,255,255,.08); padding-bottom: .3em; }
+.md-rendered h2 { font-size: 1.45em; border-bottom: 1px solid rgba(255,255,255,.06); padding-bottom: .25em; }
+.md-rendered h3 { font-size: 1.2em; }
+.md-rendered h4 { font-size: 1.05em; }
+.md-rendered p { margin: 0 0 0.9em; }
+.md-rendered ul, .md-rendered ol { margin: 0 0 0.9em; padding-left: 1.6em; }
+.md-rendered li { margin: 0.15em 0; }
+.md-rendered blockquote {
+  margin: 0.6em 0;
+  padding: 0.3em 1em;
+  border-left: 3px solid rgba(120,160,220,.4);
+  color: rgba(201,209,217,.85);
+  background: rgba(255,255,255,.02);
+}
+.md-rendered a { color: #79b8ff; text-decoration: none; }
+.md-rendered a:hover { text-decoration: underline; }
+.md-rendered code {
+  font: 13px 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  background: rgba(255,255,255,.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #ffd58a;
+}
+.md-rendered pre {
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.6em 0 1em;
+}
+.md-rendered pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.md-rendered table {
+  border-collapse: collapse;
+  margin: 0.6em 0 1em;
+  display: block;
+  overflow-x: auto;
+}
+.md-rendered table th, .md-rendered table td {
+  border: 1px solid rgba(255,255,255,.1);
+  padding: 6px 12px;
+}
+.md-rendered table th { background: rgba(255,255,255,.04); text-align: left; }
+.md-rendered img { max-width: 100%; height: auto; border-radius: 4px; }
+.md-rendered hr { border: 0; border-top: 1px solid rgba(255,255,255,.08); margin: 1.4em 0; }
+.md-rendered .conv-mermaid { margin: 0.6em 0 1em; }
+.md-rendered .conv-mermaid svg { max-width: 100%; height: auto; }
+
+@media (max-width: 720px) {
+  .md-rendered { padding: 14px 16px 24px; font-size: 14px; }
+  .md-rendered pre { padding: 10px 12px; }
+}
+
 /* ── Claude inline card ─────────────────────────────────────────────────── */
 .claude-card {
   margin: 0;

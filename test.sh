@@ -604,6 +604,15 @@ test_file_viewer_polish_static() {
   grep -q 'function onSelectionChange'         web/public/app.js && pass "js: onSelectionChange"         || fail "js: onSelectionChange"
   grep -q 'function renderCodeChunk'           web/public/app.js && pass "js: renderCodeChunk"           || fail "js: renderCodeChunk"
 
+  # Markdown file viewer: .md/.markdown files render through marked +
+  # mermaid (same path the chat pane uses) instead of raw text. Anchored
+  # Claude cards / inline comment editor fall through to the raw view so
+  # line anchors stay correct.
+  grep -q 'function renderMarkdownFileView' web/public/app.js && pass "js: renderMarkdownFileView (md rich render)" || fail "js: renderMarkdownFileView missing"
+  grep -qF "ext === 'md' || ext === 'markdown'" web/public/app.js && pass "js: md branch detected in renderFileViewerWithCards" || fail "js: md branch missing"
+  grep -qF 'renderMermaidInContainer(wrap)' web/public/app.js && pass "js: md view runs mermaid pass" || fail "js: md view mermaid pass missing"
+  grep -q '\.md-rendered' web/public/styles.css && pass "css: .md-rendered" || fail "css: .md-rendered"
+
   # Backend
   grep -q 'function askAboutFile' server/src/btw.js && pass "btw.js: askAboutFile" || fail "btw.js: askAboutFile"
   grep -q 'fileChats'             server/src/sessions.js && pass "sessions.js: fileChats" || fail "sessions.js: fileChats"

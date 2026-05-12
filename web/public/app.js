@@ -3042,6 +3042,20 @@ function renderFileViewerWithCards(content, relPath, cards) {
   const lang = hljsLangForExt(ext);
   const wrap = !!(state.files.viewing && state.files.viewing.wrap);
 
+  // Markdown rich-rendering shortcut: .md/.markdown files render through
+  // marked + mermaid (same path the chat pane uses). The numbered raw
+  // view's only advantage is line-anchored Claude cards and the inline
+  // comment editor — so if either of those is in play we fall through to
+  // the raw path below to preserve those affordances.
+  const isMarkdown = ext === 'md' || ext === 'markdown';
+  const hasAnchored = (cards || []).some(
+    (c) => c.user === ASSISTANT_USER_NAME && c.anchor && c.anchor.startLine && c.anchor.endLine,
+  );
+  const _draft = state.files.viewing && state.files.viewing.commentDraft;
+  if (isMarkdown && !hasAnchored && !_draft) {
+    return renderMarkdownFileView(body, content, cards);
+  }
+
   // Build segments interleaving code chunks and cards. Anchored cards split
   // the code at each card's endLine. Anchorless cards collect at the end.
   const anchored = [];
@@ -3118,6 +3132,44 @@ function renderFileViewerWithCards(content, relPath, cards) {
   }
   // Trailing (anchorless) cards at the very end.
   for (const c of trailing) {
+    body.appendChild(renderClaudeCard(c, pickQuestionFor(c)));
+  }
+}
+
+// Rich markdown render path for the file viewer. Reuses renderMd (the
+// same path the chat pane uses, so behaviour stays consistent) and
+// renderMermaidInContainer to turn ```mermaid fences into SVG. Trailing
+// anchorless Claude cards still render beneath the document — anchored
+// cards/inline-editor cases route through the raw path in the caller.
+function renderMarkdownFileView(body, content, cards) {
+  body.innerHTML = '';
+  body.dataset.lang = 'markdown';
+  const wrap = document.createElement('div');
+  wrap.className = 'md-rendered';
+  wrap.innerHTML = renderMd(String(content || ''));
+  body.appendChild(wrap);
+  // Fire-and-forget mermaid pass; failures stay as raw code blocks.
+  renderMermaidInContainer(wrap).catch(() => {});
+  // Pair anchorless Claude cards with their preceding 'you' question so
+  // the rendered Q+A shows up underneath the doc.
+  const userQs = (cards || []).filter((c) => c.user === 'you');
+  function pickQuestionFor(claudeMsg) {
+    const claudeTs = new Date(claudeMsg.ts).getTime();
+    let best = null;
+    for (const q of userQs) {
+      const qTs = new Date(q.ts).getTime();
+      if (qTs > claudeTs) continue;
+      if (anchorsEqual(q.anchor, claudeMsg.anchor)) {
+        if (!best || new Date(q.ts).getTime() > new Date(best.ts).getTime()) best = q;
+      }
+    }
+    return best;
+  }
+  const pending = state.files.viewing && state.files.viewing.pending;
+  if (pending) body.appendChild(renderPendingCard(pending));
+  for (const c of (cards || [])) {
+    if (c.user !== ASSISTANT_USER_NAME) continue;
+    if (c.anchor && c.anchor.startLine && c.anchor.endLine) continue; // anchored shouldn't reach here
     body.appendChild(renderClaudeCard(c, pickQuestionFor(c)));
   }
 }
