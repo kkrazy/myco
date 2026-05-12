@@ -2362,7 +2362,13 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   padding: 2px 0;
 }
 
-.conv-msg-user .conv-text::before {
+/* Put the ❯ prefix INSIDE the first child block (the <p> from renderMd)
+   instead of on .conv-text directly. ::before content is inline; if it sits
+   on .conv-text but a block-level <p> follows, the <p> drops to a new line
+   and the message looks like "❯ \n message". Putting the pseudo-element on
+   the first <p> (or whichever block is first) means ❯ flows inline with
+   the paragraph's text — same line. */
+.conv-msg-user .conv-text > :first-child::before {
   content: '\276F  ';
   color: #58d5e0;
   letter-spacing: 0.15em;
