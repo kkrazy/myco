@@ -9,7 +9,7 @@ const sessionsMod = require('./sessions');
 const { askAssistant, shouldAskAssistant, ASSISTANT_USER } = require('./btw');
 const { stripAnsi, tailLines } = require('./text-utils');
 const menuMod = require('./menu');
-const { MODE_ACCEPT_RE, MODE_PLAN_RE } = require('./pty-patterns');
+const { MODE_ACCEPT_RE, MODE_PLAN_RE, SPINNER_RUNNING_RE, SPINNER_DURATION_RE } = require('./pty-patterns');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 const authMod = require('./auth');
@@ -93,9 +93,40 @@ class PtySession extends EventEmitter {
     });
   }
 
+  // Scan the headless terminal for claude's spinner status line ("·
+  // Cerebrating… (40s · ↓ 3.4k tokens · thought for 2s)" etc.) and
+  // return its trimmed text. Returns null when no spinner line is
+  // visible (claude is idle / past the spinner / not running). We
+  // scan the bottom ~12 rows since the spinner sits right above the
+  // input editor at the bottom of the alt-screen.
+  _extractStatusLine() {
+    if (!this.headless || !this.headless.buffer) return null;
+    try {
+      const buf = this.headless.buffer.active;
+      const rows = this.headless.rows;
+      for (let i = rows - 1; i >= Math.max(0, rows - 12); i--) {
+        const line = buf.getLine(buf.viewportY + i);
+        if (!line) continue;
+        const text = line.translateToString(true).trim();
+        if (!text) continue;
+        if (SPINNER_RUNNING_RE.test(text) || SPINNER_DURATION_RE.test(text)) return text;
+      }
+    } catch {}
+    return null;
+  }
+
   _checkMenu() {
     this._menuDebounce = null;
     if (!this.headless) return;
+    // Spinner-status check rides on the same debounce — emit only on
+    // change so we don't flood clients with identical frames. Set to
+    // null when the spinner is gone (claude finished its current
+    // phase or is sitting at the input prompt).
+    const status = this._extractStatusLine();
+    if (status !== this._lastStatus) {
+      this._lastStatus = status;
+      this.emit('claude-status', status);
+    }
     const change = this.menuInterceptor.detectChange(this.headless);
     // Debug: when MYCO_MENU_DEBUG=1, dump the headless visible text on
     // every detectChange call so we can correlate what the scanner sees
@@ -332,9 +363,18 @@ function attachWebSocket(session, ws, opts = {}) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(JSON.stringify({ t: 'chat', message }));
   };
+  const onStatus = (text) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'claude-status', text }));
+  };
   session.on('data', onData);
   session.on('exit', onExit);
   session.on('chat', onChat);
+  session.on('claude-status', onStatus);
+  // Send the CURRENT status snapshot on attach so a fresh client
+  // immediately knows whether claude is busy (no need to wait for a
+  // transition).
+  if (session._lastStatus !== undefined) onStatus(session._lastStatus);
 
   ws.on('message', (raw) => {
     let msg;
@@ -373,6 +413,7 @@ function attachWebSocket(session, ws, opts = {}) {
     session.off('data', onData);
     session.off('exit', onExit);
     session.off('chat', onChat);
+    session.off('claude-status', onStatus);
     stopTranscript();
   });
 }
@@ -389,7 +430,12 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const onChat = (message) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'chat', message }));
   };
+  const onStatus = (text) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'claude-status', text }));
+  };
   session.on('chat', onChat);
+  session.on('claude-status', onStatus);
+  if (session._lastStatus !== undefined) onStatus(session._lastStatus);
 
   // viewer-mode includes the owner login so the client can render a
   // "Read-only — owned by @kkrazy" badge above the transcript.

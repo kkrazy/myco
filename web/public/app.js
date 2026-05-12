@@ -1189,6 +1189,11 @@ function openSession(id, opts = {}) {
         applyChatHistory(msg.messages);
       } else if (msg.t === 'chat') {
         appendChatMessage(msg.message);
+      } else if (msg.t === 'claude-status') {
+        // Live spinner-line readout from the server's headless terminal —
+        // text is something like "· Cerebrating… (40s · ↓ 3.4k tokens ·
+        // thought for 2s)" when claude is busy, null when it goes idle.
+        _setClaudeStatusLine(msg.text);
       } else if (msg.t === 'exit') {
         state.term?.writeln('\r\n[session ended]');
       } else if (msg.t === 'error') {
@@ -1662,6 +1667,21 @@ function _bindChatMenuClicks() {
     if (!Number.isFinite(n) || n < 1) return;
     if (!sendMenuPick(n)) return;
     state.pendingMenu = null;
+    // Mark the underlying chat message as answered so subsequent
+    // re-renders (claude's streaming reply will trigger many) keep
+    // the picker disabled with the green-highlighted pick. Without
+    // this, renderChatPane reconstructs the buttons every time a
+    // new message lands and the disabled state vanishes.
+    const msgEl = btn.closest('.chat-msg');
+    if (msgEl && msgEl.parentNode) {
+      const idx = Array.prototype.indexOf.call(msgEl.parentNode.children, msgEl);
+      if (idx >= 0 && state.chatMessages[idx]) {
+        state.chatMessages[idx]._answered = true;
+        state.chatMessages[idx]._pickedN = n;
+      }
+    }
+    // Visual update right now so the user gets immediate feedback
+    // (don't wait for the next renderChatPane).
     const grp = btn.closest('.chat-menu-opts');
     if (grp) {
       grp.querySelectorAll('.chat-menu-opt').forEach((b) => {
@@ -1717,6 +1737,7 @@ function _findLastMenuMessageIdx(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m && m.meta && m.meta.kind === 'menu' && m.meta.menu && Array.isArray(m.meta.menu.options)) {
+      if (m._answered) return -1;   // user already picked — no active menu
       return i;
     }
     // 'menu-auto' = the server auto-resolved a permission. A pending menu
@@ -1752,10 +1773,19 @@ function renderChatMessage(m, isActiveMenu) {
     const q = m.meta.menu && m.meta.menu.question ? '\n\n> ' + m.meta.menu.question : '';
     body = lead + q;
   }
+  const pickedN = menuOpts && m._pickedN ? m._pickedN : null;
   const optsHtml = menuOpts
-    ? `<div class="chat-menu-opts">${menuOpts.map((o) =>
-        `<button type="button" class="chat-menu-opt" data-n="${o.n}"${isActiveMenu ? '' : ' disabled'}>[${o.n}] ${escHtml(o.label)}</button>`
-      ).join('')}${isActiveMenu ? '<div class="chat-menu-hint">Pick here — goes straight to the session, no chat post.</div>' : '<div class="chat-menu-hint">(answered)</div>'}</div>`
+    ? `<div class="chat-menu-opts">${menuOpts.map((o) => {
+        const isPick = pickedN != null && o.n === pickedN;
+        const cls = 'chat-menu-opt' + (isPick ? ' chat-menu-picked' : '');
+        return `<button type="button" class="${cls}" data-n="${o.n}"${isActiveMenu ? '' : ' disabled'}>[${o.n}] ${escHtml(o.label)}</button>`;
+      }).join('')}<div class="chat-menu-hint">${
+        isActiveMenu
+          ? 'Pick here — goes straight to the session, no chat post.'
+          : pickedN != null
+            ? `Picked [${pickedN}]`
+            : '(answered)'
+      }</div></div>`
     : '';
   return `<div class="${cls}">
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
@@ -1890,13 +1920,29 @@ function _renderClaudeTyping() {
     host = document.createElement('div');
     host.id = 'claude-typing';
     host.className = 'claude-typing';
-    host.innerHTML = '<span class="claude-typing-dots"><span></span><span></span><span></span></span> <span class="claude-typing-label">Claude is working…</span>';
+    host.innerHTML = '<span class="claude-typing-dots"><span></span><span></span><span></span></span> <span class="claude-typing-label"></span>';
     list.insertAdjacentElement('afterend', host);
   }
-  host.hidden = !state.awaitingClaude;
-  if (state.awaitingClaude) {
+  // Visible whenever:
+  //   - we're explicitly awaiting (just sent @myco / picked a menu), OR
+  //   - the server says claude is currently busy (status line in PTY).
+  const status = state.claudeStatusLine || '';
+  const visible = state.awaitingClaude || !!status;
+  host.hidden = !visible;
+  const label = host.querySelector('.claude-typing-label');
+  if (label) label.textContent = status || 'Claude is working…';
+  if (visible) {
     requestAnimationFrame(() => { host.scrollIntoView({ block: 'end' }); });
   }
+}
+
+// Update the claude-status line cached from the server. When non-null,
+// the typing indicator becomes self-driven by the PTY — even if my own
+// awaitingClaude timer expired, the dots come back as long as claude is
+// actually running. Null = claude went idle on the server side.
+function _setClaudeStatusLine(text) {
+  state.claudeStatusLine = (text && String(text).trim()) || null;
+  _renderClaudeTyping();
 }
 
 // Send an inline menu pick via the dedicated WS frame. Bypasses chat

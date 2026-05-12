@@ -433,6 +433,35 @@ test_new_session_readonly() {
   grep -qF '.chat-msg.chat-msg-menu' web/public/styles.css \
     && pass "styles.css: chat-msg-menu unified card style" \
     || fail "styles.css: chat-msg-menu unified card style"
+  # Disable-on-pick: clicking an option in the chat-inline picker
+  # must mark the underlying chat message as answered so subsequent
+  # re-renders keep the buttons disabled with the picked one green-
+  # highlighted. Without this state, every appendChatMessage call
+  # later in the turn (claude streaming text) rebuilt the buttons
+  # active again.
+  grep -q '_answered = true' web/public/app.js \
+    && pass "app.js: marks menu message answered on click" \
+    || fail "app.js: marks menu message answered on click"
+  grep -q 'm\._answered' web/public/app.js \
+    && pass "app.js: _findLastMenuMessageIdx honors _answered" \
+    || fail "app.js: _findLastMenuMessageIdx honors _answered"
+  # Live spinner status surfaced from the headless terminal:
+  #   server pushes 'claude-status' WS frames whose text is something like
+  #   "· Cerebrating… (40s · ↓ 3.4k tokens · thought for 2s)" when claude
+  #   is busy, or null when idle. The client renders this in place of
+  #   the static "Claude is working…" label.
+  grep -q "this\\.emit('claude-status'" server/src/pty.js \
+    && pass "pty.js: emits claude-status on headless change" \
+    || fail "pty.js: emits claude-status on headless change"
+  grep -q "_extractStatusLine" server/src/pty.js \
+    && pass "pty.js: _extractStatusLine reads spinner from headless" \
+    || fail "pty.js: _extractStatusLine reads spinner from headless"
+  grep -q "msg.t === 'claude-status'" web/public/app.js \
+    && pass "app.js: handles claude-status WS frame" \
+    || fail "app.js: handles claude-status WS frame"
+  grep -q '_setClaudeStatusLine' web/public/app.js \
+    && pass "app.js: typing indicator label uses live status text" \
+    || fail "app.js: typing indicator label uses live status text"
   # Chat-only flow: when @myco sent, a typing indicator appears in chat;
   # assistant transcript text is buffered and posted as a chat message
   # after a quiet window so the user gets the FINAL result without
