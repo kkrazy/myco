@@ -998,14 +998,19 @@ test_chat_window() {
       const r = (new MenuInterceptor()).detectChange(fake);
       if (!r || r.kind !== 'newMenu') throw new Error('ultraplan dialog: expected newMenu, got ' + JSON.stringify(r));
       if (r.menu.options.length !== 6) throw new Error('expected 6 options, got ' + r.menu.options.length);
-      // Multi-line description should be folded into the label.
-      if (!/working directory/i.test(r.menu.options[0].label)) throw new Error('option 1 missing continuation: ' + r.menu.options[0].label);
-      if (!/demonstrate the flow/i.test(r.menu.options[2].label)) throw new Error('option 3 missing continuation: ' + r.menu.options[2].label);
+      // Labels are intentionally single-line (we no longer fold the
+      // description continuations — TUI key hints kept bloating
+      // labels with 'shift+tab to approve / ctrl-g to edit in Vim …').
+      // Make sure each option's label is just the first-line text and
+      // doesn't contain a description's text.
+      if (r.menu.options[0].label !== 'Add a hello-world script') throw new Error('option 1 label changed shape: ' + r.menu.options[0].label);
+      if (/working directory/i.test(r.menu.options[0].label)) throw new Error('option 1 leaks description into label');
+      if (r.menu.options[2].label !== 'No-op demo plan') throw new Error('option 3 label changed shape: ' + r.menu.options[2].label);
       // Options 5 and 6 (across the divider) must still be present.
       if (!/chat about this/i.test(r.menu.options[4].label)) throw new Error('option 5 missing: ' + r.menu.options[4].label);
       if (!/skip interview/i.test(r.menu.options[5].label)) throw new Error('option 6 missing: ' + r.menu.options[5].label);
-    " && pass "MenuInterceptor parses ultraplan-style menu (multi-line descs + divider)" \
-      || fail "MenuInterceptor parses ultraplan-style menu (multi-line descs + divider)"
+    " && pass "MenuInterceptor parses ultraplan-style menu (single-line labels + divider)" \
+      || fail "MenuInterceptor parses ultraplan-style menu (single-line labels + divider)"
   else
     skip "MenuInterceptor ultraplan (no host node)"
   fi

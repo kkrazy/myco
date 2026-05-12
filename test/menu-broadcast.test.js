@@ -702,8 +702,12 @@ t('plan-mode broadcast lands ONLY on the originating session', () => {
   ptyMod.handleSessionMenu(A.session.sessionId, A.session, PLAN_MENU);
   assert.strictEqual(aChats.length, 1, 'A should receive exactly one chat broadcast');
   assert.strictEqual(bChats.length, 0, 'B must not receive A\'s broadcast');
-  // Sanity: the message text reflects the menu options
-  assert.ok(aChats[0].text.includes('keep planning'), 'broadcast should include menu option labels');
+  // Sanity: the menu metadata still carries the option labels — the
+  // client renders them as inline buttons, so the body text no longer
+  // enumerates them.
+  const opts = aChats[0].meta && aChats[0].meta.menu && aChats[0].meta.menu.options;
+  assert.ok(opts && opts.some((o) => /keep planning/i.test(o.label)),
+    'broadcast meta should carry the menu option labels');
 });
 
 t('permission "ask" broadcast lands ONLY on the originating session', () => {
@@ -729,9 +733,14 @@ t('two simultaneous broadcasts each stay on their own session', () => {
   assert.strictEqual(aChats.length, 1);
   assert.strictEqual(bChats.length, 1);
   assert.notStrictEqual(aChats[0].text, bChats[0].text, 'A and B should see different broadcasts');
-  // Cross-check: A's chat is the plan menu, B's is the permission ask
-  assert.ok(aChats[0].text.includes('keep planning'),         'A should have plan broadcast');
-  assert.ok(/permission to run/i.test(bChats[0].text),        'B should have permission broadcast');
+  // Cross-check: A's chat carries the plan-menu metadata (options in
+  // meta now that body text is minimal), B's body says it's a
+  // permission ask.
+  const aOpts = aChats[0].meta && aChats[0].meta.menu && aChats[0].meta.menu.options;
+  assert.ok(aOpts && aOpts.some((o) => /keep planning/i.test(o.label)),
+    'A should have plan-menu options in meta');
+  assert.ok(/permission to run/i.test(bChats[0].text),
+    'B should have permission-tailored body wording');
 });
 
 t('PTY writes from one session do not appear on the other (auto-respond)', () => {

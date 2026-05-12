@@ -119,32 +119,15 @@ class MenuInterceptor {
 
     const options = chosen;
     const firstOptIdx = chosen[0].lineIdx;
-    const lastOptIdx = chosen[chosen.length - 1].lineIdx;
 
-    // Join multi-line option descriptions. For each option, any non-empty
-    // line between this option's lineIdx and the NEXT option's lineIdx
-    // (exclusive) that isn't itself an option marker line is treated as
-    // continuation and appended to the label. Box-drawing / divider lines
-    // (composed of └─╌╶ etc.) are skipped — they're claude's section
-    // separators inside multi-group menus, not part of any option.
-    // Stop joining at `lastOptIdx + GAP` so we don't eat the input
-    // editor's separator/status lines below the menu.
-    for (let i = 0; i < options.length; i++) {
-      const startLine = options[i].lineIdx;
-      const endLine = i + 1 < options.length
-        ? options[i + 1].lineIdx
-        : Math.min(lines.length, lastOptIdx + 1 + MENU_MAX_OPTION_GAP_LINES);
-      const extra = [];
-      for (let j = startLine + 1; j < endLine; j++) {
-        const t = (lines[j] || '').trim();
-        if (!t) continue;
-        if (/^[─━─-╌╴╶╴╌\-]+$/.test(t)) continue;          // divider line
-        extra.push(t);
-      }
-      if (extra.length) {
-        options[i].label = (options[i].label + ' ' + extra.join(' ')).replace(/\s+/g, ' ').trim();
-      }
-    }
+    // Each option's label = just the text on the marker line. We
+    // intentionally do NOT fold continuation lines into the label any
+    // more: claude's TUI puts TUI-only key hints ("shift+tab to
+    // approve …", "ctrl-g to edit in Vim · ~/.claude/plans/<file>")
+    // immediately under options, plus inline descriptions that bloat
+    // the chat picker. Single-line labels are unambiguous enough for
+    // a number-pick — anyone who wants the full description can read
+    // it in the conv pane.
 
     // Find the question — look back up to 5 lines from firstOptIdx for a
     // non-empty line. Prefer one with a question mark or recognizable verb.

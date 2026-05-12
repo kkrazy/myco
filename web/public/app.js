@@ -1734,20 +1734,31 @@ function renderChatMessage(m, isActiveMenu) {
   let cls = 'chat-msg';
   if (fromClaude) cls += ' from-claude';
   if (fromSelf) cls += ' from-self';
-  // renderMd for the body so menu broadcasts ("Claude wants permission to
-  // run `Bash(...)`"), allow/deny notes, /allowlist output, and any future
-  // server-side markdown all render properly. marked escapes HTML by
-  // default; this is safe for arbitrary chat input.
+  // For menu broadcasts, the inline buttons below ARE the picker; the
+  // chat body just sets the scene with the question. Override the text
+  // body to a minimal "lead + question" form regardless of what the
+  // server's `m.text` says — this stays robust against older persisted
+  // messages that include the verbose option enumeration that we no
+  // longer emit.
   const menuOpts = (m.meta && m.meta.kind === 'menu' && m.meta.menu && Array.isArray(m.meta.menu.options))
     ? m.meta.menu.options : null;
+  let body = m.text || '';
+  if (menuOpts) {
+    const tgt = m.meta.target;
+    const lead = tgt
+      ? `🤔 Claude wants permission to run \`${tgt.tool}(${tgt.input || ''})\``
+      : '🤔 Claude is waiting on a decision';
+    const q = m.meta.menu && m.meta.menu.question ? '\n\n> ' + m.meta.menu.question : '';
+    body = lead + q;
+  }
   const optsHtml = menuOpts
     ? `<div class="chat-menu-opts">${menuOpts.map((o) =>
         `<button type="button" class="chat-menu-opt" data-n="${o.n}"${isActiveMenu ? '' : ' disabled'}>[${o.n}] ${escHtml(o.label)}</button>`
-      ).join('')}<div class="chat-menu-hint">${isActiveMenu ? 'Picking here goes straight to the session — no chat message is posted.' : '(answered)'}</div></div>`
+      ).join('')}${isActiveMenu ? '<div class="chat-menu-hint">Pick here — goes straight to the session, no chat post.</div>' : '<div class="chat-menu-hint">(answered)</div>'}</div>`
     : '';
   return `<div class="${cls}">
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
-    <div class="chat-text">${renderMd(m.text || '')}</div>
+    <div class="chat-text">${renderMd(body)}</div>
     ${optsHtml}
   </div>`;
 }

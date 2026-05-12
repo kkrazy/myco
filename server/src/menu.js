@@ -68,27 +68,18 @@ function autoRespondToMenu(sessionId, session, menu, optionN, verb, target) {
 }
 
 function broadcastMenuToChat(sessionId, session, menu, target) {
+  // Minimal body — the client renders the inline buttons (see
+  // renderChatMessage), so the message text just needs to set the
+  // scene. Enumerating options here, or telling the user to type
+  // `/decide <n>`, only duplicates what the buttons already show.
   const lines = [];
   if (target) {
     const summary = `${target.tool}(${target.input || ''})`.slice(0, 200);
-    lines.push(`🤔 Claude wants permission to run \`${summary}\` (not in this session's allow/deny lists).`);
+    lines.push(`🤔 Claude wants permission to run \`${summary}\``);
   } else {
-    lines.push('🤔 Claude is waiting on a decision:');
+    lines.push('🤔 Claude is waiting on a decision');
   }
   if (menu.question) lines.push('> ' + menu.question);
-  for (const opt of menu.options) lines.push(`[${opt.n}] ${opt.label}`);
-  lines.push('');
-  if (target) {
-    // Suggest a sensible /allow pattern: the tool plus the first word of its
-    // input (so `Bash(curl example.com)` → suggest `Bash(curl)`).
-    const firstTok = String(target.input || '').trim().split(/\s+/)[0];
-    const suggest = target.tool === 'Bash' && firstTok
-      ? `${target.tool}(${firstTok})`
-      : target.tool;
-    lines.push(`Reply with \`/decide <n>\` to answer this one, or \`/allow ${suggest}\` to auto-allow similar tools in future. \`/allowlist\` shows the current lists.`);
-  } else {
-    lines.push('Reply with `/decide <n>` to pick an option.');
-  }
   const msg = {
     user: ASSISTANT_USER,
     text: lines.join('\n'),
