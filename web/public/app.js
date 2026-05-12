@@ -1573,18 +1573,21 @@ function appendChatMessage(message) {
 //
 // MenuInterceptor catches Claude Code's numbered TUI dialogs (plan-mode,
 // permission, trust-folder, etc.) and broadcasts them into chat as a
-// special message (meta.kind === 'menu'). On the readonly / new-session
-// view the chat pane may be off-screen (mobile) or just easy to miss
-// (desktop user focused on the conv pane), so we ALSO render the most
-// recent unresolved menu inline at the top of the conv pane with one
-// clickable button per option. Clicking sends `/decide <n>` through the
-// regular chat channel — the slash command routes back into the PTY.
+// special message (meta.kind === 'menu'). The option buttons are
+// rendered INLINE inside the chat message itself — see
+// renderChatMessage — so the picker lives in the chat pane, lands at
+// the bottom of the chat scroller naturally, and survives transcript-
+// delta re-renders (which used to scroll the conv-pane callout off
+// screen, causing the "first time worked, second time disappeared"
+// instability).
 //
-// state.pendingMenu shape: { question, options:[{n,label}], kind, ts, target }
+// state.pendingMenu still tracks the most recent unresolved menu so:
+//   - the readonly watchdog can hold off auto-flipping to xterm while
+//     there's something for the user to click
+//   - other code paths can check `is there a menu to respond to?`
 // Cleared when:
 //   - a 'menu-auto' chat broadcast lands (server auto-resolved a perm)
-//   - the user clicks a button here (optimistic clear; server-side menu
-//     interceptor will broadcast 'menu-cleared' if it changes its mind)
+//   - the user clicks a button on a chat message (optimistic clear)
 
 function _updatePendingMenuFromMessage(m) {
   if (!m || !m.meta) return;
@@ -1641,44 +1644,38 @@ function _cancelReadonlyFallback() {
   }
 }
 
+// No-op. The menu picker now renders inline inside each menu chat
+// message (see renderChatMessage). We still keep the existing call
+// sites (after applyChatHistory / appendChatMessage / transcript
+// renders / waiting swaps) so the watchdog-cancel side effect runs
+// on every menu event.
 function _renderPendingMenuCallout() {
-  const conv = document.getElementById('conv-content');
-  if (!conv) return;
-  const existing = document.getElementById('pending-menu-callout');
-  if (existing) existing.remove();
-  if (!state.pendingMenu) return;
-  // The readonly view now has actionable content — cancel the
-  // auto-flip-back-to-xterm watchdog.
-  _cancelReadonlyFallback();
+  if (state.pendingMenu) _cancelReadonlyFallback();
+}
 
-  const menu = state.pendingMenu;
-  const callout = document.createElement('div');
-  callout.id = 'pending-menu-callout';
-  callout.className = 'pending-menu';
-  const target = menu.target;
-  const lead = target
-    ? `🤔 Claude wants permission to run <code>${escHtml(target.tool + '(' + (target.input || '') + ')')}</code>`
-    : '🤔 Claude is waiting on a decision';
-  callout.innerHTML =
-    `<div class="pending-menu-lead">${lead}</div>` +
-    (menu.question ? `<div class="pending-menu-q">${escHtml(menu.question)}</div>` : '') +
-    `<div class="pending-menu-opts">${menu.options.map((o) =>
-      `<button type="button" class="pending-menu-opt" data-n="${o.n}">[${o.n}] ${escHtml(o.label)}</button>`
-    ).join('')}</div>` +
-    `<div class="pending-menu-hint">Picking an option here goes straight to the session — no chat message is posted.</div>`;
-  callout.addEventListener('click', (e) => {
-    const btn = e.target.closest('.pending-menu-opt');
-    if (!btn) return;
+// Click delegation: any chat-message option button anywhere in the
+// chat list. Sends the pick through the dedicated menu-pick frame
+// (no chat pollution) and visually marks the message as resolved so
+// the user can see which option they took, plus prevents double-fire.
+function _bindChatMenuClicks() {
+  const list = document.getElementById('chat-messages');
+  if (!list || list.dataset.menuBound === '1') return;
+  list.dataset.menuBound = '1';
+  list.addEventListener('click', (e) => {
+    const btn = e.target.closest('.chat-menu-opt');
+    if (!btn || btn.disabled) return;
     const n = Number(btn.dataset.n);
     if (!Number.isFinite(n) || n < 1) return;
-    sendMenuPick(n);
+    if (!sendMenuPick(n)) return;
     state.pendingMenu = null;
-    callout.remove();
+    const grp = btn.closest('.chat-menu-opts');
+    if (grp) {
+      grp.querySelectorAll('.chat-menu-opt').forEach((b) => {
+        b.disabled = true;
+        b.classList.toggle('chat-menu-picked', b === btn);
+      });
+    }
   });
-  // Clear any "waiting" placeholder so the menu isn't sandwiched.
-  const waiting = conv.querySelector('.conv-waiting');
-  if (waiting) waiting.remove();
-  conv.insertBefore(callout, conv.firstChild);
 }
 
 function clearChat() {
@@ -1706,11 +1703,33 @@ function renderChatPane(scrollToBottom = false) {
     return;
   }
   if (empty) empty.hidden = true;
-  list.innerHTML = state.chatMessages.map(renderChatMessage).join('');
+  // Render with row indexes so the inline menu picker knows which is the
+  // most recent menu broadcast (only that one stays clickable; earlier
+  // ones get their buttons disabled so a stale row can't fire a pick
+  // against a different dialog).
+  const lastMenuIdx = _findLastMenuMessageIdx(state.chatMessages);
+  list.innerHTML = state.chatMessages
+    .map((m, i) => renderChatMessage(m, i === lastMenuIdx))
+    .join('');
   if (scrollToBottom) scrollChatToLatest();
+  _bindChatMenuClicks();
 }
 
-function renderChatMessage(m) {
+function _findLastMenuMessageIdx(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m && m.meta && m.meta.kind === 'menu' && m.meta.menu && Array.isArray(m.meta.menu.options)) {
+      return i;
+    }
+    // 'menu-auto' = the server auto-resolved a permission. A pending menu
+    // older than that is no longer the live one — keep scanning back, but
+    // never offer buttons for older menus.
+    if (m && m.meta && m.meta.kind === 'menu-auto') return -1;
+  }
+  return -1;
+}
+
+function renderChatMessage(m, isActiveMenu) {
   const fromClaude = m.user === 'claude';
   const fromSelf = state.chatUser && m.user === state.chatUser;
   const ts = m.ts ? formatChatTs(m.ts) : '';
@@ -1721,9 +1740,17 @@ function renderChatMessage(m) {
   // run `Bash(...)`"), allow/deny notes, /allowlist output, and any future
   // server-side markdown all render properly. marked escapes HTML by
   // default; this is safe for arbitrary chat input.
+  const menuOpts = (m.meta && m.meta.kind === 'menu' && m.meta.menu && Array.isArray(m.meta.menu.options))
+    ? m.meta.menu.options : null;
+  const optsHtml = menuOpts
+    ? `<div class="chat-menu-opts">${menuOpts.map((o) =>
+        `<button type="button" class="chat-menu-opt" data-n="${o.n}"${isActiveMenu ? '' : ' disabled'}>[${o.n}] ${escHtml(o.label)}</button>`
+      ).join('')}<div class="chat-menu-hint">${isActiveMenu ? 'Picking here goes straight to the session — no chat message is posted.' : '(answered)'}</div></div>`
+    : '';
   return `<div class="${cls}">
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
     <div class="chat-text">${renderMd(m.text || '')}</div>
+    ${optsHtml}
   </div>`;
 }
 

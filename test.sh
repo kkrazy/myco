@@ -348,21 +348,22 @@ test_new_session_readonly() {
   grep -q 'opts.startInReadonly' web/public/app.js \
     && pass "app.js: openSession honors startInReadonly" \
     || fail "app.js: openSession honors startInReadonly"
-  # Regression: MenuInterceptor already broadcasts pending TUI dialogs
-  # (trust-folder, plan-mode, permission asks) into chat as messages with
-  # meta.kind === 'menu'. On the readonly conv pane the chat may be off-
-  # screen on mobile or just easy to miss, so the most recent unresolved
-  # menu is also rendered inline as a callout with clickable buttons that
-  # send /decide <n>.
-  grep -q '_renderPendingMenuCallout' web/public/app.js \
-    && pass "app.js: pending-menu callout helper" \
-    || fail "app.js: pending-menu callout helper"
+  # Regression: MenuInterceptor broadcasts pending TUI dialogs into
+  # chat with meta.kind === 'menu'. The picker is rendered INLINE
+  # inside each menu chat message — only the most recent one keeps its
+  # buttons clickable; older ones are disabled so a stale row can't
+  # poke a different dialog. Previously we drew the picker at the top
+  # of the conv pane, but transcript-delta auto-scroll could push it
+  # off-screen, causing intermittent disappearances.
   grep -q "meta.kind === 'menu'" web/public/app.js \
     && pass "app.js: detects menu chat messages by meta.kind" \
     || fail "app.js: detects menu chat messages by meta.kind"
-  grep -q 'pending-menu-opt' web/public/app.js \
-    && pass "app.js: menu callout renders option buttons" \
-    || fail "app.js: menu callout renders option buttons"
+  grep -q 'chat-menu-opt' web/public/app.js \
+    && pass "app.js: chat message renders inline menu buttons" \
+    || fail "app.js: chat message renders inline menu buttons"
+  grep -q '_findLastMenuMessageIdx' web/public/app.js \
+    && pass "app.js: only latest menu message is clickable" \
+    || fail "app.js: only latest menu message is clickable"
   # Regression: pending-menu callout clicks go through a dedicated
   # WS frame, NOT through chat — the user shouldn't see `/decide N`
   # messages cluttering the discussion when they click [1]/[2] on the
@@ -381,9 +382,9 @@ test_new_session_readonly() {
   grep -q 'sendChatMessage(\`/decide' web/public/app.js \
     && fail "app.js: callout still sends /decide via chat (regression)" \
     || pass "app.js: callout no longer routes through chat"
-  grep -q '\.pending-menu' web/public/styles.css \
-    && pass "styles.css: .pending-menu styling" \
-    || fail "styles.css: .pending-menu styling"
+  grep -q '\.chat-menu-opt' web/public/styles.css \
+    && pass "styles.css: .chat-menu-opt styling" \
+    || fail "styles.css: .chat-menu-opt styling"
   # Safety net: if a brand-new session lands on the readonly view and
   # neither a menu callout nor any transcript content arrives within
   # READONLY_FALLBACK_MS, auto-flip back to the live xterm so the user

@@ -2674,46 +2674,24 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: #f85149;
 }
 
-/* ── pending TUI menu callout (trust-folder, plan-mode, permission dialogs
-   that show up before Claude has produced any transcript output, so they
-   need surfacing inside the conv pane where the user is looking) ── */
-.pending-menu {
-  margin: 16px 12px 20px;
-  padding: 14px 16px;
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-left: 3px solid #d29922;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  line-height: 1.45;
-}
-.pending-menu-lead {
-  color: #c9d1d9;
-  margin-bottom: 6px;
-}
-.pending-menu-lead code,
-.pending-menu-hint code {
-  background: #0d1117;
-  border: 1px solid #30363d;
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 0.85rem;
-}
-.pending-menu-q {
-  color: #8b949e;
-  margin: 6px 0 10px;
-  font-style: italic;
-}
-.pending-menu-opts {
+/* ── Inline menu picker inside a chat message ──
+   The MenuInterceptor broadcasts every numbered claude TUI dialog into
+   chat as a special message (meta.kind === 'menu'); we render the
+   options as buttons inside the message body so the user can pick
+   without typing /decide N. Only the LATEST menu message keeps its
+   buttons clickable — older messages get :disabled buttons so a stale
+   row can't poke a different dialog. */
+.chat-menu-opts {
+  margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 10px;
 }
-.pending-menu-opt {
+.chat-menu-opt {
   background: #21262d;
   color: #c9d1d9;
   border: 1px solid #30363d;
+  border-left: 3px solid #d29922;
   border-radius: 6px;
   padding: 8px 12px;
   font: inherit;
@@ -2721,18 +2699,30 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
-.pending-menu-opt:hover {
+.chat-menu-opt:hover:not(:disabled) {
   background: #30363d;
   border-color: #58a6ff;
 }
-.pending-menu-opt:active {
+.chat-menu-opt:active:not(:disabled) {
   background: #1f6feb;
   border-color: #1f6feb;
   color: white;
 }
-.pending-menu-hint {
+.chat-menu-opt:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  border-left-color: #30363d;
+}
+.chat-menu-opt.chat-menu-picked {
+  border-left-color: #3fb950;
+  opacity: 1;
+  background: #0f2417;
+  color: #c9d1d9;
+}
+.chat-menu-hint {
   color: #6e7681;
   font-size: 0.8rem;
+  margin-top: 2px;
 }
 
 /* ── waiting spinner ── */
