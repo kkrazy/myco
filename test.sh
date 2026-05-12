@@ -790,6 +790,50 @@ test_chat_window() {
   else
     skip "MenuInterceptor trust-dialog (no host node)"
   fi
+  # Regression: claude code's WebSearch-permission dialog renders option 2
+  # WITHOUT a space after the dot ("2.Yes, and don't ask again for Web
+  # Search"). The previous /(?=\s)/ lookahead rejected this marker, the
+  # scanner found only one option (n=1), and the menu was missed entirely.
+  # The fix is /(?!\d)/ — still blocks decimals like "3.5" but allows a
+  # letter to immediately follow the dot.
+  if have_node; then
+    node -e "
+      const { MenuInterceptor } = require('./server/src/menu-interceptor');
+      const lines = [];
+      lines.push(' Tool use');
+      lines.push('');
+      lines.push('   Web Search(\"Shenzhen weather\")');
+      lines.push('   Claude wants to search the web for: Shenzhen weather');
+      lines.push('');
+      lines.push(' Do you want to proceed?');
+      lines.push(' ❯ 1. Yes');                                       // option 1 (well-formed)
+      lines.push('  2.Yes, and don\\'t ask again for Web Search');   // option 2 (no space after dot)
+      const rows = 20;
+      while (lines.length < rows) lines.push('');
+      const fake = {
+        rows,
+        buffer: { active: { viewportY: 0, getLine: (y) => lines[y] != null ? ({ translateToString: () => lines[y] }) : null }},
+      };
+      const r = (new MenuInterceptor()).detectChange(fake);
+      if (!r || r.kind !== 'newMenu') throw new Error('expected newMenu for malformed 2.Yes, got ' + JSON.stringify(r));
+      if (r.menu.options.length !== 2) throw new Error('expected 2 options, got ' + r.menu.options.length);
+      if (r.menu.options[1].n !== 2) throw new Error('expected option 2, got ' + r.menu.options[1].n);
+      if (!/yes/i.test(r.menu.options[1].label)) throw new Error('option 2 label wrong: ' + r.menu.options[1].label);
+      // Decimals must NOT match — guard against the regex relaxation
+      // accidentally allowing 'i have 3.5 reasons' as a menu marker.
+      const proseLines = [' I have 3.5 reasons to refactor this.', ' Section 2.0 has details.'];
+      while (proseLines.length < rows) proseLines.push('');
+      const fake2 = {
+        rows,
+        buffer: { active: { viewportY: 0, getLine: (y) => proseLines[y] != null ? ({ translateToString: () => proseLines[y] }) : null }},
+      };
+      const r2 = (new MenuInterceptor()).detectChange(fake2);
+      if (r2 && r2.kind === 'newMenu') throw new Error('decimals should NOT match as menu markers: ' + JSON.stringify(r2));
+    " && pass "MenuInterceptor handles missing-space-after-dot + rejects decimals" \
+      || fail "MenuInterceptor handles missing-space-after-dot + rejects decimals"
+  else
+    skip "MenuInterceptor missing-space (no host node)"
+  fi
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: while a TUI menu is pending in the session, an @myco

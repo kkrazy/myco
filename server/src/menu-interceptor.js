@@ -13,12 +13,16 @@
 
 // Accepted numbered-option shapes for the marker only:
 //   "1." "1)" "[1]" "(1)"
-// The marker must be flanked by a whitespace boundary (or string edge) so we
-// don't pick up references inside prose ("v1.0", "arr[4]access") or
-// trailing-period numbering inside a sentence ("1. install deps then…").
+// The marker must be flanked by a whitespace/start boundary on the LEFT so we
+// don't pick up references inside prose ("v1.0", "arr[4]access"). On the
+// RIGHT we only forbid another digit — claude code's TUI sometimes renders
+// option labels with no space after the marker (e.g. "2.Yes, don't ask
+// again"), and a strict trailing-whitespace check rejected the second
+// option entirely, silently breaking menu detection. The "no following
+// digit" rule still blocks decimals ("3.5", "v1.0").
 // Matched globally so multiple options on a single line are all extracted
 // (e.g. "[4] Type something. [5] Chat about this").
-const OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?=\s)/g;
+const OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/g;
 
 class MenuInterceptor {
   constructor() {
