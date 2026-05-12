@@ -15,17 +15,25 @@ let failed = 0;
 const failures = [];
 
 function section(name) { console.log('\n── ' + name + ' ──'); }
+// Tests can be either sync or async. Async tests use a `.then` chain that
+// the runner awaits via the returned promise. We accumulate pending tests
+// and await them at the bottom of the file before printing the summary.
+const _pending = [];
 function t(name, fn) {
-  try {
-    fn();
-    console.log('  ✓ ' + name);
-    passed++;
-  } catch (err) {
-    console.log('  ✗ ' + name + ' — ' + (err && err.message ? err.message : err));
-    failures.push({ name, err });
-    failed++;
-  }
+  const exec = async () => {
+    try {
+      await fn();
+      console.log('  ✓ ' + name);
+      passed++;
+    } catch (err) {
+      console.log('  ✗ ' + name + ' — ' + (err && err.message ? err.message : err));
+      failures.push({ name, err });
+      failed++;
+    }
+  };
+  _pending.push(exec());
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ─── Fake xterm headless ───────────────────────────────────────────────────
 // MenuInterceptor only uses headless.rows + headless.buffer.active.{viewportY,
@@ -572,33 +580,39 @@ t('@myco "9" with no option 9 falls through to cancel+send', () => {
   assert.ok(writes.some((w) => w.includes('\x1b')), `expected an Esc write, got ${JSON.stringify(writes)}`);
 });
 
-t('@myco <prose> with pending menu cancels (Esc) then sends', () => {
+t('@myco <prose> with pending menu cancels (Esc) then sends', async () => {
   const { session, writes } = makeFakeSession(SAMPLE_MENU);
   ptyMod.handleChatMessage(session.sessionId, session, 'tester', '@myco do the next task please');
-  // Esc must come first, then the new text+\r.
+  await sleep(150);  // let the deferred '\r' write fire
+  // Esc must come first, then the new text, then a separate \r.
   assert.strictEqual(writes[0], '\x1b', `first write should be Esc, got ${JSON.stringify(writes[0])}`);
   const tail = writes.slice(1).join('');
-  assert.ok(tail.includes('do the next task please\r'), `expected new instruction after Esc, got ${JSON.stringify(writes)}`);
+  assert.ok(tail.includes('do the next task please'), `expected text body after Esc, got ${JSON.stringify(writes)}`);
+  assert.ok(writes.includes('\r'), `expected a trailing \\r write, got ${JSON.stringify(writes)}`);
   assert.strictEqual(session.pendingMenu, null);
 });
 
-t('@myco <prose> WITHOUT pending menu does NOT send an Esc', () => {
+t('@myco <prose> WITHOUT pending menu does NOT send an Esc', async () => {
   const { session, writes } = makeFakeSession(null);
   ptyMod.handleChatMessage(session.sessionId, session, 'tester', '@myco hello there');
-  // Only the toggle+input+\r write should appear (no Esc, no menu pick).
+  await sleep(150);
+  // Only the toggle+input write and the deferred \r should appear. No Esc.
   for (const w of writes) {
     assert.notStrictEqual(w, '\x1b', `unexpected Esc write: ${JSON.stringify(writes)}`);
   }
-  assert.ok(writes.some((w) => w.includes('hello there\r')));
+  assert.ok(writes.some((w) => w.includes('hello there')), `text not written: ${JSON.stringify(writes)}`);
+  assert.ok(writes.includes('\r'), `\\r not written: ${JSON.stringify(writes)}`);
 });
 
-t('@myco "1" WITHOUT pending menu is plain text (not a digit pick)', () => {
+t('@myco "1" WITHOUT pending menu is plain text (not a digit pick)', async () => {
   const { session, writes } = makeFakeSession(null);
   ptyMod.handleChatMessage(session.sessionId, session, 'tester', '@myco 1');
+  await sleep(150);
   // Without pendingMenu the shortcut shouldn't fire; the message goes
-  // through the normal toggle+send path as the literal text "1".
-  assert.ok(writes.some((w) => w.endsWith('1\r')));
-  // No Esc either.
+  // through the normal toggle + deferred-\r path. Some write ends with "1",
+  // and a separate \r write follows.
+  assert.ok(writes.some((w) => w.endsWith('1')), `text "1" not written: ${JSON.stringify(writes)}`);
+  assert.ok(writes.includes('\r'), `\\r not written: ${JSON.stringify(writes)}`);
   for (const w of writes) {
     assert.notStrictEqual(w, '\x1b');
   }
@@ -760,5 +774,9 @@ t('chat event payload carries the menu metadata for client-side routing', () => 
 });
 
 // ─── done ──────────────────────────────────────────────────────────────────
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+// Wait for all async test bodies (some use sleep() to flush deferred
+// session.write timers in handleChatMessage) before printing the summary.
+Promise.all(_pending).then(() => {
+  console.log(`\nResults: ${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+});

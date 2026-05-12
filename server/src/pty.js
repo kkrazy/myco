@@ -506,13 +506,20 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
       //   default → accept-edits → plan → default
       const toggle = autoAcceptToggleBytes(session);
       console.log(`[chat→pty] ${user}: ${input.substring(0, 80)}${toggle ? ' (+auto-toggle)' : ''}`);
-      // End with \r (Enter = submit). We previously sent '\n\r' to leave a
-      // trailing blank line in Claude Code's input editor (Ctrl+J first,
-      // then submit), but that ordering often left the prompt sitting in
-      // the input box without submitting. Plain \r submits reliably; any
-      // embedded \n inside `input` itself still flows through as a literal
-      // newline because Claude Code reads it as Ctrl+J.
-      session.write(toggle + input + '\r');
+      // Split the write into TWO PTY operations: the text/toggle first, then
+      // the trailing \r after a short delay. When everything ships as one
+      // chunk, Claude Code's TUI input editor sometimes treats text+\r as
+      // multi-line-paste-followed-by-Enter-inside-paste rather than
+      // text-then-submit, leaving the prompt typed in the input but not
+      // submitted. Mobile is hit hardest because WS frames arrive bunched
+      // on slower networks. The 100ms gap gives the input buffer time to
+      // settle (cursor at end, no pending paste state) before submit lands.
+      // session.alive is re-checked at the timeout boundary so a session
+      // that died between the two writes doesn't throw.
+      session.write(toggle + input);
+      setTimeout(() => {
+        if (session && session.alive) session.write('\r');
+      }, 100);
     }
     return;
   }
