@@ -2674,6 +2674,67 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: #f85149;
 }
 
+/* ── pending TUI menu callout (trust-folder, plan-mode, permission dialogs
+   that show up before Claude has produced any transcript output, so they
+   need surfacing inside the conv pane where the user is looking) ── */
+.pending-menu {
+  margin: 16px 12px 20px;
+  padding: 14px 16px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-left: 3px solid #d29922;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.pending-menu-lead {
+  color: #c9d1d9;
+  margin-bottom: 6px;
+}
+.pending-menu-lead code,
+.pending-menu-hint code {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.85rem;
+}
+.pending-menu-q {
+  color: #8b949e;
+  margin: 6px 0 10px;
+  font-style: italic;
+}
+.pending-menu-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.pending-menu-opt {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.pending-menu-opt:hover {
+  background: #30363d;
+  border-color: #58a6ff;
+}
+.pending-menu-opt:active {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: white;
+}
+.pending-menu-hint {
+  color: #6e7681;
+  font-size: 0.8rem;
+}
+
 /* ── waiting spinner ── */
 .conv-waiting {
   text-align: center;

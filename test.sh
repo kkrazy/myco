@@ -255,6 +255,27 @@ test_new_session_readonly() {
   grep -q 'opts.startInReadonly' web/public/app.js \
     && pass "app.js: openSession honors startInReadonly" \
     || fail "app.js: openSession honors startInReadonly"
+  # Regression: MenuInterceptor already broadcasts pending TUI dialogs
+  # (trust-folder, plan-mode, permission asks) into chat as messages with
+  # meta.kind === 'menu'. On the readonly conv pane the chat may be off-
+  # screen on mobile or just easy to miss, so the most recent unresolved
+  # menu is also rendered inline as a callout with clickable buttons that
+  # send /decide <n>.
+  grep -q '_renderPendingMenuCallout' web/public/app.js \
+    && pass "app.js: pending-menu callout helper" \
+    || fail "app.js: pending-menu callout helper"
+  grep -q "meta.kind === 'menu'" web/public/app.js \
+    && pass "app.js: detects menu chat messages by meta.kind" \
+    || fail "app.js: detects menu chat messages by meta.kind"
+  grep -q 'pending-menu-opt' web/public/app.js \
+    && pass "app.js: menu callout renders option buttons" \
+    || fail "app.js: menu callout renders option buttons"
+  grep -qF 'sendChatMessage(`/decide ${n}`)' web/public/app.js \
+    && pass "app.js: option click sends /decide" \
+    || fail "app.js: option click sends /decide"
+  grep -q '\.pending-menu' web/public/styles.css \
+    && pass "styles.css: .pending-menu styling" \
+    || fail "styles.css: .pending-menu styling"
 }
 
 test_chat_user_capture() {

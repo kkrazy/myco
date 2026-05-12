@@ -244,6 +244,10 @@ function showTranscriptWaiting() {
   showConversationView();
   const content = document.getElementById('conv-content');
   if (content) content.innerHTML = '<div class="conv-waiting">Waiting for session to start...</div>';
+  // Re-attach a pending-menu callout (if any) — innerHTML wipe just
+  // dropped it. Keeps trust-folder / plan / permission dialogs visible
+  // while the JSONL transcript is still empty.
+  _renderPendingMenuCallout();
 }
 
 function escHtml(s) {
@@ -403,6 +407,10 @@ function renderTranscriptMessages(messages) {
   }
   scrollConvToBottom();
   renderMermaidInContainer(content);
+  // Re-attach the pending-menu callout (if any) at the top — the
+  // innerHTML wipe above removed it. Keeps the menu visible across
+  // transcript re-renders so the user can still pick an option.
+  _renderPendingMenuCallout();
 }
 
 function appendTranscriptMessages(messages) {
@@ -990,6 +998,7 @@ function _resetUiForNewSession(id) {
   state.viewerMode = false;
   state.transcriptMessages = [];
   state.previewAsViewer = false;             // reset preview toggle on session switch
+  state.pendingMenu = null;                  // clear any inline menu callout
   document.getElementById('btn-preview-readonly')?.classList.remove('active');
   // Hide all Plan/Arch/Test main-pane views so the previous session's
   // extracted content doesn't linger. Chrome-button active classes are
@@ -1164,7 +1173,15 @@ function openSession(id, opts = {}) {
         const newMsgs = msg.messages || [];
         state.transcriptMessages.push(...newMsgs);
         appendTranscriptMessages(newMsgs);
-        if (newMsgs.some((m) => m && m.role === 'assistant')) hideMycoWaiting();
+        if (newMsgs.some((m) => m && m.role === 'assistant')) {
+          hideMycoWaiting();
+          // Claude is now producing transcript output → any earlier
+          // pending menu (trust-folder etc.) has been resolved.
+          if (state.pendingMenu) {
+            state.pendingMenu = null;
+            _renderPendingMenuCallout();
+          }
+        }
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
       } else if (msg.t === 'output') {
@@ -1529,12 +1546,90 @@ function applyChatHistory(messages) {
   // connect and on every reconnect, and the user expects to see the most
   // recent activity, not the start of the thread.
   renderChatPane(/*scrollToBottom*/ true);
+  _rescanPendingMenu();
+  _renderPendingMenuCallout();
 }
 
 function appendChatMessage(message) {
   if (!message || typeof message !== 'object') return;
   state.chatMessages.push(message);
   renderChatPane(/*scrollToBottom*/ true);
+  _updatePendingMenuFromMessage(message);
+  _renderPendingMenuCallout();
+}
+
+// Pending-menu surfacing
+//
+// MenuInterceptor catches Claude Code's numbered TUI dialogs (plan-mode,
+// permission, trust-folder, etc.) and broadcasts them into chat as a
+// special message (meta.kind === 'menu'). On the readonly / new-session
+// view the chat pane may be off-screen (mobile) or just easy to miss
+// (desktop user focused on the conv pane), so we ALSO render the most
+// recent unresolved menu inline at the top of the conv pane with one
+// clickable button per option. Clicking sends `/decide <n>` through the
+// regular chat channel — the slash command routes back into the PTY.
+//
+// state.pendingMenu shape: { question, options:[{n,label}], kind, ts, target }
+// Cleared when:
+//   - a 'menu-auto' chat broadcast lands (server auto-resolved a perm)
+//   - the user clicks a button here (optimistic clear; server-side menu
+//     interceptor will broadcast 'menu-cleared' if it changes its mind)
+
+function _updatePendingMenuFromMessage(m) {
+  if (!m || !m.meta) return;
+  if (m.meta.kind === 'menu' && m.meta.menu && Array.isArray(m.meta.menu.options)) {
+    state.pendingMenu = {
+      question: m.meta.menu.question || '',
+      options: m.meta.menu.options,
+      kind: m.meta.menu.kind || 'generic',
+      target: m.meta.target || null,
+      ts: m.ts || null,
+    };
+  } else if (m.meta.kind === 'menu-auto') {
+    state.pendingMenu = null;
+  }
+}
+
+function _rescanPendingMenu() {
+  state.pendingMenu = null;
+  for (const m of state.chatMessages) _updatePendingMenuFromMessage(m);
+}
+
+function _renderPendingMenuCallout() {
+  const conv = document.getElementById('conv-content');
+  if (!conv) return;
+  const existing = document.getElementById('pending-menu-callout');
+  if (existing) existing.remove();
+  if (!state.pendingMenu) return;
+
+  const menu = state.pendingMenu;
+  const callout = document.createElement('div');
+  callout.id = 'pending-menu-callout';
+  callout.className = 'pending-menu';
+  const target = menu.target;
+  const lead = target
+    ? `🤔 Claude wants permission to run <code>${escHtml(target.tool + '(' + (target.input || '') + ')')}</code>`
+    : '🤔 Claude is waiting on a decision';
+  callout.innerHTML =
+    `<div class="pending-menu-lead">${lead}</div>` +
+    (menu.question ? `<div class="pending-menu-q">${escHtml(menu.question)}</div>` : '') +
+    `<div class="pending-menu-opts">${menu.options.map((o) =>
+      `<button type="button" class="pending-menu-opt" data-n="${o.n}">[${o.n}] ${escHtml(o.label)}</button>`
+    ).join('')}</div>` +
+    `<div class="pending-menu-hint">Or type <code>/decide &lt;n&gt;</code> in chat.</div>`;
+  callout.addEventListener('click', (e) => {
+    const btn = e.target.closest('.pending-menu-opt');
+    if (!btn) return;
+    const n = btn.dataset.n;
+    if (!n) return;
+    sendChatMessage(`/decide ${n}`);
+    state.pendingMenu = null;
+    callout.remove();
+  });
+  // Clear any "waiting" placeholder so the menu isn't sandwiched.
+  const waiting = conv.querySelector('.conv-waiting');
+  if (waiting) waiting.remove();
+  conv.insertBefore(callout, conv.firstChild);
 }
 
 function clearChat() {
