@@ -224,11 +224,15 @@ function streamTranscriptToWs(sessionId, ws) {
     transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
       if (closed || ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
+      // Hand bytesRead to watchTranscript so its watcher starts from where
+      // we left off, not from byte 0. Without this, the watcher's own
+      // initial-read would replay the entire transcript a second time as
+      // transcript-delta frames, doubling every message on the client.
       unwatch = transcriptMod.watchTranscript(filePath, (newMsgs) => {
         if (!closed && ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
         }
-      });
+      }, { startByte: bytesRead });
     }).catch(() => {});
   }
 

@@ -201,8 +201,19 @@ async function readSimpleTurnsTail(jsonlPath, { maxLines = 300 } = {}) {
   return out.reverse();
 }
 
-function watchTranscript(jsonlPath, onNewMessages) {
-  let byteOffset = 0;
+// watchTranscript(jsonlPath, onNewMessages, opts?)
+// opts.startByte — byte offset to start watching from. Pass the bytesRead
+// value from a prior readNewMessages call so the watcher doesn't re-replay
+// content the caller has already consumed. Defaults to 0 (read whole file
+// on attach), but EVERY current caller does its own initial read first, so
+// they MUST pass startByte to avoid double-firing messages on attach.
+// Bug history: omitting startByte caused every message to render twice in
+// the readonly view after the streamTranscriptToWs refactor — owner-attach
+// did its own readNewMessages then called watchTranscript, and the
+// watcher's internal "initial read from 0" fired onNewMessages with the
+// full history a second time.
+function watchTranscript(jsonlPath, onNewMessages, opts = {}) {
+  let byteOffset = Number.isFinite(opts.startByte) ? opts.startByte : 0;
   let debounceTimer = null;
   let pollTimer = null;
   let watcher = null;
@@ -253,12 +264,15 @@ function watchTranscript(jsonlPath, onNewMessages) {
     }
   }
 
-  // Initial read
-  (async () => {
-    const { messages, bytesRead } = await readNewMessages(jsonlPath, 0);
-    byteOffset = bytesRead;
-    if (messages.length) onNewMessages(messages);
-  })();
+  // Initial read — only when caller didn't pass a startByte (legacy
+  // behaviour preserved for backwards compat).
+  if (!Number.isFinite(opts.startByte)) {
+    (async () => {
+      const { messages, bytesRead } = await readNewMessages(jsonlPath, 0);
+      byteOffset = bytesRead;
+      if (messages.length) onNewMessages(messages);
+    })();
+  }
 
   startWatching();
 

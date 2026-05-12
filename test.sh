@@ -249,6 +249,19 @@ test_new_session_readonly() {
   test "$(grep -c 'const stopTranscript = streamTranscriptToWs(' server/src/pty.js)" = "2" \
     && pass "pty.js: both attach paths use streamTranscriptToWs" \
     || fail "pty.js: both attach paths use streamTranscriptToWs"
+  # Regression: streamTranscriptToWs does readNewMessages(0) for the
+  # init send AND watchTranscript for live updates. Without passing
+  # bytesRead as startByte to watchTranscript, the watcher's own
+  # initial read from byte 0 fires onNewMessages with the full
+  # transcript a second time — every message renders TWICE on the
+  # client until the user scrolls past them. The fix passes startByte
+  # so the watcher picks up exactly where the init read finished.
+  grep -q 'startByte: bytesRead' server/src/pty.js \
+    && pass "pty.js: watchTranscript receives startByte to avoid replay" \
+    || fail "pty.js: watchTranscript receives startByte to avoid replay"
+  grep -q 'opts.startByte' server/src/transcript.js \
+    && pass "transcript.js: watchTranscript honors startByte opt" \
+    || fail "transcript.js: watchTranscript honors startByte opt"
   grep -q "startInReadonly: true" web/public/app.js \
     && pass "app.js: doSpawn opens new session in readonly view" \
     || fail "app.js: doSpawn opens new session in readonly view"
