@@ -535,6 +535,14 @@ function handleChatMessage(sessionId, session, user, text /* opts = {} */) {
   // response happened to end in '?'.
   if (user === ASSISTANT_USER) return;
 
+  // `/m <body>` is a short alias for `@myco <body>`. Rewrite BEFORE the
+  // slash/@myco branching below so the entire @myco pipeline (special
+  // keys, menu-pick shortcuts, prose handling, alive check, …) is the
+  // single source of truth. The CHAT HISTORY entry above preserves what
+  // the user actually typed ("/m hi") so viewers see the original intent.
+  const mAlias = text.match(/^\/m\s+([\s\S]+)/i);
+  if (mAlias) text = '@myco ' + mAlias[1];
+
   // (Note: the old proactive Shift+Tab auto-toggle that fired on every
   // human chat is removed. Claude now starts in accept-edits at spawn
   // via --permission-mode acceptEdits, so we don't need to nudge the

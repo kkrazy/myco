@@ -48,6 +48,12 @@ const COMMANDS = [
     handler: (ctx) => addPlanItem(ctx, 'Bug'),
   },
   {
+    names: ['m'],
+    summary: 'Short alias for @myco — send the rest of the line straight to the running Claude session',
+    usage: '/m <message>',
+    handler: handleMAlias,
+  },
+  {
     names: ['decide', 'pick', 'choose'],
     summary: 'Answer Claude\'s currently-pending dialog (e.g. plan-mode "what next" menu)',
     usage: '/decide <n>',
@@ -161,6 +167,14 @@ function addPlanItem(ctx, layer) {
 
 function handleFeature(ctx) {
   return handleIssue(ctx, { kind: 'feature', labels: ['enhancement'] });
+}
+
+// /m is a short alias for @myco. The actual rewrite happens earlier in
+// pty.handleChatMessage (BEFORE the slash dispatch), so by the time
+// THIS handler fires we know the user typed bare "/m" with no body.
+// We just send a usage reply so they know how to use it.
+function handleMAlias(ctx) {
+  ctx.reply('Usage: `/m <message>` — short alias for `@myco <message>`. Whatever follows is sent straight to the running Claude session.');
 }
 
 async function handleIssue(ctx, { kind, labels }) {
