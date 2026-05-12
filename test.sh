@@ -232,6 +232,31 @@ test_viewer_ws_handler_wired() {
   grep -q 'attachViewerWebSocket' server/src/index.js && pass "viewer WS routing" || fail "viewer WS routing"
 }
 
+test_new_session_readonly() {
+  # Regression: a freshly spawned session has no JSONL transcript for
+  # ~5 seconds while Claude initialises. Two bugs used to make this
+  # awkward — pty.js attachWebSocket (owner) resolved the transcript
+  # path ONCE at attach, so new owners never got transcript-init /
+  # transcript-delta; and openSession landed owners on an empty xterm
+  # instead of the readonly conv pane. The fixes wire both ends:
+  #   - server: shared streamTranscriptToWs() polls until the JSONL
+  #     appears, then init+watch (used by owner AND viewer paths).
+  #   - client: doSpawn passes { startInReadonly: true } to openSession.
+  grep -q 'function streamTranscriptToWs' server/src/pty.js \
+    && pass "pty.js: streamTranscriptToWs helper" \
+    || fail "pty.js: streamTranscriptToWs helper"
+  # attachWebSocket and attachViewerWebSocket should BOTH call the helper.
+  test "$(grep -c 'const stopTranscript = streamTranscriptToWs(' server/src/pty.js)" = "2" \
+    && pass "pty.js: both attach paths use streamTranscriptToWs" \
+    || fail "pty.js: both attach paths use streamTranscriptToWs"
+  grep -q "startInReadonly: true" web/public/app.js \
+    && pass "app.js: doSpawn opens new session in readonly view" \
+    || fail "app.js: doSpawn opens new session in readonly view"
+  grep -q 'opts.startInReadonly' web/public/app.js \
+    && pass "app.js: openSession honors startInReadonly" \
+    || fail "app.js: openSession honors startInReadonly"
+}
+
 test_chat_user_capture() {
   grep -q 'body.user' web/public/app.js && pass "chatUser capture" || fail "chatUser capture"
   grep -q 'from-self' web/public/app.js && pass "self chat alignment" || fail "self chat alignment"
@@ -402,6 +427,7 @@ run_static_checks() {
   test_conv_view_js
   test_at_myco_chat_handler
   test_viewer_ws_handler_wired
+  test_new_session_readonly
   test_chat_user_capture
   test_session_switching_clears_panes
   test_mermaid_html_init

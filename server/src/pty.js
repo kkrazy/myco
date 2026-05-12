@@ -190,11 +190,57 @@ function killSession(sessionId) {
   if (s) { s.kill(); sessions.delete(sessionId); }
 }
 
+// Wire transcript messages from a session's JSONL file to a websocket.
+// Handles the new-session race: a freshly spawned Claude takes ~5s to
+// write its first JSONL line, so resolveTranscriptPath returns null on
+// the initial attach. We send transcript-waiting, then poll every 2s
+// until the path resolves, then stream transcript-init followed by
+// transcript-delta on every appended message.
+//
+// Returns a cleanup function the caller wires onto ws.on('close').
+// Both attachWebSocket (owner) and attachViewerWebSocket (viewer) use
+// this — previously only the viewer path polled, which left owners on
+// fresh sessions without any transcript stream at all.
+function streamTranscriptToWs(sessionId, ws) {
+  let pollTimer = null;
+  let unwatch = null;
+  let closed = false;
+
+  function startWatching(filePath) {
+    transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
+      if (closed || ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
+      unwatch = transcriptMod.watchTranscript(filePath, (newMsgs) => {
+        if (!closed && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
+        }
+      });
+    }).catch(() => {});
+  }
+
+  const initialPath = transcriptMod.resolveTranscriptPath(sessionId);
+  if (initialPath) {
+    startWatching(initialPath);
+  } else {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'transcript-waiting' }));
+    pollTimer = setInterval(() => {
+      if (closed || ws.readyState !== ws.OPEN) { clearInterval(pollTimer); pollTimer = null; return; }
+      const p = transcriptMod.resolveTranscriptPath(sessionId);
+      if (p) { clearInterval(pollTimer); pollTimer = null; startWatching(p); }
+    }, 2000);
+  }
+
+  return function cleanup() {
+    closed = true;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (unwatch) { unwatch(); unwatch = null; }
+  };
+}
+
 function attachWebSocket(session, ws, opts = {}) {
   const readOnly = !!opts.readOnly;
   const user = opts.user || null;
   const sessionId = session.sessionId;
-  let unwatchTranscript = null;
 
   // Replay ring buffer first so reconnects see prior context.
   const replay = Buffer.concat(session.buffer.map((d) => Buffer.from(d, 'utf8')));
@@ -209,21 +255,9 @@ function attachWebSocket(session, ws, opts = {}) {
   }
 
   // Owners also receive the structured transcript so they can flip to a
-  // "preview as viewer" mode in the UI without re-fetching. Cheap to keep
-  // open: one fs.watch + tail-read per session. Skipped when the JSONL
-  // path isn't resolvable yet (first attach before claude has spawned).
-  const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
-  if (transcriptPath) {
-    transcriptMod.readNewMessages(transcriptPath, 0).then(({ messages, bytesRead }) => {
-      if (ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
-      unwatchTranscript = transcriptMod.watchTranscript(transcriptPath, (newMsgs) => {
-        if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
-        }
-      });
-    }).catch(() => {});
-  }
+  // "preview as viewer" mode in the UI without re-fetching. The helper
+  // handles the new-session race (JSONL not yet written).
+  const stopTranscript = streamTranscriptToWs(sessionId, ws);
 
   const onData = (data) => {
     if (ws.readyState !== ws.OPEN) return;
@@ -271,14 +305,13 @@ function attachWebSocket(session, ws, opts = {}) {
     session.off('data', onData);
     session.off('exit', onExit);
     session.off('chat', onChat);
-    if (unwatchTranscript) unwatchTranscript();
+    stopTranscript();
   });
 }
 
 function attachViewerWebSocket(session, ws, opts = {}) {
   const user = opts.user || null;
   const sessionId = session.sessionId;
-  let unwatch = null;
 
   // Chat relay (same as owner connection)
   const history = sessionsMod.getChatHistory(sessionId);
@@ -301,33 +334,9 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   // detection in handleChatPostfixes, but no per-snapshot WS frames are
   // sent to viewers.
 
-  // Stream structured transcript (clean content from Claude's JSONL)
-  const transcriptPath = transcriptMod.resolveTranscriptPath(sessionId);
-  if (!transcriptPath) {
-    ws.send(JSON.stringify({ t: 'transcript-waiting' }));
-    const pollInterval = setInterval(() => {
-      if (ws.readyState !== ws.OPEN) { clearInterval(pollInterval); return; }
-      const p = transcriptMod.resolveTranscriptPath(sessionId);
-      if (p) { clearInterval(pollInterval); streamTranscript(p); }
-    }, 2000);
-    ws.on('close', () => { clearInterval(pollInterval); session.off('chat', onChat); if (unwatch) unwatch(); });
-    ws.on('message', handleViewerInbound);
-    return;
-  }
-
-  streamTranscript(transcriptPath);
-
-  function streamTranscript(filePath) {
-    transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
-      if (ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
-      unwatch = transcriptMod.watchTranscript(filePath, (newMsgs) => {
-        if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
-        }
-      });
-    }).catch(() => {});
-  }
+  // Stream structured transcript via the shared helper — handles the
+  // new-session race where the JSONL file doesn't exist yet.
+  const stopTranscript = streamTranscriptToWs(sessionId, ws);
 
   function handleViewerInbound(raw) {
     let msg;
@@ -347,7 +356,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   ws.on('message', handleViewerInbound);
   ws.on('close', () => {
     session.off('chat', onChat);
-    if (unwatch) unwatch();
+    stopTranscript();
   });
 }
 

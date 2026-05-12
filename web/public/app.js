@@ -1079,7 +1079,7 @@ function _buildAttachQuery(isShared) {
   return qs ? `?${qs}` : '';
 }
 
-function openSession(id) {
+function openSession(id, opts = {}) {
   // Re-tap of the same session: reconnect if WS is dead, otherwise just bring into view.
   if (state.activeId === id && state.ws && state.ws.readyState === WebSocket.OPEN) {
     if (window.innerWidth <= 900) setSidebar(true);
@@ -1103,6 +1103,20 @@ function openSession(id) {
     if (conv) conv.innerHTML = '<div class="conv-waiting">Connecting…</div>';
   } else {
     _initOwnerXterm();
+    // Newly-spawned sessions: prefer the structured-transcript pane over
+    // an empty xterm while Claude is initialising. The xterm is built
+    // anyway (so the readonly-preview toggle has somewhere to flip back
+    // to once Claude is ready), but it's hidden behind the conv pane.
+    if (opts.startInReadonly) {
+      state.previewAsViewer = true;
+      document.getElementById('btn-preview-readonly')?.classList.add('active');
+      showConversationView();
+      const conv = document.getElementById('conv-content');
+      if (conv && !conv.innerHTML.trim()) {
+        conv.innerHTML = '<div class="conv-waiting">Waiting for Claude to start…</div>';
+      }
+      applyReadOnly(state.chatUser || 'you');
+    }
   }
 
   // websocket with auto-reconnect. `connect` is closure-bound to `id` and
@@ -1484,7 +1498,12 @@ async function doSpawn() {
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
     closeSpawnModal();
     await refreshSessions();
-    openSession(body.session_id);
+    // Newly-spawned sessions land on the readonly/transcript view rather
+    // than an empty xterm — Claude takes a few seconds to render its
+    // welcome banner, and the structured-transcript pane gives a cleaner
+    // "Waiting for Claude…" state in the meantime. Owner can toggle to
+    // the live xterm via the eye button once Claude is ready.
+    openSession(body.session_id, { startInReadonly: true });
   } catch (err) {
     errEl.textContent = err.message;
     errEl.hidden = false;
