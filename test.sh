@@ -342,12 +342,12 @@ test_new_session_readonly() {
   grep -q 'opts.startByte' server/src/transcript.js \
     && pass "transcript.js: watchTranscript honors startByte opt" \
     || fail "transcript.js: watchTranscript honors startByte opt"
-  grep -q "startInReadonly: true" web/public/app.js \
-    && pass "app.js: doSpawn opens new session in readonly view" \
-    || fail "app.js: doSpawn opens new session in readonly view"
-  grep -q 'opts.startInReadonly' web/public/app.js \
-    && pass "app.js: openSession honors startInReadonly" \
-    || fail "app.js: openSession honors startInReadonly"
+  # NOTE: the old startInReadonly auto-switch was reverted — interaction
+  # now happens in the chat pane via the typing-dots indicator + the
+  # buffered-reply path (see test_chat_window guards below). doSpawn
+  # opens new sessions on the live xterm, and the user reads/sends in
+  # chat. The negative guard for the auto-switch lives in
+  # test_chat_window.
   # Regression: MenuInterceptor broadcasts pending TUI dialogs into
   # chat with meta.kind === 'menu'. The picker is rendered INLINE
   # inside each menu chat message — only the most recent one keeps its
@@ -385,6 +385,29 @@ test_new_session_readonly() {
   grep -q '\.chat-menu-opt' web/public/styles.css \
     && pass "styles.css: .chat-menu-opt styling" \
     || fail "styles.css: .chat-menu-opt styling"
+  # Chat-only flow: when @myco sent, a typing indicator appears in chat;
+  # assistant transcript text is buffered and posted as a chat message
+  # after a quiet window so the user gets the FINAL result without
+  # intermediate noise. The main pane is NOT auto-switched on send.
+  grep -q '_markAwaitingClaude' web/public/app.js \
+    && pass "app.js: @myco marks awaiting-claude" \
+    || fail "app.js: @myco marks awaiting-claude"
+  grep -q '_onTranscriptDeltaForChat' web/public/app.js \
+    && pass "app.js: transcript-delta routed into chat" \
+    || fail "app.js: transcript-delta routed into chat"
+  grep -q 'CLAUDE_REPLY_IDLE_MS' web/public/app.js \
+    && pass "app.js: idle-debounce constant defined" \
+    || fail "app.js: idle-debounce constant defined"
+  grep -q '_postBufferedClaudeReplyToChat' web/public/app.js \
+    && pass "app.js: buffered reply posted to chat" \
+    || fail "app.js: buffered reply posted to chat"
+  grep -q 'claude-typing-dots' web/public/styles.css \
+    && pass "styles.css: typing-dots animation" \
+    || fail "styles.css: typing-dots animation"
+  # Negative guard: doSpawn must NOT auto-switch new sessions to readonly.
+  grep -qF 'openSession(body.session_id, { startInReadonly: true })' web/public/app.js \
+    && fail "doSpawn auto-switched new sessions to readonly (regression)" \
+    || pass "doSpawn no longer auto-switches new sessions to readonly"
   # Safety net: if a brand-new session lands on the readonly view and
   # neither a menu callout nor any transcript content arrives within
   # READONLY_FALLBACK_MS, auto-flip back to the live xterm so the user

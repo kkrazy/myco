@@ -1117,24 +1117,10 @@ function openSession(id, opts = {}) {
     // an empty xterm while Claude is initialising. The xterm is built
     // anyway (so the readonly-preview toggle has somewhere to flip back
     // to once Claude is ready), but it's hidden behind the conv pane.
-    if (opts.startInReadonly) {
-      state.previewAsViewer = true;
-      document.getElementById('btn-preview-readonly')?.classList.add('active');
-      showConversationView();
-      const conv = document.getElementById('conv-content');
-      if (conv && !conv.innerHTML.trim()) {
-        conv.innerHTML = '<div class="conv-waiting">Waiting for Claude to start…</div>';
-      }
-      applyReadOnly(state.chatUser || 'you');
-      // Watchdog: if nothing useful arrives in the readonly view within
-      // READONLY_FALLBACK_MS (no menu callout, no transcript content),
-      // flip back to the live xterm. Two scenarios hit this:
-      //   (a) Claude is just sitting at its prompt waiting for input
-      //       (no menu, no JSONL yet) — user needs to see the prompt.
-      //   (b) Something went wrong server-side and no frames will come.
-      // Either way the user shouldn't be trapped on the waiting pane.
-      _armReadonlyFallback(id);
-    }
+    // The old `startInReadonly` auto-switch to the conv pane was removed
+    // — interaction now happens in the chat pane (typing-dots indicator
+    // + debounced assistant-reply posting). The xterm stays mounted so
+    // the 👁 toggle has somewhere to flip back to.
   }
 
   // websocket with auto-reconnect. `connect` is closure-bound to `id` and
@@ -1184,8 +1170,8 @@ function openSession(id, opts = {}) {
         if (newMsgs.length) _cancelReadonlyFallback();
         state.transcriptMessages.push(...newMsgs);
         appendTranscriptMessages(newMsgs);
+        _onTranscriptDeltaForChat(newMsgs);
         if (newMsgs.some((m) => m && m.role === 'assistant')) {
-          hideMycoWaiting();
           // Claude is now producing transcript output → any earlier
           // pending menu (trust-folder etc.) has been resolved.
           if (state.pendingMenu) {
@@ -1526,12 +1512,11 @@ async function doSpawn() {
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
     closeSpawnModal();
     await refreshSessions();
-    // Newly-spawned sessions land on the readonly/transcript view rather
-    // than an empty xterm — Claude takes a few seconds to render its
-    // welcome banner, and the structured-transcript pane gives a cleaner
-    // "Waiting for Claude…" state in the meantime. Owner can toggle to
-    // the live xterm via the eye button once Claude is ready.
-    openSession(body.session_id, { startInReadonly: true });
+    // Land on the xterm by default; all interaction happens in the
+    // chat pane anyway (see _renderClaudeTyping + the assistant-reply
+    // debounce path). The user can flip to the readonly view via the
+    // 👁 button if they want to see the structured transcript.
+    openSession(body.session_id);
   } catch (err) {
     errEl.textContent = err.message;
     errEl.hidden = false;
@@ -1762,6 +1747,94 @@ function formatChatTs(iso) {
   } catch { return ''; }
 }
 
+// Chat-only flow for @myco messages.
+//
+// When the user sends an @myco message, the conversation continues to
+// happen inside the chat pane: a typing-dots indicator appears under
+// their message, claude's text is streamed into rec.chat (via the
+// transcript JSONL → transcript-delta WS frames), and once claude has
+// been quiet for CLAUDE_REPLY_IDLE_MS the latest assistant text is
+// posted as a chat message from `claude`. The conversation pane (👁
+// readonly view) still has the raw structured transcript for users who
+// want it, but the chat pane is the primary surface.
+//
+// We DON'T touch the main pane focus here — sending @myco doesn't flip
+// the user to the terminal or conv view; they stay in chat.
+const CLAUDE_REPLY_IDLE_MS = 2000;     // post the buffered reply after this much quiet
+const CLAUDE_REPLY_TOOL_MAX_MS = 60000; // safety cap even if tools keep firing
+
+function _markAwaitingClaude() {
+  state.awaitingClaude = true;
+  state.pendingClaudeText = '';
+  state.pendingClaudeToolCalls = 0;
+  state._claudeReplyDeadline = Date.now() + CLAUDE_REPLY_TOOL_MAX_MS;
+  _renderClaudeTyping();
+}
+
+// Called from the transcript-delta WS frame handler whenever new
+// transcript messages arrive. Buffers the latest assistant text and
+// schedules a post when claude has been idle long enough.
+function _onTranscriptDeltaForChat(messages) {
+  if (!state.awaitingClaude) return;
+  let sawSomething = false;
+  for (const m of messages) {
+    if (!m) continue;
+    if (m.role === 'assistant') {
+      sawSomething = true;
+      if (m.text && m.text.trim()) state.pendingClaudeText = m.text.trim();
+      if (Array.isArray(m.toolCalls)) state.pendingClaudeToolCalls += m.toolCalls.length;
+    } else if (m.role === 'tool_result') {
+      sawSomething = true;  // claude is still working
+    }
+  }
+  if (!sawSomething) return;
+  // Reset the idle timer — claude is still producing output.
+  if (state._claudeReplyTimer) clearTimeout(state._claudeReplyTimer);
+  const remaining = Math.max(0, (state._claudeReplyDeadline || 0) - Date.now());
+  const delay = Math.min(CLAUDE_REPLY_IDLE_MS, Math.max(500, remaining));
+  state._claudeReplyTimer = setTimeout(_postBufferedClaudeReplyToChat, delay);
+}
+
+function _postBufferedClaudeReplyToChat() {
+  if (state._claudeReplyTimer) { clearTimeout(state._claudeReplyTimer); state._claudeReplyTimer = null; }
+  if (!state.awaitingClaude) return;
+  state.awaitingClaude = false;
+  const text = state.pendingClaudeText || '(Claude finished without a text reply.)';
+  const tools = state.pendingClaudeToolCalls;
+  state.pendingClaudeText = '';
+  state.pendingClaudeToolCalls = 0;
+  // Local-only chat row — not persisted server-side, just rendered
+  // here. On reconnect, applyChatHistory will reset state.chatMessages
+  // from the server's persisted history (which doesn't include these),
+  // so we don't get duplicates.
+  const summary = tools ? `\n\n_(${tools} tool call${tools === 1 ? '' : 's'} along the way)_` : '';
+  state.chatMessages.push({
+    user: 'claude',
+    text: text + summary,
+    ts: new Date().toISOString(),
+    _localOnly: true,
+  });
+  renderChatPane(/*scrollToBottom*/ true);
+  _renderClaudeTyping();
+}
+
+function _renderClaudeTyping() {
+  let host = document.getElementById('claude-typing');
+  if (!host) {
+    const list = document.getElementById('chat-messages');
+    if (!list || !list.parentNode) return;
+    host = document.createElement('div');
+    host.id = 'claude-typing';
+    host.className = 'claude-typing';
+    host.innerHTML = '<span class="claude-typing-dots"><span></span><span></span><span></span></span> <span class="claude-typing-label">Claude is working…</span>';
+    list.insertAdjacentElement('afterend', host);
+  }
+  host.hidden = !state.awaitingClaude;
+  if (state.awaitingClaude) {
+    requestAnimationFrame(() => { host.scrollIntoView({ block: 'end' }); });
+  }
+}
+
 // Send an inline menu pick via the dedicated WS frame. Bypasses chat
 // entirely so the click on a pending-menu callout button doesn't show up
 // as a `/decide N` message in the discussion. Silent-drop if the WS is
@@ -1808,14 +1881,12 @@ function sendChatMessage(text) {
       state.outboundChat.push({ text: trimmed, ts: Date.now() });
     }
   }
-  // @myco messages get injected into the running Claude session. On mobile
-  // the chat pane is a full-screen overlay, so close it so the user can
-  // immediately see Claude's response in the session pane behind it. On
-  // desktop the chat pane is a side column that doesn't cover the session
-  // view — leave it open so the user can keep chatting.
+  // @myco messages go into the running Claude session. Keep the user in
+  // the chat pane — that's where the typing-dots indicator and claude's
+  // reply will land. The transcript view stays available via the 👁
+  // toggle for users who want the raw stream.
   if (/^@myco\s+/i.test(trimmed)) {
-    if (window.innerWidth <= 900) setChatPane(false);
-    showMycoWaiting();
+    _markAwaitingClaude();
   }
   return true;
 }
