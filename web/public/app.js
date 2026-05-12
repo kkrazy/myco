@@ -268,14 +268,31 @@ const IS_TOUCH_DEVICE = (() => {
   } catch { return false; }
 })();
 
+// The main pane has three mutually-exclusive sub-panes: terminal-wrap,
+// conversation-wrap, files-wrap. Always hide the other two when switching;
+// otherwise (especially when the user toggles preview-as-viewer while
+// files is open) the panes stack and the file explorer disappears
+// behind / beside the transcript.
+function _hideMainPaneSiblings(keep) {
+  for (const id of ['terminal-wrap', 'conversation-wrap', 'files-wrap']) {
+    if (id === keep) continue;
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  if (keep !== 'files-wrap') {
+    state.files.visible = false;
+    document.getElementById('btn-files')?.classList.remove('active');
+  }
+}
+
 function showConversationView() {
-  document.getElementById('terminal-wrap').hidden = true;
+  _hideMainPaneSiblings('conversation-wrap');
   document.getElementById('conversation-wrap').hidden = false;
   updateChatButton();
 }
 
 function showTerminalView() {
-  document.getElementById('conversation-wrap').hidden = true;
+  _hideMainPaneSiblings('terminal-wrap');
   document.getElementById('terminal-wrap').hidden = false;
   updateChatButton();
   // xterm canvas needs a refit after being unhidden since clientWidth was 0.
