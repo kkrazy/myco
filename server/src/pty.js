@@ -69,6 +69,20 @@ class PtySession extends EventEmitter {
     this._menuDebounce = null;
     if (!this.headless) return;
     const change = this.menuInterceptor.detectChange(this.headless);
+    // Debug: when MYCO_MENU_DEBUG=1, dump the headless visible text on
+    // every detectChange call so we can correlate what the scanner sees
+    // with what claude is actually rendering. Throttled to one dump per
+    // 3s per session to keep logs readable.
+    if (process.env.MYCO_MENU_DEBUG === '1') {
+      const now = Date.now();
+      if (!this._lastMenuDump || now - this._lastMenuDump > 3000) {
+        this._lastMenuDump = now;
+        let snap = '';
+        try { snap = this.getVisibleText().slice(-1200); } catch (e) { snap = `(getVisibleText threw: ${e.message})`; }
+        const tag = change ? change.kind : 'noChange';
+        console.log(`[menu-debug] ${this.sessionId} scan=${tag} headless tail:\n${snap}\n[menu-debug end]`);
+      }
+    }
     if (!change) return;
     if (change.kind === 'newMenu') {
       this.pendingMenu = change.menu;
