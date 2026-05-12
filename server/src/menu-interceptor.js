@@ -78,49 +78,62 @@ class MenuInterceptor {
     // its label is the text between this marker and the next one (or the
     // end of the line). Multi-option-per-line is supported because some
     // dialogs pack options compactly: "[4] Type something. [5] Chat …".
-    const options = [];
-    let firstOptIdx = -1;
+    const allOptions = [];
     for (let i = 0; i < lines.length; i++) {
-      const lineOpts = extractOptionsOnLine(lines[i], i);
-      for (const o of lineOpts) {
-        options.push(o);
-        if (firstOptIdx === -1) firstOptIdx = i;
-      }
+      for (const o of extractOptionsOnLine(lines[i], i)) allOptions.push(o);
     }
-    if (options.length < 2) return null;
-    // Options must be roughly contiguous in source. The gap limit is
-    // generous (MENU_MAX_OPTION_GAP_LINES) so multi-line option
-    // descriptions and a single horizontal divider don't break detection
-    // — the contiguous-numbers check below is the real false-positive
-    // filter.
-    for (let i = 1; i < options.length; i++) {
-      if (options[i].lineIdx - options[i - 1].lineIdx > MENU_MAX_OPTION_GAP_LINES) return null;
+    if (allOptions.length < 2) return null;
+
+    // Split into maximal runs of contiguously-numbered options (each
+    // option's n must equal the previous + 1 AND lines must be within
+    // MENU_MAX_OPTION_GAP_LINES). Without this split, a claude
+    // assistant turn that contains BOTH a numbered plan body
+    // ("1. DB schema 2. Bus 3. Worker 4. Gateway 5. SDK 6. Inbox") AND
+    // a real menu below it ("❯ 1. Yes  2. No  3. Refine  4. Tell Claude")
+    // would have its options collected as [1..6, 1..4] — the 6 → 1
+    // discontinuity used to abort detection. Splitting lets us
+    // recognise the bottom menu as its own complete run.
+    const runs = [];
+    let cur = [];
+    for (const o of allOptions) {
+      if (cur.length === 0) { cur.push(o); continue; }
+      const prev = cur[cur.length - 1];
+      const numOK = o.n === prev.n + 1;
+      const gapOK = o.lineIdx - prev.lineIdx <= MENU_MAX_OPTION_GAP_LINES;
+      if (numOK && gapOK) cur.push(o);
+      else { if (cur.length >= 2) runs.push(cur); cur = [o]; }
     }
-    // Sanity: numbers must be contiguous (each = previous + 1). We used to
-    // require starting at 1, but some Claude Code dialogs (and any partial
-    // viewport scan) can show menus that start higher — e.g. "[4] foo /
-    // [5] bar" when the viewport cuts off the top of a longer dialog.
-    const ns = options.map((o) => o.n);
-    for (let i = 1; i < ns.length; i++) {
-      if (ns[i] !== ns[i - 1] + 1) return null;
+    if (cur.length >= 2) runs.push(cur);
+    if (!runs.length) return null;
+
+    // Pick the LAST run that has a `❯` cursor on at least one of its
+    // option lines. Claude code's TUI always paints the cursor on the
+    // currently-selected option of an active menu; plain numbered prose
+    // doesn't. Bottom-most wins when there are multiple cursored runs
+    // (rare in practice — the active dialog is always at the bottom).
+    let chosen = null;
+    for (const run of runs) {
+      if (run.some((o) => MENU_CURSOR_RE.test(lines[o.lineIdx] || ''))) chosen = run;
     }
-    // False-positive guard: require at least one option's LINE to
-    // carry the `❯` cursor marker that claude code's TUI always paints
-    // on the currently-selected option. Without this, claude's own
-    // generated plan bodies (long numbered bullet lists in assistant
-    // text) get falsely broadcast as menus — every plan with 4+
-    // numbered points would otherwise pop a callout asking the user
-    // to "pick" a bullet. See pty-patterns.js MENU_CURSOR_RE.
-    if (!options.some((o) => MENU_CURSOR_RE.test(lines[o.lineIdx] || ''))) return null;
+    if (!chosen) return null;
+
+    const options = chosen;
+    const firstOptIdx = chosen[0].lineIdx;
+    const lastOptIdx = chosen[chosen.length - 1].lineIdx;
+
     // Join multi-line option descriptions. For each option, any non-empty
     // line between this option's lineIdx and the NEXT option's lineIdx
     // (exclusive) that isn't itself an option marker line is treated as
     // continuation and appended to the label. Box-drawing / divider lines
     // (composed of └─╌╶ etc.) are skipped — they're claude's section
     // separators inside multi-group menus, not part of any option.
+    // Stop joining at `lastOptIdx + GAP` so we don't eat the input
+    // editor's separator/status lines below the menu.
     for (let i = 0; i < options.length; i++) {
       const startLine = options[i].lineIdx;
-      const endLine = i + 1 < options.length ? options[i + 1].lineIdx : lines.length;
+      const endLine = i + 1 < options.length
+        ? options[i + 1].lineIdx
+        : Math.min(lines.length, lastOptIdx + 1 + MENU_MAX_OPTION_GAP_LINES);
       const extra = [];
       for (let j = startLine + 1; j < endLine; j++) {
         const t = (lines[j] || '').trim();

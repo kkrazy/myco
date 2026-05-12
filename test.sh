@@ -1048,6 +1048,55 @@ test_chat_window() {
   else
     skip "MenuInterceptor cursor-guard (no host node)"
   fi
+  # Regression (demo010 04:24): assistant turn renders a plan body
+  # containing numbered bullets (1..6) followed by claude code's real
+  # plan-confirmation menu (1..4 with ❯ cursor). Old code collected
+  # ALL options [1..6, 1..4] and bailed at the 6→1 discontinuity, so
+  # the active menu was never broadcast. Splitting into runs and
+  # picking the cursored one fixes it.
+  if have_node; then
+    node -e "
+      const { MenuInterceptor } = require('./server/src/menu-interceptor');
+      const lines = [];
+      // Plan body — numbered prose, NO cursor:
+      lines.push(' 1. Database — notification schema');
+      lines.push(' 2. Message bus — Redis pub/sub');
+      lines.push(' 3. Worker — consumes events');
+      lines.push(' 4. WS Gateway — JWT auth');
+      lines.push(' 5. Client SDK — reconnect/backoff');
+      lines.push(' 6. Inbox UI — list + unread badge');
+      lines.push('');
+      lines.push(' ---');
+      lines.push(' Files to Create / Modify');
+      lines.push('');
+      lines.push(' - .github/workflows/ci.yml');
+      lines.push('');
+      lines.push(' Claude has written up a plan and is ready to execute. Would you like to proceed?');
+      lines.push('');
+      // Real menu — cursored:
+      lines.push(' ❯ 1. Yes, and use auto mode');
+      lines.push('   2. Yes, manually approve edits');
+      lines.push('   3. No, refine with Ultraplan on Claude Code on the web');
+      lines.push('   4. Tell Claude what to change');
+      lines.push('      shift+tab to approve with this feedback');
+      const rows = 50;
+      while (lines.length < rows) lines.push('');
+      const fake = { rows, buffer: { active: { viewportY: 0,
+        getLine: (y) => lines[y] != null ? ({ translateToString: () => lines[y] }) : null }}};
+      const r = (new MenuInterceptor()).detectChange(fake);
+      if (!r || r.kind !== 'newMenu') throw new Error('expected newMenu for cursored bottom run, got ' + JSON.stringify(r));
+      if (r.menu.options.length !== 4) throw new Error('expected 4 options (the real menu), got ' + r.menu.options.length + ': ' + JSON.stringify(r.menu.options.map(o=>o.n)));
+      if (r.menu.options[0].n !== 1) throw new Error('expected first option n=1, got ' + r.menu.options[0].n);
+      if (!/auto mode/i.test(r.menu.options[0].label)) throw new Error('option 1 label wrong: ' + r.menu.options[0].label);
+      // The plan bullets must not appear in the labels.
+      for (const o of r.menu.options) {
+        if (/database|redis pub|client sdk|inbox ui/i.test(o.label)) throw new Error('plan bullet leaked into option label: ' + o.label);
+      }
+    " && pass "MenuInterceptor picks cursored run when prose bullets are above" \
+      || fail "MenuInterceptor picks cursored run when prose bullets are above"
+  else
+    skip "MenuInterceptor mixed-runs (no host node)"
+  fi
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: while a TUI menu is pending in the session, an @myco
