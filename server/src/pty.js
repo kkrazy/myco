@@ -263,42 +263,53 @@ function killSession(sessionId) {
   if (s) { s.kill(); sessions.delete(sessionId); }
 }
 
-// Handle a `{t:'menu-pick', n}` frame from the client — the inline-callout
-// alternative to typing `/decide N` in chat.
+// Handle a `{t:'menu-pick', n, hash?}` frame from the client — the
+// inline-callout alternative to typing `/decide N` in chat.
 //
 // Two effects, independently gated:
 //
 //   (A) PERSIST the answered state on the corresponding chat message
 //       in rec.chat so a page refresh / WS reconnect / future
-//       container restart all keep the picker disabled. Gated only on
-//       (n in this menu's persisted options), so it works even when
-//       session.pendingMenu has been cleared (in-memory state lost
-//       on restart, or claude already moved past the dialog).
+//       container restart all keep the picker disabled. When the
+//       client provides `hash`, the row is located by that exact menu
+//       identity — preventing rapid-dialog-turnover races where
+//       multiple menus were broadcast and the user clicks an older one.
+//       Falls back to "latest unanswered" for back-compat with clients
+//       that haven't been upgraded yet.
 //
 //   (B) PTY WRITE the digit + \r to send the pick into the live
 //       Claude session. Gated on (session alive AND session.pendingMenu
-//       still matches), to avoid injecting stray "N" keystrokes when
-//       claude is past the menu already (which would surface as
-//       "your message '3' is ambiguous" in a later turn).
+//       still matches the hash). If the dialog claude is currently
+//       showing isn't the one the user clicked (claude already moved
+//       on to a new menu), DROP the PTY write — landing the digit on
+//       the wrong menu would silently answer the wrong question.
 //
-// Previously the entire body of this function was gated on (B), so
-// post-restart clicks silently no-op'd on both surfaces and the user
-// saw the picker as still-clickable after a refresh.
-function handleMenuPick(sessionId, session, n) {
+// Back-compat: when `hash` is omitted (older client), only `pendingMenu
+// .options` is consulted (the original behaviour). New clients always
+// send the hash and get the race-free path.
+function handleMenuPick(sessionId, session, n, hash) {
   if (!Number.isFinite(n) || n < 1 || n > 9) return;
-  _markLatestMenuChatAnswered(sessionId, n);
+  _markMenuChatAnswered(sessionId, n, hash);
   if (!session || !session.alive) return;
   const pending = session.pendingMenu;
   if (!pending || !Array.isArray(pending.options)) return;
+  // Reject the PTY write if the click targeted a menu that is no
+  // longer the one claude is showing — the digit would land on a
+  // different question.
+  if (hash && pending.hash && pending.hash !== hash) {
+    console.log(`[menu-pick] ${sessionId} dropped pick n=${n} — stale (clicked hash=${hash.slice(0,16)} != pending=${pending.hash.slice(0,16)})`);
+    return;
+  }
   if (!pending.options.some((o) => o.n === n)) return;
   session.write(String(n) + '\r');
   session.pendingMenu = null;
 }
 
-// Stamp answered + pickedN onto the most recent menu-broadcast chat
-// message. Validates n against the message's own persisted options
-// (defensive against stale clicks).
-function _markLatestMenuChatAnswered(sessionId, n) {
+// Stamp answered + pickedN onto a menu-broadcast chat message. When
+// `hash` is provided, find the row whose `meta.menu.hash` equals it
+// (race-free across multiple unanswered menus). When omitted, fall
+// back to "latest unanswered" for back-compat with older clients.
+function _markMenuChatAnswered(sessionId, n, hash) {
   if (!sessionId) return;
   try {
     const store = sessionsMod.loadStore();
@@ -307,13 +318,19 @@ function _markLatestMenuChatAnswered(sessionId, n) {
     for (let i = rec.chat.length - 1; i >= 0; i--) {
       const m = rec.chat[i];
       if (!m || !m.meta || m.meta.kind !== 'menu') continue;
-      if (m.meta.answered) return;     // already marked — nothing to do
+      if (hash) {
+        const mh = m.meta.menu && m.meta.menu.hash;
+        if (mh !== hash) continue;          // wrong row, keep searching
+        if (m.meta.answered) return;        // already marked
+      } else {
+        if (m.meta.answered) return;        // latest is already answered → done
+      }
       const opts = (m.meta.menu && m.meta.menu.options) || [];
       if (!opts.some((o) => o.n === n)) return;   // n not valid for this menu
       m.meta.answered = true;
       m.meta.pickedN = n;
       sessionsMod.saveStore();
-      console.log(`[menu-pick] ${sessionId} stamped answered=true pickedN=${n}`);
+      console.log(`[menu-pick] ${sessionId} stamped answered=true pickedN=${n}${hash ? ' (byHash)' : ''}`);
       return;
     }
   } catch (err) {
@@ -441,7 +458,10 @@ function attachWebSocket(session, ws, opts = {}) {
       // Inline reply to a pending TUI menu — bypasses chat entirely so the
       // user's click on a callout button doesn't pollute the discussion
       // with `/decide N` messages. See handleMenuPick for the gating.
-      if (user) handleMenuPick(sessionId, session, msg.n | 0);
+      // The optional `hash` ties the pick to the specific menu that
+      // was displayed when the user clicked (race-free across rapid
+      // dialog turnover).
+      if (user) handleMenuPick(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
       return;
     }
     if (readOnly) return; // share-link viewers can watch but not type / resize
@@ -510,8 +530,9 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     }
     if (msg.t === 'menu-pick' && Number.isFinite(msg.n) && user) {
       // Inline menu pick — same as the owner path; we keep this enabled for
-      // viewers because chat steering is open to them anyway.
-      handleMenuPick(sessionId, session, msg.n | 0);
+      // viewers because chat steering is open to them anyway. Hash
+      // forwarding is identical to the owner branch.
+      handleMenuPick(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
     }
   }
 
@@ -800,6 +821,8 @@ module.exports = {
   attachWebSocket,
   attachViewerWebSocket,
   handleChatMessage,
+  // Exposed for the menu-pick race-condition regression test.
+  handleMenuPick,
   // Re-exported for menu-broadcast.test.js — the live implementations now
   // live in menu.js; this surface stays so the test contract (and any
   // outside caller that pulls the menu helpers off ptyMod) keeps working.

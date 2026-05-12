@@ -1665,7 +1665,8 @@ function _bindChatMenuClicks() {
     if (!btn || btn.disabled) return;
     const n = Number(btn.dataset.n);
     if (!Number.isFinite(n) || n < 1) return;
-    if (!sendMenuPick(n)) return;
+    const hash = btn.dataset.hash || '';
+    if (!sendMenuPick(n, hash)) return;
     state.pendingMenu = null;
     // Mark the underlying chat message as answered so subsequent
     // re-renders (claude's streaming reply will trigger many) keep
@@ -1793,8 +1794,15 @@ function renderChatMessage(m, isActiveMenu) {
     const label = matched ? matched.label : '';
     optsHtml = `<div class="chat-menu-resolved">✓ Picked [${pickedN}]${label ? ' ' + escHtml(label) : ''}</div>`;
   } else if (menuOpts && isActiveMenu) {
+    // data-hash stamps the click with the specific menu's identity so
+    // the server can validate that the user's pick still corresponds
+    // to the menu currently displayed in Claude's TUI — if another
+    // menu has since taken its place (parallel tool calls, rapid
+    // dialog turnover), the pick is dropped instead of silently
+    // answering the wrong question.
+    const menuHash = (m.meta.menu && m.meta.menu.hash) || '';
     optsHtml = `<div class="chat-menu-opts">${menuOpts.map((o) =>
-      `<button type="button" class="chat-menu-opt" data-n="${o.n}">[${o.n}] ${escHtml(o.label)}</button>`
+      `<button type="button" class="chat-menu-opt" data-n="${o.n}" data-hash="${escHtml(menuHash)}">[${o.n}] ${escHtml(o.label)}</button>`
     ).join('')}<div class="chat-menu-hint">Pick here — goes straight to the session, no chat post.</div></div>`;
   } else if (menuOpts) {
     // Menu broadcast that's no longer the latest AND has no recorded
@@ -2009,11 +2017,19 @@ function _setClaudeStatusLine(text) {
 // entirely so the click on a pending-menu callout button doesn't show up
 // as a `/decide N` message in the discussion. Silent-drop if the WS is
 // reconnecting — the next menu broadcast will repopulate the callout.
-function sendMenuPick(n) {
+//
+// The optional `hash` is the identity of the specific menu the user
+// clicked (from m.meta.menu.hash). The server uses it to verify that
+// the same dialog is still on screen before injecting the digit into
+// the PTY — without it, rapid dialog turnover (parallel tool calls,
+// auto-resolved menus) could land a stale pick on the wrong menu.
+function sendMenuPick(n, hash) {
   if (!Number.isFinite(n) || n < 1) return false;
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-  try { ws.send(JSON.stringify({ t: 'menu-pick', n })); return true; }
+  const frame = { t: 'menu-pick', n };
+  if (hash) frame.hash = hash;
+  try { ws.send(JSON.stringify(frame)); return true; }
   catch { return false; }
 }
 

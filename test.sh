@@ -407,9 +407,9 @@ test_new_session_readonly() {
   # messages cluttering the discussion when they click [1]/[2] on the
   # readonly view's trust/plan/permission callout. See handleMenuPick
   # in pty.js and sendMenuPick in app.js.
-  grep -qF 'sendMenuPick(n)' web/public/app.js \
-    && pass "app.js: option click uses sendMenuPick" \
-    || fail "app.js: option click uses sendMenuPick"
+  grep -qF 'sendMenuPick(n, hash)' web/public/app.js \
+    && pass "app.js: option click uses sendMenuPick(n, hash)" \
+    || fail "app.js: option click uses sendMenuPick(n, hash)"
   grep -q "msg.t === 'menu-pick'" server/src/pty.js \
     && pass "pty.js: handles menu-pick WS frame" \
     || fail "pty.js: handles menu-pick WS frame"
@@ -458,7 +458,7 @@ test_new_session_readonly() {
   # corresponding chat entry in rec.chat so a page refresh / WS
   # reconnect (which reloads chat-history from disk) keeps the
   # picker disabled with the picked option highlighted.
-  grep -q '_markLatestMenuChatAnswered' server/src/pty.js \
+  grep -q '_markMenuChatAnswered' server/src/pty.js \
     && pass "pty.js: menu-pick persists answered on rec.chat" \
     || fail "pty.js: menu-pick persists answered on rec.chat"
   grep -q 'm.meta.answered' web/public/app.js \
@@ -1106,6 +1106,39 @@ test_chat_window() {
   else
     skip "test/find-newest-jsonl.test.js (no host node)"
   fi
+  # Regression for the menu-pick race condition: when two menus are
+  # broadcast in quick succession (parallel tool calls, rapid dialog
+  # turnover) the user's click on the older callout must NOT answer
+  # the newer menu in the TUI. Hash-validated picks land on the right
+  # row; stale picks drop the PTY write.
+  if have_node; then
+    if node test/menu-pick-race.test.js >/dev/null 2>&1; then
+      pass "test/menu-pick-race.test.js (5 cases)"
+    else
+      fail "test/menu-pick-race.test.js — re-run with 'node test/menu-pick-race.test.js' to see failures"
+    fi
+  else
+    skip "test/menu-pick-race.test.js (no host node)"
+  fi
+  # Quick wire-level checks for the hash field carrying end-to-end.
+  grep -qF 'data-hash="${escHtml(menuHash)}"' web/public/app.js \
+    && pass "app.js: menu buttons stamp data-hash" \
+    || fail "app.js: menu buttons missing data-hash stamp"
+  grep -qF 'btn.dataset.hash' web/public/app.js \
+    && pass "app.js: click handler reads hash from button" \
+    || fail "app.js: click handler not reading hash"
+  grep -qF "sendMenuPick(n, hash)" web/public/app.js \
+    && pass "app.js: sendMenuPick accepts hash arg" \
+    || fail "app.js: sendMenuPick signature missing hash"
+  grep -qF 'function handleMenuPick(sessionId, session, n, hash)' server/src/pty.js \
+    && pass "pty.js: handleMenuPick accepts hash" \
+    || fail "pty.js: handleMenuPick signature missing hash"
+  grep -qF 'pending.hash !== hash' server/src/pty.js \
+    && pass "pty.js: handleMenuPick validates hash against pendingMenu" \
+    || fail "pty.js: handleMenuPick hash validation missing"
+  grep -qF '_markMenuChatAnswered' server/src/pty.js \
+    && pass "pty.js: renamed persist helper (_markMenuChatAnswered)" \
+    || fail "pty.js: persist helper not renamed"
   if have_node; then
     node -e "
       const { MenuInterceptor } = require('./server/src/menu-interceptor');
