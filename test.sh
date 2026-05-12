@@ -445,6 +445,20 @@ test_new_session_readonly() {
   grep -q 'm\._answered' web/public/app.js \
     && pass "app.js: _findLastMenuMessageIdx honors _answered" \
     || fail "app.js: _findLastMenuMessageIdx honors _answered"
+  # Server-side persistence: clicking a menu option must mutate the
+  # corresponding chat entry in rec.chat so a page refresh / WS
+  # reconnect (which reloads chat-history from disk) keeps the
+  # picker disabled with the picked option highlighted.
+  grep -q '_markLatestMenuChatAnswered' server/src/pty.js \
+    && pass "pty.js: menu-pick persists answered on rec.chat" \
+    || fail "pty.js: menu-pick persists answered on rec.chat"
+  grep -q 'm.meta.answered' web/public/app.js \
+    && pass "app.js: client honors persisted meta.answered" \
+    || fail "app.js: client honors persisted meta.answered"
+  # /decide slash command must mirror the same persistence.
+  grep -qF "m.meta.answered = true" server/src/slashcmds.js \
+    && pass "slashcmds: /decide persists answered on rec.chat" \
+    || fail "slashcmds: /decide persists answered on rec.chat"
   # Live spinner status surfaced from the headless terminal:
   #   server pushes 'claude-status' WS frames whose text is something like
   #   "· Cerebrating… (40s · ↓ 3.4k tokens · thought for 2s)" when claude

@@ -1737,7 +1737,11 @@ function _findLastMenuMessageIdx(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m && m.meta && m.meta.kind === 'menu' && m.meta.menu && Array.isArray(m.meta.menu.options)) {
-      if (m._answered) return -1;   // user already picked — no active menu
+      // Answered marker is checked from BOTH sources so a page refresh
+      // (which reloads server-persisted chat into state.chatMessages)
+      // still treats picked menus as inactive — the server stamps
+      // m.meta.answered on the persisted message when a pick lands.
+      if (m._answered || (m.meta && m.meta.answered)) return -1;
       return i;
     }
     // 'menu-auto' = the server auto-resolved a permission. A pending menu
@@ -1773,7 +1777,12 @@ function renderChatMessage(m, isActiveMenu) {
     const q = m.meta.menu && m.meta.menu.question ? '\n\n> ' + m.meta.menu.question : '';
     body = lead + q;
   }
-  const pickedN = menuOpts && m._pickedN ? m._pickedN : null;
+  // Picked option number from either the local click (m._pickedN) or
+  // the server-persisted record (m.meta.pickedN). The server source is
+  // what makes the disabled+picked state survive a page refresh.
+  const pickedN = menuOpts
+    ? (m._pickedN || (m.meta && m.meta.pickedN) || null)
+    : null;
   const optsHtml = menuOpts
     ? `<div class="chat-menu-opts">${menuOpts.map((o) => {
         const isPick = pickedN != null && o.n === pickedN;

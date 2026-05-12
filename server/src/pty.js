@@ -268,7 +268,15 @@ function killSession(sessionId) {
 // PTY and clears pendingMenu, mirroring slashcmds.handleDecide but WITHOUT
 // any chat persistence or broadcast. Validates n against the menu's
 // current options so a stale callout can't poke a different dialog.
-function handleMenuPick(session, n) {
+//
+// Also persists the answered state on the corresponding chat message
+// (the most recent meta.kind === 'menu' broadcast in rec.chat). That
+// way a page refresh / WS reconnect — which replays chat-history from
+// the server's persisted state — still renders the picker disabled
+// with the chosen option highlighted instead of resurrecting it as
+// clickable. Without this the client-only `_answered` flag was lost
+// across reconnects.
+function handleMenuPick(sessionId, session, n) {
   if (!session || !session.alive) return;
   if (!Number.isFinite(n) || n < 1 || n > 9) return;
   const pending = session.pendingMenu;
@@ -276,6 +284,26 @@ function handleMenuPick(session, n) {
   if (!pending.options.some((o) => o.n === n)) return;
   session.write(String(n) + '\r');
   session.pendingMenu = null;
+  _markLatestMenuChatAnswered(sessionId, n);
+}
+
+function _markLatestMenuChatAnswered(sessionId, n) {
+  if (!sessionId) return;
+  try {
+    const store = sessionsMod.loadStore();
+    const rec = store.sessions[sessionId];
+    if (!rec || !Array.isArray(rec.chat)) return;
+    for (let i = rec.chat.length - 1; i >= 0; i--) {
+      const m = rec.chat[i];
+      if (m && m.meta && m.meta.kind === 'menu') {
+        if (m.meta.answered) return;     // already marked — nothing to do
+        m.meta.answered = true;
+        m.meta.pickedN = n;
+        sessionsMod.saveStore();
+        return;
+      }
+    }
+  } catch {}
 }
 
 // Wire transcript messages from a session's JSONL file to a websocket.
@@ -398,7 +426,7 @@ function attachWebSocket(session, ws, opts = {}) {
       // Inline reply to a pending TUI menu — bypasses chat entirely so the
       // user's click on a callout button doesn't pollute the discussion
       // with `/decide N` messages. See handleMenuPick for the gating.
-      if (user) handleMenuPick(session, msg.n | 0);
+      if (user) handleMenuPick(sessionId, session, msg.n | 0);
       return;
     }
     if (readOnly) return; // share-link viewers can watch but not type / resize
@@ -468,7 +496,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     if (msg.t === 'menu-pick' && Number.isFinite(msg.n) && user) {
       // Inline menu pick — same as the owner path; we keep this enabled for
       // viewers because chat steering is open to them anyway.
-      handleMenuPick(session, msg.n | 0);
+      handleMenuPick(sessionId, session, msg.n | 0);
     }
   }
 

@@ -172,6 +172,26 @@ async function handleDecide(ctx) {
   // "cleared" transition.
   session.write(String(n) + '\r');
   session.pendingMenu = null;
+  // Mark the most recent menu chat broadcast as answered so the
+  // chat-inline picker stays disabled across page refreshes /
+  // reconnects (same as the menu-pick WS frame path in pty.js).
+  try {
+    const store = sessionsMod.loadStore();
+    const rec = store.sessions[ctx.sessionId];
+    if (rec && Array.isArray(rec.chat)) {
+      for (let i = rec.chat.length - 1; i >= 0; i--) {
+        const m = rec.chat[i];
+        if (m && m.meta && m.meta.kind === 'menu') {
+          if (!m.meta.answered) {
+            m.meta.answered = true;
+            m.meta.pickedN = n;
+            sessionsMod.saveStore();
+          }
+          break;
+        }
+      }
+    }
+  } catch {}
   ctx.reply(`✓ picked option ${n}: ${matched.label}`);
 }
 
