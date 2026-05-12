@@ -1779,23 +1779,36 @@ function renderChatMessage(m, isActiveMenu) {
   }
   // Picked option number from either the local click (m._pickedN) or
   // the server-persisted record (m.meta.pickedN). The server source is
-  // what makes the disabled+picked state survive a page refresh.
+  // what makes the answered state survive a page refresh.
   const pickedN = menuOpts
     ? (m._pickedN || (m.meta && m.meta.pickedN) || null)
     : null;
-  const optsHtml = menuOpts
-    ? `<div class="chat-menu-opts">${menuOpts.map((o) => {
-        const isPick = pickedN != null && o.n === pickedN;
-        const cls = 'chat-menu-opt' + (isPick ? ' chat-menu-picked' : '');
-        return `<button type="button" class="${cls}" data-n="${o.n}"${isActiveMenu ? '' : ' disabled'}>[${o.n}] ${escHtml(o.label)}</button>`;
-      }).join('')}<div class="chat-menu-hint">${
-        isActiveMenu
-          ? 'Pick here — goes straight to the session, no chat post.'
-          : pickedN != null
-            ? `Picked [${pickedN}]`
-            : '(answered)'
-      }</div></div>`
-    : '';
+  // Once answered, the buttons row collapses into a single "✓ Picked …"
+  // line. Leaving N disabled buttons around clutters the chat — the
+  // pick is captured in the summary line and that's all the user
+  // needs to see in the history.
+  let optsHtml = '';
+  if (menuOpts && pickedN != null) {
+    const matched = menuOpts.find((o) => o.n === pickedN);
+    const label = matched ? matched.label : '';
+    optsHtml = `<div class="chat-menu-resolved">✓ Picked [${pickedN}]${label ? ' ' + escHtml(label) : ''}</div>`;
+  } else if (menuOpts && isActiveMenu) {
+    optsHtml = `<div class="chat-menu-opts">${menuOpts.map((o) =>
+      `<button type="button" class="chat-menu-opt" data-n="${o.n}">[${o.n}] ${escHtml(o.label)}</button>`
+    ).join('')}<div class="chat-menu-hint">Pick here — goes straight to the session, no chat post.</div></div>`;
+  } else if (menuOpts) {
+    // Menu broadcast that's no longer the latest AND has no recorded
+    // pick (e.g. older menu in history that got superseded). Show
+    // nothing extra — the lead + question above is enough.
+    optsHtml = '<div class="chat-menu-resolved">(no longer active)</div>';
+  } else if (m.meta && m.meta.kind === 'menu') {
+    // Defensive: a "menu" message landed without an options array.
+    // Shouldn't happen with the current server (broadcastMenuToChat
+    // always populates meta.menu.options), but if a stale broadcast
+    // or a bundle/data mismatch hides the buttons, surface that fact
+    // instead of silently rendering only the lead + question.
+    optsHtml = '<div class="chat-menu-resolved">(buttons unavailable — try a hard-refresh of this page)</div>';
+  }
   return `<div class="${cls}">
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
     <div class="chat-text">${renderMd(body)}</div>

@@ -433,6 +433,15 @@ test_new_session_readonly() {
   grep -qF '.chat-msg.chat-msg-menu' web/public/styles.css \
     && pass "styles.css: chat-msg-menu unified card style" \
     || fail "styles.css: chat-msg-menu unified card style"
+  # When a menu is answered, the inline option buttons collapse to a
+  # single "✓ Picked [N] <label>" line — no disabled-buttons graveyard
+  # cluttering the chat scroll.
+  grep -q 'chat-menu-resolved' web/public/app.js \
+    && pass "app.js: answered menu renders compact resolved line" \
+    || fail "app.js: answered menu renders compact resolved line"
+  grep -q '\.chat-menu-resolved' web/public/styles.css \
+    && pass "styles.css: chat-menu-resolved styling" \
+    || fail "styles.css: chat-menu-resolved styling"
   # Disable-on-pick: clicking an option in the chat-inline picker
   # must mark the underlying chat message as answered so subsequent
   # re-renders keep the buttons disabled with the picked one green-
@@ -1159,7 +1168,7 @@ test_chat_window() {
         getLine: (y) => plan[y] != null ? ({ translateToString: () => plan[y] }) : null }}};
       const r = (new MenuInterceptor()).detectChange(fakePlan);
       if (r && r.kind === 'newMenu') throw new Error('plan bullet body falsely detected as menu: ' + JSON.stringify(r));
-      // Same content with `❯` on one bullet → should detect.
+      // Same content with cursor on one bullet → should detect.
       const planWithCursor = plan.slice();
       planWithCursor[5] = ' ❯ 4. WS Gateway — JWT auth on upgrade';
       const fakeMenu = { rows, buffer: { active: { viewportY: 0,

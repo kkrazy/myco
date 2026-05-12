@@ -2768,6 +2768,16 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   padding-top: 6px;
   border-top: 1px solid #21262d;
 }
+/* Compact summary line that REPLACES the option-buttons block once the
+   menu is answered. Keeps the chat history tidy — no graveyard of
+   disabled buttons cluttering the scroll. */
+.chat-menu-resolved {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #21262d;
+  font-size: 0.85rem;
+  color: #3fb950;       /* green, matches the picked-row highlight */
+}
 
 /* ── waiting spinner ── */
 .conv-waiting {
