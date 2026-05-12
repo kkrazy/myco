@@ -111,7 +111,8 @@ test_pty_patterns() {
         'MENU_KIND_PERMISSION_RE','MENU_KIND_PLAN_RE','TRUST_DIALOG_RE',
         'PERMISSION_TOOL_RE','PERMISSION_INPUT_RE',
         'MODE_ACCEPT_RE','MODE_PLAN_RE','MODE_BYPASS_RE',
-        'SPINNER_DURATION_RE','WELCOME_BANNER_RE',
+        'SPINNER_DURATION_RE','SPINNER_RUNNING_RE',
+        'WELCOME_BANNER_RE','LIMIT_WARNING_RE','TUI_KEY_HINT_RE',
       ];
       for (const k of want) {
         if (!(p[k] instanceof RegExp)) throw new Error('missing pattern export: ' + k);
@@ -135,10 +136,34 @@ test_pty_patterns() {
       // Trust dialog recognizer.
       if (!p.TRUST_DIALOG_RE.test('Quick safety check: Is this a project you created or one you trust?')) throw new Error('TRUST_DIALOG_RE missed safety-check phrasing');
       if (!p.TRUST_DIALOG_RE.test('Do you trust the files in this folder?')) throw new Error('TRUST_DIALOG_RE missed canonical phrasing');
-      // Spinner.
-      if (!p.SPINNER_DURATION_RE.test('✻ Worked for 12s · esc to interrupt')) throw new Error('SPINNER_DURATION_RE missed \"Worked for Ns\"');
-      if (!p.SPINNER_DURATION_RE.test('✦ Thinking for 3s …')) throw new Error('SPINNER_DURATION_RE missed alternate spinner glyph');
+      // Spinner — DURATION variants. Claude's verb roster is creative
+      // and grows release-to-release (Baked, Brewed, Cooked, Churned,
+      // Moonwalking, Thundering, Crunching, plus the boring built-ins).
+      // Match on STRUCTURE not on a verb whitelist.
+      const durSamples = ['✻ Worked for 12s · esc to interrupt', '✦ Thinking for 3s …',
+                          '✻ Baked for 15s', '✻ Brewed for 51s', '✻ Cooked for 13s',
+                          '✻ Churned for 4s'];
+      for (const s of durSamples) {
+        if (!p.SPINNER_DURATION_RE.test(s)) throw new Error('SPINNER_DURATION_RE missed: ' + s);
+      }
       if (p.SPINNER_DURATION_RE.test('We worked for 12 hours')) throw new Error('SPINNER_DURATION_RE matched prose');
+      // Spinner — RUNNING variants (no duration yet, claude is currently in that phase).
+      const runSamples = ['✽ Moonwalking…', '· Thundering…', '✽ Crunching', '✻ Working'];
+      for (const s of runSamples) {
+        if (!p.SPINNER_RUNNING_RE.test(s)) throw new Error('SPINNER_RUNNING_RE missed: ' + s);
+      }
+      // MODE_ACCEPT_RE must now also recognise the post-plan-confirm 'auto mode'.
+      if (!p.MODE_ACCEPT_RE.test('⏵⏵ auto mode on (shift+tab to cycle)')) throw new Error('MODE_ACCEPT_RE missed \"auto mode\"');
+      if (!p.MODE_ACCEPT_RE.test('⏵⏵ accept edits on')) throw new Error('MODE_ACCEPT_RE missed \"accept edits\"');
+      // Weekly-limit notice surfaced in the status bar.
+      if (!p.LIMIT_WARNING_RE.test('You\\'ve used 76% of your weekly limit · resets May 15, 3am (UTC)')) throw new Error('LIMIT_WARNING_RE missed weekly-limit notice');
+      // TUI key-hint lines (in-dialog instruction text).
+      const hints = ['Enter to confirm · Esc to cancel', 'ctrl-g to edit in Vim · ~/.claude/plans/foo.md',
+                     'shift+tab to approve with this feedback', 'Tab/Arrow keys to navigate', 'esc to interrupt'];
+      for (const h of hints) {
+        if (!p.TUI_KEY_HINT_RE.test(h)) throw new Error('TUI_KEY_HINT_RE missed: ' + h);
+      }
+      if (p.TUI_KEY_HINT_RE.test(' real prose about shift in a story.')) throw new Error('TUI_KEY_HINT_RE matched prose');
       // Welcome banner.
       if (!p.WELCOME_BANNER_RE.test('Welcome back Ken!')) throw new Error('WELCOME_BANNER_RE missed \"Welcome back\"');
       // Question verbs widened.

@@ -156,12 +156,18 @@ const PERMISSION_INPUT_RE = /^\s*[>❯]\s+(.+)$/;
 // Observed status-bar variants (lower-cased, partial line matches OK):
 //   "⏵⏵ accept edits on (shift+tab to cycle)"
 //   "⏵⏵ auto-accept edits on (shift+tab to cycle)"
+//   "⏵⏵ auto mode on (shift+tab to cycle)"           ← seen after picking the plan-confirm
+//                                                       "Yes, and use auto mode" option
 //   "⏸ plan mode on (shift+tab to cycle)"
 //   "bypass permissions mode on (shift+tab to cycle)"  (only with the
 //      `--dangerously-skip-permissions` flag — we don't use it under
 //      root, but the line is harmless to recognise)
+// The status bar can also carry trailing decorations like
+// " · esc to interrupt", " IDE extension install failed",
+// " You've used 76% of your weekly limit", and an "◉ xhigh · /effort"
+// chip. None of those break the regexes since they're partial matches.
 // Absence of any of these = default mode.
-const MODE_ACCEPT_RE = /accept edits|auto-accept|auto edit/i;
+const MODE_ACCEPT_RE = /accept edits|auto-accept|auto edit|auto mode/i;
 const MODE_PLAN_RE = /plan mode/i;
 const MODE_BYPASS_RE = /bypass permissions/i;
 
@@ -170,18 +176,51 @@ const MODE_BYPASS_RE = /bypass permissions/i;
 // without parsing the JSONL transcript.
 // ───────────────────────────────────────────────────────────────────────
 
-// Claude renders a per-turn spinner like "✻ Worked for 12s …" while a
-// tool is running. The verb varies between releases ("Thinking",
-// "Working", "Reading", "Searching", etc.); the "for <Ns>" tail is the
-// stable signal.
-const SPINNER_DURATION_RE =
-  /[✻✦✺·•▮]\s*(?:Worked|Working|Thinking|Reading|Writing|Searching|Editing|Running|Generating|Considering)\s+for\s+\d+s\b/i;
+// Claude renders a per-turn spinner that goes through two visible
+// shapes:
+//
+//   in-progress      "✽ Moonwalking…"  "· Thundering…"  "✽ Crunching…"
+//   done-with-phase  "✻ Brewed for 51s"  "✻ Baked for 15s"  "✻ Cooked for 13s"
+//                    "✻ Churned for 4s"
+//
+// The verb roster is creative and seems to be sampled from a much
+// wider set than the old explicit ("Working"|"Thinking"|…) list
+// implied — observed in production logs alone we have Baked, Brewed,
+// Cooked, Churned, Moonwalking, Thundering, Crunching, plus the
+// boring built-ins. Match on STRUCTURE (glyph + capitalised verb +
+// optional duration tail) instead of enumerating verbs.
+//
+// Glyph class: ✻ ✦ ✺ ✽ · • ▮ ⏳ (Unicode block ✻=U+273B, ✽=U+273D,
+// the rest are common bullet/middle-dot/etc.).
+const SPINNER_DURATION_RE = /[✻✦✺✽·•▮⏳]\s*[A-Z][a-z]+\s+for\s+\d+s\b/;
+const SPINNER_RUNNING_RE  = /[✻✦✺✽·•▮⏳]\s*[A-Z][a-z]+(?:ing|ed)\b/;
 
 // Claude's welcome / resume banner (inside a box-drawn frame). We don't
 // rely on this for routing yet, but it's handy when classifying snapshot
 // dumps and for any future "session is fresh" heuristics.
 const WELCOME_BANNER_RE =
   /Welcome (?:back|to Claude Code)/i;
+
+// "You've used X% of your weekly limit · resets <date>" — surfaced in
+// the bottom status bar. Useful for a future "rate limit warning"
+// indicator. Not branched on yet.
+const LIMIT_WARNING_RE =
+  /You['’]ve used\s+\d+%\s+of your weekly limit/i;
+
+// ───────────────────────────────────────────────────────────────────────
+// In-dialog TUI key hints — visual instructions that claude code paints
+// under interactive widgets. We don't want them ending up inside
+// option labels OR being mistaken for option lines.
+//   "Enter to confirm · Esc to cancel"
+//   "ctrl-g to edit in Vim · ~/.claude/plans/<file>"
+//   "shift+tab to approve with this feedback"
+//   "Tab/Arrow keys to navigate"
+//   "esc to interrupt"
+// Currently unused at scan time but kept here for the next time we
+// need to suppress TUI noise from a captured label.
+// ───────────────────────────────────────────────────────────────────────
+const TUI_KEY_HINT_RE =
+  /^\s*(?:Enter\s+to|Esc\s+to|ctrl-[a-z]\s+to|shift\+tab\s+to|Tab\/Arrow\s+keys|esc\s+to interrupt)\b/i;
 
 module.exports = {
   MENU_OPT_MARKER_RE,
@@ -198,5 +237,8 @@ module.exports = {
   MODE_PLAN_RE,
   MODE_BYPASS_RE,
   SPINNER_DURATION_RE,
+  SPINNER_RUNNING_RE,
   WELCOME_BANNER_RE,
+  LIMIT_WARNING_RE,
+  TUI_KEY_HINT_RE,
 };
