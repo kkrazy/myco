@@ -1584,6 +1584,15 @@ function _updatePendingMenuFromMessage(m) {
       target: m.meta.target || null,
       ts: m.ts || null,
     };
+    // Claude is now blocked on user input — pause the typing dots so
+    // the indicator doesn't keep pulsing while we wait for the user
+    // to click an option. Picking re-arms via _markAwaitingClaude in
+    // the menu-pick click handler.
+    if (state.awaitingClaude) {
+      state.awaitingClaude = false;
+      if (state._claudeIdleTimer) { clearTimeout(state._claudeIdleTimer); state._claudeIdleTimer = null; }
+      _renderClaudeTyping();
+    }
   } else if (m.meta.kind === 'menu-auto') {
     state.pendingMenu = null;
   }
@@ -1660,6 +1669,10 @@ function _bindChatMenuClicks() {
         b.classList.toggle('chat-menu-picked', b === btn);
       });
     }
+    // Claude was paused waiting for this pick — it'll start producing
+    // output again. Re-arm the typing indicator + idle timer so the
+    // user sees that claude is working.
+    _markAwaitingClaude();
   });
 }
 
@@ -1749,31 +1762,35 @@ function formatChatTs(iso) {
 
 // Chat-only flow for @myco messages.
 //
-// When the user sends an @myco message, the conversation continues to
-// happen inside the chat pane: a typing-dots indicator appears under
-// their message, claude's text is streamed into rec.chat (via the
-// transcript JSONL → transcript-delta WS frames), and once claude has
-// been quiet for CLAUDE_REPLY_IDLE_MS the latest assistant text is
-// posted as a chat message from `claude`. The conversation pane (👁
-// readonly view) still has the raw structured transcript for users who
-// want it, but the chat pane is the primary surface.
+// When the user @myco's, all of claude's response stream lands in chat:
+//   * Each assistant TEXT block arrives via transcript-delta and is
+//     immediately appended as a separate `claude` chat message — so
+//     pre-tool planning, post-tool summaries, and the final answer
+//     each get their own bubble (close to ChatGPT-style streaming).
+//   * tool_use entries don't post to chat — they're invisible work.
+//     We keep a counter so a tool-only turn (claude ran tools and
+//     didn't produce text) can be summarised at the end.
+//   * The typing-dots indicator stays visible from the @myco send
+//     until CLAUDE_IDLE_MS of complete transcript silence (longer
+//     than a single 2s debounce because real claude turns can have
+//     10–30s gaps between text and tool_result frames).
 //
-// We DON'T touch the main pane focus here — sending @myco doesn't flip
-// the user to the terminal or conv view; they stay in chat.
-const CLAUDE_REPLY_IDLE_MS = 2000;     // post the buffered reply after this much quiet
-const CLAUDE_REPLY_TOOL_MAX_MS = 60000; // safety cap even if tools keep firing
+// We DON'T touch main-pane focus — interaction stays in the chat pane.
+const CLAUDE_IDLE_MS = 8000;            // post-stream silence before we declare claude idle
 
 function _markAwaitingClaude() {
   state.awaitingClaude = true;
-  state.pendingClaudeText = '';
   state.pendingClaudeToolCalls = 0;
-  state._claudeReplyDeadline = Date.now() + CLAUDE_REPLY_TOOL_MAX_MS;
+  state.pendingClaudeReplyPosted = false;
+  state._claudeSeenText = new Set();    // dedupe by uuid across overlapping deltas
+  if (state._claudeIdleTimer) { clearTimeout(state._claudeIdleTimer); state._claudeIdleTimer = null; }
   _renderClaudeTyping();
+  _scheduleClaudeIdleCheck();
 }
 
 // Called from the transcript-delta WS frame handler whenever new
-// transcript messages arrive. Buffers the latest assistant text and
-// schedules a post when claude has been idle long enough.
+// transcript messages arrive. Streams every assistant text into chat
+// as it lands; the idle timer ticks forward on every signal of life.
 function _onTranscriptDeltaForChat(messages) {
   if (!state.awaitingClaude) return;
   let sawSomething = false;
@@ -1781,40 +1798,64 @@ function _onTranscriptDeltaForChat(messages) {
     if (!m) continue;
     if (m.role === 'assistant') {
       sawSomething = true;
-      if (m.text && m.text.trim()) state.pendingClaudeText = m.text.trim();
-      if (Array.isArray(m.toolCalls)) state.pendingClaudeToolCalls += m.toolCalls.length;
-    } else if (m.role === 'tool_result') {
-      sawSomething = true;  // claude is still working
+      const tools = Array.isArray(m.toolCalls) ? m.toolCalls.length : 0;
+      state.pendingClaudeToolCalls += tools;
+      if (m.text && m.text.trim()) {
+        // Dedupe — transcript-delta can re-emit the same uuid after a
+        // reconnect (server replays from startByte) and we don't want
+        // to double-post in chat.
+        const key = m.uuid || (m.ts + '|' + m.text.slice(0, 40));
+        if (!state._claudeSeenText.has(key)) {
+          state._claudeSeenText.add(key);
+          _postClaudeStreamToChat(m.text.trim());
+          state.pendingClaudeReplyPosted = true;
+        }
+      }
+    } else if (m.role === 'tool_result' || m.role === 'user') {
+      // tool_result = claude got data back; user = our own @myco echo.
+      // Both count as "still alive" for the idle timer but produce no
+      // chat output.
+      sawSomething = true;
     }
   }
-  if (!sawSomething) return;
-  // Reset the idle timer — claude is still producing output.
-  if (state._claudeReplyTimer) clearTimeout(state._claudeReplyTimer);
-  const remaining = Math.max(0, (state._claudeReplyDeadline || 0) - Date.now());
-  const delay = Math.min(CLAUDE_REPLY_IDLE_MS, Math.max(500, remaining));
-  state._claudeReplyTimer = setTimeout(_postBufferedClaudeReplyToChat, delay);
+  if (sawSomething) _scheduleClaudeIdleCheck();
 }
 
-function _postBufferedClaudeReplyToChat() {
-  if (state._claudeReplyTimer) { clearTimeout(state._claudeReplyTimer); state._claudeReplyTimer = null; }
+function _scheduleClaudeIdleCheck() {
+  if (state._claudeIdleTimer) clearTimeout(state._claudeIdleTimer);
+  state._claudeIdleTimer = setTimeout(_onClaudeIdle, CLAUDE_IDLE_MS);
+}
+
+function _onClaudeIdle() {
+  state._claudeIdleTimer = null;
   if (!state.awaitingClaude) return;
+  // If claude ran tools but never posted a text reply, surface a
+  // one-line summary so the chat doesn't look like nothing happened.
+  if (!state.pendingClaudeReplyPosted && state.pendingClaudeToolCalls > 0) {
+    const n = state.pendingClaudeToolCalls;
+    _postClaudeStreamToChat(`_(Claude ran ${n} tool call${n === 1 ? '' : 's'} and didn't post a text reply.)_`);
+  }
   state.awaitingClaude = false;
-  const text = state.pendingClaudeText || '(Claude finished without a text reply.)';
-  const tools = state.pendingClaudeToolCalls;
-  state.pendingClaudeText = '';
   state.pendingClaudeToolCalls = 0;
-  // Local-only chat row — not persisted server-side, just rendered
-  // here. On reconnect, applyChatHistory will reset state.chatMessages
-  // from the server's persisted history (which doesn't include these),
-  // so we don't get duplicates.
-  const summary = tools ? `\n\n_(${tools} tool call${tools === 1 ? '' : 's'} along the way)_` : '';
+  state.pendingClaudeReplyPosted = false;
+  state._claudeSeenText = null;
+  _renderClaudeTyping();
+}
+
+function _postClaudeStreamToChat(text) {
+  // Local-only chat row — not persisted server-side. On reconnect,
+  // applyChatHistory will reset state.chatMessages from the server's
+  // persisted history (which doesn't include these), so no duplicates.
   state.chatMessages.push({
     user: 'claude',
-    text: text + summary,
+    text: text,
     ts: new Date().toISOString(),
     _localOnly: true,
   });
   renderChatPane(/*scrollToBottom*/ true);
+  // Re-render the typing indicator so it slots back below the newest
+  // message (renderChatPane only touched the list innerHTML; the
+  // sibling indicator is unchanged but the new message bumps it).
   _renderClaudeTyping();
 }
 

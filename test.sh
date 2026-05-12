@@ -395,12 +395,25 @@ test_new_session_readonly() {
   grep -q '_onTranscriptDeltaForChat' web/public/app.js \
     && pass "app.js: transcript-delta routed into chat" \
     || fail "app.js: transcript-delta routed into chat"
-  grep -q 'CLAUDE_REPLY_IDLE_MS' web/public/app.js \
-    && pass "app.js: idle-debounce constant defined" \
-    || fail "app.js: idle-debounce constant defined"
-  grep -q '_postBufferedClaudeReplyToChat' web/public/app.js \
-    && pass "app.js: buffered reply posted to chat" \
-    || fail "app.js: buffered reply posted to chat"
+  grep -q 'CLAUDE_IDLE_MS' web/public/app.js \
+    && pass "app.js: idle-timeout constant defined" \
+    || fail "app.js: idle-timeout constant defined"
+  grep -q '_postClaudeStreamToChat' web/public/app.js \
+    && pass "app.js: streams assistant text to chat" \
+    || fail "app.js: streams assistant text to chat"
+  # Regression: each assistant text message must be appended as its own
+  # chat row (streaming UX), not buffered into one final post. The 2s
+  # debounce-then-buffer pattern was too aggressive — it fired after
+  # the FIRST assistant text and ignored everything claude said
+  # afterward (tool_result and subsequent summary text). Now we post
+  # each text on arrival and only retire the typing dots after
+  # CLAUDE_IDLE_MS of complete silence.
+  grep -qE 'm\.role === .assistant.|role === .assistant.' web/public/app.js \
+    && pass "app.js: handles assistant-role transcript messages" \
+    || fail "app.js: handles assistant-role transcript messages"
+  grep -q '_scheduleClaudeIdleCheck' web/public/app.js \
+    && pass "app.js: schedules idle check on transcript activity" \
+    || fail "app.js: schedules idle check on transcript activity"
   grep -q 'claude-typing-dots' web/public/styles.css \
     && pass "styles.css: typing-dots animation" \
     || fail "styles.css: typing-dots animation"
