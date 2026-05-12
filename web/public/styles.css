@@ -2711,54 +2711,62 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 
 /* ── Inline menu picker inside a chat message ──
-   The MenuInterceptor broadcasts every numbered claude TUI dialog into
-   chat as a special message (meta.kind === 'menu'); we render the
-   options as buttons inside the message body so the user can pick
-   without typing /decide N. Only the LATEST menu message keeps its
-   buttons clickable — older messages get :disabled buttons so a stale
-   row can't poke a different dialog. */
-.chat-menu-opts {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.chat-menu-opt {
-  background: #21262d;
-  color: #c9d1d9;
+   When a chat message carries menu options (meta.kind === 'menu'),
+   the whole message is one unified card: the lead/question is the
+   card header, the option buttons are flat rows inside the same
+   bordered container, and a hint footer sits below. The
+   `chat-msg-menu` class is added by renderChatMessage in app.js. */
+.chat-msg.chat-msg-menu {
+  background: #161b22;
   border: 1px solid #30363d;
   border-left: 3px solid #d29922;
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+/* Card header — the lead + question line(s). Subtle divider below it
+   visually separates the header from the option rows. */
+.chat-msg.chat-msg-menu .chat-text {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #21262d;
+}
+.chat-menu-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-menu-opt {
+  background: transparent;
+  color: #c9d1d9;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 10px;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s;
 }
 .chat-menu-opt:hover:not(:disabled) {
-  background: #30363d;
-  border-color: #58a6ff;
+  background: rgba(88, 166, 255, 0.12);
 }
 .chat-menu-opt:active:not(:disabled) {
-  background: #1f6feb;
-  border-color: #1f6feb;
-  color: white;
+  background: rgba(31, 111, 235, 0.30);
 }
 .chat-menu-opt:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-  border-left-color: #30363d;
 }
 .chat-menu-opt.chat-menu-picked {
-  border-left-color: #3fb950;
-  opacity: 1;
-  background: #0f2417;
+  background: rgba(63, 185, 80, 0.16);
   color: #c9d1d9;
+  opacity: 1;
 }
 .chat-menu-hint {
   color: #6e7681;
-  font-size: 0.8rem;
-  margin-top: 2px;
+  font-size: 0.78rem;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #21262d;
 }
 
 /* ── waiting spinner ── */

@@ -1744,6 +1744,7 @@ function renderChatMessage(m, isActiveMenu) {
     ? m.meta.menu.options : null;
   let body = m.text || '';
   if (menuOpts) {
+    cls += ' chat-msg-menu';   // unifies the bubble + the option rows into one card (see styles.css)
     const tgt = m.meta.target;
     const lead = tgt
       ? `🤔 Claude wants permission to run \`${tgt.tool}(${tgt.input || ''})\``

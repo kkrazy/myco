@@ -398,6 +398,16 @@ test_new_session_readonly() {
   grep -q '\.chat-menu-opt' web/public/styles.css \
     && pass "styles.css: .chat-menu-opt styling" \
     || fail "styles.css: .chat-menu-opt styling"
+  # Whole-card unified menu look: app.js tags the chat-msg div with
+  # chat-msg-menu when menu options are present, and the stylesheet
+  # styles that combined selector as one bordered container so the
+  # title + buttons no longer look like separate cards.
+  grep -qF 'chat-msg-menu' web/public/app.js \
+    && pass "app.js: tags menu messages with chat-msg-menu class" \
+    || fail "app.js: tags menu messages with chat-msg-menu class"
+  grep -qF '.chat-msg.chat-msg-menu' web/public/styles.css \
+    && pass "styles.css: chat-msg-menu unified card style" \
+    || fail "styles.css: chat-msg-menu unified card style"
   # Chat-only flow: when @myco sent, a typing indicator appears in chat;
   # assistant transcript text is buffered and posted as a chat message
   # after a quiet window so the user gets the FINAL result without
