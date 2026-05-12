@@ -281,12 +281,25 @@ test_at_myco_chat_handler() {
   grep -qF "input + '\\n\\r'" server/src/pty.js \
     && fail "@myco still uses '\\n\\r' (regression — should be bare \\r)" \
     || pass "@myco no longer uses '\\n\\r'"
+  # Regression: chat prefix is generalised. Any @<word> prefix routes
+  # the message body to claude UNLESS <word> matches a known username
+  # (so @kkrazy stays a real mention; @generate / @claude / @myco all
+  # route to PTY). Demo010 surfaced the old "@myco only" miss.
+  grep -q 'CHAT_TO_PTY_PREFIX_RE' server/src/pty.js \
+    && pass "pty.js: generalised @<word> prefix" \
+    || fail "pty.js: generalised @<word> prefix"
+  grep -q '_isKnownChatUser' server/src/pty.js \
+    && pass "pty.js: known-user check guards mention routing" \
+    || fail "pty.js: known-user check guards mention routing"
   # Regression: the @myco capture regex must use [\s\S] so multi-line chat
   # messages (now reachable via the discussion textarea + Ctrl/⌘+Enter)
   # don't get truncated to the first line by the `.` shorthand.
-  grep -qF '@myco\s+([\s\S]+)' server/src/pty.js \
-    && pass "@myco regex captures multi-line input" \
-    || fail "@myco regex captures multi-line input"
+  # The chat-to-PTY regex must use [\s\S] (not .) so a multi-line
+  # @<word> message — reachable via the discussion textarea — captures
+  # all lines, not just the first.
+  grep -qF '[\s\S]+' server/src/pty.js \
+    && pass "chat-to-PTY regex captures multi-line input" \
+    || fail "chat-to-PTY regex captures multi-line input"
   # Plain chat (no @myco prefix, no /btw) must NOT trigger the assistant.
   # Regression guard: the old shouldAskAssistant treated any '?'-ending
   # message as an assistant trigger, making every question look like claude

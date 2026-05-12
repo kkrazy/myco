@@ -12,6 +12,33 @@ const menuMod = require('./menu');
 const { MODE_ACCEPT_RE, MODE_PLAN_RE } = require('./pty-patterns');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
+const authMod = require('./auth');
+
+// "@<word> <body>" chat messages get routed to the running Claude PTY.
+// Historically this only matched "@myco"; users typed "@generate" /
+// "@claude" / etc. and the message silently stayed in chat. Now any
+// @<word> prefix routes to claude UNLESS <word> matches a known
+// username — so genuine user mentions (@kkrazy) still work as chat.
+const CHAT_TO_PTY_PREFIX_RE = /^@([A-Za-z][\w-]{0,30})\s+([\s\S]+)/;
+
+function _isKnownChatUser(word) {
+  if (!word) return false;
+  const w = word.toLowerCase();
+  try {
+    for (const u of authMod.listUsernames()) {
+      if (String(u || '').toLowerCase() === w) return true;
+    }
+  } catch {}
+  try {
+    const allow = authMod.loadAllowlist();
+    if (allow && typeof allow.has === 'function') {
+      for (const u of allow) {
+        if (String(u || '').toLowerCase() === w) return true;
+      }
+    }
+  } catch {}
+  return false;
+}
 
 const MAX_BUFFER = 1024 * 1024;
 const CHAT_TEXT_LIMIT = 4000;
@@ -465,13 +492,17 @@ function handleChatMessage(sessionId, session, user, text /* opts = {} */) {
 // The non-slash routing — kept as a separate function so the slash path
 // can fall through after dispatch().
 function handleChatPostfixes(sessionId, session, user, text, message) {
-  // @myco → send the message to the running Claude PTY session. Open to all
-  // chat participants (owner + read-only viewers), since the chat is the
-  // collaborative steering channel for the session.
-  // [\s\S] (not .) so a multi-line @myco message — now reachable via the
-  // discussion panel's textarea — captures all lines, not just the first.
-  const mycoMatch = text.match(/^@myco\s+([\s\S]+)/i);
-  if (mycoMatch) {
+  // @<word> → send the message body to the running Claude PTY session.
+  // Historically only @myco matched; we now accept any @<word> prefix
+  // (so @claude / @generate / @anything works) UNLESS <word> is a
+  // known username from the chat allowlist (so @kkrazy stays a real
+  // user mention). Open to owner + viewers — chat is the collaborative
+  // steering channel.
+  const prefixMatch = text.match(CHAT_TO_PTY_PREFIX_RE);
+  const ptyChat = prefixMatch && !_isKnownChatUser(prefixMatch[1])
+    ? { prefix: prefixMatch[1], body: prefixMatch[2] }
+    : null;
+  if (ptyChat) {
     if (!session.alive) {
       // Used to silently drop here — viewers' @myco messages would
       // disappear into the void with no feedback. Echo a warning so the
@@ -483,7 +514,7 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
       });
       return;
     }
-    const input = mycoMatch[1].trim();
+    const input = ptyChat.body.trim();
     if (input) {
       // Reject Claude's interactive slash-commands. They aren't meaningful
       // when delivered via chat — Claude responds "Unknown command: /<x>"

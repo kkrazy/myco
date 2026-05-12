@@ -1922,11 +1922,16 @@ function sendChatMessage(text) {
       state.outboundChat.push({ text: trimmed, ts: Date.now() });
     }
   }
-  // @myco messages go into the running Claude session. Keep the user in
+  // @<word> messages go into the running Claude session (server-side
+  // rule: any prefix that isn't a known username). Keep the user in
   // the chat pane — that's where the typing-dots indicator and claude's
   // reply will land. The transcript view stays available via the 👁
-  // toggle for users who want the raw stream.
-  if (/^@myco\s+/i.test(trimmed)) {
+  // toggle for users who want the raw stream. The client doesn't know
+  // the username list at type-time, so we optimistically arm the dots
+  // for any @<word> prefix; if the server decides it was actually a
+  // user mention and didn't route to PTY, the idle timer (8s) will
+  // retire the dots harmlessly.
+  if (/^@[A-Za-z][\w-]{0,30}\s+\S/.test(trimmed)) {
     _markAwaitingClaude();
   }
   return true;
