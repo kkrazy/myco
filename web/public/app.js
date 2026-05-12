@@ -1752,6 +1752,10 @@ function renderChatPane(scrollToBottom = false) {
     .join('');
   if (scrollToBottom) scrollChatToLatest();
   _bindChatMenuClicks();
+  // marked emits ```mermaid``` blocks as <pre><code class="language-mermaid">.
+  // Without this pass they render as raw source. Same async, fire-and-forget
+  // pattern the transcript view uses; failures stay as raw code blocks.
+  renderMermaidInContainer(list).catch(() => {});
 }
 
 function _findLastMenuMessageIdx(messages) {
@@ -1996,6 +2000,10 @@ function _postClaudeStreamToChat(text, uuid) {
 function _renderClaudeTyping() {
   let host = document.getElementById('claude-typing');
   if (!host) {
+    // Sits as a sibling of #chat-messages so it lives in the chatpane
+    // layout but doesn't scroll WITH the messages. CSS fixes its
+    // height + overflow so frequent status updates ("Brewing for 5s"
+    // → "6s" → "7s"…) don't reflow the chat above.
     const list = document.getElementById('chat-messages');
     if (!list || !list.parentNode) return;
     host = document.createElement('div');
@@ -2004,17 +2012,19 @@ function _renderClaudeTyping() {
     host.innerHTML = '<span class="claude-typing-dots"><span></span><span></span><span></span></span> <span class="claude-typing-label"></span>';
     list.insertAdjacentElement('afterend', host);
   }
-  // Visible whenever:
-  //   - we're explicitly awaiting (just sent @myco / picked a menu), OR
-  //   - the server says claude is currently busy (status line in PTY).
   const status = state.claudeStatusLine || '';
   const visible = state.awaitingClaude || !!status;
   host.hidden = !visible;
   const label = host.querySelector('.claude-typing-label');
-  if (label) label.textContent = status || 'Claude is working…';
-  if (visible) {
-    requestAnimationFrame(() => { host.scrollIntoView({ block: 'end' }); });
-  }
+  // Label is the live spinner text only — no "Claude is working…"
+  // fallback chatter. When the server hasn't surfaced a spinner line
+  // yet (the brief window between @myco send and claude code's first
+  // spinner render), the dots alone signal activity.
+  if (label) label.textContent = status;
+  // Intentionally NO scrollIntoView here: indicator updates fire as
+  // often as the PTY spinner ticks (every ~750ms via the periodic
+  // safety scan). Auto-scrolling on each tick would yank the chat
+  // viewport whenever the user scrolled up to read history.
 }
 
 // Update the claude-status line cached from the server. When non-null,

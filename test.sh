@@ -390,6 +390,24 @@ test_new_session_readonly() {
   grep -q 'opts.startByte' server/src/transcript.js \
     && pass "transcript.js: watchTranscript honors startByte opt" \
     || fail "transcript.js: watchTranscript honors startByte opt"
+  # Chat pane must render markdown + mermaid the same way the transcript
+  # view does. Both share renderMd → marked + hljs, but only the
+  # transcript path used to call renderMermaidInContainer; chat showed
+  # ```mermaid``` blocks as raw code. Also: missing CSS for headings,
+  # blockquote, tables, hr, links inside .chat-msg .chat-text meant
+  # ordinary markdown features rendered poorly in chat bubbles.
+  grep -qF 'renderMermaidInContainer(list)' web/public/app.js \
+    && pass "app.js: renderChatPane runs mermaid pass on the chat list" \
+    || fail "app.js: chat pane does not process mermaid blocks"
+  grep -qF '.chat-msg .chat-text blockquote' web/public/styles.css \
+    && pass "css: chat-text blockquote styled" \
+    || fail "css: chat-text blockquote not styled"
+  grep -qF '.chat-msg .chat-text table' web/public/styles.css \
+    && pass "css: chat-text table styled" \
+    || fail "css: chat-text table not styled"
+  grep -qF '.chat-msg .chat-text .conv-mermaid' web/public/styles.css \
+    && pass "css: chat-text mermaid container sized to bubble width" \
+    || fail "css: chat-text mermaid container not styled"
   # NOTE: the old startInReadonly auto-switch was reverted — interaction
   # now happens in the chat pane via the typing-dots indicator + the
   # buffered-reply path (see test_chat_window guards below). doSpawn
@@ -481,8 +499,25 @@ test_new_session_readonly() {
   # Live spinner status surfaced from the headless terminal:
   #   server pushes 'claude-status' WS frames whose text is something like
   #   "· Cerebrating… (40s · ↓ 3.4k tokens · thought for 2s)" when claude
-  #   is busy, or null when idle. The client renders this in place of
-  #   the static "Claude is working…" label.
+  #   is busy, or null when idle. The chat-pane indicator carries ONLY
+  #   that live text — no static "Claude is working…" fallback — and
+  #   its height is fixed via CSS so tick-by-tick status updates don't
+  #   reflow the chat-message list above.
+  grep -qF "'Claude is working" web/public/app.js \
+    && fail "app.js: 'Claude is working' fallback label still present (regression)" \
+    || pass "app.js: typing indicator label uses live status only (no fallback chatter)"
+  # Match the call site specifically (`scrollIntoView(`) not the word — the
+  # explanatory comment in the function body mentions scrollIntoView too.
+  awk '/^function _renderClaudeTyping\(/,/^\}/' web/public/app.js | \
+    grep -qF 'host.scrollIntoView(' \
+    && fail "app.js: _renderClaudeTyping still calls scrollIntoView (yanks chat viewport on every tick)" \
+    || pass "app.js: _renderClaudeTyping no longer auto-scrolls on tick"
+  grep -qF 'height: 30px;' web/public/styles.css \
+    && pass "css: claude-typing has fixed height (no reflow on status update)" \
+    || fail "css: claude-typing missing fixed height — status updates will reflow chat"
+  grep -qF '.claude-typing-label' web/public/styles.css \
+    && pass "css: claude-typing-label has overflow-ellipsis rules" \
+    || fail "css: claude-typing-label not styled"
   grep -q "this\\.emit('claude-status'" server/src/pty.js \
     && pass "pty.js: emits claude-status on headless change" \
     || fail "pty.js: emits claude-status on headless change"

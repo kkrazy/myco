@@ -1494,6 +1494,61 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   margin: 6px 0;
 }
 .chat-msg .chat-text pre code { background: transparent; padding: 0; }
+/* Full markdown coverage inside chat bubbles — headings, blockquote,
+   tables, links, hr, images, mermaid SVG. Keep proportions tight so a
+   chat bubble doesn't visually compete with the transcript view. */
+.chat-msg .chat-text h1,
+.chat-msg .chat-text h2,
+.chat-msg .chat-text h3,
+.chat-msg .chat-text h4,
+.chat-msg .chat-text h5,
+.chat-msg .chat-text h6 {
+  margin: 0.7em 0 0.3em;
+  line-height: 1.25;
+  color: #e6edf3;
+}
+.chat-msg .chat-text h1 { font-size: 1.3em; border-bottom: 1px solid rgba(255,255,255,.08); padding-bottom: 2px; }
+.chat-msg .chat-text h2 { font-size: 1.15em; border-bottom: 1px solid rgba(255,255,255,.06); padding-bottom: 2px; }
+.chat-msg .chat-text h3 { font-size: 1.05em; }
+.chat-msg .chat-text blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 3px solid rgba(120,160,220,.4);
+  color: rgba(201,209,217,.85);
+  background: rgba(255,255,255,.02);
+}
+.chat-msg .chat-text a { color: #79b8ff; text-decoration: none; }
+.chat-msg .chat-text a:hover { text-decoration: underline; }
+.chat-msg .chat-text hr {
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.08);
+  margin: 8px 0;
+}
+.chat-msg .chat-text img { max-width: 100%; height: auto; border-radius: 4px; }
+.chat-msg .chat-text table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  display: block;
+  overflow-x: auto;
+  font-size: .92em;
+}
+.chat-msg .chat-text table th,
+.chat-msg .chat-text table td {
+  border: 1px solid rgba(255,255,255,.1);
+  padding: 4px 8px;
+}
+.chat-msg .chat-text table th { background: rgba(255,255,255,.04); text-align: left; }
+/* Mermaid SVG sized to the bubble width. The .conv-mermaid class is
+   assigned by renderMermaidInContainer and shared with the transcript
+   view; reuse the global svg sizing rule there if it exists. */
+.chat-msg .chat-text .conv-mermaid {
+  margin: 8px 0;
+  background: rgba(255,255,255,.02);
+  border-radius: 4px;
+  padding: 6px;
+  overflow-x: auto;
+}
+.chat-msg .chat-text .conv-mermaid svg { max-width: 100%; height: auto; }
 .chat-msg.from-claude .chat-text {
   background: rgba(76, 175, 130, .08);
   border-left: 2px solid var(--accent);
@@ -2769,19 +2824,34 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: #f85149;
 }
 
-/* ── "Claude is working…" typing indicator inside the chat pane ──
-   Sits as a sibling AFTER #chat-messages so it renders below the
-   newest message. Visible only while state.awaitingClaude is true.
-   The dots use a staggered pulse to read as "live". */
+/* ── Claude typing indicator inside the chat pane ──
+   Sits as a sibling of #chat-messages but its height is FIXED so
+   frequent status updates (the live spinner ticks every ~750ms with
+   strings like "Brewing for 5s") never reflow the chat list above.
+   The label text overflows with ellipsis instead of wrapping. The
+   indicator carries only the live spinner text — no "Claude is
+   working…" fallback chatter — so when claude is idle the strip
+   collapses to nothing. */
 .claude-typing {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  height: 30px;
+  padding: 0 12px;
   color: #8b949e;
   font-size: 0.85rem;
   border-top: 1px dashed #21262d;
   background: rgba(22, 27, 34, 0.4);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.claude-typing-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .claude-typing[hidden] { display: none; }
 .claude-typing-dots {
