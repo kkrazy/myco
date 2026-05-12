@@ -1177,6 +1177,16 @@ test_chat_window() {
   grep -qF '_postClaudeStreamToChat(m.text.trim(), m.uuid)' web/public/app.js \
     && pass "app.js: live chat rows stamp transcriptUuid for dedup" \
     || fail "app.js: live chat rows missing transcriptUuid stamp"
+  # Regression: appendChatMessage (the 'chat' WS frame handler) must
+  # dedup by meta.transcriptUuid. Without this, the SAME assistant text
+  # arriving via transcript-delta first and then the server's 'chat'
+  # push from persistAssistantTextToChat rendered twice in the chat
+  # pane (observed on mycobeta demo010 as identical "claude 01:17"
+  # rows duplicated back-to-back).
+  awk '/^function appendChatMessage\(/,/^\}/' web/public/app.js | \
+    grep -qF 'existing.meta.transcriptUuid === uuid' \
+    && pass "app.js: appendChatMessage dedups by transcriptUuid" \
+    || fail "app.js: appendChatMessage missing transcriptUuid dedup"
   # Regression: the readonly transcript viewer used to freeze when
   # fs.watch silently stopped firing (overlay/bind-mount/Docker
   # filesystem quirk). The safety setInterval guarantees forward

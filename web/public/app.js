@@ -1553,6 +1553,26 @@ function applyChatHistory(messages) {
 
 function appendChatMessage(message) {
   if (!message || typeof message !== 'object') return;
+  // Dedup by transcript uuid — Claude's assistant text reaches the
+  // client through two paths now: the live transcript-delta (which
+  // posts a _localOnly row via _postClaudeStreamToChat) AND a 'chat'
+  // frame from persistAssistantTextToChat on the server. If
+  // transcript-delta arrived first the local row is already in chat;
+  // skip the server-side push to avoid rendering the same reply twice.
+  // (If chat arrives first the existing _onTranscriptDeltaForChat dedup
+  // handles the reverse direction.)
+  const uuid = message.meta && message.meta.transcriptUuid;
+  if (uuid) {
+    for (let i = 0; i < state.chatMessages.length; i++) {
+      const existing = state.chatMessages[i];
+      if (existing && existing.meta && existing.meta.transcriptUuid === uuid) {
+        // Upgrade the _localOnly row to the persisted one in place so
+        // subsequent renders use the canonical server-side metadata.
+        if (existing._localOnly && !message._localOnly) state.chatMessages[i] = message;
+        return;
+      }
+    }
+  }
   state.chatMessages.push(message);
   renderChatPane(/*scrollToBottom*/ true);
   _updatePendingMenuFromMessage(message);
