@@ -1130,6 +1130,23 @@ test_chat_window() {
   else
     skip "test/menu-pick-race.test.js (no host node)"
   fi
+  # Regression: captureClaudeSessionId must REPLACE a stale store value
+  # when claude code creates a new jsonl during a --resume respawn. The
+  # original gate (`!rec.claudeSessionId`) silently froze the store at
+  # the first-ever id, so every readonly viewer for a long-running
+  # session pointed at a transcript that stopped at the first restart.
+  if have_node; then
+    if node test/capture-claude-session-id.test.js >/dev/null 2>&1; then
+      pass "test/capture-claude-session-id.test.js (4 cases)"
+    else
+      fail "test/capture-claude-session-id.test.js — re-run with 'node test/capture-claude-session-id.test.js' to see failures"
+    fi
+  else
+    skip "test/capture-claude-session-id.test.js (no host node)"
+  fi
+  grep -qF 'rec.claudeSessionId !== id' server/src/sessions.js \
+    && pass "sessions.js: captureClaudeSessionId gate replaces stale id" \
+    || fail "sessions.js: captureClaudeSessionId still has the freeze-on-first gate"
   # Quick wire-level checks for the hash field carrying end-to-end.
   grep -qF 'data-hash="${escHtml(menuHash)}"' web/public/app.js \
     && pass "app.js: menu buttons stamp data-hash" \

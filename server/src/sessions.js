@@ -269,10 +269,20 @@ function captureClaudeSessionId(sessionId, absCwd, spawnedAtMs) {
       }
       if (!isClaudeSessionId(id)) { if (attempts < 120) setTimeout(tick, 500); return; }
       const rec = loadStore().sessions[sessionId];
-      if (rec && !rec.claudeSessionId) {
+      if (rec && rec.claudeSessionId !== id) {
+        // Two paths land here:
+        //   - fresh spawn: rec.claudeSessionId was null, capture for the
+        //     first time.
+        //   - --resume respawn: rec.claudeSessionId was the OLD jsonl, and
+        //     claude code created a NEW jsonl when it resumed. The old
+        //     gate (`!rec.claudeSessionId`) refused to update, so the
+        //     readonly viewer + every subsequent --resume kept pointing
+        //     at a frozen transcript while the live session kept writing
+        //     to the new file. Always store the freshly-discovered id.
+        const prev = rec.claudeSessionId;
         rec.claudeSessionId = id;
         saveStore();
-        console.log(`[capture] claudeSessionId=${id} for ${sessionId} (attempt ${attempts})`);
+        console.log(`[capture] claudeSessionId=${id} for ${sessionId} (attempt ${attempts}${prev ? `, replaced ${prev}` : ''})`);
       }
       return;
     }
@@ -548,6 +558,7 @@ Object.assign(module.exports, {
   encodeCwdForClaude,
   isClaudeSessionId,
   findNewestJsonl,
+  captureClaudeSessionId,
   getSessionRecord,
   readDescriptionForCwd,
   resolveCwd,
