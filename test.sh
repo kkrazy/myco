@@ -928,6 +928,25 @@ test_chat_window() {
   grep -qF "it.source === 'user'" server/src/artifacts.js \
     && pass "artifacts: refresh preserves user-added plan items" \
     || fail "artifacts: refresh preserves user-added plan items"
+  # Arch artifact mirror to <cwd>/architecture.md. GET prefers the file
+  # so the Arch tab auto-loads existing content (no Refresh click
+  # required); refresh writes the extracted markdown back to disk so
+  # it lives with the project, not just sessions.json.
+  grep -qF "architecture.md" server/src/artifacts.js \
+    && pass "artifacts: arch mirrors to architecture.md" \
+    || fail "artifacts: arch mirrors to architecture.md"
+  grep -q "function readArchFromFile" server/src/artifacts.js \
+    && pass "artifacts: readArchFromFile helper" \
+    || fail "artifacts: readArchFromFile helper"
+  grep -q "function writeArchToFile" server/src/artifacts.js \
+    && pass "artifacts: writeArchToFile helper" \
+    || fail "artifacts: writeArchToFile helper"
+  grep -q "readArchFromFile(ctx.rec)" server/src/artifacts.js \
+    && pass "artifacts: GET arch reads from file first" \
+    || fail "artifacts: GET arch reads from file first"
+  grep -q "writeArchToFile(ctx.rec, artifact.markdown)" server/src/artifacts.js \
+    && pass "artifacts: refresh arch writes file" \
+    || fail "artifacts: refresh arch writes file"
   if have_node; then
     node -e "
       const s = require('./server/src/slashcmds');

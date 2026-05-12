@@ -8,11 +8,47 @@
 // the canonical chat-message path in pty.js.
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const { extractArtifact } = require('./extractor');
 const { saveStore } = require('./sessions');
 
 const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
+
+// The Arch artifact (markdown body) is mirrored to <session-cwd>/architecture.md
+// so it lives with the project (version-controllable, editable from claude
+// or directly), instead of only inside myco's sessions.json. GET prefers
+// the file when present; refresh writes the freshly-extracted markdown to it.
+const ARCH_FILE = 'architecture.md';
+
+function archFilePath(rec) {
+  if (!rec || !rec.absCwd) return null;
+  return path.join(rec.absCwd, ARCH_FILE);
+}
+
+function readArchFromFile(rec) {
+  const p = archFilePath(rec);
+  if (!p) return null;
+  let stat, body;
+  try {
+    stat = fs.statSync(p);
+    body = fs.readFileSync(p, 'utf8');
+  } catch { return null; }
+  return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
+}
+
+function writeArchToFile(rec, markdown) {
+  const p = archFilePath(rec);
+  if (!p) return false;
+  try {
+    fs.writeFileSync(p, String(markdown || ''));
+    return true;
+  } catch (err) {
+    console.error(`[artifact] failed to write ${p}: ${err.message}`);
+    return false;
+  }
+}
 
 // Plan items only — see autoFireIfQuorum below. Two distinct voters dispatch
 // the @myco run automatically; arch is unactionable, test items don't run.
@@ -51,11 +87,25 @@ function register(app, deps) {
   const { fileApiPreamble, getPtySession, handleChatMessage } = deps;
 
   // GET — return the persisted artifact (or an empty stub of the right shape).
+  // For type=arch we prefer the on-disk <cwd>/architecture.md when present
+  // so a user (or claude) editing the file is the source of truth, not the
+  // sessions.json copy. The Arch tab auto-loads from this path so the user
+  // doesn't have to click Refresh to see content that already exists in
+  // the project.
   app.get('/sessions/:id/artifact', (req, res) => {
     const ctx = fileApiPreamble(req, res, 'viewer');
     if (!ctx) return;
     const type = String(req.query.type || '');
     if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') {
+      const fromFile = readArchFromFile(ctx.rec);
+      if (fromFile) {
+        // Mirror back into rec.artifacts so other code paths (UI cache,
+        // legacy clients) see a consistent shape.
+        persistArtifact(ctx.rec, type, fromFile);
+        return res.json({ artifact: fromFile });
+      }
+    }
     const stored = ctx.rec.artifacts && ctx.rec.artifacts[type];
     res.json({ artifact: stored || emptyArtifact(type) });
   });
@@ -88,6 +138,12 @@ function register(app, deps) {
       }
     }
     persistArtifact(ctx.rec, type, artifact);
+    // Mirror the Arch markdown to <cwd>/architecture.md so it lives with
+    // the project (next GET will read from there, and the file can be
+    // committed / edited externally).
+    if (type === 'arch' && artifact && typeof artifact.markdown === 'string') {
+      writeArchToFile(ctx.rec, artifact.markdown);
+    }
     res.json({ artifact });
   });
 
