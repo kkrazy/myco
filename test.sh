@@ -98,6 +98,86 @@ test_frontend_files() {
   done
 }
 
+test_pty_patterns() {
+  # CLAUDE.md rule: every regex that matches claude's PTY/TUI output
+  # lives in server/src/pty-patterns.js. Consumer files reference the
+  # named constants; they don't inline the patterns.
+  test -f server/src/pty-patterns.js && pass "pty-patterns.js exists" || fail "pty-patterns.js missing"
+  if have_node; then
+    node -e "
+      const p = require('./server/src/pty-patterns');
+      const want = [
+        'MENU_OPT_MARKER_RE','MENU_QUESTION_TAIL_RE','MENU_QUESTION_VERB_RE',
+        'MENU_KIND_PERMISSION_RE','MENU_KIND_PLAN_RE','TRUST_DIALOG_RE',
+        'PERMISSION_TOOL_RE','PERMISSION_INPUT_RE',
+        'MODE_ACCEPT_RE','MODE_PLAN_RE','MODE_BYPASS_RE',
+        'SPINNER_DURATION_RE','WELCOME_BANNER_RE',
+      ];
+      for (const k of want) {
+        if (!(p[k] instanceof RegExp)) throw new Error('missing pattern export: ' + k);
+      }
+      // Marker pattern: well-formed + claude-malformed YES, decimals NO.
+      const re = p.MENU_OPT_MARKER_RE;
+      re.lastIndex = 0; if (!re.exec(' 1. Yes'))   throw new Error('marker missed \"1. Yes\"');
+      re.lastIndex = 0; if (!re.exec(' 2.Yes'))    throw new Error('marker missed claude-malformed \"2.Yes\"');
+      re.lastIndex = 0; if (re.exec('v1.0'))       throw new Error('marker should NOT match \"v1.0\"');
+      re.lastIndex = 0; if (re.exec('I have 3.5')) throw new Error('marker should NOT match \"3.5\"');
+      // Permission tool: catches both API form AND display form (with space).
+      // Caller (permissions.extractPermissionTarget) trims leading whitespace
+      // first, so we mirror that here.
+      const ptr = p.PERMISSION_TOOL_RE;
+      let m = 'Web Search(\"x\")'.match(ptr);
+      if (!m || !/web ?search/i.test(m[1])) throw new Error('PERMISSION_TOOL_RE missed display-form \"Web Search\": ' + JSON.stringify(m));
+      m = 'WebSearch(\"x\")'.match(ptr);
+      if (!m || !/web ?search/i.test(m[1])) throw new Error('PERMISSION_TOOL_RE missed API-form \"WebSearch\": ' + JSON.stringify(m));
+      m = 'Allow Bash command?'.match(ptr);
+      if (!m || m[1].toLowerCase() !== 'bash') throw new Error('PERMISSION_TOOL_RE missed \"Allow Bash\": ' + JSON.stringify(m));
+      // Trust dialog recognizer.
+      if (!p.TRUST_DIALOG_RE.test('Quick safety check: Is this a project you created or one you trust?')) throw new Error('TRUST_DIALOG_RE missed safety-check phrasing');
+      if (!p.TRUST_DIALOG_RE.test('Do you trust the files in this folder?')) throw new Error('TRUST_DIALOG_RE missed canonical phrasing');
+      // Spinner.
+      if (!p.SPINNER_DURATION_RE.test('✻ Worked for 12s · esc to interrupt')) throw new Error('SPINNER_DURATION_RE missed \"Worked for Ns\"');
+      if (!p.SPINNER_DURATION_RE.test('✦ Thinking for 3s …')) throw new Error('SPINNER_DURATION_RE missed alternate spinner glyph');
+      if (p.SPINNER_DURATION_RE.test('We worked for 12 hours')) throw new Error('SPINNER_DURATION_RE matched prose');
+      // Welcome banner.
+      if (!p.WELCOME_BANNER_RE.test('Welcome back Ken!')) throw new Error('WELCOME_BANNER_RE missed \"Welcome back\"');
+      // Question verbs widened.
+      if (!p.MENU_QUESTION_VERB_RE.test('Are you sure you want to continue?')) throw new Error('MENU_QUESTION_VERB_RE missed \"are you sure\"');
+      if (!p.MENU_QUESTION_VERB_RE.test('Would you like me to proceed?')) throw new Error('MENU_QUESTION_VERB_RE missed \"would you like\"');
+      // Permission target normalisation: extractPermissionTarget must
+      // canonicalise \"Web Search\" → \"WebSearch\" so the result feeds
+      // allow/deny patterns directly.
+      const perms = require('./server/src/permissions');
+      const tgt = perms.extractPermissionTarget('  Web Search(\"weather\")\n  Claude wants to search the web for:\n  weather');
+      if (!tgt || tgt.tool !== 'WebSearch') throw new Error('extractPermissionTarget did not normalise \"Web Search\" → \"WebSearch\": ' + JSON.stringify(tgt));
+    " && pass "pty-patterns: required constants + enriched matchers" \
+      || fail "pty-patterns: required constants + enriched matchers"
+  else
+    skip "pty-patterns runtime (no host node)"
+  fi
+  # Consumers must require from pty-patterns and not inline the same
+  # regexes locally — otherwise the centralisation is decorative.
+  grep -q "require('./pty-patterns')" server/src/menu-interceptor.js \
+    && pass "menu-interceptor imports from pty-patterns" \
+    || fail "menu-interceptor imports from pty-patterns"
+  grep -q "require('./pty-patterns')" server/src/permissions.js \
+    && pass "permissions imports from pty-patterns" \
+    || fail "permissions imports from pty-patterns"
+  grep -q "require('./pty-patterns')" server/src/pty.js \
+    && pass "pty imports from pty-patterns" \
+    || fail "pty imports from pty-patterns"
+  # No inline TUI regex copies left in the three migrated files.
+  ! grep -qE "approve\.\*tool|approve\.\*bash" server/src/menu-interceptor.js \
+    && pass "menu-interceptor no longer inlines kind-classifier regex" \
+    || fail "menu-interceptor no longer inlines kind-classifier regex"
+  ! grep -qE "Bash\|Edit\|Write\|Read\|MultiEdit" server/src/permissions.js \
+    && pass "permissions no longer inlines tool-name regex" \
+    || fail "permissions no longer inlines tool-name regex"
+  ! grep -qE "accept edits\|auto-accept" server/src/pty.js \
+    && pass "pty no longer inlines status-bar mode regex" \
+    || fail "pty no longer inlines status-bar mode regex"
+}
+
 test_vendor_assets() {
   # Regression: marked.umd.js was referenced from index.html but never
   # vendored into the static dir, so the browser 404'd marked, renderMd
@@ -485,6 +565,7 @@ run_static_checks() {
   test_vendor_assets
   test_npm_deps
   test_text_utils
+  test_pty_patterns
   test_cache_busters
   test_conv_view_css
   test_conv_view_js

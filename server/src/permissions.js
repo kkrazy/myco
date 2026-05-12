@@ -19,6 +19,10 @@ const sessionsMod = require('./sessions');
 const loadStore = (...a) => sessionsMod.loadStore(...a);
 const saveStore = (...a) => sessionsMod.saveStore(...a);
 
+// TUI-output regexes live in pty-patterns.js (one home so future tweaks
+// for new claude-code rendering quirks all land in the same file).
+const { PERMISSION_TOOL_RE, PERMISSION_INPUT_RE } = require('./pty-patterns');
+
 // Conservative default — the user explicitly chose this baseline. Common
 // safe-by-design tools plus a handful of build / test / git Bash families.
 // Anything not on the list (and not on rec.denyList) is auto-denied; the
@@ -137,9 +141,11 @@ function extractPermissionTarget(rawText) {
   //   "Run Bash command?"
   let tool = null;
   for (const line of lines) {
-    const t = line.trim();
-    const m = t.match(/^(?:Allow|Run|Approve)?\s*(Bash|Edit|Write|Read|MultiEdit|Glob|Grep|WebFetch|WebSearch|NotebookEdit|TodoWrite|Task)\b/i);
-    if (m) { tool = m[1]; break; }
+    const m = line.trim().match(PERMISSION_TOOL_RE);
+    // Normalise display-form tool names to their canonical no-space API
+    // form ("Web Search" → "WebSearch") so they match the allow/deny
+    // pattern syntax. See PERMISSION_TOOL_RE in pty-patterns.js.
+    if (m) { tool = m[1].replace(/\s+/g, ''); break; }
   }
   if (!tool) return null;
 
@@ -149,7 +155,7 @@ function extractPermissionTarget(rawText) {
   // non-decoration line above the options.
   let input = '';
   for (const line of lines) {
-    const m = line.match(/^\s*[>❯]\s+(.+)$/);
+    const m = line.match(PERMISSION_INPUT_RE);
     if (m) { input = m[1].trim(); break; }
   }
   return { tool, input };

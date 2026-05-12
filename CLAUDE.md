@@ -54,6 +54,8 @@
 
 1. **Break functionality into small functions with one clear responsibility.** Aim for fewer than ~80 lines per function. If a function is doing setup + work + teardown, or covers more than one concept, split it. Name each function for what it does (`build_image`, `seed_caddyfile`, `test_persist_after_restart`) — the call site should read like prose. Top-level orchestration belongs in a `main()` (or equivalent) that just sequences the named steps. This keeps diffs reviewable and makes scripts/code easy to extend without rewriting the world.
 
+2. **All regexes that match claude's PTY/TUI output live in `server/src/pty-patterns.js`.** Whenever you need to detect anything claude renders to its terminal — menu markers, question lines, status-bar mode hints, permission-dialog labels, anything new — add the pattern there as a named `<SURFACE>_<WHAT>_RE` constant with a docstring that quotes the exact claude output the regex is meant to match. Then import it from the consumer (menu-interceptor.js, permissions.js, pty.js, future files). Do NOT inline TUI-matching regexes at the call site, and do NOT scatter them across modules — claude code's rendering shifts between releases, and we want every patch to land in one file. Excluded from this file: regexes that parse user input, our own config, or non-TUI text (those stay with their callers).
+
 ## Design Guidelines
 
 1. **Always use Mermaid diagrams** for any architecture, flow, sequence, or state diagrams. Never use ASCII art boxes or plain-text diagrams.

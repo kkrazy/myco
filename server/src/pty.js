@@ -9,6 +9,7 @@ const sessionsMod = require('./sessions');
 const { askAssistant, shouldAskAssistant, ASSISTANT_USER } = require('./btw');
 const { stripAnsi, tailLines } = require('./text-utils');
 const menuMod = require('./menu');
+const { MODE_ACCEPT_RE, MODE_PLAN_RE } = require('./pty-patterns');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 
@@ -628,12 +629,9 @@ function detectClaudeMode(session) {
     }
     const blob = tail.join('\n').toLowerCase();
     let mode;
-    // Patterns updated to match Claude Code's actual status bar variants:
-    // ⏵⏵ auto-accept edits on (shift+tab to cycle)
-    // ⏸ plan mode on (shift+tab to cycle)
-    // (no mode label) → default mode
-    if (/accept edits|auto-accept|auto edit/i.test(blob)) mode = 'accept';
-    else if (/plan mode/i.test(blob)) mode = 'plan';
+    // Status-bar variants live in pty-patterns.js (MODE_ACCEPT_RE / MODE_PLAN_RE).
+    if (MODE_ACCEPT_RE.test(blob)) mode = 'accept';
+    else if (MODE_PLAN_RE.test(blob)) mode = 'plan';
     else mode = 'default';
     // Log the detected mode + a tiny tail snippet so we can confirm the
     // patterns are matching reality. Short enough not to flood logs.

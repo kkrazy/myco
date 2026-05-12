@@ -11,18 +11,16 @@
 // (question + options) so the same dialog doesn't re-fire on every render
 // tick — only on transitions (new dialog, replaced dialog, dialog cleared).
 
-// Accepted numbered-option shapes for the marker only:
-//   "1." "1)" "[1]" "(1)"
-// The marker must be flanked by a whitespace/start boundary on the LEFT so we
-// don't pick up references inside prose ("v1.0", "arr[4]access"). On the
-// RIGHT we only forbid another digit — claude code's TUI sometimes renders
-// option labels with no space after the marker (e.g. "2.Yes, don't ask
-// again"), and a strict trailing-whitespace check rejected the second
-// option entirely, silently breaking menu detection. The "no following
-// digit" rule still blocks decimals ("3.5", "v1.0").
-// Matched globally so multiple options on a single line are all extracted
-// (e.g. "[4] Type something. [5] Chat about this").
-const OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/g;
+// All TUI-output regexes live in pty-patterns.js — one place to patch
+// when claude code's rendering shifts. See that file for the per-pattern
+// rationale + the exact dialog text that motivated each rule.
+const {
+  MENU_OPT_MARKER_RE: OPT_MARKER_RE,
+  MENU_QUESTION_TAIL_RE,
+  MENU_QUESTION_VERB_RE,
+  MENU_KIND_PERMISSION_RE,
+  MENU_KIND_PLAN_RE,
+} = require('./pty-patterns');
 
 class MenuInterceptor {
   constructor() {
@@ -108,7 +106,7 @@ class MenuInterceptor {
     for (let i = firstOptIdx - 1; i >= Math.max(0, firstOptIdx - 5); i--) {
       const t = lines[i].trim();
       if (!t) continue;
-      if (/\?\s*$/.test(t) || /what would you|allow|do you want|approve|confirm|proceed/i.test(t)) {
+      if (MENU_QUESTION_TAIL_RE.test(t) || MENU_QUESTION_VERB_RE.test(t)) {
         question = t;
         break;
       }
@@ -122,8 +120,8 @@ class MenuInterceptor {
     // option labels ("Always allow <tool>", "Don't allow", "Yes, run").
     const classBlob = (question + ' ' + options.map((o) => o.label).join(' ')).toLowerCase();
     let kind = 'generic';
-    if (/allow.*\?|permission|approve.*tool|approve.*bash|bypass.*permission|always allow|don'?t allow|run this command|allow this command/i.test(classBlob)) kind = 'permission';
-    else if (/plan|proceed|continue (with|the) plan|keep planning/i.test(classBlob)) kind = 'plan';
+    if (MENU_KIND_PERMISSION_RE.test(classBlob)) kind = 'permission';
+    else if (MENU_KIND_PLAN_RE.test(classBlob)) kind = 'plan';
 
     const optsForHash = options.map((o) => ({ n: o.n, label: o.label }));
     const hash = hashMenu(question, optsForHash);
