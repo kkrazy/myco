@@ -23,11 +23,29 @@ const COMMANDS = [
     usage: '/feature <title>',
     handler: handleFeature,
   },
+  // Short plan-item commands. Each one appends a row to this session's
+  // Plan artifact (rec.artifacts.plan.items) with a classification layer
+  // — Feature / Todo / Bug — that the Plan tab groups items by. The
+  // items are tagged source='user' so they survive a Refresh of the
+  // claude-extracted plan (the extractor would otherwise replace the
+  // whole list).
+  {
+    names: ['fr'],
+    summary: 'Add a feature-request item to this session\'s Plan',
+    usage: '/fr <description>',
+    handler: (ctx) => addPlanItem(ctx, 'Feature'),
+  },
+  {
+    names: ['td', 'todo'],
+    summary: 'Add a todo item to this session\'s Plan',
+    usage: '/td <description>',
+    handler: (ctx) => addPlanItem(ctx, 'Todo'),
+  },
   {
     names: ['bug'],
-    summary: 'Raise a bug-report issue on the session\'s GitHub repo',
-    usage: '/bug <title>',
-    handler: (ctx) => handleIssue(ctx, { kind: 'bug', labels: ['bug'] }),
+    summary: 'Add a bug-report item to this session\'s Plan',
+    usage: '/bug <description>',
+    handler: (ctx) => addPlanItem(ctx, 'Bug'),
   },
   {
     names: ['decide', 'pick', 'choose'],
@@ -93,6 +111,53 @@ async function dispatch(ctx, text) {
 }
 
 // ── individual handlers ─────────────────────────────────────────────────────
+
+const crypto = require('crypto');
+
+// Append a free-form plan item to rec.artifacts.plan.items. Used by
+// /fr, /td, /bug — each pre-binds the `layer` (which the Plan tab
+// groups items by) so the user just types the description.
+//
+// source='user' so the next "Refresh" of the plan (which re-extracts
+// from the transcript and replaces the items array) preserves these
+// instead of clobbering them — see the merge in artifacts.js refresh.
+function addPlanItem(ctx, layer) {
+  const text = (ctx.args || '').trim();
+  if (!text) {
+    ctx.reply(`Usage: /<cmd> <description> — adds a ${layer} item to this session's Plan.`);
+    return;
+  }
+  const sessionId = ctx.sessionId;
+  if (!sessionId) { ctx.reply('(no session context — slash command dropped)'); return; }
+  let item;
+  try {
+    const store = sessionsMod.loadStore();
+    const rec = store.sessions[sessionId];
+    if (!rec) { ctx.reply('(no session record on disk — cannot persist plan item)'); return; }
+    if (!rec.artifacts) rec.artifacts = {};
+    if (!rec.artifacts.plan || !Array.isArray(rec.artifacts.plan.items)) {
+      rec.artifacts.plan = { items: [], updatedAt: null };
+    }
+    item = {
+      id: crypto.randomBytes(6).toString('hex'),
+      text,
+      layer,
+      done: false,
+      addedAt: new Date().toISOString(),
+      addedBy: ctx.user || 'unknown',
+      source: 'user',
+      voters: [],
+      comments: [],
+    };
+    rec.artifacts.plan.items.push(item);
+    rec.artifacts.plan.updatedAt = item.addedAt;
+    sessionsMod.saveStore();
+  } catch (err) {
+    ctx.reply(`(plan item failed to save: ${err.message})`);
+    return;
+  }
+  ctx.reply(`✓ added **${layer}** item to Plan: ${text}`);
+}
 
 function handleFeature(ctx) {
   return handleIssue(ctx, { kind: 'feature', labels: ['enhancement'] });

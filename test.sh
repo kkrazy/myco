@@ -906,6 +906,34 @@ test_chat_window() {
   grep -q "names: \['allow'" server/src/slashcmds.js && pass "/allow command registered" || fail "/allow missing"
   grep -q "names: \['deny'" server/src/slashcmds.js && pass "/deny command registered" || fail "/deny missing"
   grep -q "names: \['allowlist'" server/src/slashcmds.js && pass "/allowlist command registered" || fail "/allowlist missing"
+  # Plan-item shortcuts — /fr (feature), /td (todo, also /todo), /bug.
+  # Each appends a row to rec.artifacts.plan.items with a fixed layer.
+  grep -q "names: \['fr'\]" server/src/slashcmds.js && pass "/fr command registered" || fail "/fr command missing"
+  grep -q "names: \['td', 'todo'\]" server/src/slashcmds.js && pass "/td command registered (alias /todo)" || fail "/td command missing"
+  grep -q "names: \['bug'\]" server/src/slashcmds.js && pass "/bug command registered" || fail "/bug command missing"
+  grep -q "function addPlanItem" server/src/slashcmds.js && pass "addPlanItem helper defined" || fail "addPlanItem helper missing"
+  # source='user' tagging + refresh-merge so user items survive a Plan refresh.
+  grep -qF "source: 'user'" server/src/slashcmds.js \
+    && pass "addPlanItem tags user items with source='user'" \
+    || fail "addPlanItem tags user items with source='user'"
+  grep -qF "it.source === 'user'" server/src/artifacts.js \
+    && pass "artifacts: refresh preserves user-added plan items" \
+    || fail "artifacts: refresh preserves user-added plan items"
+  if have_node; then
+    node -e "
+      const s = require('./server/src/slashcmds');
+      const cmds = s.listCommands();
+      const names = new Set();
+      for (const c of cmds) {
+        if (c.name) names.add(c.name);
+        for (const a of (c.aliases || [])) names.add(a);
+      }
+      for (const n of ['fr','td','todo','bug']) {
+        if (!names.has(n)) throw new Error('missing slash command: ' + n);
+      }
+    " && pass "slashcmds: /fr /td /todo /bug all listed by listCommands" \
+      || fail "slashcmds: /fr /td /todo /bug all listed by listCommands"
+  fi
   if have_node; then
     node -e "
       const p = require('./server/src/permissions');

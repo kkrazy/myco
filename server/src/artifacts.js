@@ -73,6 +73,20 @@ function register(app, deps) {
       console.error(`[artifact] extract failed for ${type}: ${err.message}`);
       return res.status(500).json({ error: 'extraction failed', detail: err.message });
     }
+    // Preserve user-typed plan items (added via /fr, /td, /bug slash
+    // commands and tagged source='user') across a refresh — without
+    // this they'd be wiped every time the user clicks the Refresh
+    // button on the Plan tab, defeating the whole purpose of letting
+    // users hand-add classified items.
+    const previous = ctx.rec.artifacts && ctx.rec.artifacts[type];
+    if (previous && Array.isArray(previous.items) && Array.isArray(artifact.items)) {
+      const userItems = previous.items.filter((it) => it && it.source === 'user');
+      if (userItems.length) {
+        // User items first so they stay near the top of their layer
+        // group after the client groups by `layer`.
+        artifact.items = [...userItems, ...artifact.items];
+      }
+    }
     persistArtifact(ctx.rec, type, artifact);
     res.json({ artifact });
   });
