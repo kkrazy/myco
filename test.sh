@@ -1058,6 +1058,19 @@ test_chat_window() {
   else
     skip "test/menu-broadcast.test.js (no host node)"
   fi
+  # Regression for the subagent-jsonl bug that hung mycobeta sessions:
+  # `<project>/subagents/agent-*.jsonl` must NEVER be returned by
+  # findNewestJsonl, and isClaudeSessionId must reject non-UUID names so
+  # claude --resume can't be invoked with a bogus id.
+  if have_node; then
+    if node test/find-newest-jsonl.test.js >/dev/null 2>&1; then
+      pass "test/find-newest-jsonl.test.js (6 cases)"
+    else
+      fail "test/find-newest-jsonl.test.js — re-run with 'node test/find-newest-jsonl.test.js' to see failures"
+    fi
+  else
+    skip "test/find-newest-jsonl.test.js (no host node)"
+  fi
   if have_node; then
     node -e "
       const { MenuInterceptor } = require('./server/src/menu-interceptor');

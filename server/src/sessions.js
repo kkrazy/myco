@@ -99,6 +99,15 @@ function getSessionRecord(id) { return loadStore().sessions[id] || null; }
 function projectsDir() { return path.join(os.homedir(), '.claude', 'projects'); }
 function encodeCwdForClaude(cwd) { return cwd.replace(/\//g, '-'); }
 
+// Claude session-id shape (UUID v4): the basename of `<project>/<uuid>.jsonl`.
+// Task-tool subagent transcripts use the shape `agent-<hex>.jsonl` and live
+// under a `subagents/` subdirectory — those are NOT resumable session ids
+// and must never be stored as `claudeSessionId`. Doing so causes
+// `claude --resume agent-XYZ` to error and exit immediately, leaving the
+// PTY blank and the chat hung (the symptom that exposed this bug).
+const CLAUDE_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isClaudeSessionId(name) { return CLAUDE_SESSION_ID_RE.test(String(name || '')); }
+
 async function findNewestJsonl(dir, sinceMs = 0) {
   let best = null;
   async function walk(d) {
@@ -107,8 +116,18 @@ async function findNewestJsonl(dir, sinceMs = 0) {
     for (const e of entries) {
       const full = path.join(d, e.name);
       if (e.isDirectory()) {
+        // Skip the `subagents/` directory entirely — it holds Task-tool
+        // sub-conversations whose filenames (`agent-*.jsonl`) are NOT
+        // resumable claude session ids.
+        if (e.name === 'subagents') continue;
         await walk(full);
       } else if (e.name.endsWith('.jsonl')) {
+        const base = e.name.replace(/\.jsonl$/, '');
+        // Belt-and-braces: only accept canonical UUID-shaped basenames.
+        // Real claude sessions are `<uuid>.jsonl`; anything else (subagent
+        // leakage, partial transcripts, future variants) is excluded so a
+        // bad name can never reach `claude --resume`.
+        if (!isClaudeSessionId(base)) continue;
         let st;
         try { st = await fsp.stat(full); } catch { continue; }
         if (st.mtimeMs < sinceMs) continue;
@@ -248,7 +267,7 @@ function captureClaudeSessionId(sessionId, absCwd, spawnedAtMs) {
         const m = newest.full.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i);
         id = m ? m[1] : id;
       }
-      if (id === 'transcript') { if (attempts < 120) setTimeout(tick, 500); return; }
+      if (!isClaudeSessionId(id)) { if (attempts < 120) setTimeout(tick, 500); return; }
       const rec = loadStore().sessions[sessionId];
       if (rec && !rec.claudeSessionId) {
         rec.claudeSessionId = id;
@@ -335,7 +354,7 @@ async function ensureLiveSession(sessionId) {
           const m = newest.full.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i);
           id = m ? m[1] : id;
         }
-        if (id !== 'transcript') {
+        if (isClaudeSessionId(id)) {
           rec.claudeSessionId = id;
           saveStore();
           console.log(`[ensureLive] captured claudeSessionId=${id} for ${sessionId}`);
@@ -396,13 +415,18 @@ async function importExistingTranscripts() {
     if (!user) continue;
     const userRel = segs.slice(1).join('/') || '.';
 
+    const claudeId = newest.file.replace(/\.jsonl$/, '');
+    // findNewestJsonl already filters by UUID shape, but keep this guard
+    // explicit so the auto-import path can never silently introduce a
+    // non-resumable id (subagent leak, future schema drift).
+    if (!isClaudeSessionId(claudeId)) continue;
     const id = `myco-${user}-${shortId()}`;
     store.sessions[id] = {
       id,
       user,
       cwd: userRel,
       absCwd: cwd,
-      claudeSessionId: newest.file.replace(/\.jsonl$/, ''),
+      claudeSessionId: claudeId,
       createdAt: new Date(newest.mtimeMs).toISOString(),
     };
     haveCwds.add(cwd);
@@ -522,6 +546,8 @@ Object.assign(module.exports, {
   saveStore,
   projectsDir,
   encodeCwdForClaude,
+  isClaudeSessionId,
+  findNewestJsonl,
   getSessionRecord,
   readDescriptionForCwd,
   resolveCwd,

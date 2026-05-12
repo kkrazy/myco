@@ -22,6 +22,11 @@ function resolveTranscriptPath(sessionId) {
 
 // Walk `dir` recursively and return the full path of the .jsonl with the
 // largest mtime, or null if none exist / the dir is missing.
+//
+// Skips the `subagents/` directory and rejects any .jsonl whose basename
+// isn't a canonical UUID. Task-tool subagent transcripts (`agent-*.jsonl`
+// under `subagents/`) are NOT resumable claude session ids and would
+// surface as junk in the transcript viewer if they leaked through.
 function findNewestJsonl(dir) {
   if (!fs.existsSync(dir)) return null;
   let best = null;
@@ -31,8 +36,14 @@ function findNewestJsonl(dir) {
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       const full = path.join(d, e.name);
-      if (e.isDirectory()) { walk(full); continue; }
+      if (e.isDirectory()) {
+        if (e.name === 'subagents') continue;
+        walk(full);
+        continue;
+      }
       if (!e.name.endsWith('.jsonl')) continue;
+      const base = e.name.replace(/\.jsonl$/, '');
+      if (!sessionsMod.isClaudeSessionId(base)) continue;
       let st;
       try { st = fs.statSync(full); } catch { continue; }
       if (st.mtimeMs > bestMtime) { best = full; bestMtime = st.mtimeMs; }
