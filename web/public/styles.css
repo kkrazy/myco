@@ -1653,13 +1653,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #btn-files.active { background: rgba(80, 120, 200, .35); }
 
 /* Preview-as-viewer toggle for session owners. Same fixed-cluster styling
-   as #btn-files / #btn-chat; sits between them. When toggled on the owner
-   sees the structured transcript + read-only banner instead of the live
-   PTY — useful for sanity-checking what shared viewers see. */
+   as #btn-files / #btn-chat. */
 #btn-preview-readonly {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 10px);
-  /* 10 + 2*(chrome-btn-size + 8) from right edge: third button slot. */
+  /* slot 2 from the right */
   right: calc(env(safe-area-inset-right, 0px) + 10px + 2 * (var(--chrome-btn-size) + 8px));
   z-index: 50;
   width: var(--chrome-btn-size); height: var(--chrome-btn-size);
@@ -1677,6 +1675,57 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 #btn-preview-readonly:active { transform: scale(.92); }
 #btn-preview-readonly.active { background: rgba(80, 120, 200, .35); }
+
+/* Plan / Arch / Test toggles. Promoted from in-chatpane tabs to top-level
+   chrome buttons sitting alongside files / preview / chat. Each opens its
+   own main-pane view (.artifact-main-view) and is mutually-exclusive with
+   terminal, conversation, files, and the other artifact views. */
+#btn-plan, #btn-arch, #btn-test {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  z-index: 50;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
+  padding: 0;
+  border-radius: 8px;
+  background: rgba(40, 40, 40, .85);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, .08);
+  font-size: .95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+/* slot 3 / 4 / 5 from the right (chat=0, files=1, preview=2) */
+#btn-plan { right: calc(env(safe-area-inset-right, 0px) + 10px + 3 * (var(--chrome-btn-size) + 8px)); }
+#btn-arch { right: calc(env(safe-area-inset-right, 0px) + 10px + 4 * (var(--chrome-btn-size) + 8px)); }
+#btn-test { right: calc(env(safe-area-inset-right, 0px) + 10px + 5 * (var(--chrome-btn-size) + 8px)); }
+#btn-plan:active, #btn-arch:active, #btn-test:active { transform: scale(.92); }
+#btn-plan.active, #btn-arch.active, #btn-test.active { background: rgba(80, 120, 200, .35); }
+
+/* Main-pane artifact view container. Fills the terminal-pane like
+   #terminal-wrap / #conversation-wrap / #files-wrap do, with a small
+   header strip on top and a scrollable body underneath. */
+.artifact-main-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
+  box-sizing: border-box;
+}
+.artifact-main-view .artifact-header {
+  padding: 10px 16px;
+  font-size: .92rem;
+}
+.artifact-main-view .artifact-body {
+  flex: 1;
+  padding: 16px;
+  font-size: 1rem;
+  line-height: 1.5;
+}
 
 /* ── per-session file explorer (code-review polish) ──────────────────────── */
 

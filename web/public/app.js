@@ -49,6 +49,9 @@ const state = {
     viewing: null,       // { path, mtimeMs, content, binary, cards, selection, pending, commentDraft, wrap, size }
     prevView: null,      // 'terminal' | 'conversation' — what to restore on toggle off
   },
+  // Which artifact view (Plan / Arch / Test) is currently open in the main
+  // pane, plus the pane we should restore on close. null means none.
+  artifactView: { active: null, prev: 'terminal' },
 };
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -268,13 +271,12 @@ const IS_TOUCH_DEVICE = (() => {
   } catch { return false; }
 })();
 
-// The main pane has three mutually-exclusive sub-panes: terminal-wrap,
-// conversation-wrap, files-wrap. Always hide the other two when switching;
-// otherwise (especially when the user toggles preview-as-viewer while
-// files is open) the panes stack and the file explorer disappears
-// behind / beside the transcript.
+// The main pane has six mutually-exclusive sub-panes: terminal-wrap,
+// conversation-wrap, files-wrap, plan-wrap, arch-wrap, test-wrap. Always
+// hide the others when switching; otherwise the panes stack and the
+// inactive one disappears behind / beside the active one.
 function _hideMainPaneSiblings(keep) {
-  for (const id of ['terminal-wrap', 'conversation-wrap', 'files-wrap']) {
+  for (const id of ['terminal-wrap', 'conversation-wrap', 'files-wrap', 'plan-wrap', 'arch-wrap', 'test-wrap']) {
     if (id === keep) continue;
     const el = document.getElementById(id);
     if (el) el.hidden = true;
@@ -282,6 +284,14 @@ function _hideMainPaneSiblings(keep) {
   if (keep !== 'files-wrap') {
     state.files.visible = false;
     document.getElementById('btn-files')?.classList.remove('active');
+  }
+  // Clear the artifact-toggle active class for any view that's no longer up.
+  for (const t of ['plan', 'arch', 'test']) {
+    if (keep === t + '-wrap') continue;
+    document.getElementById('btn-' + t)?.classList.remove('active');
+    if (state.artifactView && state.artifactView.active === t && keep !== t + '-wrap') {
+      state.artifactView.active = null;
+    }
   }
 }
 
@@ -1050,18 +1060,19 @@ function openSession(id) {
   state.transcriptMessages = [];
   state.previewAsViewer = false;             // reset preview toggle on session switch
   document.getElementById('btn-preview-readonly')?.classList.remove('active');
+  // Reset and hide the Plan/Arch/Test main-pane views so the previous
+  // session's extracted content doesn't linger. The chrome buttons'
+  // active class is cleared in clearArtifactBodies too.
+  state.artifactView = { active: null, prev: 'terminal' };
+  for (const t of ARTIFACT_TYPES) {
+    const wrap = document.getElementById(t + '-wrap');
+    if (wrap) wrap.hidden = true;
+    document.getElementById('btn-' + t)?.classList.remove('active');
+  }
   try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
   clearChat();
-  // Wipe the Plan / Arch / Test panels so the previous session's extracted
-  // content doesn't linger after a switch. If the user is currently on one
-  // of those tabs, re-fetch right away so they see the new session's
-  // persisted artifact (or its empty state). The fetch is best-effort —
-  // failure leaves the empty-state copy in place.
   clearArtifactBodies();
-  if (ARTIFACT_TYPES.includes(state.chatpaneTab)) {
-    loadArtifact(state.chatpaneTab).catch(() => {});
-  }
   updateChatButton();
 
   if (window.innerWidth <= 900) setSidebar(true);
@@ -1267,7 +1278,10 @@ function updateChatButton() {
   const hasContent =
     !document.getElementById('terminal-wrap').hidden ||
     !document.getElementById('conversation-wrap').hidden ||
-    !document.getElementById('files-wrap').hidden;
+    !document.getElementById('files-wrap').hidden ||
+    !document.getElementById('plan-wrap').hidden ||
+    !document.getElementById('arch-wrap').hidden ||
+    !document.getElementById('test-wrap').hidden;
   btn.hidden = !state.activeId || state.chatPaneVisible || !hasContent;
   // The files toggle is bound to the same active-session condition, but not
   // the chatpane visibility (it toggles within the main pane, independent
@@ -1283,6 +1297,12 @@ function updateChatButton() {
       ? state.sessions.find((s) => s.id === state.activeId) : null;
     const isOwner = !!(session && session.owned);
     pbtn.hidden = !state.activeId || !isOwner || !hasContent;
+  }
+  // Plan / Arch / Test toggles: available to everyone with an active session
+  // (owners + viewers can both inspect/refresh extracted artifacts).
+  for (const t of ['plan', 'arch', 'test']) {
+    const el = document.getElementById('btn-' + t);
+    if (el) el.hidden = !state.activeId || !hasContent;
   }
 }
 
@@ -1773,7 +1793,7 @@ function bindChatUi() {
   document.getElementById('chatpane-close')?.addEventListener('click', () => setChatPane(false));
   bindChatpaneResize();
   bindChatAutocomplete();
-  bindChatpaneTabs();
+  bindArtifactToggles();
 }
 
 // ─── Chatpane tabs (Discussion / Plan / Arch / Test) ─────────────────────────
@@ -1788,14 +1808,18 @@ function bindChatUi() {
 // real extraction.
 const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
 
-function bindChatpaneTabs() {
-  const tabBar = document.getElementById('chatpane-tabs');
-  if (!tabBar || tabBar.dataset.bound) return;
-  tabBar.dataset.bound = '1';
-  tabBar.addEventListener('click', (e) => {
-    const btn = e.target.closest('.chatpane-tab');
-    if (!btn) return;
-    setChatpaneTab(btn.dataset.tab);
+// Each artifact type has its own main-pane view (#plan-wrap / #arch-wrap /
+// #test-wrap) and a top-right chrome button (#btn-plan / #btn-arch /
+// #btn-test). The buttons are mutually-exclusive with each other AND with
+// the files / terminal / conversation views (same exclusivity rules as
+// #files-wrap). Clicking an active button closes the view and restores
+// whatever main-pane view was up before — same pattern as the files toggle.
+
+function bindArtifactToggles() {
+  document.querySelectorAll('.artifact-toggle').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => toggleArtifactView(btn.dataset.type));
   });
   document.querySelectorAll('.artifact-refresh').forEach((btn) => {
     if (btn.dataset.bound) return;
@@ -1804,21 +1828,52 @@ function bindChatpaneTabs() {
   });
 }
 
-function setChatpaneTab(name) {
-  if (!name) name = 'discussion';
-  state.chatpaneTab = name;
-  document.querySelectorAll('.chatpane-tab').forEach((t) => {
-    t.classList.toggle('is-active', t.dataset.tab === name);
-  });
-  document.querySelectorAll('.chatpane-body').forEach((b) => {
-    b.hidden = b.dataset.tab !== name;
-  });
-  // Load the persisted artifact for Plan/Arch/Test so the user sees the last
-  // refresh result without having to click Refresh on every reload.
-  if (ARTIFACT_TYPES.includes(name)) loadArtifact(name).catch(() => {});
-  // Switching back to Discussion: scroll to the latest so a long chat
-  // history doesn't show the oldest message on tab return.
-  if (name === 'discussion') scrollChatToLatest();
+function _wrapIdForArtifact(type) {
+  return type + '-wrap';
+}
+
+function showArtifactView(type) {
+  if (!ARTIFACT_TYPES.includes(type)) return;
+  if (!state.activeId) return;
+  const wrapId = _wrapIdForArtifact(type);
+  const termWrap = document.getElementById('terminal-wrap');
+  const convWrap = document.getElementById('conversation-wrap');
+  const filesWrap = document.getElementById('files-wrap');
+  // Capture whatever the user was looking at, so closing this view restores
+  // them to that pane rather than dumping them on the terminal.
+  if (!termWrap.hidden) state.artifactView.prev = 'terminal';
+  else if (!convWrap.hidden) state.artifactView.prev = 'conversation';
+  else if (filesWrap && !filesWrap.hidden) state.artifactView.prev = 'files';
+  // (otherwise leave the prior prev alone — we may be flipping between
+  // artifact views and want to return to the same upstream pane.)
+  _hideMainPaneSiblings(wrapId);
+  document.getElementById(wrapId).hidden = false;
+  state.artifactView.active = type;
+  // Mark the right button active, clear the others.
+  for (const t of ARTIFACT_TYPES) {
+    document.getElementById('btn-' + t)?.classList.toggle('active', t === type);
+  }
+  loadArtifact(type).catch(() => {});
+  updateChatButton();
+}
+
+function hideArtifactView() {
+  const type = state.artifactView.active;
+  if (!type) return;
+  const wrapId = _wrapIdForArtifact(type);
+  document.getElementById(wrapId).hidden = true;
+  document.getElementById('btn-' + type)?.classList.remove('active');
+  state.artifactView.active = null;
+  // Restore whichever main-pane view the user was on before opening this.
+  const prev = state.artifactView.prev || 'terminal';
+  if (prev === 'conversation') showConversationView();
+  else if (prev === 'files') showFilesView();
+  else showTerminalView();
+}
+
+function toggleArtifactView(type) {
+  if (state.artifactView.active === type) hideArtifactView();
+  else showArtifactView(type);
 }
 
 // Per-tab empty-state copy, mirrored from index.html. Centralised so a
