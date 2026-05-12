@@ -583,35 +583,34 @@ t('@myco "9" with no option 9 falls through to cancel+send', () => {
 t('@myco <prose> with pending menu cancels (Esc) then sends', () => {
   const { session, writes } = makeFakeSession(SAMPLE_MENU);
   ptyMod.handleChatMessage(session.sessionId, session, 'tester', '@myco do the next task please');
-  // Esc first, then a single bracketed-paste-wrapped write containing the
-  // new text and the trailing \r.
+  // Esc first, then a single bare write of the text + \r.
   assert.strictEqual(writes[0], '\x1b', `first write should be Esc, got ${JSON.stringify(writes[0])}`);
   const tail = writes.slice(1).join('');
   assert.ok(tail.includes('do the next task please'), `expected text body after Esc, got ${JSON.stringify(writes)}`);
-  assert.ok(tail.includes('\x1b[200~') && tail.includes('\x1b[201~'),
-    `expected bracketed-paste markers, got ${JSON.stringify(writes)}`);
   assert.ok(tail.endsWith('\r'), `expected trailing \\r, got ${JSON.stringify(writes)}`);
+  // No bracketed-paste markers — bare text only.
+  assert.ok(!tail.includes('\x1b[200~'), `unexpected paste-start marker, got ${JSON.stringify(writes)}`);
   assert.strictEqual(session.pendingMenu, null);
 });
 
 t('@myco <prose> WITHOUT pending menu does NOT send an Esc', () => {
   const { session, writes } = makeFakeSession(null);
   ptyMod.handleChatMessage(session.sessionId, session, 'tester', '@myco hello there');
-  // No Esc, single bracketed-paste write containing "hello there\r".
+  // No Esc, single bare write containing "hello there\r".
   for (const w of writes) {
     assert.notStrictEqual(w, '\x1b', `unexpected Esc write: ${JSON.stringify(writes)}`);
   }
-  assert.ok(writes.some((w) => w.includes('hello there')), `text not written: ${JSON.stringify(writes)}`);
-  assert.ok(writes.some((w) => w.endsWith('\r')), `\\r not written: ${JSON.stringify(writes)}`);
+  assert.ok(writes.some((w) => w === 'hello there\r'),
+    `expected exactly "hello there\\r" write, got ${JSON.stringify(writes)}`);
 });
 
 t('@myco "1" WITHOUT pending menu is plain text (not a digit pick)', () => {
   const { session, writes } = makeFakeSession(null);
   ptyMod.handleChatMessage(session.sessionId, session, 'tester', '@myco 1');
   // Without pendingMenu the shortcut shouldn't fire; the message goes
-  // through the normal bracketed-paste path containing "1" + \r.
-  assert.ok(writes.some((w) => w.endsWith('1\x1b[201~\r')),
-    `expected paste-wrapped "1\\r", got ${JSON.stringify(writes)}`);
+  // through the bare-text send path → "1\r" as a single write.
+  assert.ok(writes.some((w) => w === '1\r'),
+    `expected bare "1\\r" write, got ${JSON.stringify(writes)}`);
   for (const w of writes) {
     assert.notStrictEqual(w, '\x1b');
   }

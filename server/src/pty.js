@@ -498,23 +498,17 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
         });
         // fall through to the normal toggle + send below
       }
-      // Send the @myco text straight to Claude's input with no mode-toggle
-      // preamble. The Shift+Tab auto-toggle we used to send was causing
-      // Claude's TUI to redraw the mode banner above the input box, which
-      // pushed the typed text down one row — the user saw "every @myco
-      // appears on a new line below the > prompt". With the permission
-      // interceptor + per-session allow list already handling tool
-      // approvals, the toggle wasn't actually load-bearing anymore.
-      //
-      // Bracketed-paste wrap (\x1b[200~ … \x1b[201~) keeps the write atomic
-      // and tells Claude's TUI "this is one paste atom" so internal
-      // newlines aren't interpreted as Enter mid-stream. The trailing \r
-      // sits OUTSIDE the close marker so it reads as a keystroke after the
-      // paste — reliably submitting on both desktop and mobile.
+      // Bare write: just the text + Enter. No mode-toggle preamble (we
+      // rely on the permission interceptor for tool approvals now), and
+      // no bracketed-paste wrap. Each prior attempt (toggle-then-text,
+      // setTimeout-split-r, paste-wrapped) still left the user reporting
+      // "@myco messages always start on a new line below the > prompt".
+      // The common thread was characters we sent in front of the input —
+      // toggle escape codes or paste-mode markers. With those removed,
+      // Claude's input editor sees the user's text as raw keystrokes
+      // starting at column 0 of the prompt line, exactly like typing.
       console.log(`[chat→pty] ${user}: ${input.substring(0, 80)}`);
-      const PASTE_START = '\x1b[200~';
-      const PASTE_END = '\x1b[201~';
-      session.write(PASTE_START + input + PASTE_END + '\r');
+      session.write(input + '\r');
     }
     return;
   }
