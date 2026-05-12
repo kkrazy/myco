@@ -529,6 +529,30 @@ test_new_session_readonly() {
   grep -q 'claude-typing-dots' web/public/styles.css \
     && pass "styles.css: typing-dots animation" \
     || fail "styles.css: typing-dots animation"
+  # Regression: the typing indicator must retire promptly when claude's
+  # PTY spinner disappears, not wait for the 30s idle timer. Fix
+  # introduces _spinnerSeen + _spinnerStopTimer + a short grace
+  # (CLAUDE_POST_SPINNER_GRACE_MS) that fires _retireClaudeTyping when
+  # the server-emitted claude-status flips from running → null after
+  # being seen at least once this turn. Mid-stream transcript activity
+  # cancels the grace so we don't yank the dots while claude is still
+  # streaming text.
+  grep -q 'CLAUDE_POST_SPINNER_GRACE_MS' web/public/app.js \
+    && pass "app.js: post-spinner grace constant defined" \
+    || fail "app.js: post-spinner grace constant missing"
+  grep -q '_spinnerStopTimer' web/public/app.js \
+    && pass "app.js: spinner-stop retire timer wired" \
+    || fail "app.js: spinner-stop retire timer wired"
+  grep -q 'function _retireClaudeTyping' web/public/app.js \
+    && pass "app.js: shared _retireClaudeTyping path" \
+    || fail "app.js: shared _retireClaudeTyping path missing"
+  # The grace timer must cancel when fresh transcript activity arrives,
+  # otherwise a momentary mid-turn spinner gap would yank the dots
+  # while claude is still streaming.
+  awk '/^function _onTranscriptDeltaForChat\(/,/^\}/' web/public/app.js | \
+    grep -q '_spinnerStopTimer' \
+    && pass "app.js: transcript activity cancels pending spinner-stop retirement" \
+    || fail "app.js: transcript activity does not cancel spinner-stop retirement"
   # Negative guard: doSpawn must NOT auto-switch new sessions to readonly.
   grep -qF 'openSession(body.session_id, { startInReadonly: true })' web/public/app.js \
     && fail "doSpawn auto-switched new sessions to readonly (regression)" \

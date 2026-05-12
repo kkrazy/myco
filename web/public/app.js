@@ -1852,7 +1852,9 @@ function _markAwaitingClaude() {
   state.pendingClaudeToolCalls = 0;
   state.pendingClaudeReplyPosted = false;
   state._claudeSeenText = new Set();    // dedupe by uuid across overlapping deltas
+  state._spinnerSeen = false;            // claude's PTY spinner: arm post-spinner retirement once seen
   if (state._claudeIdleTimer) { clearTimeout(state._claudeIdleTimer); state._claudeIdleTimer = null; }
+  if (state._spinnerStopTimer) { clearTimeout(state._spinnerStopTimer); state._spinnerStopTimer = null; }
   _renderClaudeTyping();
   _scheduleClaudeIdleCheck();
 }
@@ -1894,6 +1896,13 @@ function _onTranscriptDeltaForChat(messages) {
   }
   // Reset the typing-dots idle timer only when dots are currently up.
   if (sawSomething && state.awaitingClaude) _scheduleClaudeIdleCheck();
+  // Fresh transcript activity means claude is still streaming — if a
+  // spinner-stop retirement was queued from a momentary spinner blip,
+  // cancel it so we don't yank the dots mid-turn.
+  if (sawSomething && state._spinnerStopTimer) {
+    clearTimeout(state._spinnerStopTimer);
+    state._spinnerStopTimer = null;
+  }
 }
 
 function _scheduleClaudeIdleCheck() {
@@ -1903,9 +1912,17 @@ function _scheduleClaudeIdleCheck() {
 
 function _onClaudeIdle() {
   state._claudeIdleTimer = null;
-  if (!state.awaitingClaude) return;
-  // If claude ran tools but never posted a text reply, surface a
-  // one-line summary so the chat doesn't look like nothing happened.
+  _retireClaudeTyping();
+}
+
+// Single retire path used by both the 30s idle timer fallback and the
+// spinner-stop signal. Posts the "ran N tool calls without reply"
+// summary if applicable, then clears awaiting state and re-renders.
+function _retireClaudeTyping() {
+  if (state._claudeIdleTimer) { clearTimeout(state._claudeIdleTimer); state._claudeIdleTimer = null; }
+  if (state._spinnerStopTimer) { clearTimeout(state._spinnerStopTimer); state._spinnerStopTimer = null; }
+  state._spinnerSeen = false;
+  if (!state.awaitingClaude) { _renderClaudeTyping(); return; }
   if (!state.pendingClaudeReplyPosted && state.pendingClaudeToolCalls > 0) {
     const n = state.pendingClaudeToolCalls;
     _postClaudeStreamToChat(`_(Claude ran ${n} tool call${n === 1 ? '' : 's'} and didn't post a text reply.)_`);
@@ -1962,8 +1979,29 @@ function _renderClaudeTyping() {
 // the typing indicator becomes self-driven by the PTY — even if my own
 // awaitingClaude timer expired, the dots come back as long as claude is
 // actually running. Null = claude went idle on the server side.
+//
+// Crucially, when the spinner flips from running → gone AFTER we've seen
+// it running at least once this turn, we treat that as "claude stopped
+// processing" and schedule a short-grace retirement of the typing dots.
+// This makes the indicator stop within a couple seconds of claude
+// finishing instead of waiting for the 30s idle-timer fallback.
+const CLAUDE_POST_SPINNER_GRACE_MS = 2500;
 function _setClaudeStatusLine(text) {
-  state.claudeStatusLine = (text && String(text).trim()) || null;
+  const trimmed = (text && String(text).trim()) || null;
+  state.claudeStatusLine = trimmed;
+  if (trimmed) {
+    state._spinnerSeen = true;
+    if (state._spinnerStopTimer) { clearTimeout(state._spinnerStopTimer); state._spinnerStopTimer = null; }
+  } else if (state._spinnerSeen) {
+    // Spinner just went away after having been visible — turn is done.
+    // Grace timer covers the gap between final spinner frame and the
+    // final transcript-delta carrying claude's text reply.
+    if (state._spinnerStopTimer) clearTimeout(state._spinnerStopTimer);
+    state._spinnerStopTimer = setTimeout(() => {
+      state._spinnerStopTimer = null;
+      _retireClaudeTyping();
+    }, CLAUDE_POST_SPINNER_GRACE_MS);
+  }
   _renderClaudeTyping();
 }
 
