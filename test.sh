@@ -63,10 +63,33 @@ mint_session_via_oauth() {
 
 test_server_js_files() {
   local missing=""
-  for f in src/index.js src/pty.js src/sessions.js src/transcript.js src/auth.js src/btw.js src/oauth.js; do
+  for f in src/index.js src/pty.js src/sessions.js src/transcript.js src/auth.js src/btw.js src/oauth.js src/text-utils.js; do
     [ -r "server/$f" ] || missing="$missing $f"
   done
   [ -z "$missing" ] && pass "Server JS files readable" || fail "Server JS files (missing:$missing)"
+}
+
+test_text_utils() {
+  if ! have_node; then skip "text-utils runtime (no host node)"; return; fi
+  # Regression: stripAnsi, tailLines, formatChat live in text-utils.js and
+  # are consumed by both btw.js (prompt build) and pty.js (scrollback feed
+  # for /btw). A regression that swallows ANSI escapes incorrectly or
+  # mis-tails would silently feed the assistant garbage.
+  node -e "
+    const u = require('./server/src/text-utils');
+    const stripped = u.stripAnsi('\x1b[31mred\x1b[0m\x07plain');
+    if (stripped !== 'redplain') throw new Error('stripAnsi: got ' + JSON.stringify(stripped));
+    if (u.tailLines('a\nb\nc\nd\ne', 2) !== 'd\ne') throw new Error('tailLines tail wrong');
+    if (u.tailLines('', 3) !== '')             throw new Error('tailLines empty wrong');
+    if (u.formatChat([])             !== '(empty)')         throw new Error('formatChat empty wrong');
+    if (u.formatChat(null)           !== '(empty)')         throw new Error('formatChat null wrong');
+    if (u.formatChat([{user:'a',text:'hi'},{user:'b',text:'there'}]) !== 'a: hi\nb: there')
+      throw new Error('formatChat shape wrong');
+    // pty.js still gets them through the module
+    const p = require('./server/src/pty');
+    if (typeof p.spawnClaude !== 'function') throw new Error('pty.js failed to load');
+  " && pass "text-utils.js: stripAnsi/tailLines/formatChat" \
+    || fail "text-utils.js: stripAnsi/tailLines/formatChat"
 }
 
 test_frontend_files() {
@@ -366,6 +389,7 @@ run_static_checks() {
   test_frontend_files
   test_vendor_assets
   test_npm_deps
+  test_text_utils
   test_cache_busters
   test_conv_view_css
   test_conv_view_js
@@ -489,13 +513,18 @@ test_chat_window() {
       || fail "artifact chrome button #btn-${view}"
   done
   grep -q 'function refreshArtifact' web/public/app.js && pass "refreshArtifact()" || fail "refreshArtifact()"
-  grep -q "artifact/refresh"  server/src/index.js && pass "POST /artifact/refresh route" || fail "POST /artifact/refresh route"
-  grep -q "artifact/run"      server/src/index.js && pass "POST /artifact/run route"     || fail "POST /artifact/run route"
-  grep -q "artifact/mark"     server/src/index.js && pass "POST /artifact/mark route"    || fail "POST /artifact/mark route"
-  grep -q "artifact/vote"     server/src/index.js && pass "POST /artifact/vote route"    || fail "POST /artifact/vote route"
-  grep -q "artifact/comment"  server/src/index.js && pass "/artifact/comment route"      || fail "/artifact/comment route"
-  grep -q "artifact/item"     server/src/index.js && pass "DELETE /artifact/item route"  || fail "DELETE /artifact/item route"
-  grep -q "AUTO_EXECUTE_VOTE_THRESHOLD" server/src/index.js \
+  # Artifact routes (refresh / run / mark / vote / comment / item) live in
+  # server/src/artifacts.js and are wired onto the express app from index.js
+  # via artifactsRoutes.register(app, deps).
+  test -f server/src/artifacts.js && pass "artifacts.js exists" || fail "artifacts.js missing"
+  grep -q "artifactsRoutes.register" server/src/index.js && pass "index.js wires artifacts.register" || fail "index.js wires artifacts.register"
+  grep -q "artifact/refresh"  server/src/artifacts.js && pass "POST /artifact/refresh route" || fail "POST /artifact/refresh route"
+  grep -q "artifact/run"      server/src/artifacts.js && pass "POST /artifact/run route"     || fail "POST /artifact/run route"
+  grep -q "artifact/mark"     server/src/artifacts.js && pass "POST /artifact/mark route"    || fail "POST /artifact/mark route"
+  grep -q "artifact/vote"     server/src/artifacts.js && pass "POST /artifact/vote route"    || fail "POST /artifact/vote route"
+  grep -q "artifact/comment"  server/src/artifacts.js && pass "/artifact/comment route"      || fail "/artifact/comment route"
+  grep -q "artifact/item"     server/src/artifacts.js && pass "DELETE /artifact/item route"  || fail "DELETE /artifact/item route"
+  grep -q "AUTO_EXECUTE_VOTE_THRESHOLD" server/src/artifacts.js \
     && pass "vote auto-execute threshold defined" \
     || fail "vote auto-execute threshold defined"
   grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"
@@ -522,7 +551,7 @@ test_chat_window() {
   test -f server/src/anthropic.js && pass "anthropic.js exists" || fail "anthropic.js missing"
   test -f server/src/extractor.js && pass "extractor.js exists" || fail "extractor.js missing"
   test -f server/src/claude-cli.js && pass "claude-cli.js exists" || fail "claude-cli.js missing"
-  grep -q "extractArtifact" server/src/index.js && pass "extractArtifact wired into index.js" || fail "extractArtifact wired"
+  grep -q "extractArtifact" server/src/artifacts.js && pass "extractArtifact wired into artifacts.js" || fail "extractArtifact wired into artifacts.js"
   # Regression: extraction goes through the `claude` CLI (same auth as the
   # running PTY session), NOT a raw Anthropic API call.
   grep -q "callClaudeCli" server/src/extractor.js && pass "extractor uses claude-cli" || fail "extractor uses claude-cli"
@@ -550,7 +579,12 @@ test_chat_window() {
     && fail "--dangerously-skip-permissions came back (claude CLI refuses it under root)" \
     || pass "--dangerously-skip-permissions removed (refused under root)"
   test -f server/src/permissions.js && pass "permissions.js exists" || fail "permissions.js missing"
-  grep -q "permissions.decide" server/src/pty.js && pass "pty uses permissions.decide" || fail "pty uses permissions.decide"
+  test -f server/src/menu.js && pass "menu.js exists" || fail "menu.js missing"
+  # Menu dialogs flow PTY → menu.handleSessionMenu → permissions.decide.
+  # The dispatch lives in menu.js (factored out of pty.js); pty.js just
+  # wires the EventEmitter hook.
+  grep -q "permissions.decide" server/src/menu.js && pass "menu.js uses permissions.decide" || fail "menu.js uses permissions.decide"
+  grep -q "menuMod.handleSessionMenu" server/src/pty.js && pass "pty.js delegates menu events to menu.js" || fail "pty.js delegates menu events to menu.js"
   grep -q "extractPermissionTarget" server/src/permissions.js && pass "permissions exports extractPermissionTarget" || fail "permissions exports extractPermissionTarget"
   grep -q "names: \['allow'" server/src/slashcmds.js && pass "/allow command registered" || fail "/allow missing"
   grep -q "names: \['deny'" server/src/slashcmds.js && pass "/deny command registered" || fail "/deny missing"

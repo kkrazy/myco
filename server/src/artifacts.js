@@ -1,0 +1,247 @@
+// Plan / Arch / Test artifact routes.
+//
+// Server-side extraction of pending todos, architectural notes, and test
+// plans from the running session's JSONL transcript via the Anthropic API
+// (extractor.callClaudeCli). Stored under rec.artifacts[type] on the
+// session record. Checking a Plan item or hitting the per-item quorum
+// dispatches it back to the running Claude session as `@myco <text>` via
+// the canonical chat-message path in pty.js.
+
+const crypto = require('crypto');
+
+const { extractArtifact } = require('./extractor');
+const { saveStore } = require('./sessions');
+
+const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
+
+// Plan items only — see autoFireIfQuorum below. Two distinct voters dispatch
+// the @myco run automatically; arch is unactionable, test items don't run.
+const AUTO_EXECUTE_VOTE_THRESHOLD = 2;
+const COMMENT_TEXT_MAX = 1000;
+const COMMENTS_PER_ITEM_MAX = 50;
+
+function emptyArtifact(type) {
+  if (type === 'arch') return { markdown: '', updatedAt: null };
+  return { items: [], updatedAt: null };
+}
+
+function persistArtifact(rec, type, artifact) {
+  if (!rec.artifacts) rec.artifacts = {};
+  rec.artifacts[type] = artifact;
+  saveStore();
+}
+
+function findItem(rec, type, itemId) {
+  const artifact = rec.artifacts && rec.artifacts[type];
+  if (!artifact || !Array.isArray(artifact.items)) return null;
+  return artifact.items.find((it) => it.id === itemId) || null;
+}
+
+function ensureVoterAndCommentFields(item) {
+  if (!Array.isArray(item.voters)) item.voters = [];
+  if (!Array.isArray(item.comments)) item.comments = [];
+}
+
+function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
+
+// Wire the routes onto the express app. `deps` carries the shared auth
+// preamble + the chat-dispatch hooks that live in index.js / pty.js — the
+// artifact module stays decoupled from auth and PTY plumbing.
+function register(app, deps) {
+  const { fileApiPreamble, getPtySession, handleChatMessage } = deps;
+
+  // GET — return the persisted artifact (or an empty stub of the right shape).
+  app.get('/sessions/:id/artifact', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    const stored = ctx.rec.artifacts && ctx.rec.artifacts[type];
+    res.json({ artifact: stored || emptyArtifact(type) });
+  });
+
+  // Re-extract via `claude -p` in the session's cwd.
+  app.post('/sessions/:id/artifact/refresh', async (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    let artifact;
+    try {
+      artifact = await extractArtifact(ctx.rec, type);
+    } catch (err) {
+      console.error(`[artifact] extract failed for ${type}: ${err.message}`);
+      return res.status(500).json({ error: 'extraction failed', detail: err.message });
+    }
+    persistArtifact(ctx.rec, type, artifact);
+    res.json({ artifact });
+  });
+
+  // Dispatch a Plan or Test item to the running Claude session as
+  // `@myco <text>` via the canonical chat pipeline (so it shows up in the
+  // discussion history and broadcasts to read-only viewers).
+  app.post('/sessions/:id/artifact/run', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch is not actionable' });
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(409).json({ error: 'session not running' });
+
+    try {
+      handleChatMessage(ctx.id, session, reqUser(req, ctx), `@myco ${item.text}`);
+    } catch (err) {
+      console.error(`[artifact] run failed: ${err.message}`);
+      return res.status(500).json({ error: 'dispatch failed', detail: err.message });
+    }
+    item.done = true;
+    item.ranAt = new Date().toISOString();
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, item, artifact: ctx.rec.artifacts[type] });
+  });
+
+  // Manual check/uncheck — no dispatch.
+  app.post('/sessions/:id/artifact/mark', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const done = String(req.query.done || '') === '1';
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch has no items' });
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    item.done = done;
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, item });
+  });
+
+  // Toggle a vote on a Plan item; auto-fire @myco if the per-item voter set
+  // hits AUTO_EXECUTE_VOTE_THRESHOLD distinct users. Test items only carry
+  // votes (no auto-fire); arch items can't be voted on.
+  function autoFireIfQuorum(ctx, type, item) {
+    if (item.done) return null;
+    if (type !== 'plan') return null;
+    if (item.voters.length < AUTO_EXECUTE_VOTE_THRESHOLD) return null;
+    const session = getPtySession(ctx.id);
+    if (!session) return { err: 'session not running, vote stored but not dispatched' };
+    try {
+      handleChatMessage(ctx.id, session, 'auto-quorum', `@myco ${item.text}`);
+    } catch (err) {
+      return { err: `dispatch failed: ${err.message}` };
+    }
+    item.done = true;
+    item.ranAt = new Date().toISOString();
+    return { fired: true };
+  }
+
+  app.post('/sessions/:id/artifact/vote', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be voted on' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+
+    const user = reqUser(req, ctx);
+    const idx = item.voters.indexOf(user);
+    let action;
+    if (idx >= 0) { item.voters.splice(idx, 1); action = 'removed'; }
+    else          { item.voters.push(user);    action = 'added'; }
+
+    const autoFired = action === 'added' ? autoFireIfQuorum(ctx, type, item) : null;
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    res.json({
+      ok: true,
+      item,
+      action,
+      threshold: AUTO_EXECUTE_VOTE_THRESHOLD,
+      autoFired: !!(autoFired && autoFired.fired),
+      note: autoFired && autoFired.err ? autoFired.err : null,
+    });
+  });
+
+  app.post('/sessions/:id/artifact/comment', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const text = String((req.body && req.body.text) || '').trim();
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be commented' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!text) return res.status(400).json({ error: 'comment text required' });
+    if (text.length > COMMENT_TEXT_MAX) return res.status(400).json({ error: `comment too long (max ${COMMENT_TEXT_MAX} chars)` });
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+
+    const comment = {
+      id: crypto.randomBytes(6).toString('hex'),
+      user: reqUser(req, ctx),
+      text,
+      ts: new Date().toISOString(),
+    };
+    item.comments.push(comment);
+    if (item.comments.length > COMMENTS_PER_ITEM_MAX) {
+      item.comments = item.comments.slice(-COMMENTS_PER_ITEM_MAX);
+    }
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, comment, item });
+  });
+
+  app.delete('/sessions/:id/artifact/item', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch has no items' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const artifact = ctx.rec.artifacts && ctx.rec.artifacts[type];
+    if (!artifact || !Array.isArray(artifact.items)) return res.status(404).json({ error: 'no items' });
+    const before = artifact.items.length;
+    artifact.items = artifact.items.filter((it) => it.id !== itemId);
+    if (artifact.items.length === before) return res.status(404).json({ error: 'no such item' });
+    persistArtifact(ctx.rec, type, artifact);
+    res.json({ ok: true, artifact });
+  });
+
+  app.delete('/sessions/:id/artifact/comment', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const commentId = String(req.query.commentId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId || !commentId) return res.status(400).json({ error: 'itemId + commentId required' });
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    const user = reqUser(req, ctx);
+    const isOwner = ctx.rec.user === user;
+    const before = item.comments.length;
+    // Authors can delete their own; session owner can delete any.
+    item.comments = item.comments.filter((c) => !(c.id === commentId && (c.user === user || isOwner)));
+    if (item.comments.length === before) return res.status(403).json({ error: 'not your comment' });
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, item });
+  });
+}
+
+module.exports = { register, ARTIFACT_TYPES, AUTO_EXECUTE_VOTE_THRESHOLD };

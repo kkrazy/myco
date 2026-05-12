@@ -8,6 +8,7 @@
 // session works here too.
 
 const { spawn } = require('child_process');
+const { stripAnsi, tailLines, formatChat } = require('./text-utils');
 
 const TIMEOUT_MS = 60000;
 const ASSISTANT_USER = 'claude';
@@ -32,24 +33,6 @@ const ASSISTANT_INSTRUCTIONS = [
 function shouldAskAssistant(text) {
   if (typeof text !== 'string') return false;
   return /^\/btw\b/i.test(text);
-}
-
-function stripAnsi(text) {
-  return String(text || '')
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')      // CSI: cursor, colors, erase
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '') // OSC: window titles
-    .replace(/\x1b[@-_]/g, '')                       // single-char ESC
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');       // misc control chars
-}
-
-function tailLines(text, n) {
-  const lines = String(text || '').split('\n');
-  return lines.slice(-n).join('\n');
-}
-
-function formatChat(messages) {
-  if (!messages || !messages.length) return '(empty)';
-  return messages.map((m) => `${m.user}: ${m.text}`).join('\n');
 }
 
 function buildPrompt({ chatHistory, scrollback, lastMessage }) {
@@ -244,11 +227,4 @@ function askAboutFile({ cwd, filePath, fileContent, anchor, history, question })
   return runClaudeP(cwd, buildFilePrompt({ filePath, fileContent, anchor, history, question }));
 }
 
-module.exports = {
-  askAssistant,
-  askAboutFile,
-  shouldAskAssistant,
-  stripAnsi,
-  tailLines,
-  ASSISTANT_USER,
-};
+module.exports = { askAssistant, askAboutFile, shouldAskAssistant, ASSISTANT_USER };

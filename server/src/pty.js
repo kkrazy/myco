@@ -6,7 +6,9 @@ const permissions = require('./permissions');
 // Late-bound: sessions.js requires this module, so destructuring at load
 // time would capture undefined values from the partial export.
 const sessionsMod = require('./sessions');
-const { askAssistant, shouldAskAssistant, stripAnsi, tailLines, ASSISTANT_USER } = require('./btw');
+const { askAssistant, shouldAskAssistant, ASSISTANT_USER } = require('./btw');
+const { stripAnsi, tailLines } = require('./text-utils');
+const menuMod = require('./menu');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 
@@ -169,7 +171,7 @@ function spawnClaude(sessionId, { cwd, resumeId, cols = 120, rows = 30 }) {
   });
   const wrapped = new PtySession(sessionId, proc);
   sessions.set(sessionId, wrapped);
-  wrapped.on('menu', (menu) => handleSessionMenu(sessionId, wrapped, menu));
+  wrapped.on('menu', (menu) => menuMod.handleSessionMenu(sessionId, wrapped, menu));
   wrapped.on('exit', () => {
     setTimeout(() => {
       const cur = sessions.get(sessionId);
@@ -552,96 +554,6 @@ async function runAssistant(sessionId, session, lastMessage) {
   session.emit('chat', reply);
 }
 
-// When MenuInterceptor fires for a session, decide what to do with the
-// dialog:
-//   - permission dialogs → check the session's allow/deny lists. Match
-//     allow → auto-pick the "Yes" option. Match deny (or no match in
-//     conservative mode) → auto-pick the "No" option. Post a brief
-//     chat note either way so the user can see what happened.
-//   - plan / generic dialogs → broadcast the full menu to chat so the
-//     user can /decide manually.
-function handleSessionMenu(sessionId, session, menu) {
-  if (menu.kind === 'permission') {
-    const target = permissions.extractPermissionTarget(menu.rawText);
-    if (target) {
-      const rec = sessionsMod.loadStore().sessions[sessionId];
-      const decision = permissions.decide(rec, target.tool, target.input);
-      const allowOpt = pickOptionByLabel(menu.options, /^yes|allow|approve/i, 1);
-      const denyOpt  = pickOptionByLabel(menu.options, /^no|don'?t|deny|reject/i, 2);
-      if (decision === 'allow') {
-        autoRespondToMenu(sessionId, session, menu, allowOpt, 'allow', target);
-        return;
-      }
-      if (decision === 'deny') {
-        autoRespondToMenu(sessionId, session, menu, denyOpt, 'deny', target);
-        return;
-      }
-      // decision === 'ask' → broadcast the full menu with permission-
-      // tailored wording so the user can /decide AND optionally /allow.
-      broadcastMenuToChat(sessionId, session, menu, target);
-      return;
-    }
-  }
-  broadcastMenuToChat(sessionId, session, menu);
-}
-
-function pickOptionByLabel(options, regex, fallback) {
-  const hit = options.find((o) => regex.test(o.label));
-  return hit ? hit.n : fallback;
-}
-
-function autoRespondToMenu(sessionId, session, menu, optionN, verb, target) {
-  if (!session || !session.alive) return;
-  session.write(String(optionN) + '\r');
-  session.pendingMenu = null;
-  const tgt = target ? `${target.tool}(${target.input || ''})`.slice(0, 120) : 'permission';
-  const text = verb === 'allow'
-    ? `✓ auto-allowed \`${tgt}\` (matched allow list — option ${optionN}).`
-    : `🚫 auto-denied \`${tgt}\` (not in allow list — option ${optionN}). Run \`/allow <pattern>\` then \`@myco try again\` to retry.`;
-  const msg = {
-    user: ASSISTANT_USER,
-    text,
-    ts: new Date().toISOString(),
-    meta: { kind: 'menu-auto', menu, verb, target },
-  };
-  sessionsMod.appendChatMessage(sessionId, msg);
-  session.emit('chat', msg);
-  console.log(`[menu] ${sessionId} auto-${verb} ${tgt}`);
-}
-
-function broadcastMenuToChat(sessionId, session, menu, target) {
-  const lines = [];
-  if (target) {
-    const summary = `${target.tool}(${target.input || ''})`.slice(0, 200);
-    lines.push(`🤔 Claude wants permission to run \`${summary}\` (not in this session's allow/deny lists).`);
-  } else {
-    lines.push('🤔 Claude is waiting on a decision:');
-  }
-  if (menu.question) lines.push('> ' + menu.question);
-  for (const opt of menu.options) lines.push(`[${opt.n}] ${opt.label}`);
-  lines.push('');
-  if (target) {
-    // Suggest a sensible /allow pattern: the tool plus the first word of
-    // its input (so `Bash(curl example.com)` → suggest `Bash(curl)`).
-    const firstTok = String(target.input || '').trim().split(/\s+/)[0];
-    const suggest = target.tool === 'Bash' && firstTok
-      ? `${target.tool}(${firstTok})`
-      : target.tool;
-    lines.push(`Reply with \`/decide <n>\` to answer this one, or \`/allow ${suggest}\` to auto-allow similar tools in future. \`/allowlist\` shows the current lists.`);
-  } else {
-    lines.push('Reply with `/decide <n>` to pick an option.');
-  }
-  const msg = {
-    user: ASSISTANT_USER,
-    text: lines.join('\n'),
-    ts: new Date().toISOString(),
-    meta: { kind: 'menu', menu, target: target || null },
-  };
-  sessionsMod.appendChatMessage(sessionId, msg);
-  session.emit('chat', msg);
-  console.log(`[menu] ${sessionId} broadcast ${menu.kind} with ${menu.options.length} options: ${JSON.stringify(menu.question).slice(0, 80)}`);
-}
-
 // Read the bottom rows of the session's headless terminal and decide what
 // mode Claude Code's TUI is in. Claude Code paints a status hint at the
 // bottom of its alt-screen: something like "auto-accept edits on" when in
@@ -696,8 +608,9 @@ module.exports = {
   attachWebSocket,
   attachViewerWebSocket,
   handleChatMessage,
-  // Exposed for menu-broadcast.test.js — exercises the per-session routing
-  // (auto-allow / auto-deny / broadcast) without spinning up a real PTY.
-  handleSessionMenu,
-  broadcastMenuToChat,
+  // Re-exported for menu-broadcast.test.js — the live implementations now
+  // live in menu.js; this surface stays so the test contract (and any
+  // outside caller that pulls the menu helpers off ptyMod) keeps working.
+  handleSessionMenu: menuMod.handleSessionMenu,
+  broadcastMenuToChat: menuMod.broadcastMenuToChat,
 };
