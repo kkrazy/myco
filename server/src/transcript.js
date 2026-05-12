@@ -115,16 +115,25 @@ function parseLine(line) {
       }
     }
 
-    // Plain text user message
+    // Plain text user message.
+    //
+    // Strip leading/trailing whitespace. Claude Code's input editor has a
+    // multi-row layout (a `>` prompt header + the actual input area below),
+    // and when a message is submitted via bracketed-paste the recorded text
+    // sometimes starts with a literal "\n" (the layout's empty header row).
+    // Rendering that verbatim makes the readonly viewer's transcript look
+    // like a blank line follows the "❯ " CSS prefix. Trimming gives a
+    // clean "❯ message text" presentation.
     if (typeof content === 'string') {
       if (content.startsWith('<')) return null; // internal scaffolding
-      return { role: 'user', text: content, uuid, ts };
+      return { role: 'user', text: content.trim(), uuid, ts };
     }
     if (Array.isArray(content)) {
       const text = content
         .filter((b) => b && b.type === 'text' && b.text)
         .map((b) => b.text)
-        .join('\n');
+        .join('\n')
+        .trim();
       if (text && !text.startsWith('<')) {
         return { role: 'user', text, uuid, ts };
       }
@@ -142,7 +151,9 @@ function parseLine(line) {
     const textBlocks = content.filter((b) => b && b.type === 'text' && b.text);
     const toolBlocks = content.filter((b) => b && b.type === 'tool_use');
 
-    const text = textBlocks.map((b) => b.text).join('\n');
+    // Same trim as the user branch — strip leading/trailing whitespace so
+    // the transcript pane renders cleanly without a leading blank line.
+    const text = textBlocks.map((b) => b.text).join('\n').trim();
     const toolCalls = toolBlocks.map((b) => ({
       name: b.name,
       id: b.id,
