@@ -87,8 +87,20 @@ class PtySession extends EventEmitter {
       this._menuDebounce = setTimeout(() => this._checkMenu(), 250);
       this.emit('data', data);
     });
+    // Periodic safety scan — the data-event debounce only fires when
+    // bytes stop flowing for 250ms. During a busy turn with rapid
+    // back-to-back dialogs (parallel tool calls, fast-resolving permission
+    // prompts) the debounce can keep resetting, so only the LAST menu of
+    // the burst ever gets hashed and any intermediate dialogs are missed
+    // entirely. This interval guarantees a scan on a fixed cadence
+    // regardless of data activity, so no menu can live on screen
+    // longer than ~750ms without being seen. Cheap: each tick is one
+    // viewport scan (~30 lines × regex).
+    this._periodicMenuScan = setInterval(() => this._checkMenu(), 750);
     this.pty.onExit(({ exitCode }) => {
       this.alive = false;
+      if (this._periodicMenuScan) { clearInterval(this._periodicMenuScan); this._periodicMenuScan = null; }
+      if (this._menuDebounce) { clearTimeout(this._menuDebounce); this._menuDebounce = null; }
       this.emit('exit', exitCode);
     });
   }
@@ -305,6 +317,48 @@ function handleMenuPick(sessionId, session, n, hash) {
   session.pendingMenu = null;
 }
 
+// Mirror assistant text from the transcript stream into rec.chat so
+// the chat pane survives a refresh / new tab / readonly attach.
+//
+// Without this, _postClaudeStreamToChat on the client posted claude's
+// reply as `_localOnly: true` — visible in the live tab but absent
+// from rec.chat on disk. On reload the chat-history WS frame returned
+// only user messages + menu callouts, so claude's responses appeared
+// to vanish.
+//
+// Idempotent via meta.transcriptUuid: each jsonl entry has a stable
+// `uuid`, so even with multiple WS connections persisting the same
+// stream (owner + viewer + reconnects) the row only lands once. Emits
+// a 'chat' event so already-connected clients get the row pushed
+// live too (the per-WS 'chat' subscription handles broadcast).
+function persistAssistantTextToChat(sessionId, newMsgs) {
+  if (!Array.isArray(newMsgs) || !newMsgs.length) return;
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return;
+  if (!Array.isArray(rec.chat)) rec.chat = [];
+  const seen = new Set();
+  for (const c of rec.chat) {
+    if (c && c.meta && c.meta.transcriptUuid) seen.add(c.meta.transcriptUuid);
+  }
+  const session = sessions.get(sessionId);
+  for (const m of newMsgs) {
+    if (!m || m.role !== 'assistant') continue;
+    if (!m.text || !m.text.trim()) continue;
+    if (!m.uuid) continue;          // no stable dedup key → skip
+    if (seen.has(m.uuid)) continue;
+    seen.add(m.uuid);
+    const reply = {
+      user: 'claude',
+      text: m.text.trim(),
+      ts: m.ts || new Date().toISOString(),
+      meta: { transcriptUuid: m.uuid, fromTranscript: true },
+    };
+    sessionsMod.appendChatMessage(sessionId, reply);
+    if (session) session.emit('chat', reply);
+  }
+}
+
 // Stamp answered + pickedN onto a menu-broadcast chat message. When
 // `hash` is provided, find the row whose `meta.menu.hash` equals it
 // (race-free across multiple unanswered menus). When omitted, fall
@@ -358,6 +412,10 @@ function streamTranscriptToWs(sessionId, ws) {
     transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
       if (closed || ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
+      // First-time backfill: mirror any assistant text already in the
+      // jsonl into rec.chat. This catches messages claude produced
+      // BEFORE any client was attached. Idempotent via uuid dedup.
+      persistAssistantTextToChat(sessionId, messages);
       // Hand bytesRead to watchTranscript so its watcher starts from where
       // we left off, not from byte 0. Without this, the watcher's own
       // initial-read would replay the entire transcript a second time as
@@ -366,6 +424,11 @@ function streamTranscriptToWs(sessionId, ws) {
         if (!closed && ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ t: 'transcript-delta', messages: newMsgs }));
         }
+        // Mirror claude's text into rec.chat so it survives a refresh /
+        // new tab / readonly attach. Without this, _postClaudeStreamToChat
+        // on the client adds `_localOnly: true` rows that never reach
+        // disk, leaving the chat pane blank on reload.
+        persistAssistantTextToChat(sessionId, newMsgs);
       }, { startByte: bytesRead });
     }).catch(() => {});
   }

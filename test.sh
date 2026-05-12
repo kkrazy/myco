@@ -1147,6 +1147,49 @@ test_chat_window() {
   grep -qF 'rec.claudeSessionId !== id' server/src/sessions.js \
     && pass "sessions.js: captureClaudeSessionId gate replaces stale id" \
     || fail "sessions.js: captureClaudeSessionId still has the freeze-on-first gate"
+  # Regression: claude's assistant text from the transcript jsonl must
+  # mirror into rec.chat so chat survives a refresh. Pre-fix the
+  # _localOnly chat rows on the client never reached disk.
+  if have_node; then
+    if node test/persist-assistant-chat.test.js >/dev/null 2>&1; then
+      pass "test/persist-assistant-chat.test.js (6 cases)"
+    else
+      fail "test/persist-assistant-chat.test.js — re-run with 'node test/persist-assistant-chat.test.js' to see failures"
+    fi
+  else
+    skip "test/persist-assistant-chat.test.js (no host node)"
+  fi
+  grep -qF 'function persistAssistantTextToChat' server/src/pty.js \
+    && pass "pty.js: persistAssistantTextToChat defined" \
+    || fail "pty.js: persistAssistantTextToChat missing"
+  grep -qF "persistAssistantTextToChat(sessionId, newMsgs)" server/src/pty.js \
+    && pass "pty.js: transcript watcher mirrors assistant text into rec.chat" \
+    || fail "pty.js: transcript watcher does not mirror assistant text"
+  grep -qF 'meta: { transcriptUuid: m.uuid, fromTranscript: true }' server/src/pty.js \
+    && pass "pty.js: persisted chat rows carry meta.transcriptUuid for dedup" \
+    || fail "pty.js: persisted chat rows missing meta.transcriptUuid"
+  # Client dedup: when chat-history already has a row with the same
+  # uuid, the live transcript-delta path skips it so we don't render
+  # the same reply twice on a reconnect.
+  grep -qF 'c.meta.transcriptUuid === m.uuid' web/public/app.js \
+    && pass "app.js: transcript-delta dedups against chat-history" \
+    || fail "app.js: transcript-delta dedup against chat-history missing"
+  grep -qF '_postClaudeStreamToChat(m.text.trim(), m.uuid)' web/public/app.js \
+    && pass "app.js: live chat rows stamp transcriptUuid for dedup" \
+    || fail "app.js: live chat rows missing transcriptUuid stamp"
+  # Fix 1: periodic safety scan. The 250ms data-event debounce alone
+  # misses rapid back-to-back menus because it keeps resetting during
+  # a busy turn — a fixed-cadence scan guarantees no menu lives on
+  # screen longer than ~750ms without being hashed.
+  grep -qF 'setInterval(() => this._checkMenu(), 750)' server/src/pty.js \
+    && pass "pty.js: periodic 750ms menu safety scan" \
+    || fail "pty.js: periodic menu safety scan missing"
+  grep -qF '_periodicMenuScan' server/src/pty.js \
+    && pass "pty.js: periodic-scan timer field exists for cleanup" \
+    || fail "pty.js: _periodicMenuScan field missing"
+  grep -qF 'clearInterval(this._periodicMenuScan)' server/src/pty.js \
+    && pass "pty.js: periodic-scan timer cleared on pty exit" \
+    || fail "pty.js: periodic-scan timer not cleared on exit"
   # Quick wire-level checks for the hash field carrying end-to-end.
   grep -qF 'data-hash="${escHtml(menuHash)}"' web/public/app.js \
     && pass "app.js: menu buttons stamp data-hash" \

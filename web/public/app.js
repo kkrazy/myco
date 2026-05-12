@@ -1887,12 +1887,20 @@ function _onTranscriptDeltaForChat(messages) {
       if (m.text && m.text.trim()) {
         // Dedupe — transcript-delta can re-emit the same uuid after a
         // reconnect (server replays from startByte) and we don't want
-        // to double-post in chat.
+        // to double-post in chat. Two layers of dedup:
+        //   1. _claudeSeenText: within-tab repeat (cheap Set).
+        //   2. chatMessages scan by meta.transcriptUuid: catches the
+        //      case where the server has ALREADY persisted this message
+        //      into rec.chat and the client got it via chat-history /
+        //      'chat' push, so the live transcript-delta should skip it.
         if (!state._claudeSeenText) state._claudeSeenText = new Set();
         const key = m.uuid || (m.ts + '|' + m.text.slice(0, 40));
-        if (!state._claudeSeenText.has(key)) {
+        const alreadyInChat = m.uuid && state.chatMessages.some(
+          (c) => c && c.meta && c.meta.transcriptUuid === m.uuid,
+        );
+        if (!state._claudeSeenText.has(key) && !alreadyInChat) {
           state._claudeSeenText.add(key);
-          _postClaudeStreamToChat(m.text.trim());
+          _postClaudeStreamToChat(m.text.trim(), m.uuid);
           state.pendingClaudeReplyPosted = true;
         }
       }
@@ -1942,16 +1950,22 @@ function _retireClaudeTyping() {
   _renderClaudeTyping();
 }
 
-function _postClaudeStreamToChat(text) {
-  // Local-only chat row — not persisted server-side. On reconnect,
-  // applyChatHistory will reset state.chatMessages from the server's
-  // persisted history (which doesn't include these), so no duplicates.
-  state.chatMessages.push({
+function _postClaudeStreamToChat(text, uuid) {
+  // Local-only chat row for INSTANT live feedback. The server now
+  // mirrors assistant text into rec.chat via persistAssistantTextToChat
+  // (with meta.transcriptUuid), so on reconnect the chat-history path
+  // brings the same message back as a properly persisted row. Stamping
+  // the uuid here means the chat-history-driven dedup in
+  // _onTranscriptDeltaForChat can recognize "this is the same message"
+  // and won't double-render.
+  const row = {
     user: 'claude',
     text: text,
     ts: new Date().toISOString(),
     _localOnly: true,
-  });
+  };
+  if (uuid) row.meta = { transcriptUuid: uuid };
+  state.chatMessages.push(row);
   renderChatPane(/*scrollToBottom*/ true);
   // Re-render the typing indicator so it slots back below the newest
   // message (renderChatPane only touched the list innerHTML; the
