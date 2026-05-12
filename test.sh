@@ -1177,6 +1177,25 @@ test_chat_window() {
   grep -qF '_postClaudeStreamToChat(m.text.trim(), m.uuid)' web/public/app.js \
     && pass "app.js: live chat rows stamp transcriptUuid for dedup" \
     || fail "app.js: live chat rows missing transcriptUuid stamp"
+  # Regression: the readonly transcript viewer used to freeze when
+  # fs.watch silently stopped firing (overlay/bind-mount/Docker
+  # filesystem quirk). The safety setInterval guarantees forward
+  # progress regardless of fs.watch's mood.
+  if have_node; then
+    if node test/transcript-watcher-safety-poll.test.js >/dev/null 2>&1; then
+      pass "test/transcript-watcher-safety-poll.test.js (3 cases)"
+    else
+      fail "test/transcript-watcher-safety-poll.test.js — re-run to see failures"
+    fi
+  else
+    skip "test/transcript-watcher-safety-poll.test.js (no host node)"
+  fi
+  grep -qF 'safetyPollTimer = setInterval' server/src/transcript.js \
+    && pass "transcript.js: fs.watch safety poll wired" \
+    || fail "transcript.js: safety poll missing"
+  grep -qF 'clearInterval(safetyPollTimer)' server/src/transcript.js \
+    && pass "transcript.js: safety poll cleared on unsubscribe" \
+    || fail "transcript.js: safety poll not cleared on unsubscribe"
   # Fix 1: periodic safety scan. The 250ms data-event debounce alone
   # misses rapid back-to-back menus because it keeps resetting during
   # a busy turn — a fixed-cadence scan guarantees no menu lives on

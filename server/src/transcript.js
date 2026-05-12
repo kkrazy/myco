@@ -226,22 +226,16 @@ async function readSimpleTurnsTail(jsonlPath, { maxLines = 300 } = {}) {
 function watchTranscript(jsonlPath, onNewMessages, opts = {}) {
   let byteOffset = Number.isFinite(opts.startByte) ? opts.startByte : 0;
   let debounceTimer = null;
-  let pollTimer = null;
+  let dirWaitPollTimer = null;    // fallback when the project dir doesn't exist yet
+  let safetyPollTimer = null;     // belt-and-braces poll alongside fs.watch
   let watcher = null;
   let stopped = false;
 
   const dir = path.dirname(jsonlPath);
-  const basename = path.basename(jsonlPath);
 
   function tick() {
     if (stopped) return;
     debounceTimer = null;
-    // Re-resolve in case the file rotated
-    const currentPath = resolveTranscriptPath(
-      // Extract sessionId from the path... but we don't have it here.
-      // Instead, just check if the watched file still exists and read from it.
-      null
-    );
     readNewMessages(jsonlPath, byteOffset).then(({ messages, bytesRead }) => {
       byteOffset = bytesRead;
       if (messages.length) onNewMessages(messages);
@@ -261,18 +255,30 @@ function watchTranscript(jsonlPath, onNewMessages, opts = {}) {
       });
       watcher.on('error', () => {});
     } catch {
-      // Directory doesn't exist yet — fall back to polling
-      pollTimer = setInterval(() => {
+      // Directory doesn't exist yet — wait for it to appear, then retry.
+      dirWaitPollTimer = setInterval(() => {
         if (stopped) return;
         try {
           fs.statSync(jsonlPath);
-          clearInterval(pollTimer);
-          pollTimer = null;
+          clearInterval(dirWaitPollTimer);
+          dirWaitPollTimer = null;
           startWatching();
           tick();
         } catch {}
       }, 2000);
+      return;
     }
+    // Belt-and-braces safety poll. fs.watch is notoriously unreliable
+    // on overlay / bind-mount / network filesystems — events can be
+    // coalesced, the watcher can silently go deaf, and on some Docker
+    // configurations inotify never fires for files written by another
+    // process holding an open fd. Symptom: the readonly viewer freezes
+    // mid-stream and only a page refresh recovers (re-runs the init
+    // read from byte 0). A periodic stat+tail-read guarantees forward
+    // progress regardless of fs.watch's mood. Cheap: ~1ms per tick.
+    safetyPollTimer = setInterval(() => {
+      if (!stopped) scheduleTick();
+    }, 4000);
   }
 
   // Initial read — only when caller didn't pass a startByte (legacy
@@ -290,7 +296,8 @@ function watchTranscript(jsonlPath, onNewMessages, opts = {}) {
   return function unsubscribe() {
     stopped = true;
     if (debounceTimer) clearTimeout(debounceTimer);
-    if (pollTimer) clearInterval(pollTimer);
+    if (dirWaitPollTimer) clearInterval(dirWaitPollTimer);
+    if (safetyPollTimer) clearInterval(safetyPollTimer);
     if (watcher) watcher.close();
   };
 }
