@@ -44,6 +44,24 @@
 // (e.g. "[4] Type something. [5] Chat about this").
 const MENU_OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/g;
 
+// Maximum number of lines allowed BETWEEN consecutive numbered-option
+// markers before we decide they're unrelated. Claude code's older
+// dialogs packed options on consecutive lines (gap 1), but the ultraplan
+// interview menu has multi-line descriptions:
+//
+//   ❯ 1. Add a hello-world script
+//        Create a tiny script in the working
+//        directory                          ← gap = 3 from option 1 to 2
+//     2. Add a README stub
+//
+// Plus the same dialog inserts a horizontal divider between option 4 and
+// option 5. A limit of 5 covers descriptions of up to ~4 lines AND a
+// divider line, while still catching the false-positive case where
+// "[3] foo" and "[4] bar" sit on opposite ends of an unrelated screen.
+// The contiguous-numbers check (1,2,3 with no gaps) does the real
+// false-positive filtering — this is just the upper bound.
+const MENU_MAX_OPTION_GAP_LINES = 5;
+
 // Question-line shape: prefer the line that ends with `?`, or carries one
 // of claude's recognizable question verbs. Used to find the prompt line
 // above a numbered-option block. Verbs widened over time as we observe
@@ -150,6 +168,7 @@ const WELCOME_BANNER_RE =
 
 module.exports = {
   MENU_OPT_MARKER_RE,
+  MENU_MAX_OPTION_GAP_LINES,
   MENU_QUESTION_TAIL_RE,
   MENU_QUESTION_VERB_RE,
   MENU_KIND_PERMISSION_RE,

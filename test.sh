@@ -916,6 +916,50 @@ test_chat_window() {
   else
     skip "MenuInterceptor missing-space (no host node)"
   fi
+  # Regression: claude code's ultraplan-interview dialog has multi-line
+  # option descriptions plus a horizontal divider between option 4 and
+  # option 5. The old "gap ≤ 2 lines between markers" rule rejected it
+  # entirely. After bumping MENU_MAX_OPTION_GAP_LINES and joining
+  # continuation lines, all 6 options should be detected and their
+  # descriptions folded into the label.
+  if have_node; then
+    node -e "
+      const { MenuInterceptor } = require('./server/src/menu-interceptor');
+      const lines = [];
+      lines.push(' What kind of sample task should this plan be for?');
+      lines.push('');
+      lines.push(' ❯ 1. Add a hello-world script');
+      lines.push('      Create a tiny script in the working');
+      lines.push('      directory');
+      lines.push('   2. Add a README stub');
+      lines.push('      Create a minimal README.md');
+      lines.push('   3. No-op demo plan');
+      lines.push('      Don\\'t actually change anything — just');
+      lines.push('      demonstrate the flow');
+      lines.push('   4. Type something.');
+      lines.push('────────────────────────────────────────────');
+      lines.push('   5. Chat about this');
+      lines.push('   6. Skip interview and plan immediately');
+      const rows = 30;
+      while (lines.length < rows) lines.push('');
+      const fake = {
+        rows,
+        buffer: { active: { viewportY: 0, getLine: (y) => lines[y] != null ? ({ translateToString: () => lines[y] }) : null }},
+      };
+      const r = (new MenuInterceptor()).detectChange(fake);
+      if (!r || r.kind !== 'newMenu') throw new Error('ultraplan dialog: expected newMenu, got ' + JSON.stringify(r));
+      if (r.menu.options.length !== 6) throw new Error('expected 6 options, got ' + r.menu.options.length);
+      // Multi-line description should be folded into the label.
+      if (!/working directory/i.test(r.menu.options[0].label)) throw new Error('option 1 missing continuation: ' + r.menu.options[0].label);
+      if (!/demonstrate the flow/i.test(r.menu.options[2].label)) throw new Error('option 3 missing continuation: ' + r.menu.options[2].label);
+      // Options 5 and 6 (across the divider) must still be present.
+      if (!/chat about this/i.test(r.menu.options[4].label)) throw new Error('option 5 missing: ' + r.menu.options[4].label);
+      if (!/skip interview/i.test(r.menu.options[5].label)) throw new Error('option 6 missing: ' + r.menu.options[5].label);
+    " && pass "MenuInterceptor parses ultraplan-style menu (multi-line descs + divider)" \
+      || fail "MenuInterceptor parses ultraplan-style menu (multi-line descs + divider)"
+  else
+    skip "MenuInterceptor ultraplan (no host node)"
+  fi
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: while a TUI menu is pending in the session, an @myco

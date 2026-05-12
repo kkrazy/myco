@@ -16,6 +16,7 @@
 // rationale + the exact dialog text that motivated each rule.
 const {
   MENU_OPT_MARKER_RE: OPT_MARKER_RE,
+  MENU_MAX_OPTION_GAP_LINES,
   MENU_QUESTION_TAIL_RE,
   MENU_QUESTION_VERB_RE,
   MENU_KIND_PERMISSION_RE,
@@ -86,10 +87,13 @@ class MenuInterceptor {
       }
     }
     if (options.length < 2) return null;
-    // Options must be roughly contiguous in source: allow markers on the
-    // same line (lineIdx delta = 0) or up to 1 blank line gap.
+    // Options must be roughly contiguous in source. The gap limit is
+    // generous (MENU_MAX_OPTION_GAP_LINES) so multi-line option
+    // descriptions and a single horizontal divider don't break detection
+    // — the contiguous-numbers check below is the real false-positive
+    // filter.
     for (let i = 1; i < options.length; i++) {
-      if (options[i].lineIdx - options[i - 1].lineIdx > 2) return null;
+      if (options[i].lineIdx - options[i - 1].lineIdx > MENU_MAX_OPTION_GAP_LINES) return null;
     }
     // Sanity: numbers must be contiguous (each = previous + 1). We used to
     // require starting at 1, but some Claude Code dialogs (and any partial
@@ -98,6 +102,26 @@ class MenuInterceptor {
     const ns = options.map((o) => o.n);
     for (let i = 1; i < ns.length; i++) {
       if (ns[i] !== ns[i - 1] + 1) return null;
+    }
+    // Join multi-line option descriptions. For each option, any non-empty
+    // line between this option's lineIdx and the NEXT option's lineIdx
+    // (exclusive) that isn't itself an option marker line is treated as
+    // continuation and appended to the label. Box-drawing / divider lines
+    // (composed of └─╌╶ etc.) are skipped — they're claude's section
+    // separators inside multi-group menus, not part of any option.
+    for (let i = 0; i < options.length; i++) {
+      const startLine = options[i].lineIdx;
+      const endLine = i + 1 < options.length ? options[i + 1].lineIdx : lines.length;
+      const extra = [];
+      for (let j = startLine + 1; j < endLine; j++) {
+        const t = (lines[j] || '').trim();
+        if (!t) continue;
+        if (/^[─━─-╌╴╶╴╌\-]+$/.test(t)) continue;          // divider line
+        extra.push(t);
+      }
+      if (extra.length) {
+        options[i].label = (options[i].label + ' ' + extra.join(' ')).replace(/\s+/g, ' ').trim();
+      }
     }
 
     // Find the question — look back up to 5 lines from firstOptIdx for a
