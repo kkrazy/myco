@@ -1009,6 +1009,45 @@ test_chat_window() {
   else
     skip "MenuInterceptor ultraplan (no host node)"
   fi
+  # Regression: a claude assistant plan body that contains numbered
+  # bullet points (1., 2., 3., …) must NOT be detected as a menu, even
+  # if the bullets are contiguously numbered. The signal that
+  # distinguishes a real TUI menu from prose is the `❯` cursor on the
+  # selected option's line. Without this guard, claude's own plans
+  # popped a "🤔 Claude is waiting on a decision" callout asking the
+  # user to "pick" a plan bullet.
+  if have_node; then
+    node -e "
+      const { MenuInterceptor } = require('./server/src/menu-interceptor');
+      // Plan body with numbered bullets, no cursor — must be rejected.
+      const plan = [
+        ' Heres the plan:',
+        '',
+        ' 1. Database — notification schema',
+        ' 2. Message bus — Redis pub/sub',
+        ' 3. Worker consumes events → persists',
+        ' 4. WS Gateway — JWT auth on upgrade',
+        ' 5. Client SDK — exponential backoff reconnect',
+        ' 6. Inbox UI — list + unread badge',
+      ];
+      const rows = 30;
+      while (plan.length < rows) plan.push('');
+      const fakePlan = { rows, buffer: { active: { viewportY: 0,
+        getLine: (y) => plan[y] != null ? ({ translateToString: () => plan[y] }) : null }}};
+      const r = (new MenuInterceptor()).detectChange(fakePlan);
+      if (r && r.kind === 'newMenu') throw new Error('plan bullet body falsely detected as menu: ' + JSON.stringify(r));
+      // Same content with `❯` on one bullet → should detect.
+      const planWithCursor = plan.slice();
+      planWithCursor[5] = ' ❯ 4. WS Gateway — JWT auth on upgrade';
+      const fakeMenu = { rows, buffer: { active: { viewportY: 0,
+        getLine: (y) => planWithCursor[y] != null ? ({ translateToString: () => planWithCursor[y] }) : null }}};
+      const r2 = (new MenuInterceptor()).detectChange(fakeMenu);
+      if (!r2 || r2.kind !== 'newMenu') throw new Error('cursor-marked menu rejected: ' + JSON.stringify(r2));
+    " && pass "MenuInterceptor rejects bullet-prose without ❯ cursor" \
+      || fail "MenuInterceptor rejects bullet-prose without ❯ cursor"
+  else
+    skip "MenuInterceptor cursor-guard (no host node)"
+  fi
   grep -q "handleChatMessage" server/src/pty.js && pass "handleChatMessage in pty.js" || fail "handleChatMessage in pty.js"
   grep -q "handleChatMessage" server/src/index.js && pass "handleChatMessage imported by /run route" || fail "handleChatMessage imported"
   # Regression: while a TUI menu is pending in the session, an @myco

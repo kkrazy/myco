@@ -16,6 +16,7 @@
 // rationale + the exact dialog text that motivated each rule.
 const {
   MENU_OPT_MARKER_RE: OPT_MARKER_RE,
+  MENU_CURSOR_RE,
   MENU_MAX_OPTION_GAP_LINES,
   MENU_QUESTION_TAIL_RE,
   MENU_QUESTION_VERB_RE,
@@ -103,6 +104,14 @@ class MenuInterceptor {
     for (let i = 1; i < ns.length; i++) {
       if (ns[i] !== ns[i - 1] + 1) return null;
     }
+    // False-positive guard: require at least one option's LINE to
+    // carry the `❯` cursor marker that claude code's TUI always paints
+    // on the currently-selected option. Without this, claude's own
+    // generated plan bodies (long numbered bullet lists in assistant
+    // text) get falsely broadcast as menus — every plan with 4+
+    // numbered points would otherwise pop a callout asking the user
+    // to "pick" a bullet. See pty-patterns.js MENU_CURSOR_RE.
+    if (!options.some((o) => MENU_CURSOR_RE.test(lines[o.lineIdx] || ''))) return null;
     // Join multi-line option descriptions. For each option, any non-empty
     // line between this option's lineIdx and the NEXT option's lineIdx
     // (exclusive) that isn't itself an option marker line is treated as

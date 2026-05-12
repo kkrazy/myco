@@ -38,8 +38,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ─── Fake xterm headless ───────────────────────────────────────────────────
 // MenuInterceptor only uses headless.rows + headless.buffer.active.{viewportY,
 // getLine(y).translateToString(true)}. Stub the minimum we need.
+//
+// MenuInterceptor now requires at least one option line to carry the
+// `❯` cursor marker (the false-positive guard against numbered prose
+// in claude's assistant turns). To keep these legacy fixtures terse,
+// we auto-prepend `❯ ` to the FIRST option-marker line when no line
+// in the input already has the cursor. Fixtures that intentionally
+// test the no-cursor case (e.g. plain prose, false-positive guards)
+// don't include any markers, so this is a no-op for them. The cursor
+// guard itself is regression-tested in test.sh:test_chat_window.
 function fakeHeadless(text) {
   const lines = text.split('\n');
+  if (!lines.some((l) => l && l.includes('❯'))) {
+    for (let i = 0; i < lines.length; i++) {
+      if (/(?:^|\s)(?:\[\d\]|\(\d\)|\d[.)])/.test(lines[i] || '')) {
+        lines[i] = lines[i].replace(/^(\s*)/, '$1❯ ');
+        break;
+      }
+    }
+  }
   return {
     rows: lines.length,
     buffer: {

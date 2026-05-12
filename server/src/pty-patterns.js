@@ -44,6 +44,23 @@
 // (e.g. "[4] Type something. [5] Chat about this").
 const MENU_OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/g;
 
+// The CURRENTLY-SELECTED option in a claude code TUI menu is rendered
+// with a `❯` cursor in the left gutter:
+//
+//    ❯ 1. Yes, and use auto mode
+//      2. Yes, manually approve edits
+//
+// We require at least one detected option's LINE to contain this glyph
+// before declaring the screen contents a menu. Without this guard,
+// plain numbered prose inside a claude assistant turn (e.g. "1. set
+// up DB schema  2. add bus  3. worker  4. WS gateway …") matches the
+// option-marker regex and gets falsely broadcast as a "🤔 Claude is
+// waiting on a decision" callout. Verified false positive on a plan
+// body that contained 6 numbered bullets — the scanner caught 4/5/6
+// after the top scrolled off and the cursor-marker check would have
+// rejected it.
+const MENU_CURSOR_RE = /❯/;
+
 // Maximum number of lines allowed BETWEEN consecutive numbered-option
 // markers before we decide they're unrelated. Claude code's older
 // dialogs packed options on consecutive lines (gap 1), but the ultraplan
@@ -168,6 +185,7 @@ const WELCOME_BANNER_RE =
 
 module.exports = {
   MENU_OPT_MARKER_RE,
+  MENU_CURSOR_RE,
   MENU_MAX_OPTION_GAP_LINES,
   MENU_QUESTION_TAIL_RE,
   MENU_QUESTION_VERB_RE,
