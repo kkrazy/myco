@@ -432,6 +432,35 @@ test_new_session_readonly() {
   grep -qF '_deactivatePriorMenuRows' web/public/app.js \
     && pass "app.js: prior menu rows are surgically deactivated on new menu append" \
     || fail "app.js: missing _deactivatePriorMenuRows — new menu won't deactivate older clickable menus"
+  # Regression: the claude-typing indicator must be OUT of the chatpane
+  # flex flow so its show/hide toggle never resizes #chat-messages. The
+  # earlier design used a fixed-height flex sibling whose display:none ↔
+  # display:flex transition resized chat-messages by 30px — mobile users
+  # perceived this as the chat content "jumping up and down" on every
+  # turn start/end. Fix: absolute-position the indicator just above
+  # #chat-form (same pattern as #chat-autocomplete) and reserve the
+  # overlay zone with permanent padding-bottom on #chat-messages.
+  grep -qF "form.insertBefore(host, form.firstChild)" web/public/app.js \
+    && pass "app.js: typing indicator mounted inside #chat-form (out of flex flow)" \
+    || fail "app.js: typing indicator no longer mounted inside chat-form — will reflow on toggle"
+  # Negative guard: _renderClaudeTyping must NOT scroll-anchor. The
+  # earlier scroll-anchor was a workaround for the now-removed reflow;
+  # leaving it in would yank a scrolled-up reader to the bottom on every
+  # status update because there's no more wasAtBottom gate to guard it.
+  if awk '/^function _renderClaudeTyping\(/,/^}$/' web/public/app.js | grep -q 'scrollChatToLatest\|isChatAtBottom'; then
+    fail "app.js: _renderClaudeTyping still scroll-anchors — drop it now that the indicator is a floating overlay"
+  else
+    pass "app.js: _renderClaudeTyping is layout-neutral (no scroll-anchor needed)"
+  fi
+  grep -Pzoq '\.claude-typing\s*\{[^}]*position:\s*absolute' web/public/styles.css \
+    && pass "css: .claude-typing is absolutely positioned" \
+    || fail "css: .claude-typing is not absolutely positioned — will still reflow chat on toggle"
+  grep -Pzoq '\.claude-typing\[hidden\]\s*\{[^}]*visibility:\s*hidden' web/public/styles.css \
+    && pass "css: .claude-typing[hidden] uses visibility (not display:none)" \
+    || fail "css: .claude-typing[hidden] still toggles display — defeats the floating overlay"
+  grep -Pzoq '#chat-messages\s*\{[^}]*padding:\s*12px\s+14px\s+42px' web/public/styles.css \
+    && pass "css: #chat-messages reserves overlay zone via padding-bottom" \
+    || fail "css: #chat-messages missing padding-bottom reservation for typing-indicator overlay"
   grep -qF '.chat-msg .chat-text blockquote' web/public/styles.css \
     && pass "css: chat-text blockquote styled" \
     || fail "css: chat-text blockquote not styled"

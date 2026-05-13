@@ -183,6 +183,77 @@ const no = (m, why) => { fail++; console.log(`  ✗ ${m}${why ? ` — ${why}` : 
   menuT.firstHasResolved ? ok('prior menu shows (no longer active) placeholder') : no('prior menu missing resolved label');
   menuT.secondHasButtons ? ok('new menu has active option buttons') : no('new menu missing buttons');
 
+  // 4d. Typing indicator must be a floating overlay — toggling its
+  // hidden state must NOT change #chat-messages's scrollHeight or
+  // clientHeight. The fix mounts the indicator inside #chat-form as
+  // an absolutely-positioned overlay, leaving the flex column
+  // unchanged. Mobile users no longer see the chat "jump up and down"
+  // when a turn starts or ends.
+  console.log('── Browser: typing indicator is layout-neutral ──');
+  await page.setViewportSize({ width: 400, height: 600 });
+  await page.evaluate(() => setChatPane(true));
+  const layoutN = await page.evaluate(async () => {
+    state.chatMessages = [];
+    state.awaitingClaude = false;
+    state.claudeStatusLine = null;
+    const stale = document.getElementById('claude-typing');
+    if (stale) stale.remove();
+    const list = document.getElementById('chat-messages');
+    list.innerHTML = '';
+    const history = [];
+    for (let i = 0; i < 30; i++) {
+      history.push({ user: i % 2 ? 'alice' : 'bob', text: 'line ' + i + ' ' + 'x'.repeat(40), ts: '2026-05-13T00:00:00Z' });
+    }
+    applyChatHistory(history);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const snap = () => ({
+      sh: list.scrollHeight,
+      ch: list.clientHeight,
+      st: list.scrollTop,
+    });
+    const before = snap();
+    // Show indicator (dots only).
+    state.awaitingClaude = true;
+    _renderClaudeTyping();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const onShow = snap();
+    // Add status text.
+    state.claudeStatusLine = '· Cerebrating… (5s)';
+    _renderClaudeTyping();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const onStatus = snap();
+    // Hide indicator.
+    state.awaitingClaude = false;
+    state.claudeStatusLine = null;
+    _renderClaudeTyping();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const onHide = snap();
+    // Where the indicator actually mounted.
+    const indicatorParent = document.getElementById('claude-typing')?.parentElement?.id || null;
+    return { before, onShow, onStatus, onHide, indicatorParent };
+  });
+  layoutN.indicatorParent === 'chat-form'
+    ? ok('typing indicator mounted inside #chat-form (out of flex flow)')
+    : no('indicator mounted outside #chat-form', layoutN.indicatorParent);
+  layoutN.before.sh === layoutN.onShow.sh && layoutN.before.ch === layoutN.onShow.ch
+    ? ok('chat-messages dimensions unchanged on indicator show')
+    : no('chat-messages reflowed on indicator show', JSON.stringify({ before: layoutN.before, after: layoutN.onShow }));
+  layoutN.onShow.sh === layoutN.onStatus.sh && layoutN.onShow.ch === layoutN.onStatus.ch
+    ? ok('chat-messages dimensions unchanged on status text update')
+    : no('chat-messages reflowed on status text update', JSON.stringify({ before: layoutN.onShow, after: layoutN.onStatus }));
+  layoutN.onStatus.sh === layoutN.onHide.sh && layoutN.onStatus.ch === layoutN.onHide.ch
+    ? ok('chat-messages dimensions unchanged on indicator hide')
+    : no('chat-messages reflowed on indicator hide', JSON.stringify({ before: layoutN.onStatus, after: layoutN.onHide }));
+  // scrollTop also stable across all three transitions — a stable
+  // viewport is the user-visible effect we care about.
+  layoutN.before.st === layoutN.onShow.st
+    && layoutN.onShow.st === layoutN.onStatus.st
+    && layoutN.onStatus.st === layoutN.onHide.st
+    ? ok(`scrollTop stable across show/status/hide (${layoutN.before.st})`)
+    : no('scrollTop drifted across indicator toggles', JSON.stringify(layoutN));
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+
   // 5. Layout — sidebar + main grid
   console.log('── Browser: layout ──');
   const layout = await page.evaluate(() => {

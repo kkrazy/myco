@@ -1448,7 +1448,13 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 14px;
+  /* Bottom padding reserves the overlay zone for the floating
+     .claude-typing indicator (30px tall, absolute-positioned just above
+     #chat-form). The reservation is permanent so the toggle has zero
+     reflow impact on chat content. Worst case when claude is idle: a
+     30px empty strip below the last message — acceptable trade for
+     never jolting the chat on a turn start/end. */
+  padding: 12px 14px 42px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2825,15 +2831,22 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 
 /* ── Claude typing indicator inside the chat pane ──
-   Sits as a sibling of #chat-messages but its height is FIXED so
-   frequent status updates (the live spinner ticks every ~750ms with
-   strings like "Brewing for 5s") never reflow the chat list above.
+   Floats just above #chat-form (which is position:relative) — same
+   pattern #chat-autocomplete uses. position:absolute means the
+   indicator is OUT OF FLEX FLOW, so its show/hide toggle never resizes
+   the #chat-messages slot. (Previous design used a fixed-height flex
+   sibling, which still reflowed by ±30px on every hidden↔visible
+   transition; mobile users saw the chat content "jump up and down"
+   every time a turn started or ended.)
    The label text overflows with ellipsis instead of wrapping. The
    indicator carries only the live spinner text — no "Claude is
-   working…" fallback chatter — so when claude is idle the strip
-   collapses to nothing. */
+   working…" fallback chatter — so when claude is idle the strip is
+   invisible (visibility:hidden, layout unchanged). */
 .claude-typing {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 1px);        /* sit just above chat-form's border-top */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2842,9 +2855,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: #8b949e;
   font-size: 0.85rem;
   border-top: 1px dashed #21262d;
-  background: rgba(22, 27, 34, 0.4);
+  background: rgba(22, 27, 34, 0.92); /* opaque enough to obscure padding-bottom zone if any content peeks */
   overflow: hidden;
   white-space: nowrap;
+  z-index: 4;                       /* below #chat-autocomplete (z:50), above chat content */
+  pointer-events: none;             /* purely informational — never intercept clicks */
 }
 .claude-typing-label {
   flex: 1 1 auto;
@@ -2853,7 +2868,14 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.claude-typing[hidden] { display: none; }
+.claude-typing[hidden] {
+  /* Keep the element absolutely-positioned and out of flex flow even
+     when "hidden" — display:none would still be layout-neutral here
+     (we're already position:absolute), but using visibility lets us
+     transition opacity later without remounting. */
+  display: flex;
+  visibility: hidden;
+}
 .claude-typing-dots {
   display: inline-flex;
   align-items: center;
