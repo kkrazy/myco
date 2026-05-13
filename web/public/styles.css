@@ -1134,48 +1134,22 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 :root { --chatpane-w: 320px; }
 
-#chatpane {
-  width: var(--chatpane-w);
-  min-width: var(--chatpane-w);
+/* Chat is a main-pane view now — same layout slot as #terminal-wrap /
+   #conversation-wrap / #plan-wrap / etc. Fills the #terminal-pane via
+   absolute positioning, reserves the top strip for the safe-area + the
+   chrome buttons so the chat list never sits underneath them. The
+   "Discussion" header was removed at the same time — the chat icon's
+   own .active state is the only state indicator we need.
+   (Earlier this was an <aside> sidebar on desktop and a z-index:60
+   overlay on mobile; on mobile the overlay blocked the chrome buttons.) */
+#chatpane.chat-main-view {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
   background: var(--surface);
-  position: relative;            /* anchor for #chatpane-resize handle */
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
 }
-
-/* Drag handle on the chatpane's left edge — desktop only. Drag left to grow,
-   right to shrink. Width persisted to localStorage as --chatpane-w. */
-#chatpane-resize {
-  position: absolute;
-  left: -3px;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  background: transparent;
-  z-index: 15;
-  transition: background-color .12s;
-  touch-action: none;
-}
-#chatpane-resize:hover,
-#chatpane-resize.dragging { background: rgba(120, 160, 230, .35); }
-@media (max-width: 900px) {
-  /* Mobile chatpane is a full-screen overlay — no resizing. */
-  #chatpane-resize { display: none; }
-}
-
-#chatpane header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  padding-top: calc(8px + var(--safe-top));
-  min-height: calc(var(--pane-header-h) + var(--safe-top));
-  box-sizing: border-box;
-  border-bottom: 1px solid var(--border);
-}
-#chatpane h2 { flex: 1; font-size: 1rem; font-weight: 600; color: var(--accent); letter-spacing: .05em; }
 
 /* Tab bar inside the chatpane header. Holds Discussion / Plan / Arch / Test. */
 #chatpane-tabs {
@@ -1689,6 +1663,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   -webkit-backdrop-filter: blur(10px);
 }
 #btn-chat:active { transform: scale(.92); }
+#btn-chat.active { background: rgba(80, 120, 200, .35); }
 
 /* Files toggle sits left of #btn-chat in the same fixed cluster. */
 #btn-files {
@@ -2392,20 +2367,10 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   .claude-card .cc-a { font-size: 13px; }
 }
 
-/* Mobile: chatpane behaves like sidebar — full-screen overlay, mutually
-   exclusive with the session sidebar. JS keeps them from being visible at
-   the same time. */
-@media (max-width: 900px) {
-  #chatpane {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    min-width: 0;
-    /* Match #sidebar — full-screen overlay must cover the floating buttons. */
-    z-index: 60;
-    border-left: none;
-  }
-}
+/* (Mobile chatpane overrides removed — chatpane is now a main-pane
+   view governed by .chat-main-view above. The old @media block forced
+   it to position:fixed; z-index:60 which sat ON TOP of the chrome
+   buttons and made them unreachable while chat was open.) */
 
 /* ── conversation view (read-only viewer) ─────────────────────────────────── */
 /* Layout: [readonly-banner] [conv-messages flex:1 scroller]. The transcript

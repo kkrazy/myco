@@ -74,6 +74,15 @@
           <span class="ro-owner"></span>
         </div>
       </div>
+      <div id="chatpane" class="chat-main-view" hidden>
+        <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
+        <div id="chat-messages"></div>
+        <div id="chat-autocomplete" hidden></div>
+        <form id="chat-form" autocomplete="off">
+          <textarea id="chat-input" rows="3" placeholder="Message…  (Ctrl/⌘+Enter to send · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>
+          <button type="submit" id="chat-send">Send</button>
+        </form>
+      </div>
       <div id="plan-wrap" class="artifact-main-view" hidden>
         <div class="artifact-header">
           <span class="artifact-title">Plan — todos extracted from session</span>
@@ -131,20 +140,6 @@
       </div>
     </main>
 
-    <aside id="chatpane" hidden>
-      <div id="chatpane-resize" title="Drag to resize"></div>
-      <header>
-        <h2>Discussion</h2>
-        <button id="chatpane-close" title="Close">×</button>
-      </header>
-      <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
-      <div id="chat-messages"></div>
-      <div id="chat-autocomplete" hidden></div>
-      <form id="chat-form" autocomplete="off">
-        <textarea id="chat-input" rows="3" placeholder="Message…  (Ctrl/⌘+Enter to send · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>
-        <button type="submit" id="chat-send">Send</button>
-      </form>
-    </aside>
   </div>
 
   <!-- login modal: GitHub OAuth + PAT, both gated by the invitation allowlist -->

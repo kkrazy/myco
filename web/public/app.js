@@ -201,10 +201,11 @@ const IS_TOUCH_DEVICE = (() => {
   } catch { return false; }
 })();
 
-// The main pane has six mutually-exclusive sub-panes. Always hide the
+// The main pane has seven mutually-exclusive sub-panes. Always hide the
 // others when switching; otherwise the panes stack and the inactive one
-// disappears behind / beside the active one.
-const MAIN_PANE_IDS = ['terminal-wrap', 'conversation-wrap', 'files-wrap', 'plan-wrap', 'arch-wrap', 'test-wrap'];
+// disappears behind / beside the active one. `chatpane` joined this set
+// when chat became a top-level view (was a right-aside sidebar before).
+const MAIN_PANE_IDS = ['terminal-wrap', 'conversation-wrap', 'files-wrap', 'chatpane', 'plan-wrap', 'arch-wrap', 'test-wrap'];
 
 function _hideMainPaneSiblings(keep) {
   for (const id of MAIN_PANE_IDS) {
@@ -215,6 +216,10 @@ function _hideMainPaneSiblings(keep) {
   if (keep !== 'files-wrap') {
     state.files.visible = false;
     document.getElementById('btn-files')?.classList.remove('active');
+  }
+  if (keep !== 'chatpane') {
+    state.chatPaneVisible = false;
+    document.getElementById('btn-chat')?.classList.remove('active');
   }
   // Clear the artifact-toggle active class for any view that's no longer up.
   for (const t of ['plan', 'arch', 'test']) {
@@ -645,10 +650,11 @@ async function init() {
   bindChatUi();
   bindFilesUi();
   bindReadOnlyBanner();
-  // Desktop default: chat pane visible alongside the terminal. Mobile: hidden,
-  // user opens it explicitly via the 💬 button (mutually exclusive with the
-  // session sidebar).
-  setChatPane(window.innerWidth > 900);
+  // Boot lands on the terminal view; the user picks chat / plan / arch /
+  // test / files / preview from the chrome cluster. Previously chat
+  // auto-opened on desktop as a sidebar — that layout is gone now that
+  // chat is a main-pane view (mutually exclusive with the others), so
+  // auto-opening would hide the terminal on every page load.
   connectLogWs();
   showBuildStamp();
   showUserStamp();
@@ -1244,29 +1250,45 @@ function setSidebar(collapsed) {
 }
 
 function setChatPane(visible) {
-  state.chatPaneVisible = visible;
-  document.getElementById('chatpane').hidden = !visible;
-  // Mobile: showing chat dismisses the sidebar overlay (mutual exclusion).
-  if (visible && window.innerWidth <= 900) {
-    document.getElementById('sidebar').hidden = true;
-    document.getElementById('btn-expand').hidden = false;
+  if (visible) {
+    // Switching INTO chat — hide every other main-pane view, mark
+    // btn-chat active. Mobile: also dismiss the sidebar overlay so the
+    // chat view isn't covered by it.
+    _hideMainPaneSiblings('chatpane');
+    document.getElementById('chatpane').hidden = false;
+    state.chatPaneVisible = true;
+    document.getElementById('btn-chat')?.classList.add('active');
+    if (window.innerWidth <= 900) {
+      document.getElementById('sidebar').hidden = true;
+      document.getElementById('btn-expand').hidden = false;
+    }
+    // List was 0-height while hidden — pin to the bottom now it has dimensions.
+    scrollChatToLatest();
+  } else {
+    // Closing chat returns the user to the terminal (the default
+    // primary view). Switching directly to another chrome button
+    // skips this branch — _hideMainPaneSiblings clears chat state.
+    showTerminalView();
   }
   updateChatButton();
   if (state.fitAddon) requestAnimationFrame(() => state.fitAddon.fit());
-  // When the pane is unhidden, scroll the chat list to the latest — the
-  // list may have rendered while hidden (zero-height), so its scrollTop
-  // was a no-op then. Now that it has dimensions, pin to the bottom.
-  if (visible) scrollChatToLatest();
 }
 
 function updateChatButton() {
   const btn = document.getElementById('btn-chat');
   if (!btn) return;
   const hasContent = MAIN_PANE_IDS.some((id) => !document.getElementById(id)?.hidden);
-  btn.hidden = !state.activeId || state.chatPaneVisible || !hasContent;
-  // The files toggle is bound to the same active-session condition, but not
-  // the chatpane visibility (it toggles within the main pane, independent
-  // of the discussion overlay).
+  // Chat button stays visible whenever there's a live session — same
+  // pattern the other chrome toggles use. Open/closed state is shown
+  // via the .active class (CSS swaps the background tint) so the icon
+  // doesn't morph mid-click. The earlier behaviour hid btn-chat while
+  // the chatpane was open, which read as "the 💬 icon became ×"
+  // because the chatpane's own close button sits in roughly the same
+  // viewport corner.
+  btn.hidden = !state.activeId || !hasContent;
+  btn.classList.toggle('active', !!state.chatPaneVisible);
+  // The files toggle is bound to the same active-session condition; its
+  // visibility doesn't depend on the chatpane.
   const fbtn = document.getElementById('btn-files');
   if (fbtn) fbtn.hidden = !state.activeId || !hasContent;
   // Preview-as-viewer toggle: only show for the actual session owner, since
@@ -2450,6 +2472,9 @@ function bindChatUi() {
 
   document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(!state.chatPaneVisible));
   document.getElementById('btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview);
+  // The legacy chatpane-close × was removed; #btn-chat itself toggles
+  // open/closed via its .active state. Optional-chain still leaves this
+  // a no-op for any cached page that still has the old element.
   document.getElementById('chatpane-close')?.addEventListener('click', () => setChatPane(false));
   bindChatpaneResize();
   bindChatAutocomplete();

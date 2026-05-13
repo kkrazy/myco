@@ -1001,7 +1001,44 @@ test_chat_window() {
   grep -q "t: 'chat'" server/src/pty.js && pass "chat WS frame format" || fail "chat WS frame"
   grep -q "t: 'chat-history'" server/src/pty.js && pass "chat-history replay" || fail "chat-history replay"
   grep -q "msg.t === 'chat-history'" web/public/app.js && pass "chat-history client handler" || fail "chat-history client handler"
-  grep -q 'chatpane-close' web/public/app.js && pass "chatpane close binding" || fail "chatpane close binding"
+  # The standalone chatpane-close × element was removed — #btn-chat
+  # itself now toggles open/closed via its .active class. The optional-
+  # chain handler stays in app.js for back-compat with cached pages.
+  grep -q 'chatpane-close' web/public/app.js && pass "chatpane close binding (legacy)" || fail "chatpane close binding"
+  # btn-chat must stay visible while the chatpane is open and pick up
+  # an .active state instead of hiding (which previously read as "the
+  # 💬 icon became ×"). Same pattern files/plan/arch/test already use.
+  grep -qF "btn.classList.toggle('active', !!state.chatPaneVisible)" web/public/app.js \
+    && pass "app.js: btn-chat picks up .active class while chatpane is open" \
+    || fail "app.js: btn-chat doesn't toggle .active — chat icon will still vanish on open"
+  if awk '/^function updateChatButton\(/,/^}$/' web/public/app.js | grep -q 'state.chatPaneVisible || !hasContent'; then
+    fail "app.js: btn-chat still hidden while chatpane is open — drop the chatPaneVisible from the hidden check"
+  else
+    pass "app.js: btn-chat stays visible while chatpane is open"
+  fi
+  grep -qF '#btn-chat.active' web/public/styles.css \
+    && pass "css: #btn-chat.active styling present" \
+    || fail "css: #btn-chat.active styling missing"
+  # The chatpane is now a main-pane view (mutually exclusive with
+  # terminal/conversation/files/plan/arch/test) instead of an aside
+  # sidebar. This fixes mobile — the old z-index:60 overlay sat ON TOP
+  # of the chrome buttons (z:50) so users couldn't tap files/plan/etc.
+  # while chat was open. New layout puts chat inside #terminal-pane so
+  # the buttons (still at z:50) stay above by default.
+  grep -qF "'chatpane'" web/public/app.js \
+    && pass "app.js: chatpane registered as a main-pane view" \
+    || fail "app.js: chatpane not in MAIN_PANE_IDS — switching to another view won't auto-clear chat"
+  grep -qF 'chat-main-view' web/public/index.html \
+    && pass "index.html: chatpane uses chat-main-view class (lives inside #terminal-pane)" \
+    || fail "index.html: chatpane is still an outer <aside> — buttons stay hidden on mobile"
+  grep -q '<h2>Discussion</h2>' web/public/index.html \
+    && fail "index.html: stale 'Discussion' header still present" \
+    || pass "index.html: chatpane has no 'Discussion' header (icons stay visible)"
+  # The desktop auto-open was removed — chat as a main-pane view would
+  # have hidden the terminal on every page load.
+  grep -qF 'setChatPane(window.innerWidth > 900)' web/public/app.js \
+    && fail "app.js: init still auto-opens chat on desktop — hides terminal at boot" \
+    || pass "app.js: init no longer auto-opens chat (boots on terminal)"
   # Plan / Arch / Test artifact views (promoted to top-level chrome buttons,
   # commit 15187ea). Each has its own main-pane container and a chrome button.
   for view in plan arch test; do
