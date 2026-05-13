@@ -338,14 +338,22 @@ const MULTI_SELECT_CURSOR_RE =
 // pushing submitRow PAST the real Submit row by several lines. The
 // nav burst then overshoots and the cursor wraps.
 //
-// `done`/`continue`/`finish`/`ok` kept for variants we haven't seen
-// claude render yet but that Ink's SelectInput patterns sometimes
-// produce. If a future build packs Submit next to a separator
-// ("Submit │ Cancel"), this regex will NEED to be widened —
-// intentionally not preemptively done so we don't reintroduce the
-// footer-text false-positive.
+// `done`/`continue`/`finish`/`ok`/`next` are the labels Ink's
+// SelectInput-style wizards have been observed using for the
+// "advance from this question to the next" affordance. `next` is
+// load-bearing: claude code's plan-mode interview wizard renders
+// "Next" as the submit row of each multi-select question (verified
+// 2026-05-13 on mycobeta demo010 — the Features question's submit
+// row was the indented "Next" below option 5 "Type something").
+// Without `next` in the alternation, _findSubmitNavCount fell back to
+// the 6-row fixed count, the cursor wrapped past the actual Next row,
+// and claude received the wrong row's Enter — interpreted as decline.
+// If a future build packs Submit next to a separator ("Submit │
+// Cancel"), this regex will NEED to be widened — intentionally not
+// preemptively done so we don't reintroduce the footer-text
+// false-positive.
 const SUBMIT_ROW_RE =
-  /^\s*(?:submit|done|continue|finish|ok)\s*$/i;
+  /^\s*(?:submit|done|continue|finish|ok|next)\s*$/i;
 
 // ───────────────────────────────────────────────────────────────────────
 // Tool invocation + corner-block chrome — exposed for future server-side

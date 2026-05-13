@@ -434,13 +434,20 @@ function handleMenuToggle(sessionId, session, n, hash) {
   }
   const opt = pending.options.find((o) => o.n === n);
   if (!opt || !opt.checkbox) return;
-  // Persist the new checked state on the chat row so reconnects see the
-  // most recent UI. The hash stays constant across toggles (see
+  // Persist the new checked state on the chat row so reconnects see
+  // the most recent UI. The hash stays constant across toggles (see
   // hashMenu — it excludes checked state on purpose).
+  //
+  // Critical: _toggleMenuChatCheckbox already flips opt.checked on the
+  // persisted record, and the persisted record + this pending menu
+  // hold the SAME option object reference (broadcastMenuToChat doesn't
+  // clone — appendChatMessage pushes the object as-is). Doing
+  // `opt.checked = !opt.checked` here used to double-flip, net zero,
+  // so the chat picker's checkbox UI never reflected the user's clicks
+  // and the menu-multi diagnostic always logged the initial state.
+  // Verified 2026-05-13 on mycobeta demo010 — every toggle log line
+  // said "unchecked" even when the user was checking. Just persist.
   _toggleMenuChatCheckbox(sessionId, n, hash);
-  // Also update pending so a follow-up toggle in the same dialog sees
-  // current state (used only by the server log + future heuristics).
-  opt.checked = !opt.checked;
   // Drive the actual TUI toggle — bare digit, no CR.
   session.write(String(n));
   console.log(`[menu-toggle] ${sessionId} toggled n=${n} → ${opt.checked ? 'checked' : 'unchecked'}`);

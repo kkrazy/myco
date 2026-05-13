@@ -1299,7 +1299,7 @@ test_chat_window() {
   # row; stale picks drop the PTY write.
   if have_node; then
     if node test/menu-pick-race.test.js >/dev/null 2>&1; then
-      pass "test/menu-pick-race.test.js (5 cases)"
+      pass "test/menu-pick-race.test.js (8 cases)"
     else
       fail "test/menu-pick-race.test.js — re-run with 'node test/menu-pick-race.test.js' to see failures"
     fi
@@ -1411,6 +1411,21 @@ test_chat_window() {
   else
     pass "pty.js: handleMenuToggle has no CR (matches multi-select toggle semantics)"
   fi
+  # handleMenuToggle must flip opt.checked exactly ONCE per click.
+  # _toggleMenuChatCheckbox mutates the persisted record (which shares
+  # the same object reference as pending.options[i] because
+  # broadcastMenuToChat doesn't clone). Re-applying `opt.checked =
+  # !opt.checked` in handleMenuToggle ITSELF used to double-flip — net
+  # zero — so the chat picker's UI never moved and the menu-multi
+  # diagnostic always logged the initial state. Verified live on
+  # mycobeta demo010 (2026-05-13): "select 2 of 4" logged "unchecked"
+  # for both clicks. Sentinel the lone _toggleMenuChatCheckbox call
+  # AND the absence of an opt.checked toggle inside handleMenuToggle.
+  if awk '/^function handleMenuToggle\(/,/^}$/' server/src/pty.js | grep -qE '^[[:space:]]*opt\.checked\s*=\s*!opt\.checked'; then
+    fail "pty.js: handleMenuToggle re-flips opt.checked AFTER _toggleMenuChatCheckbox — net zero, chat UI lies, server/TUI diverge"
+  else
+    pass "pty.js: handleMenuToggle flips opt.checked exactly once (no double-flip)"
+  fi
   # menu-submit must navigate to the "Submit" row before pressing Enter —
   # claude's multi-select dialog has a separate Submit element below
   # the numbered options. Plain CR on the cursor's current position
@@ -1445,6 +1460,15 @@ test_chat_window() {
   grep -qF 'SUBMIT_ROW_RE' server/src/pty.js \
     && pass "pty.js: SUBMIT_ROW_RE locates the Submit/Done row" \
     || fail "pty.js: SUBMIT_ROW_RE missing — footer hint text may be mistaken for Submit"
+  # Plan-mode interview wizard labels its per-question submit row "Next",
+  # not "Submit". Verified 2026-05-13 on mycobeta demo010 — the Features
+  # multi-select's submit row was an indented "Next" below option 5
+  # "Type something". Without `next` in the alternation, the nav burst
+  # fell back to the 6-row default, the cursor wrapped past Next, and
+  # claude received Enter on a checkbox row — interpreted as decline.
+  grep -qE "submit\|done\|continue\|finish\|ok\|next" server/src/pty-patterns.js \
+    && pass "pty-patterns.js: SUBMIT_ROW_RE includes 'next' label (per-question wizard submit row)" \
+    || fail "pty-patterns.js: SUBMIT_ROW_RE missing 'next' — wizard multi-select submit will land on the wrong row"
   grep -qF 'function sendMenuToggle' web/public/app.js \
     && pass "app.js: sendMenuToggle defined" \
     || fail "app.js: sendMenuToggle missing"

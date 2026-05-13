@@ -204,6 +204,13 @@ t('SUBMIT_ROW_RE matches a bare Submit-row label only', () => {
   // final-action row across releases.
   assert.ok(SUBMIT_ROW_RE.test('Done'));
   assert.ok(SUBMIT_ROW_RE.test('  Continue  '));
+  // Plan-mode interview wizard's per-question submit row label —
+  // verified 2026-05-13 on mycobeta demo010 (Features multi-select).
+  // Without this, _findSubmitNavCount fell back to 6 and the cursor
+  // wrapped past Next, landing Enter on a checkbox or "Chat about
+  // this" — interpreted by claude as decline.
+  assert.ok(SUBMIT_ROW_RE.test('     Next'));
+  assert.ok(SUBMIT_ROW_RE.test('Next'));
 });
 
 t('SUBMIT_ROW_RE rejects footer hints that end in "submit"', () => {

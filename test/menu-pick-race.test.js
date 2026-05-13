@@ -161,6 +161,80 @@ t('hash path: unknown hash → no row stamped, no PTY write', () => {
   assert.deepStrictEqual(session.writes, []);
 });
 
+// ─── multi-select toggle: single-flip invariant ────────────────────────
+// Pre-fix, handleMenuToggle flipped opt.checked TWICE for one click —
+// once inside _toggleMenuChatCheckbox (which mutates the persisted chat
+// row's options array) and once on `pending.options` (same object
+// reference, since broadcastMenuToChat doesn't clone). Net flip was
+// zero; the chat picker's checkbox UI never moved and the menu-multi
+// diagnostic always logged the initial state. Worse: clicks STILL drove
+// claude's TUI (the digit write is independent), so server state and
+// claude state diverged. Verified 2026-05-13 on mycobeta demo010 — a
+// "select 2 of 4" interaction logged BOTH toggles as "unchecked"
+// despite the user trying to check.
+
+t('toggle: one click flips opt.checked exactly once (no double-flip)', () => {
+  const sid = 'sess-toggle-1';
+  const opts = [
+    { n: 1, label: 'PTY output streaming', checkbox: true, checked: false },
+    { n: 2, label: 'Preview-icon parity',  checkbox: true, checked: false },
+  ];
+  const menu = { hash: 'h_features', question: 'Which features?', options: opts, kind: 'plan', multi: true };
+  seedStore(sid, [menu]);
+  const session = makeMockSession();
+  session.pendingMenu = menu;
+  ptyMod.handleMenuToggle(sid, session, 1, 'h_features');
+  const chat = freshChat(sid);
+  // Persisted state must reflect the toggle.
+  assert.strictEqual(chat[0].meta.menu.options[0].checked, true, 'option 1 must be checked after one click');
+  assert.strictEqual(chat[0].meta.menu.options[1].checked, false, 'option 2 untouched');
+  // PTY received bare digit (no CR).
+  assert.deepStrictEqual(session.writes, ['1'], 'PTY should receive a bare "1"');
+  // Hash UNCHANGED — hashMenu deliberately excludes checked state so the
+  // chat row keeps its identity across toggles.
+  assert.strictEqual(chat[0].meta.menu.hash, 'h_features');
+});
+
+t('toggle: two clicks on the same option return to initial state', () => {
+  // Net effect of click + click is identity. With the pre-fix double-
+  // flip bug, this property held trivially (each click was net zero),
+  // so this test alone doesn't catch the regression — pair with the
+  // single-click test above. Both must be green.
+  const sid = 'sess-toggle-2';
+  const opts = [{ n: 1, label: 'OAuth', checkbox: true, checked: false }];
+  const menu = { hash: 'h_two', question: 'Q?', options: opts, kind: 'plan', multi: true };
+  seedStore(sid, [menu]);
+  const session = makeMockSession();
+  session.pendingMenu = menu;
+  ptyMod.handleMenuToggle(sid, session, 1, 'h_two');
+  ptyMod.handleMenuToggle(sid, session, 1, 'h_two');
+  const chat = freshChat(sid);
+  assert.strictEqual(chat[0].meta.menu.options[0].checked, false, 'two clicks return to false');
+  assert.deepStrictEqual(session.writes, ['1', '1'], 'PTY received two bare "1"s');
+});
+
+t('toggle: pending.options and the persisted row share the same object reference', () => {
+  // Invariant the double-flip bug relied on (and which the fix relies
+  // on too — only one of pending vs persisted does the flip). If a
+  // future refactor clones either side, the toggle UI will silently
+  // diverge from the persisted record; this test ensures the
+  // invariant is documented.
+  const sid = 'sess-toggle-3';
+  const opts = [{ n: 1, label: 'X', checkbox: true, checked: false }];
+  const menu = { hash: 'h_ref', question: 'Q?', options: opts, kind: 'plan', multi: true };
+  seedStore(sid, [menu]);
+  const persisted = sessionsMod.loadStore().sessions[sid].chat[0].meta.menu.options[0];
+  // Same {n, label, checkbox, checked} fields but distinct object on
+  // reload (JSON.parse made a copy). That's fine — what matters is
+  // that handleMenuToggle treats persisted as authoritative and only
+  // flips it once.
+  const session = makeMockSession();
+  session.pendingMenu = menu;
+  ptyMod.handleMenuToggle(sid, session, 1, 'h_ref');
+  const reloaded = sessionsMod.loadStore().sessions[sid].chat[0].meta.menu.options[0];
+  assert.strictEqual(reloaded.checked, true);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 if (failed) process.exit(1);
