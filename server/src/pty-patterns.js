@@ -44,6 +44,27 @@
 // (e.g. "[4] Type something. [5] Chat about this").
 const MENU_OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/g;
 
+// Multi-select option marker — claude code renders a checkbox after the
+// numbered prefix when the dialog is a multi-select. Each digit press
+// TOGGLES one checkbox; Enter submits the whole set. Examples observed:
+//
+//   ❯ 1. [ ] OAuth
+//     2. [x] Allowlist        ← checked, with x (lowercase)
+//     3. [✓] PAT login        ← checked, with check glyph
+//     4. Done                 ← non-checkbox: digit+Enter submits
+//     5. — [ ] Extra option   ← bullet/dash between marker and checkbox
+//
+// Group 1 (when defined) is the check glyph — presence means "checked".
+// Group 2 is the clean label.
+//
+// Tolerated check glyphs: x, X, ✓, ✔, ●, *, ▪, ◉, █ — whatever claude code
+// or a theme decides to render. The optional decoration class lets a
+// bullet/dash/arrow sit between the number marker and the `[` without
+// breaking detection. Non-checkbox labels (like "Done") still won't
+// match here so the caller knows to treat them as plain picks.
+const MENU_CHECKBOX_RE =
+  /^\s*(?:[•·*▪◦◆◇\-–—➜→›»>]\s+)?\[\s*([xX✓✔●▪◉█*])?\s*\]\s*(.*)$/;
+
 // The CURRENTLY-SELECTED option in a claude code TUI menu is rendered
 // with a `❯` cursor in the left gutter:
 //
@@ -238,6 +259,7 @@ const TUI_KEY_HINT_RE =
 
 module.exports = {
   MENU_OPT_MARKER_RE,
+  MENU_CHECKBOX_RE,
   MENU_CURSOR_RE,
   MENU_MAX_OPTION_GAP_LINES,
   MENU_QUESTION_TAIL_RE,

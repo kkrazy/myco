@@ -317,6 +317,119 @@ function handleMenuPick(sessionId, session, n, hash) {
   session.pendingMenu = null;
 }
 
+// Multi-select half of menu-pick: TOGGLE one checkbox without submitting.
+// Claude code's multi-select dialog responds to a bare digit (no CR) by
+// flipping checkbox <n>'s state. We persist the toggle on the chat row
+// so a refresh / reconnect shows the updated state, and write the digit
+// to the PTY so claude's TUI reflects it. Submit happens via the
+// separate `menu-submit` frame (Enter alone).
+//
+// Stale-dialog guard mirrors handleMenuPick: if the hash no longer
+// matches what claude is showing, drop the write to avoid toggling the
+// wrong dialog.
+function handleMenuToggle(sessionId, session, n, hash) {
+  if (!Number.isFinite(n) || n < 1 || n > 9) return;
+  if (!session || !session.alive) return;
+  const pending = session.pendingMenu;
+  if (!pending || !Array.isArray(pending.options) || !pending.multi) return;
+  if (hash && pending.hash && pending.hash !== hash) {
+    console.log(`[menu-toggle] ${sessionId} dropped n=${n} — stale (clicked hash=${hash.slice(0,16)} != pending=${pending.hash.slice(0,16)})`);
+    return;
+  }
+  const opt = pending.options.find((o) => o.n === n);
+  if (!opt || !opt.checkbox) return;
+  // Persist the new checked state on the chat row so reconnects see the
+  // most recent UI. The hash stays constant across toggles (see
+  // hashMenu — it excludes checked state on purpose).
+  _toggleMenuChatCheckbox(sessionId, n, hash);
+  // Also update pending so a follow-up toggle in the same dialog sees
+  // current state (used only by the server log + future heuristics).
+  opt.checked = !opt.checked;
+  // Drive the actual TUI toggle — bare digit, no CR.
+  session.write(String(n));
+  console.log(`[menu-toggle] ${sessionId} toggled n=${n} → ${opt.checked ? 'checked' : 'unchecked'}`);
+}
+
+// Multi-select half of menu-pick: SUBMIT the current checkbox set.
+//
+// Claude's multi-select dialog ships with a separate "Submit" navigable
+// row below the numbered options (visible as the indented "Submit"
+// sub-line under the last option). Plain Enter on the current cursor
+// position just operates on whatever the cursor's sitting on — it does
+// NOT finalize the selection. To submit, the user normally arrow-downs
+// onto the Submit row and hits Enter.
+//
+// Earlier we over-sent 12 down-arrows in one PTY write hoping the
+// cursor would clamp at the bottom. That apparently wrapped (cursor
+// landed back on option 1) and the trailing Enter submitted option 1
+// only. Two fixes here:
+//
+//   1. PRECISE row count from the headless terminal — find the `❯`
+//      cursor row and the "Submit" row, send exactly (submit - cursor)
+//      down-arrows. No overshoot, no wrap risk.
+//   2. PACED arrows — emit one key every 30ms so claude's TUI
+//      processes each as a separate input event. The rapid 12-byte
+//      burst from the earlier version may have been read as a single
+//      event by claude's input loop (some Ink builds debounce
+//      consecutive arrow keys), so only one navigation step actually
+//      registered.
+//
+// If the headless lookup can't find either row, fall back to a small
+// fixed count (6) — much safer than the original 12, and still enough
+// for a dialog with 4-5 numbered options + Submit.
+const ARROW_DOWN = '\x1b[B';
+const SUBMIT_LABEL_RE = /\b(?:submit|done|continue|finish|ok)\b\s*$/i;
+function _findSubmitNavCount(session) {
+  if (!session.headless || !session.headless.buffer) return 6;
+  try {
+    const buf = session.headless.buffer.active;
+    const rows = session.headless.rows;
+    let cursorRow = -1, submitRow = -1;
+    for (let i = 0; i < rows; i++) {
+      const line = buf.getLine(buf.viewportY + i);
+      if (!line) continue;
+      const txt = line.translateToString(true);
+      if (cursorRow < 0 && txt.includes('❯')) cursorRow = i;
+      if (SUBMIT_LABEL_RE.test(txt)) submitRow = i;       // last-match wins
+    }
+    if (cursorRow < 0 || submitRow <= cursorRow) return 6;
+    return Math.min(20, submitRow - cursorRow);
+  } catch { return 6; }
+}
+function handleMenuSubmit(sessionId, session, hash) {
+  if (!session || !session.alive) return;
+  const pending = session.pendingMenu;
+  if (!pending || !pending.multi) return;
+  if (hash && pending.hash && pending.hash !== hash) {
+    console.log(`[menu-submit] ${sessionId} dropped — stale (clicked hash=${hash.slice(0,16)} != pending=${pending.hash.slice(0,16)})`);
+    return;
+  }
+  _markMenuChatAnswered(sessionId, 0, hash, /*submit*/ true);
+  const navCount = _findSubmitNavCount(session);
+  console.log(`[menu-submit] ${sessionId} navigating ${navCount} rows then CR`);
+  // Send each arrow as a separate write spaced ~30ms apart, then Enter
+  // after a slightly longer pause. The pause budget caps at ~30*navCount
+  // + 80 ms (<800ms for navCount=20), well below any reasonable user-
+  // perceived wait, while giving claude's TUI time to advance the cursor
+  // between each event.
+  let i = 0;
+  function tick() {
+    if (!session.alive) return;
+    if (i < navCount) {
+      session.write(ARROW_DOWN);
+      i++;
+      setTimeout(tick, 30);
+    } else {
+      setTimeout(() => {
+        if (session && session.alive) session.write('\r');
+        session.pendingMenu = null;
+        console.log(`[menu-submit] ${sessionId} CR sent`);
+      }, 80);
+    }
+  }
+  tick();
+}
+
 // Mirror assistant text from the transcript stream into rec.chat so
 // the chat pane survives a refresh / new tab / readonly attach.
 //
@@ -363,7 +476,12 @@ function persistAssistantTextToChat(sessionId, newMsgs) {
 // `hash` is provided, find the row whose `meta.menu.hash` equals it
 // (race-free across multiple unanswered menus). When omitted, fall
 // back to "latest unanswered" for back-compat with older clients.
-function _markMenuChatAnswered(sessionId, n, hash) {
+//
+// For multi-select submit: pass submit=true with n=0. The row is
+// stamped answered=true with no pickedN — the chat picker reads the
+// per-option `checked` flags on the persisted menu to render the
+// "✓ Submitted with [a, c]" summary line.
+function _markMenuChatAnswered(sessionId, n, hash, submit) {
   if (!sessionId) return;
   try {
     const store = sessionsMod.loadStore();
@@ -379,16 +497,48 @@ function _markMenuChatAnswered(sessionId, n, hash) {
       } else {
         if (m.meta.answered) return;        // latest is already answered → done
       }
-      const opts = (m.meta.menu && m.meta.menu.options) || [];
-      if (!opts.some((o) => o.n === n)) return;   // n not valid for this menu
+      if (!submit) {
+        const opts = (m.meta.menu && m.meta.menu.options) || [];
+        if (!opts.some((o) => o.n === n)) return;   // n not valid for this menu
+        m.meta.pickedN = n;
+      } else {
+        m.meta.submitted = true;
+      }
       m.meta.answered = true;
-      m.meta.pickedN = n;
       sessionsMod.saveStore();
-      console.log(`[menu-pick] ${sessionId} stamped answered=true pickedN=${n}${hash ? ' (byHash)' : ''}`);
+      console.log(`[menu-pick] ${sessionId} stamped answered=true ${submit ? 'submitted' : `pickedN=${n}`}${hash ? ' (byHash)' : ''}`);
       return;
     }
   } catch (err) {
     console.error(`[menu-pick] persist failed for ${sessionId}: ${err.message}`);
+  }
+}
+
+// Flip the `checked` flag on option <n> of the multi-select chat row
+// matching `hash`. No "answered" stamp — the row stays interactive
+// until the user hits Submit. Persisted so a reconnect/refresh sees the
+// most recent UI state.
+function _toggleMenuChatCheckbox(sessionId, n, hash) {
+  if (!sessionId) return;
+  try {
+    const store = sessionsMod.loadStore();
+    const rec = store.sessions[sessionId];
+    if (!rec || !Array.isArray(rec.chat)) return;
+    for (let i = rec.chat.length - 1; i >= 0; i--) {
+      const m = rec.chat[i];
+      if (!m || !m.meta || m.meta.kind !== 'menu') continue;
+      const mh = m.meta.menu && m.meta.menu.hash;
+      if (hash && mh !== hash) continue;
+      if (m.meta.answered) return;
+      const opts = (m.meta.menu && m.meta.menu.options) || [];
+      const opt = opts.find((o) => o.n === n);
+      if (!opt || !opt.checkbox) return;
+      opt.checked = !opt.checked;
+      sessionsMod.saveStore();
+      return;
+    }
+  } catch (err) {
+    console.error(`[menu-toggle] persist failed for ${sessionId}: ${err.message}`);
   }
 }
 
@@ -527,6 +677,18 @@ function attachWebSocket(session, ws, opts = {}) {
       if (user) handleMenuPick(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
       return;
     }
+    if (msg.t === 'menu-toggle' && Number.isFinite(msg.n)) {
+      // Multi-select toggle — writes a bare digit (no CR) to flip one
+      // checkbox. Hash gates the same race protection as menu-pick.
+      if (user) handleMenuToggle(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
+      return;
+    }
+    if (msg.t === 'menu-submit') {
+      // Multi-select submit — Enter only. Sends the currently-checked set
+      // as the dialog answer.
+      if (user) handleMenuSubmit(sessionId, session, typeof msg.hash === 'string' ? msg.hash : null);
+      return;
+    }
     if (readOnly) return; // share-link viewers can watch but not type / resize
     if (msg.t === 'input' && typeof msg.data === 'string') {
       session.write(Buffer.from(msg.data, 'base64').toString('utf8'));
@@ -596,6 +758,12 @@ function attachViewerWebSocket(session, ws, opts = {}) {
       // viewers because chat steering is open to them anyway. Hash
       // forwarding is identical to the owner branch.
       handleMenuPick(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
+    }
+    if (msg.t === 'menu-toggle' && Number.isFinite(msg.n) && user) {
+      handleMenuToggle(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
+    }
+    if (msg.t === 'menu-submit' && user) {
+      handleMenuSubmit(sessionId, session, typeof msg.hash === 'string' ? msg.hash : null);
     }
   }
 
@@ -886,6 +1054,8 @@ module.exports = {
   handleChatMessage,
   // Exposed for the menu-pick race-condition regression test.
   handleMenuPick,
+  handleMenuToggle,
+  handleMenuSubmit,
   // Re-exported for menu-broadcast.test.js — the live implementations now
   // live in menu.js; this surface stays so the test contract (and any
   // outside caller that pulls the menu helpers off ptyMod) keeps working.

@@ -39,7 +39,12 @@ app.use((req, res, next) => {
   const longCache =
     url.startsWith('/vendor/') ||
     url.startsWith('/fonts/') ||
-    /\?v=\d+/.test(url);
+    // `?v=<anything>` — the indexHtml() injector replaces hard-coded
+    // `?v=NNN` with build-stamp-based query strings (ISO timestamps
+    // contain non-digit chars like ':' and 'T'), so a `\d+`-only match
+    // would miss the auto-busted URLs and serve them no-store. Match
+    // any non-empty `?v=...` value.
+    /\?v=[^&]/.test(url);
   if (longCache) {
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
   } else {
@@ -56,7 +61,47 @@ function requireAuth(req, res, next) {
   next();
 }
 
-app.use(express.static(path.join(__dirname, '../../web/public'), { etag: false, lastModified: false, maxAge: 0 }));
+// Serve index.html with build-stamp cache-busters injected — `app.js?v=N`
+// and `styles.css?v=N` become `?v=<build-stamp>`. The static
+// `?v=<n>` literal in the file is a fallback that only matters when
+// build.txt is absent (dev runs outside docker). With this dynamic
+// rewrite, every deploy automatically invalidates browser caches for
+// every client asset without anyone having to remember to bump the
+// hard-coded version number. Bug history: an app.js change shipped to
+// production with the hard-coded ?v=164 left in place, so every
+// returning browser kept the cached old bundle and silently broke the
+// multi-select picker (didn't know about menu.multi → rendered toggles
+// as plain picks → first click disabled the whole row).
+const PUBLIC_DIR = path.join(__dirname, '../../web/public');
+let _cachedBuildStamp = null;
+function buildStamp() {
+  if (_cachedBuildStamp !== null) return _cachedBuildStamp;
+  try {
+    _cachedBuildStamp = fs.readFileSync(path.join(PUBLIC_DIR, 'build.txt'), 'utf8').trim();
+  } catch {
+    // No build.txt — dev mode. Use process start time so each restart
+    // still busts the cache for in-progress development.
+    _cachedBuildStamp = 'dev-' + Date.now();
+  }
+  return _cachedBuildStamp;
+}
+let _cachedIndexHtml = null;
+function indexHtml() {
+  if (_cachedIndexHtml !== null) return _cachedIndexHtml;
+  const raw = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
+  const stamp = encodeURIComponent(buildStamp());
+  _cachedIndexHtml = raw
+    .replace(/app\.js\?v=[^"'\s]+/g, `app.js?v=${stamp}`)
+    .replace(/styles\.css\?v=[^"'\s]+/g, `styles.css?v=${stamp}`)
+    .replace(/keyboard\.js\?v=[^"'\s]+/g, `keyboard.js?v=${stamp}`);
+  return _cachedIndexHtml;
+}
+app.get(['/', '/index.html'], (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(indexHtml());
+});
+
+app.use(express.static(PUBLIC_DIR, { etag: false, lastModified: false, maxAge: 0 }));
 
 // Serve xterm assets from node_modules so we don't depend on a CDN
 app.use('/vendor/xterm', express.static(path.join(__dirname, '../node_modules/@xterm/xterm/lib')));

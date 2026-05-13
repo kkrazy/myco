@@ -88,7 +88,18 @@ function broadcastMenuToChat(sessionId, session, menu, target) {
   };
   sessionsMod.appendChatMessage(sessionId, msg);
   session.emit('chat', msg);
-  console.log(`[menu] ${sessionId} broadcast ${menu.kind} with ${menu.options.length} options: ${JSON.stringify(menu.question).slice(0, 80)}`);
+  console.log(`[menu] ${sessionId} broadcast ${menu.kind}${menu.multi ? ' (MULTI)' : ''} with ${menu.options.length} options: ${JSON.stringify(menu.question).slice(0, 80)}`);
+  // Multi-select diagnostic: dump per-option {n, label, checkbox, checked}
+  // so we can see which lines matched MENU_CHECKBOX_RE. Options that
+  // SHOULD be toggles but render without `checkbox: true` are the most
+  // common cause of "click locks the picker" — they fall out of the
+  // toggle branch and get the plain-pick treatment, which disables the
+  // whole row.
+  if (menu.multi) {
+    for (const o of menu.options) {
+      console.log(`[menu-multi]   n=${o.n} checkbox=${!!o.checkbox} checked=${!!o.checked} label=${JSON.stringify(String(o.label).slice(0, 80))}`);
+    }
+  }
 }
 
 module.exports = { handleSessionMenu, broadcastMenuToChat };

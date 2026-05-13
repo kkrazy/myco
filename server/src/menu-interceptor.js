@@ -16,6 +16,7 @@
 // rationale + the exact dialog text that motivated each rule.
 const {
   MENU_OPT_MARKER_RE: OPT_MARKER_RE,
+  MENU_CHECKBOX_RE,
   MENU_CURSOR_RE,
   MENU_MAX_OPTION_GAP_LINES,
   MENU_QUESTION_TAIL_RE,
@@ -152,10 +153,28 @@ class MenuInterceptor {
     if (MENU_KIND_PERMISSION_RE.test(classBlob)) kind = 'permission';
     else if (MENU_KIND_PLAN_RE.test(classBlob)) kind = 'plan';
 
-    const optsForHash = options.map((o) => ({ n: o.n, label: o.label }));
-    const hash = hashMenu(question, optsForHash);
+    // Multi-select detection: claude code prefixes each toggleable option's
+    // label with a "[ ]"/"[x]" checkbox. Digit keys flip individual
+    // checkboxes; Enter submits the whole set. If ANY option carries a
+    // checkbox, the dialog is multi-select and the broadcast must surface
+    // per-option {checkbox, checked} state plus a multi flag so the chat
+    // picker uses toggle semantics instead of pick-and-submit.
+    //
+    // Mixed dialogs are common: a final "Done" / "Submit" line lacks the
+    // checkbox marker — it acts as a normal pick (digit+Enter), and the
+    // chat UI renders it as a plain button rather than a checkbox.
+    const optsForBroadcast = options.map((o) => {
+      const m = MENU_CHECKBOX_RE.exec(o.label || '');
+      if (m) {
+        return { n: o.n, label: m[2].trim(), checkbox: true, checked: !!m[1] };
+      }
+      return { n: o.n, label: o.label };
+    });
+    const multi = optsForBroadcast.some((o) => o.checkbox);
+
+    const hash = hashMenu(question, optsForBroadcast);
     const rawText = lines.slice(Math.max(0, firstOptIdx - 5)).join('\n');
-    return { hash, kind, question, options: optsForHash, rawText };
+    return { hash, kind, multi, question, options: optsForBroadcast, rawText };
   }
 }
 
@@ -193,7 +212,9 @@ function extractOptionsOnLine(line, lineIdx) {
 
 function hashMenu(question, options) {
   // Truncated so trivial re-renders (cursor blink, mouse hover state) don't
-  // shift the hash.
+  // shift the hash. Checkbox CHECKED state is intentionally excluded —
+  // toggling a checkbox MUST keep the hash stable so the chat row stays
+  // tied to the same pending dialog across user clicks.
   return question.slice(0, 100) + '|' + options.map((o) => `${o.n}:${o.label.slice(0, 60)}`).join('|');
 }
 

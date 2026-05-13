@@ -2964,6 +2964,55 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   padding-top: 6px;
   border-top: 1px solid #21262d;
 }
+/* Multi-select dialogs — checkbox-style toggle buttons + a separate
+   Submit row. The .chat-menu-glyph holds the ☐/☑ icon so it's easy to
+   target for the toggle animation. .is-checked overrides the default
+   button styling with a green tint so checked boxes are visually
+   distinct from un-clicked options. */
+.chat-menu-opt.chat-menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-menu-opt.chat-menu-toggle.is-checked {
+  background: rgba(63, 185, 80, 0.12);
+  color: #c9d1d9;
+}
+.chat-menu-opt.chat-menu-toggle.is-checked:hover:not(:disabled) {
+  background: rgba(63, 185, 80, 0.22);
+}
+.chat-menu-glyph {
+  display: inline-block;
+  width: 1.2em;
+  text-align: center;
+  font-size: 1.05em;
+  color: #58a6ff;
+}
+.chat-menu-opt.chat-menu-toggle.is-checked .chat-menu-glyph {
+  color: #3fb950;
+}
+.chat-menu-submit {
+  margin-top: 6px;
+  background: rgba(31, 111, 235, 0.18);
+  color: #c9d1d9;
+  border: 1px solid rgba(88, 166, 255, 0.35);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.12s;
+}
+.chat-menu-submit:hover:not(:disabled) {
+  background: rgba(31, 111, 235, 0.32);
+}
+.chat-menu-submit:active:not(:disabled) {
+  background: rgba(31, 111, 235, 0.46);
+}
+.chat-menu-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 /* Compact summary line that REPLACES the option-buttons block once the
    menu is answered. Keeps the chat history tidy — no graveyard of
    disabled buttons cluttering the scroll. */

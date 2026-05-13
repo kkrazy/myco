@@ -1573,6 +1573,35 @@ function appendChatMessage(message) {
       }
     }
   }
+  // Dedup by menu hash — if claude re-broadcasts the SAME dialog
+  // (e.g. multi-select re-render after a checkbox toggle that bumped
+  // the hash for some reason, or a flicker that fires the detector
+  // twice), update the existing row's options in place and skip the
+  // append. Without this dedup, the new row's _appendChatMessageDom
+  // would deactivate the original row's buttons via
+  // _deactivatePriorMenuRows, making the picker appear to "lock up"
+  // after one click. Active rows only — answered/submitted rows are
+  // permanent history, not candidates for live updates.
+  const incomingHash = message.meta && message.meta.kind === 'menu'
+    && message.meta.menu && message.meta.menu.hash;
+  if (incomingHash) {
+    for (let i = 0; i < state.chatMessages.length; i++) {
+      const existing = state.chatMessages[i];
+      if (!existing || !existing.meta || existing.meta.kind !== 'menu') continue;
+      if (existing.meta.answered) continue;
+      const existingHash = existing.meta.menu && existing.meta.menu.hash;
+      if (existingHash !== incomingHash) continue;
+      existing.meta.menu = message.meta.menu;
+      const list = document.getElementById('chat-messages');
+      if (list && list.children[i]) {
+        const newEl = _htmlToNode(renderChatMessage(existing, /*isActiveMenu*/ true));
+        if (newEl) list.children[i].replaceWith(newEl);
+      }
+      _updatePendingMenuFromMessage(existing);
+      _renderPendingMenuCallout();
+      return;
+    }
+  }
   state.chatMessages.push(message);
   _appendChatMessageDom(message);
   _updatePendingMenuFromMessage(message);
@@ -1603,7 +1632,14 @@ function _appendChatMessageDom(message) {
   const isMenu = !!(message && message.meta && message.meta.kind === 'menu'
     && message.meta.menu && Array.isArray(message.meta.menu.options));
   const isMenuAuto = !!(message && message.meta && message.meta.kind === 'menu-auto');
-  if (isMenu || isMenuAuto) _deactivatePriorMenuRows(list);
+  if (isMenu || isMenuAuto) {
+    // Hash of the incoming menu — _deactivatePriorMenuRows uses it to
+    // skip rows that share the same hash (those are the SAME dialog,
+    // not a successor). Without this guard, a hash-collision re-broadcast
+    // would strip the buttons off the still-active picker.
+    const incomingHash = isMenu ? (message.meta.menu.hash || null) : null;
+    _deactivatePriorMenuRows(list, incomingHash);
+  }
 
   const html = renderChatMessage(message, /*isActiveMenu*/ isMenu);
   const node = _htmlToNode(html);
@@ -1628,12 +1664,17 @@ function _htmlToNode(html) {
 // "(no longer active)". Indexes align because every append goes through
 // _appendChatMessageDom and applyChatHistory rebuilds from state, so
 // list.children[i] tracks state.chatMessages[i].
-function _deactivatePriorMenuRows(list) {
+function _deactivatePriorMenuRows(list, incomingHash) {
   const children = list.children;
   for (let i = 0; i < state.chatMessages.length && i < children.length; i++) {
     const m = state.chatMessages[i];
     if (!m || !m.meta || m.meta.kind !== 'menu') continue;
     if (!m.meta.menu || !Array.isArray(m.meta.menu.options)) continue;
+    // Skip rows that have the same hash as the incoming menu — they're
+    // the SAME dialog, not a superseded one. The appendChatMessage
+    // hash-dedup branch usually catches this first, but the guard
+    // belongs here too for callers that bypass the dedup.
+    if (incomingHash && m.meta.menu.hash === incomingHash) continue;
     const oldEl = children[i];
     if (!oldEl || !oldEl.querySelector('.chat-menu-opts')) continue;
     const newEl = _htmlToNode(renderChatMessage(m, /*isActiveMenu*/ false));
@@ -1743,40 +1784,80 @@ function _bindChatMenuClicks() {
   if (!list || list.dataset.menuBound === '1') return;
   list.dataset.menuBound = '1';
   list.addEventListener('click', (e) => {
+    // Multi-select Submit button — sends just Enter, finalising the dialog.
+    const submitBtn = e.target.closest('.chat-menu-submit');
+    if (submitBtn && !submitBtn.disabled) {
+      const hash = submitBtn.dataset.hash || '';
+      if (!sendMenuSubmit(hash)) return;
+      _resolveMenuRow(submitBtn, { submitted: true });
+      _markAwaitingClaude();
+      return;
+    }
     const btn = e.target.closest('.chat-menu-opt');
     if (!btn || btn.disabled) return;
     const n = Number(btn.dataset.n);
     if (!Number.isFinite(n) || n < 1) return;
     const hash = btn.dataset.hash || '';
+    const isToggle = btn.classList.contains('chat-menu-toggle');
+    if (isToggle) {
+      // Multi-select toggle — flip checkbox state, send digit-only frame.
+      if (!sendMenuToggle(n, hash)) return;
+      _toggleCheckboxOnRow(btn, n);
+      return;   // do NOT mark answered or yank pendingMenu — user is still composing
+    }
+    // Plain pick (single-select OR non-checkbox option in a multi-select
+    // dialog like "Done" — both behave as digit+CR final pick).
     if (!sendMenuPick(n, hash)) return;
     state.pendingMenu = null;
-    // Mark the underlying chat message as answered so subsequent
-    // re-renders (claude's streaming reply will trigger many) keep
-    // the picker disabled with the green-highlighted pick. Without
-    // this, renderChatPane reconstructs the buttons every time a
-    // new message lands and the disabled state vanishes.
-    const msgEl = btn.closest('.chat-msg');
-    if (msgEl && msgEl.parentNode) {
-      const idx = Array.prototype.indexOf.call(msgEl.parentNode.children, msgEl);
-      if (idx >= 0 && state.chatMessages[idx]) {
-        state.chatMessages[idx]._answered = true;
-        state.chatMessages[idx]._pickedN = n;
-      }
-    }
-    // Visual update right now so the user gets immediate feedback
-    // (don't wait for the next renderChatPane).
-    const grp = btn.closest('.chat-menu-opts');
-    if (grp) {
-      grp.querySelectorAll('.chat-menu-opt').forEach((b) => {
-        b.disabled = true;
-        b.classList.toggle('chat-menu-picked', b === btn);
-      });
-    }
-    // Claude was paused waiting for this pick — it'll start producing
-    // output again. Re-arm the typing indicator + idle timer so the
-    // user sees that claude is working.
+    _resolveMenuRow(btn, { pickedN: n });
     _markAwaitingClaude();
   });
+}
+
+// Stamp the chat row + the chat-messages DOM as resolved. opts.pickedN
+// for single-select / Done in multi-select. opts.submitted=true for
+// multi-select Submit. Without this, the next renderChatPane / inline
+// re-render would reconstruct the picker (claude's streaming reply
+// triggers many of those) and the disabled state would vanish.
+function _resolveMenuRow(btn, opts) {
+  const msgEl = btn.closest('.chat-msg');
+  if (msgEl && msgEl.parentNode) {
+    const idx = Array.prototype.indexOf.call(msgEl.parentNode.children, msgEl);
+    if (idx >= 0 && state.chatMessages[idx]) {
+      state.chatMessages[idx]._answered = true;
+      if (opts.pickedN != null) state.chatMessages[idx]._pickedN = opts.pickedN;
+      if (opts.submitted) state.chatMessages[idx]._submitted = true;
+    }
+  }
+  // Disable every option in this row immediately — don't wait for the
+  // next renderChatPane.
+  const grp = btn.closest('.chat-menu-opts');
+  if (grp) {
+    grp.querySelectorAll('.chat-menu-opt, .chat-menu-submit').forEach((b) => {
+      b.disabled = true;
+      if (b === btn) b.classList.add('chat-menu-picked');
+    });
+  }
+}
+
+// Optimistic checkbox flip on a multi-select toggle click. The server
+// also persists the new state on the chat row (see _toggleMenuChatCheckbox
+// in pty.js), but this gives instant feedback without waiting for the
+// 'chat' frame round-trip.
+function _toggleCheckboxOnRow(btn, n) {
+  const msgEl = btn.closest('.chat-msg');
+  if (msgEl && msgEl.parentNode) {
+    const idx = Array.prototype.indexOf.call(msgEl.parentNode.children, msgEl);
+    const m = state.chatMessages[idx];
+    if (m && m.meta && m.meta.menu && Array.isArray(m.meta.menu.options)) {
+      const opt = m.meta.menu.options.find((o) => o.n === n);
+      if (opt && opt.checkbox) opt.checked = !opt.checked;
+    }
+  }
+  const checked = btn.classList.toggle('is-checked');
+  btn.setAttribute('aria-pressed', checked ? 'true' : 'false');
+  const glyph = btn.querySelector('.chat-menu-glyph');
+  if (glyph) glyph.textContent = checked ? '☑' : '☐';
 }
 
 function clearChat() {
@@ -1870,12 +1951,21 @@ function renderChatMessage(m, isActiveMenu) {
   const pickedN = menuOpts
     ? (m._pickedN || (m.meta && m.meta.pickedN) || null)
     : null;
+  const isMulti = !!(menuOpts && m.meta && m.meta.menu && m.meta.menu.multi);
+  const wasSubmitted = !!(m.meta && (m.meta.submitted || m._submitted));
   // Once answered, the buttons row collapses into a single "✓ Picked …"
   // line. Leaving N disabled buttons around clutters the chat — the
   // pick is captured in the summary line and that's all the user
   // needs to see in the history.
   let optsHtml = '';
-  if (menuOpts && pickedN != null) {
+  if (menuOpts && wasSubmitted) {
+    // Multi-select submitted: summarize the checked set.
+    const picked = menuOpts.filter((o) => o.checkbox && o.checked);
+    const summary = picked.length
+      ? picked.map((o) => `[${o.n}] ${escHtml(o.label)}`).join(', ')
+      : '(nothing selected)';
+    optsHtml = `<div class="chat-menu-resolved">✓ Submitted with ${summary}</div>`;
+  } else if (menuOpts && pickedN != null) {
     const matched = menuOpts.find((o) => o.n === pickedN);
     const label = matched ? matched.label : '';
     optsHtml = `<div class="chat-menu-resolved">✓ Picked [${pickedN}]${label ? ' ' + escHtml(label) : ''}</div>`;
@@ -1887,9 +1977,26 @@ function renderChatMessage(m, isActiveMenu) {
     // dialog turnover), the pick is dropped instead of silently
     // answering the wrong question.
     const menuHash = (m.meta.menu && m.meta.menu.hash) || '';
-    optsHtml = `<div class="chat-menu-opts">${menuOpts.map((o) =>
-      `<button type="button" class="chat-menu-opt" data-n="${o.n}" data-hash="${escHtml(menuHash)}">[${o.n}] ${escHtml(o.label)}</button>`
-    ).join('')}<div class="chat-menu-hint">Pick here — goes straight to the session, no chat post.</div></div>`;
+    if (isMulti) {
+      // Multi-select: each checkbox option is a toggle (click sends
+      // menu-toggle frame); non-checkbox options are plain picks (final
+      // "Done"/"Submit" rendered by claude inside the dialog options).
+      // Plus an explicit Submit button at the end for dialogs that don't
+      // include their own "Done" option.
+      const buttons = menuOpts.map((o) => {
+        if (o.checkbox) {
+          const checked = !!o.checked;
+          const glyph = checked ? '☑' : '☐';
+          return `<button type="button" class="chat-menu-opt chat-menu-toggle${checked ? ' is-checked' : ''}" data-n="${o.n}" data-hash="${escHtml(menuHash)}" aria-pressed="${checked ? 'true' : 'false'}"><span class="chat-menu-glyph">${glyph}</span> [${o.n}] ${escHtml(o.label)}</button>`;
+        }
+        return `<button type="button" class="chat-menu-opt" data-n="${o.n}" data-hash="${escHtml(menuHash)}">[${o.n}] ${escHtml(o.label)}</button>`;
+      }).join('');
+      optsHtml = `<div class="chat-menu-opts chat-menu-opts-multi">${buttons}<button type="button" class="chat-menu-submit" data-hash="${escHtml(menuHash)}">↵ Submit</button><div class="chat-menu-hint">Click to toggle; Submit when done.</div></div>`;
+    } else {
+      optsHtml = `<div class="chat-menu-opts">${menuOpts.map((o) =>
+        `<button type="button" class="chat-menu-opt" data-n="${o.n}" data-hash="${escHtml(menuHash)}">[${o.n}] ${escHtml(o.label)}</button>`
+      ).join('')}<div class="chat-menu-hint">Pick here — goes straight to the session, no chat post.</div></div>`;
+    }
   } else if (menuOpts) {
     // Menu broadcast that's no longer the latest AND has no recorded
     // pick (e.g. older menu in history that got superseded). Show
@@ -2139,6 +2246,30 @@ function sendMenuPick(n, hash) {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   const frame = { t: 'menu-pick', n };
+  if (hash) frame.hash = hash;
+  try { ws.send(JSON.stringify(frame)); return true; }
+  catch { return false; }
+}
+
+// Multi-select toggle — flip one checkbox without submitting. Writes a
+// bare digit to claude's PTY (the server adds no CR). The user keeps
+// composing the answer; the actual answer goes when they click Submit.
+function sendMenuToggle(n, hash) {
+  if (!Number.isFinite(n) || n < 1) return false;
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  const frame = { t: 'menu-toggle', n };
+  if (hash) frame.hash = hash;
+  try { ws.send(JSON.stringify(frame)); return true; }
+  catch { return false; }
+}
+
+// Multi-select submit — finalises the dialog with whatever boxes are
+// currently checked. Writes just \r to the PTY.
+function sendMenuSubmit(hash) {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  const frame = { t: 'menu-submit' };
   if (hash) frame.hash = hash;
   try { ws.send(JSON.stringify(frame)); return true; }
   catch { return false; }

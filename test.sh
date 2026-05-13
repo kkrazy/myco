@@ -1261,6 +1261,103 @@ test_chat_window() {
   else
     skip "test/menu-pick-race.test.js (no host node)"
   fi
+  # Regression: multi-select dialog detection. Claude code renders
+  # "<n>. [ ] label" / "<n>. [x] label" for toggleable options; each
+  # digit press flips one checkbox and Enter submits. Parser must mark
+  # menu.multi=true, strip "[ ]"/"[x]" from labels, expose per-option
+  # {checkbox, checked}, leave non-checkbox lines (e.g. final "Done")
+  # alone, and keep the hash stable across checked-state changes so the
+  # chat row keeps its identity across toggle clicks.
+  if have_node; then
+    if node test/menu-multiselect.test.js >/dev/null 2>&1; then
+      pass "test/menu-multiselect.test.js (7 cases)"
+    else
+      fail "test/menu-multiselect.test.js — re-run with 'node test/menu-multiselect.test.js' to see failures"
+    fi
+  else
+    skip "test/menu-multiselect.test.js (no host node)"
+  fi
+  grep -qF 'MENU_CHECKBOX_RE' server/src/pty-patterns.js \
+    && pass "pty-patterns.js: MENU_CHECKBOX_RE defined" \
+    || fail "pty-patterns.js: MENU_CHECKBOX_RE missing — multi-select detection won't work"
+  grep -qF 'function handleMenuToggle' server/src/pty.js \
+    && pass "pty.js: handleMenuToggle defined" \
+    || fail "pty.js: handleMenuToggle missing"
+  grep -qF 'function handleMenuSubmit' server/src/pty.js \
+    && pass "pty.js: handleMenuSubmit defined" \
+    || fail "pty.js: handleMenuSubmit missing"
+  grep -qF "msg.t === 'menu-toggle'" server/src/pty.js \
+    && pass "pty.js: WS frame menu-toggle wired" \
+    || fail "pty.js: WS frame menu-toggle not wired"
+  grep -qF "msg.t === 'menu-submit'" server/src/pty.js \
+    && pass "pty.js: WS frame menu-submit wired" \
+    || fail "pty.js: WS frame menu-submit not wired"
+  # menu-toggle MUST send digit only (no CR) — sending '\r' here would
+  # submit prematurely and fail the multi-select.
+  if awk '/^function handleMenuToggle\(/,/^}$/' server/src/pty.js | grep -qF 'session.write(String(n));'; then
+    pass "pty.js: handleMenuToggle writes digit only (no CR)"
+  else
+    fail "pty.js: handleMenuToggle writes wrong byte sequence (should be just the digit)"
+  fi
+  # And it must NOT include the CR-suffix form used by single-select.
+  if awk '/^function handleMenuToggle\(/,/^}$/' server/src/pty.js | grep -qF "session.write(String(n) + '\\r')"; then
+    fail "pty.js: handleMenuToggle includes CR — would submit on every checkbox click"
+  else
+    pass "pty.js: handleMenuToggle has no CR (matches multi-select toggle semantics)"
+  fi
+  # menu-submit must navigate to the "Submit" row before pressing Enter —
+  # claude's multi-select dialog has a separate Submit element below
+  # the numbered options. Plain CR on the cursor's current position
+  # just operates on a checkbox row. Earlier the navigation used a
+  # blind 12-arrow over-send which wrapped on some Ink builds (cursor
+  # ended back at option 1, Enter submitted option 1 only). Current
+  # impl reads the headless to find the exact cursor→Submit distance
+  # AND paces arrows ~30ms apart so the TUI processes them serially.
+  grep -qF '_findSubmitNavCount' server/src/pty.js \
+    && pass "pty.js: handleMenuSubmit reads headless to compute exact nav distance" \
+    || fail "pty.js: handleMenuSubmit no longer computes precise nav count"
+  if awk '/^function handleMenuSubmit\(/,/^}$/' server/src/pty.js | grep -qF 'setTimeout(tick'; then
+    pass "pty.js: handleMenuSubmit paces arrows with setTimeout (no rapid-burst)"
+  else
+    fail "pty.js: handleMenuSubmit sends arrows as a burst — TUI may debounce them into one event"
+  fi
+  grep -qF 'SUBMIT_LABEL_RE' server/src/pty.js \
+    && pass "pty.js: SUBMIT_LABEL_RE locates the Submit/Done row" \
+    || fail "pty.js: SUBMIT_LABEL_RE missing"
+  grep -qF 'function sendMenuToggle' web/public/app.js \
+    && pass "app.js: sendMenuToggle defined" \
+    || fail "app.js: sendMenuToggle missing"
+  grep -qF 'function sendMenuSubmit' web/public/app.js \
+    && pass "app.js: sendMenuSubmit defined" \
+    || fail "app.js: sendMenuSubmit missing"
+  grep -qF 'chat-menu-toggle' web/public/app.js \
+    && pass "app.js: multi-select renders chat-menu-toggle buttons" \
+    || fail "app.js: multi-select rendering missing chat-menu-toggle class"
+  grep -qF 'chat-menu-submit' web/public/app.js \
+    && pass "app.js: multi-select renders Submit button" \
+    || fail "app.js: multi-select Submit button missing"
+  grep -qF '.chat-menu-opt.chat-menu-toggle' web/public/styles.css \
+    && pass "css: multi-select toggle styling present" \
+    || fail "css: multi-select toggle styling missing"
+  grep -qF '.chat-menu-submit' web/public/styles.css \
+    && pass "css: multi-select Submit styling present" \
+    || fail "css: multi-select Submit styling missing"
+  # Regression: index.html static cache busters (app.js?v=N, styles.css?v=N)
+  # used to be hand-bumped on every client change. Forgetting the bump
+  # shipped new app.js to disk but kept returning browsers on the cached
+  # old bundle — the multi-select picker silently regressed because old
+  # app.js didn't know about menu.multi. The server now injects a build-
+  # stamp cache buster on every served index.html so client edits
+  # invalidate caches automatically.
+  grep -qF 'function indexHtml()' server/src/index.js \
+    && pass "index.js: indexHtml() injector defined" \
+    || fail "index.js: missing indexHtml() — cache busters won't auto-bump on deploy"
+  grep -qF 'function buildStamp()' server/src/index.js \
+    && pass "index.js: buildStamp() reads /build.txt" \
+    || fail "index.js: missing buildStamp() helper"
+  grep -qE "app.get\(\['/', '/index\.html'\]" server/src/index.js \
+    && pass "index.js: GET / and /index.html routed through indexHtml()" \
+    || fail "index.js: index route not wired to the cache-buster injector"
   # Regression: captureClaudeSessionId must REPLACE a stale store value
   # when claude code creates a new jsonl during a --resume respawn. The
   # original gate (`!rec.claudeSessionId`) silently froze the store at
