@@ -269,6 +269,44 @@ const LIMIT_WARNING_RE =
 const TUI_KEY_HINT_RE =
   /^\s*(?:Enter\s+to|Esc\s+to|ctrl-[a-z]\s+to|shift\+tab\s+to|Tab\/Arrow\s+keys|esc\s+to interrupt)\b/i;
 
+// ───────────────────────────────────────────────────────────────────────
+// Plan-mode wizard tab bar — the multi-step picker claude code shows
+// when it's interviewing the user before generating a plan.
+//
+//   ←  ☒ Feature  ☐ Stack  ✔ Submit  →
+//
+// Two reasons this needs its own pattern:
+//
+//   1. SIGNAL — when the bar is on screen, we KNOW a wizard is active.
+//      The cursor `❯` on the wizard's review/submit step is NOT always
+//      on the numbered-option line (claude places it on the active
+//      breadcrumb item or on the ←/→ navigators), so the generic
+//      MENU_CURSOR_RE guard rejects the run and the chat broadcast
+//      misses the "Submit answers / Cancel" picker. Treating the tab
+//      bar as a strong wizard signal lets us accept the numbered options
+//      below it without requiring an option-line cursor.
+//
+//   2. FALSE-POSITIVE SAFETY — the cursor guard is there to reject
+//      numbered prose ("1. set up DB schema  2. add bus …") inside a
+//      regular assistant turn. The wizard tab bar is unmistakable —
+//      `← / →` arrow nav + ☐/☒/✔ step glyphs + step labels — and
+//      doesn't appear in prose, so it's safe to use as an alternative
+//      menu signal.
+//
+// Glyph class covers the variants claude has been observed using for
+// step state: ☐ (todo), ☒ (selected/done), ✔/✓ (committed), ◯/●,
+// plus uppercase X for terminals that don't render ☒.
+//
+// Shape: `←` … `→` framing the bar, with the body containing AT LEAST
+// TWO step glyphs (one is too easy — a stray ← Back arrow next to a
+// status ☐ doesn't qualify). We don't anchor the glyphs to specific
+// positions because claude code inserts a `❯` selection cursor at
+// the active step (e.g. "←  ☒ Feature  ☐ Stack ❯ ✔ Submit  →"), and
+// a strict label-after-glyph pattern would refuse to match across
+// the cursor.
+const WIZARD_TAB_BAR_RE =
+  /←[^←→]*[☐☒✔✓◯●xX][^←→]*[☐☒✔✓◯●xX][^←→]*→/;
+
 module.exports = {
   MENU_OPT_MARKER_RE,
   MENU_CHECKBOX_RE,
@@ -290,4 +328,5 @@ module.exports = {
   WELCOME_BANNER_RE,
   LIMIT_WARNING_RE,
   TUI_KEY_HINT_RE,
+  WIZARD_TAB_BAR_RE,
 };

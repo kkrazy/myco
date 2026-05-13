@@ -23,6 +23,7 @@ const {
   MENU_QUESTION_VERB_RE,
   MENU_KIND_PERMISSION_RE,
   MENU_KIND_PLAN_RE,
+  WIZARD_TAB_BAR_RE,
 } = require('./pty-patterns');
 
 class MenuInterceptor {
@@ -112,10 +113,21 @@ class MenuInterceptor {
     // currently-selected option of an active menu; plain numbered prose
     // doesn't. Bottom-most wins when there are multiple cursored runs
     // (rare in practice — the active dialog is always at the bottom).
+    //
+    // EXCEPTION — plan-mode wizard. When the screen has the wizard's
+    // breadcrumb tab bar (← ☒ Feature ☐ Stack ✔ Submit →), the cursor
+    // `❯` is often on the breadcrumb item rather than on the numbered
+    // option below ("Submit answers / Cancel"), so the cursor guard
+    // would reject the option run and the chat broadcast would miss
+    // the picker. Tab bar is an unambiguous wizard signal that doesn't
+    // appear in prose, so when it's present we accept the LAST run
+    // unconditionally — bottom-most still wins.
+    const wizardActive = lines.some((l) => WIZARD_TAB_BAR_RE.test(l || ''));
     let chosen = null;
     for (const run of runs) {
       if (run.some((o) => MENU_CURSOR_RE.test(lines[o.lineIdx] || ''))) chosen = run;
     }
+    if (!chosen && wizardActive) chosen = runs[runs.length - 1];
     if (!chosen) return null;
 
     const options = chosen;

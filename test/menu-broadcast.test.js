@@ -308,6 +308,54 @@ t('classification: keep planning option triggers plan kind', () => {
   assert.strictEqual(r.menu.kind, 'plan');
 });
 
+t('plan-mode wizard submit screen detected even when ❯ is on the breadcrumb', () => {
+  // Real claude code plan-mode wizard final screen. The `❯` cursor sits
+  // on the breadcrumb tab bar (← ☒ Feature ☐ Stack ❯ ✔ Submit →), NOT
+  // on the numbered options below. Without the wizard-tab-bar bypass
+  // the cursor guard would reject the option run and the chat broadcast
+  // would miss the "Submit answers / Cancel" picker entirely. The bar
+  // is unambiguous so we accept the option run when it's present.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless([
+    '● Entered plan mode',
+    '  Claude is now exploring and designing an implementation approach.',
+    '',
+    '─────────────────────────────────────────',
+    '←  ☒ Feature  ☐ Stack ❯ ✔ Submit  →',
+    '',
+    'Review your answers',
+    '',
+    '⚠ You have not answered all questions',
+    '',
+    ' ● What sample feature should this plan target?',
+    '   → Add a weather CLI command',
+    '',
+    'Ready to submit your answers?',
+    '',
+    '1. Submit answers',
+    '2. Cancel',
+  ].join('\n')));
+  assert.ok(r, 'wizard submit screen must produce a menu broadcast');
+  assert.strictEqual(r.kind, 'newMenu');
+  assert.strictEqual(r.menu.options.length, 2);
+  assert.strictEqual(r.menu.options[0].label, 'Submit answers');
+  assert.strictEqual(r.menu.options[1].label, 'Cancel');
+  assert.strictEqual(r.menu.question, 'Ready to submit your answers?');
+});
+
+t('wizard tab bar alone (no numbered options) does NOT fabricate a menu', () => {
+  // Defensive: the tab bar is only a bypass for the cursor guard — it
+  // must NOT manufacture a menu out of thin air when there are no
+  // numbered options on screen.
+  const i = new MenuInterceptor();
+  const r = i.detectChange(fakeHeadless([
+    '←  ☒ Feature  ☐ Stack  ✔ Submit  →',
+    '',
+    'Review your answers',
+  ].join('\n')));
+  assert.strictEqual(r, null);
+});
+
 section('MenuInterceptor — state machine');
 
 // Note: option labels must be ≥2 chars — the parser rejects 1-char labels
