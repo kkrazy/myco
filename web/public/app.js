@@ -1607,30 +1607,41 @@ function appendChatMessage(message) {
     }
   }
   // Dedup by menu hash — if claude re-broadcasts the SAME dialog
-  // (e.g. multi-select re-render after a checkbox toggle that bumped
-  // the hash for some reason, or a flicker that fires the detector
-  // twice), update the existing row's options in place and skip the
-  // append. Without this dedup, the new row's _appendChatMessageDom
-  // would deactivate the original row's buttons via
-  // _deactivatePriorMenuRows, making the picker appear to "lock up"
-  // after one click. Active rows only — answered/submitted rows are
-  // permanent history, not candidates for live updates.
+  // (multi-select re-render after a checkbox toggle, flicker that
+  // fires the detector twice, etc.), update the existing row's options
+  // in place and skip the append. Without this dedup, the new row's
+  // _appendChatMessageDom would deactivate the original row's buttons,
+  // making the picker appear to "lock up" after one click. Active rows
+  // only — answered/submitted rows are permanent history, not
+  // candidates for live updates.
+  //
+  // Crucially this only applies to the LAST chat row. The wizard's
+  // Submit/Cancel screen has a deterministic hash
+  // ("Ready to submit your answers?|1:Submit answers|2:Cancel") that
+  // repeats across wizard runs, and the same is true for any pin-shaped
+  // dialog claude code re-poses with identical wording. Matching an
+  // OLDER stale row (a prior unanswered wizard menu, or one buried
+  // behind interleaved transcript chunks) would silently update that
+  // mid-chat row instead of surfacing the live picker at the bottom —
+  // the exact symptom of "the chat is missing the Submit/Cancel
+  // selection until I refresh the page." Rapid re-fires arrive
+  // back-to-back with no intervening append, so they still hit this
+  // last-row dedup; everything else falls through to a fresh append.
   const incomingHash = message.meta && message.meta.kind === 'menu'
     && message.meta.menu && message.meta.menu.hash;
   if (incomingHash) {
-    for (let i = 0; i < state.chatMessages.length; i++) {
-      const existing = state.chatMessages[i];
-      if (!existing || !existing.meta || existing.meta.kind !== 'menu') continue;
-      if (existing.meta.answered) continue;
-      const existingHash = existing.meta.menu && existing.meta.menu.hash;
-      if (existingHash !== incomingHash) continue;
-      existing.meta.menu = message.meta.menu;
+    const lastIdx = state.chatMessages.length - 1;
+    const last = lastIdx >= 0 ? state.chatMessages[lastIdx] : null;
+    const lastHash = last && last.meta && last.meta.kind === 'menu'
+      && !last.meta.answered && last.meta.menu && last.meta.menu.hash;
+    if (lastHash && lastHash === incomingHash) {
+      last.meta.menu = message.meta.menu;
       const list = document.getElementById('chat-messages');
-      if (list && list.children[i]) {
-        const newEl = _htmlToNode(renderChatMessage(existing, /*isActiveMenu*/ true));
-        if (newEl) list.children[i].replaceWith(newEl);
+      if (list && list.children[lastIdx]) {
+        const newEl = _htmlToNode(renderChatMessage(last, /*isActiveMenu*/ true));
+        if (newEl) list.children[lastIdx].replaceWith(newEl);
       }
-      _updatePendingMenuFromMessage(existing);
+      _updatePendingMenuFromMessage(last);
       _renderPendingMenuCallout();
       return;
     }

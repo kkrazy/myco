@@ -1461,6 +1461,17 @@ test_chat_window() {
   grep -qF 'existing.meta.transcriptUuid === uuid' web/public/app.js \
     && pass "app.js: appendChatMessage dedups by transcriptUuid" \
     || fail "app.js: appendChatMessage missing transcriptUuid dedup"
+  # Regression: the menu-hash dedup must only collapse against the
+  # LAST chat row. The wizard's Submit/Cancel screen has a deterministic
+  # hash that recurs across wizard runs ("Ready to submit your
+  # answers?|1:Submit answers|2:Cancel"); matching a mid-chat stale row
+  # silently updates that buried row instead of appending the live
+  # picker at the bottom — the user only saw the missing selection
+  # after refreshing the page. Sentinel the last-row-only guard so a
+  # regression to the from-zero-iterate version trips a test.
+  grep -qF 'const lastIdx = state.chatMessages.length - 1;' web/public/app.js \
+    && pass "app.js: menu-hash dedup constrained to last chat row" \
+    || fail "app.js: menu-hash dedup not constrained to last row (would hide live wizard pickers)"
   # Regression: the readonly transcript viewer used to freeze when
   # fs.watch silently stopped firing (overlay/bind-mount/Docker
   # filesystem quirk). The safety setInterval guarantees forward
