@@ -9,7 +9,12 @@ const sessionsMod = require('./sessions');
 const { askAssistant, shouldAskAssistant, ASSISTANT_USER } = require('./btw');
 const { stripAnsi, tailLines } = require('./text-utils');
 const menuMod = require('./menu');
-const { MODE_ACCEPT_RE, MODE_PLAN_RE, SPINNER_RUNNING_RE, SPINNER_DURATION_RE, MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE } = require('./pty-patterns');
+const {
+  MODE_ACCEPT_RE, MODE_PLAN_RE, MODE_BYPASS_RE,
+  SPINNER_RUNNING_RE, SPINNER_DURATION_RE,
+  MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE,
+  STATUS_TOKEN_TRAILER_RE, STATUS_INTERRUPT_RE, EFFORT_CHIP_RE,
+} = require('./pty-patterns');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 const authMod = require('./auth');
@@ -105,23 +110,26 @@ class PtySession extends EventEmitter {
     });
   }
 
-  // Scan the headless terminal for claude's spinner status line ("·
-  // Cerebrating… (40s · ↓ 3.4k tokens · thought for 2s)" etc.) and
-  // return its trimmed text. Returns null when no spinner line is
-  // visible (claude is idle / past the spinner / not running). We
-  // scan the bottom ~12 rows since the spinner sits right above the
-  // input editor at the bottom of the alt-screen.
-  _extractStatusLine() {
+  // Back-compat alias preserved across the structured-status refactor.
+  // The function name is referenced by older callers (and a regression
+  // check in test.sh) — keep it as a one-line wrapper around the new
+  // _findSpinnerLine() internal helper so nobody downstream breaks.
+  _extractStatusLine() { return this._findSpinnerLine(); }
+
+  // Find the spinner row in the bottom of the viewport. Returns the
+  // raw line text (trimmed) or null if no spinner is rendered.
+  // Internal helper — callers want _extractStatus() (structured) for
+  // anything that flows to a client.
+  _findSpinnerLine() {
     if (!this.headless || !this.headless.buffer) return null;
     try {
       const buf = this.headless.buffer.active;
       const rows = this.headless.rows;
-      // Walk from the bottom up to find the most recent spinner line.
-      // The attached detail block (corner ⎿ + indented checklist) is
-      // deliberately ignored — only the top spinner row goes to the
-      // chat-pane status strip. Look further than the original 12-row
-      // window (20 rows) since the detail block can push the spinner
-      // higher up the viewport.
+      // Walk from the bottom up. The attached detail block (corner ⎿
+      // + indented checklist) is deliberately ignored — only the top
+      // spinner row goes to the chat-pane status strip. Look further
+      // than the original 12-row window (20 rows) since the detail
+      // block can push the spinner higher up the viewport.
       for (let i = rows - 1; i >= Math.max(0, rows - 20); i--) {
         const line = buf.getLine(buf.viewportY + i);
         if (!line) continue;
@@ -133,17 +141,99 @@ class PtySession extends EventEmitter {
     return null;
   }
 
+  // Decompose the spinner status line into structured fields so the
+  // readonly viewer can render chips instead of one opaque blob:
+  //
+  //   { text:    "✽ Cerebrating for 12s · ↓ 3.4k tokens · esc to interrupt",
+  //     verb:    "Cerebrating",
+  //     durationS: 12,
+  //     tokens:  { dir: 'down', count: 3400 },
+  //     interruptible: true,
+  //     effort:  null }
+  //
+  // Returns null when no spinner is on screen (claude is idle). The
+  // `text` field is preserved so older clients reading `claude-status.text`
+  // keep working — `status` is purely additive.
+  _extractStatus() {
+    const text = this._findSpinnerLine();
+    if (!text) return null;
+    const verbMatch = text.match(/[A-Z][a-z]+ing/);
+    const verb = verbMatch ? verbMatch[0] : null;
+    const durMatch = text.match(/for\s+(?:(\d+)h\s+)?(?:(\d+)m\s+)?(\d+)s/);
+    let durationS = null;
+    if (durMatch) {
+      const h = parseInt(durMatch[1] || '0', 10);
+      const m = parseInt(durMatch[2] || '0', 10);
+      const s = parseInt(durMatch[3] || '0', 10);
+      durationS = h * 3600 + m * 60 + s;
+    }
+    let tokens = null;
+    const tokMatch = STATUS_TOKEN_TRAILER_RE.exec(text);
+    if (tokMatch) {
+      const dir = tokMatch[1] === '↑' ? 'up' : 'down';
+      let count = parseFloat(tokMatch[2]);
+      const scale = (tokMatch[3] || '').toLowerCase();
+      if (scale === 'k') count *= 1000;
+      else if (scale === 'm') count *= 1000000;
+      tokens = { dir, count: Math.round(count) };
+    }
+    const interruptible = STATUS_INTERRUPT_RE.test(text);
+    let effort = null;
+    const effMatch = EFFORT_CHIP_RE.exec(text);
+    if (effMatch) effort = effMatch[1].toLowerCase();
+    return { text, verb, durationS, tokens, interruptible, effort };
+  }
+
+  // Read claude's mode-bar line from the bottom of the viewport and
+  // classify into 'plan'|'accept'|'bypass'|'default'. Scans separately
+  // from the spinner (mode bar is visible both busy and idle, spinner
+  // only when busy). Defensive try/catch matches _findSpinnerLine.
+  _extractMode() {
+    if (!this.headless || !this.headless.buffer) return 'default';
+    try {
+      const buf = this.headless.buffer.active;
+      const rows = this.headless.rows;
+      for (let i = rows - 1; i >= Math.max(0, rows - 10); i--) {
+        const line = buf.getLine(buf.viewportY + i);
+        if (!line) continue;
+        const text = line.translateToString(true).trim();
+        if (!text) continue;
+        if (MODE_BYPASS_RE.test(text)) return 'bypass';
+        if (MODE_PLAN_RE.test(text)) return 'plan';
+        if (MODE_ACCEPT_RE.test(text)) return 'accept';
+      }
+    } catch {}
+    return 'default';
+  }
+
   _checkMenu() {
     this._menuDebounce = null;
     if (!this.headless) return;
     // Spinner-status check rides on the same debounce — emit only on
-    // change so we don't flood clients with identical frames. Set to
-    // null when the spinner is gone (claude finished its current
-    // phase or is sitting at the input prompt).
-    const status = this._extractStatusLine();
-    if (status !== this._lastStatus) {
-      this._lastStatus = status;
+    // change so we don't flood clients with identical frames. Pass
+    // the structured object; the WS forwarder still surfaces the
+    // legacy `text` field for older clients.
+    const status = this._extractStatus();
+    const statusKey = status ? JSON.stringify(status) : null;
+    if (statusKey !== this._lastStatusKey) {
+      this._lastStatusKey = statusKey;
+      this._lastStatus = status;          // back-compat for attach-time replay
       this.emit('claude-status', status);
+    }
+    // Mode-transition detection — owner-facing autoAcceptToggleBytes
+    // logic still drives the Shift+Tab cycle elsewhere; this is an
+    // additive observation channel so viewers see the same mode-pill
+    // narrative the JSONL replay produces, but ~750ms after the PTY
+    // shows it (vs minutes for the JSONL flush). First scan
+    // ESTABLISHES baseline without emitting — no fictitious "entered
+    // default" pill on every reconnect.
+    const mode = this._extractMode();
+    if (this._lastMode == null) {
+      this._lastMode = mode;
+    } else if (mode !== this._lastMode) {
+      const from = this._lastMode;
+      this._lastMode = mode;
+      this.emit('mode-change', { from, to: mode, ts: new Date().toISOString() });
     }
     const change = this.menuInterceptor.detectChange(this.headless);
     // Debug: when MYCO_MENU_DEBUG=1, dump the headless visible text on
@@ -664,14 +754,26 @@ function attachWebSocket(session, ws, opts = {}) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(JSON.stringify({ t: 'chat', message }));
   };
-  const onStatus = (text) => {
+  // claude-status emits the STRUCTURED `_extractStatus()` payload
+  // (object or null). Legacy `text` field is preserved on the WS
+  // frame so older clients keep working; new clients read `status`
+  // for the chip render (token trailer, interrupt badge, effort,
+  // duration). Null status means "no spinner on screen" — both
+  // fields go null and the client clears its status strip.
+  const onStatus = (status) => {
     if (ws.readyState !== ws.OPEN) return;
-    ws.send(JSON.stringify({ t: 'claude-status', text }));
+    const text = status && status.text ? status.text : null;
+    ws.send(JSON.stringify({ t: 'claude-status', text, status }));
+  };
+  const onModeChange = (change) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'mode-change', ...change }));
   };
   session.on('data', onData);
   session.on('exit', onExit);
   session.on('chat', onChat);
   session.on('claude-status', onStatus);
+  session.on('mode-change', onModeChange);
   // Send the CURRENT status snapshot on attach so a fresh client
   // immediately knows whether claude is busy (no need to wait for a
   // transition).
@@ -730,6 +832,7 @@ function attachWebSocket(session, ws, opts = {}) {
     session.off('exit', onExit);
     session.off('chat', onChat);
     session.off('claude-status', onStatus);
+    session.off('mode-change', onModeChange);
     stopTranscript();
   });
 }
@@ -746,11 +849,20 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const onChat = (message) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'chat', message }));
   };
-  const onStatus = (text) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'claude-status', text }));
+  // Mirror the owner-attach status frame shape: object payload, both
+  // `text` and `status` populated. Viewer renders chips off `status`,
+  // legacy fallback to `text`.
+  const onStatus = (status) => {
+    if (ws.readyState !== ws.OPEN) return;
+    const text = status && status.text ? status.text : null;
+    ws.send(JSON.stringify({ t: 'claude-status', text, status }));
+  };
+  const onModeChange = (change) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'mode-change', ...change }));
   };
   session.on('chat', onChat);
   session.on('claude-status', onStatus);
+  session.on('mode-change', onModeChange);
   if (session._lastStatus !== undefined) onStatus(session._lastStatus);
 
   // viewer-mode includes the owner login so the client can render a
@@ -798,6 +910,8 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   ws.on('message', handleViewerInbound);
   ws.on('close', () => {
     session.off('chat', onChat);
+    session.off('claude-status', onStatus);
+    session.off('mode-change', onModeChange);
     stopTranscript();
   });
 }

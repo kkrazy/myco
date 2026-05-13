@@ -347,6 +347,103 @@ const MULTI_SELECT_CURSOR_RE =
 const SUBMIT_ROW_RE =
   /^\s*(?:submit|done|continue|finish|ok)\s*$/i;
 
+// ───────────────────────────────────────────────────────────────────────
+// Tool invocation + corner-block chrome — exposed for future server-side
+// consumers (owner tool-callout broadcast, error highlighter). Not yet
+// scanned by any caller; the export is the wedge so the next patch only
+// touches the consumer.
+// ───────────────────────────────────────────────────────────────────────
+
+// Tool-invocation header rendered above the result of each tool call:
+//
+//   "● Bash(npm test)"
+//   "● Read(/wks/kkrazy/myco/server/src/pty.js)"
+//   "● TaskCreate"
+//   "● Web Search(\"Shenzhen weather…\")"
+//   "● Agent(Map myco architecture for diagram)"
+//
+// Group 1 = tool name (camelCase API form, or display form with a space).
+// Group 2 = argument blob (the original input verbatim; may contain
+// quotes, slashes, parens-aware truncation downstream). The capturing
+// parens-balance is intentionally cheap — we accept "(…)" of any
+// contents up to the FIRST `)` because claude code's renderer never
+// nests parens inside a tool invocation header (long args are truncated
+// with `…)`).
+//
+// The leading "● " glyph is a U+25CF (BLACK CIRCLE). The `^\s*` anchor
+// lets a future viewport-scan match this on indented lines too — claude
+// indents continuation tools after the first when rendering a chain.
+const TOOL_INVOCATION_RE =
+  /^\s*●\s+([A-Z][A-Za-z ]+?)\(([^)]*)\)/;
+
+// Corner-glyph status block rendered under a tool callout to deliver a
+// terse summary. Observed labels:
+//
+//   "⎿  Error: Exit code 127"           ← bash failures, very common
+//   "⎿  Tip: Use /memory to view…"      ← claude's nudges
+//   "⎿  Did 1 search in 4s"             ← Web Search completion
+//   "⎿  Note: only the first 5 entries" ← truncation notice
+//   "⎿  Warning: file looks binary"     ← Read/Edit caveats
+//   "⎿  Result: 3 files changed"        ← TaskCreate summary
+//
+// `⎿` is U+23BF (DRAWINGS LIGHT UP AND HORIZONTAL). The `\s+` after the
+// glyph tolerates the customary 2-space indent that follows it but also
+// matches when claude collapses to a single space (some terminals).
+//
+// Group 1 = label (Error/Tip/Did/Note/Warning/Result). Group 2 = body.
+// `Did` is special — claude's Web Search uses "Did N <thing> in Xs"
+// where the colon is missing. The alternation keeps both shapes; the
+// optional `:` is consumed by the alternative branch.
+const CORNER_BLOCK_RE =
+  /^\s*⎿\s+(Error|Tip|Note|Warning|Result)(?::\s*(.*))?$|^\s*⎿\s+(Did)\s+(.*)$/;
+
+// ───────────────────────────────────────────────────────────────────────
+// Status-line decoration chrome — consumed by _extractStatus in pty.js
+// to decompose the spinner line into structured fields. Each regex
+// targets ONE dimension of the status bar so a viewer can render chips.
+// ───────────────────────────────────────────────────────────────────────
+
+// Token-volume trailer in the spinner line:
+//
+//   "✽ Cerebrating for 12s · ↓ 3.4k tokens"
+//   "· Thundering… · ↑ 4.2k tokens"
+//   "✽ Working for 47s · ↓ 7.6k tokens"
+//   "✻ Brewed for 51s · ↓ 1.1k tokens"
+//
+// Group 1 = direction glyph (↑ U+2191 = uplink, ↓ U+2193 = downlink).
+// Group 2 = numeric count. Group 3 = scale suffix (`k`/`m`/empty). The
+// downstream caller multiplies to integer tokens. We accept either
+// "tokens" or "token" (singular form rare but observed once).
+const STATUS_TOKEN_TRAILER_RE =
+  /([↑↓])\s*(\d+(?:\.\d+)?)\s*([km])?\s+tokens?/i;
+
+// Interrupt-state trailer — present on the status bar ONLY while claude
+// is mid-turn AND can be aborted:
+//
+//   "✽ Cerebrating for 12s · esc to interrupt"
+//   "✻ Working for 3s · esc to interrupt"
+//
+// Distinguished from the menu-dialog hint `TUI_KEY_HINT_RE` by the
+// preceding `·` middle-dot separator (U+00B7) — only the spinner-bar
+// trailer uses the dot-bullet, dialog hints use newlines or sentence
+// punctuation.
+const STATUS_INTERRUPT_RE =
+  /·\s*esc\s+to\s+interrupt/i;
+
+// Effort chip rendered in the bottom-right of the status bar when the
+// `/effort` setting is set:
+//
+//   "◉ xhigh · /effort"
+//   "◉ medium"
+//   "◉ high · /effort"
+//
+// Group 1 = effort level keyword (xhigh, high, medium, low). `◉` is
+// U+25C9 (FISHEYE). The `· /effort` tail is decorative — claude renders
+// it as a click hint on terminals that support mouse — and matches an
+// optional non-capturing tail.
+const EFFORT_CHIP_RE =
+  /◉\s+([a-z]+)(?:\s*·\s*\/effort)?/i;
+
 module.exports = {
   MENU_OPT_MARKER_RE,
   MENU_CHECKBOX_RE,
@@ -371,4 +468,9 @@ module.exports = {
   WIZARD_TAB_BAR_RE,
   MULTI_SELECT_CURSOR_RE,
   SUBMIT_ROW_RE,
+  TOOL_INVOCATION_RE,
+  CORNER_BLOCK_RE,
+  STATUS_TOKEN_TRAILER_RE,
+  STATUS_INTERRUPT_RE,
+  EFFORT_CHIP_RE,
 };

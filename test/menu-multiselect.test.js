@@ -16,7 +16,11 @@
 
 const assert = require('assert');
 const { MenuInterceptor, hashMenu } = require('../server/src/menu-interceptor');
-const { MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE } = require('../server/src/pty-patterns');
+const {
+  MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE,
+  TOOL_INVOCATION_RE, CORNER_BLOCK_RE,
+  STATUS_TOKEN_TRAILER_RE, STATUS_INTERRUPT_RE, EFFORT_CHIP_RE,
+} = require('../server/src/pty-patterns');
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -212,6 +216,94 @@ t('SUBMIT_ROW_RE rejects footer hints that end in "submit"', () => {
   // mistaken for the multi-select Submit row.
   assert.ok(!SUBMIT_ROW_RE.test('1. Submit answers'));
   assert.ok(!SUBMIT_ROW_RE.test(' ● Submit and continue'));
+});
+
+// ─── TUI surface regexes added 2026-05-13 ──────────────────────────────
+// Five new patterns from the local-sessions survey: tool invocation
+// header, corner-glyph status block, and three status-bar trailers
+// (token throughput, interrupt-state, effort chip). The first two
+// are exported for future server-side consumers; the last three feed
+// _extractStatus() in pty.js.
+
+t('TOOL_INVOCATION_RE matches `● Bash(cmd)` / `● Read(path)` / display-form tools', () => {
+  assert.ok(TOOL_INVOCATION_RE.test('● Bash(npm test)'));
+  assert.ok(TOOL_INVOCATION_RE.test('● Read(/wks/kkrazy/myco/server/src/pty.js)'));
+  assert.ok(TOOL_INVOCATION_RE.test('● Web Search("Shenzhen weather")'));
+  assert.ok(TOOL_INVOCATION_RE.test('● Agent(Map myco architecture for diagram)'));
+  // Captures: tool name (group 1) + argument blob (group 2).
+  const m = TOOL_INVOCATION_RE.exec('● Bash(npm test)');
+  assert.strictEqual(m[1], 'Bash');
+  assert.strictEqual(m[2], 'npm test');
+  // Indented continuation in a chain.
+  assert.ok(TOOL_INVOCATION_RE.test('    ● Agent(do something)'));
+});
+
+t('TOOL_INVOCATION_RE rejects prose mentions of the same shape', () => {
+  // Without the ● glyph this is just prose ("Run Bash(npm test)").
+  assert.ok(!TOOL_INVOCATION_RE.test('Bash(npm test)'));
+  // ● glyph but no parens — not a tool invocation header.
+  assert.ok(!TOOL_INVOCATION_RE.test('● Some heading'));
+});
+
+t('CORNER_BLOCK_RE matches the labelled corner-glyph variants claude renders', () => {
+  assert.ok(CORNER_BLOCK_RE.test('⎿  Error: Exit code 127'));
+  assert.ok(CORNER_BLOCK_RE.test('⎿  Tip: Use /memory to view…'));
+  assert.ok(CORNER_BLOCK_RE.test('⎿  Note: only the first 5 entries'));
+  assert.ok(CORNER_BLOCK_RE.test('⎿  Warning: file looks binary'));
+  assert.ok(CORNER_BLOCK_RE.test('⎿  Result: 3 files changed'));
+  // "Did N <thing> in Xs" is the only no-colon shape claude uses.
+  assert.ok(CORNER_BLOCK_RE.test('⎿  Did 1 search in 4s'));
+});
+
+t('CORNER_BLOCK_RE rejects free-form text with the label words mid-line', () => {
+  // No corner glyph at start.
+  assert.ok(!CORNER_BLOCK_RE.test('Error: this is just prose'));
+  // Corner glyph + unknown label.
+  assert.ok(!CORNER_BLOCK_RE.test('⎿  random string'));
+  // The label needs to be at the start of the body, not mid-text.
+  assert.ok(!CORNER_BLOCK_RE.test('something  ⎿  Error: x'));
+});
+
+t('STATUS_TOKEN_TRAILER_RE matches inline token throughput chips', () => {
+  assert.ok(STATUS_TOKEN_TRAILER_RE.test('✽ Cerebrating for 12s · ↓ 3.4k tokens'));
+  assert.ok(STATUS_TOKEN_TRAILER_RE.test('↑ 4.2k tokens'));
+  assert.ok(STATUS_TOKEN_TRAILER_RE.test('↓ 800 tokens'));     // no unit suffix
+  // Group capture: direction + count + scale.
+  const m = STATUS_TOKEN_TRAILER_RE.exec('✽ Working for 47s · ↓ 7.6k tokens');
+  assert.strictEqual(m[1], '↓');
+  assert.strictEqual(m[2], '7.6');
+  assert.strictEqual(m[3], 'k');
+});
+
+t('STATUS_TOKEN_TRAILER_RE rejects no-arrow prose', () => {
+  // "4.2k tokens" without the up/down arrow is just a number — not a
+  // status chip. Without this rejection the parser would over-count.
+  assert.ok(!STATUS_TOKEN_TRAILER_RE.test('Used 4.2k tokens'));
+});
+
+t('STATUS_INTERRUPT_RE matches the dot-separated interrupt trailer', () => {
+  assert.ok(STATUS_INTERRUPT_RE.test('· esc to interrupt'));
+  assert.ok(STATUS_INTERRUPT_RE.test('✽ Working · esc to interrupt'));
+  // Case insensitive (claude has been observed capitalizing Esc).
+  assert.ok(STATUS_INTERRUPT_RE.test('· Esc to Interrupt'));
+});
+
+t('STATUS_INTERRUPT_RE rejects "esc to interrupt" without the dot bullet', () => {
+  // Dialog hint footers use sentence punctuation; the spinner-bar
+  // trailer is the dot variant. Distinguishes the two surfaces.
+  assert.ok(!STATUS_INTERRUPT_RE.test('press esc to interrupt'));
+});
+
+t('EFFORT_CHIP_RE matches the bottom-right effort indicator', () => {
+  assert.ok(EFFORT_CHIP_RE.test('◉ xhigh · /effort'));
+  assert.ok(EFFORT_CHIP_RE.test('◉ medium'));
+  const m = EFFORT_CHIP_RE.exec('◉ high · /effort');
+  assert.strictEqual(m[1], 'high');
+});
+
+t('EFFORT_CHIP_RE rejects the glyph alone or with unrelated content', () => {
+  assert.ok(!EFFORT_CHIP_RE.test('◉'));
+  assert.ok(!EFFORT_CHIP_RE.test('plain prose'));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

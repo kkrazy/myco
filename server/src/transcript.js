@@ -132,6 +132,18 @@ function parseLine(line) {
 
     const textBlocks = content.filter((b) => b && b.type === 'text' && b.text);
     const toolBlocks = content.filter((b) => b && b.type === 'tool_use');
+    // Thinking blocks are claude's chain-of-thought reasoning. The
+    // `.thinking` field carries the visible text on newer models;
+    // older models redact it (encrypted blob in `.signature`, empty
+    // `.thinking`), in which case we skip silently — there's nothing
+    // to render. 2,176 occurrences across local sessions today;
+    // until this branch they fell through the content filter and the
+    // readonly viewer never saw them. Surfaced as a separate field
+    // on the assistant frame so client renderers can fold them into
+    // a `<details>` callout.
+    const thinkingTexts = content
+      .filter((b) => b && b.type === 'thinking' && b.thinking && b.thinking.trim())
+      .map((b) => b.thinking);
 
     // Same trim as the user branch — strip leading/trailing whitespace so
     // the transcript pane renders cleanly without a leading blank line.
@@ -142,8 +154,68 @@ function parseLine(line) {
       summary: summarizeToolInput(b.name, b.input || {}),
     }));
 
-    if (!text && !toolCalls.length) return null;
-    return { role: 'assistant', text, toolCalls, uuid, ts };
+    if (!text && !toolCalls.length && !thinkingTexts.length) return null;
+    const frame = { role: 'assistant', text, toolCalls, uuid, ts };
+    if (thinkingTexts.length) frame.thinking = thinkingTexts;
+    return frame;
+  }
+
+  // Attachment-typed records — claude code stores mode transitions,
+  // command-permission changes, and queued slash-command state under
+  // `obj.type === 'attachment'` with `obj.attachment.type` carrying the
+  // actual kind. These are silently dropped by older parser versions;
+  // surfacing them lets the viewer render boundary pills (entered plan
+  // mode / entered auto mode), permission-change notes, and queued
+  // prompts. Skip subAgent reminders — those are recursive context
+  // claude posts to itself, not user-relevant.
+  if (obj.type === 'attachment' && obj.attachment && typeof obj.attachment === 'object') {
+    const att = obj.attachment;
+    const kind = att.type || '';
+    if (att.isSubAgent) return null;
+    switch (kind) {
+      case 'plan_mode':
+        return { role: 'plan_mode', state: 'entered', text: att.planFilePath || '', uuid, ts };
+      case 'plan_mode_exit':
+        return { role: 'plan_mode', state: 'exited', text: att.planFilePath || '', uuid, ts };
+      case 'plan_mode_reentry':
+        return { role: 'plan_mode', state: 'reentered', text: att.planFilePath || '', uuid, ts };
+      case 'auto_mode':
+        return { role: 'auto_mode', state: 'entered', uuid, ts };
+      case 'auto_mode_exit':
+        return { role: 'auto_mode', state: 'exited', uuid, ts };
+      case 'command_permissions':
+        // allowedTools is an array of tool-spec strings ("Bash(npm test)",
+        // "Read", etc.). Empty array means "reset to defaults" — claude
+        // emits this on /permission reset. Render the count + a short
+        // summary; full list is in the JSONL for anyone who wants it.
+        return {
+          role: 'permission_change',
+          tools: Array.isArray(att.allowedTools) ? att.allowedTools : [],
+          uuid, ts,
+        };
+      case 'queued_command':
+        return { role: 'queued', text: att.prompt || '', mode: att.commandMode || '', uuid, ts };
+      default:
+        return null; // unknown attachment kind — passive metadata, skip
+    }
+  }
+
+  // System-typed records — claude code writes API errors, auth failures,
+  // and other framework-level diagnostics here. Shape: `{type:'system',
+  // subtype:'api_error'|..., level:'error'|'warn', error:{status, message,
+  // ...}}`. Surface anything tagged level=error so failed turns don't
+  // disappear from the readonly viewer's transcript.
+  if (obj.type === 'system' && obj.level === 'error') {
+    const e = obj.error || {};
+    let text = '';
+    if (typeof e === 'string') text = e;
+    else if (e && typeof e === 'object') {
+      // Prefer human message; fall back to status + a short stringify
+      // (capped so a stack-trace blob doesn't dump into the transcript).
+      text = e.message || (e.status ? `HTTP ${e.status}` : '');
+      if (!text) { try { text = JSON.stringify(e).slice(0, 200); } catch {} }
+    }
+    return { role: 'error', kind: obj.subtype || 'system', text, uuid, ts };
   }
 
   return null;
@@ -302,4 +374,4 @@ function watchTranscript(jsonlPath, onNewMessages, opts = {}) {
   };
 }
 
-module.exports = { resolveTranscriptPath, readNewMessages, watchTranscript, readSimpleTurnsTail };
+module.exports = { resolveTranscriptPath, readNewMessages, watchTranscript, readSimpleTurnsTail, parseLine };

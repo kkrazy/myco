@@ -1315,12 +1315,100 @@ test_chat_window() {
   # chat row keeps its identity across toggle clicks.
   if have_node; then
     if node test/menu-multiselect.test.js >/dev/null 2>&1; then
-      pass "test/menu-multiselect.test.js (7 cases)"
+      pass "test/menu-multiselect.test.js (21 cases)"
     else
       fail "test/menu-multiselect.test.js — re-run with 'node test/menu-multiselect.test.js' to see failures"
     fi
   else
     skip "test/menu-multiselect.test.js (no host node)"
+  fi
+  # Regression: parseLine() in transcript.js used to recognise only 4 of
+  # the 40+ JSONL `type` values claude code emits. The expanded parser
+  # surfaces thinking content, plan/auto-mode transitions, framework
+  # errors, command-permission changes, and queued slash commands so
+  # readonly viewers see the same narrative the owner does in their TUI.
+  if have_node; then
+    if node test/transcript-parser-types.test.js >/dev/null 2>&1; then
+      pass "test/transcript-parser-types.test.js (14 cases)"
+    else
+      fail "test/transcript-parser-types.test.js — re-run with 'node test/transcript-parser-types.test.js' to see failures"
+    fi
+  else
+    skip "test/transcript-parser-types.test.js (no host node)"
+  fi
+  # Regression: the PTY mode-change observer must emit ONLY on
+  # transitions, not on every periodic safety scan. First scan
+  # establishes baseline silently — otherwise every owner reconnect
+  # would produce a spurious "entered default" pill on the viewer.
+  if have_node; then
+    if node test/pty-mode-change.test.js >/dev/null 2>&1; then
+      pass "test/pty-mode-change.test.js (6 cases)"
+    else
+      fail "test/pty-mode-change.test.js — re-run with 'node test/pty-mode-change.test.js' to see failures"
+    fi
+  else
+    skip "test/pty-mode-change.test.js (no host node)"
+  fi
+  # Each new TUI regex must be exported from pty-patterns.js and (when
+  # applicable) consumed by pty.js. Sentinels here so a future revert
+  # to inlined regex shapes trips the static check.
+  for re in TOOL_INVOCATION_RE CORNER_BLOCK_RE STATUS_TOKEN_TRAILER_RE STATUS_INTERRUPT_RE EFFORT_CHIP_RE; do
+    grep -qF "$re" server/src/pty-patterns.js \
+      && pass "pty-patterns.js: $re defined" \
+      || fail "pty-patterns.js: $re missing — readonly viewer status decomposition will lose this dimension"
+  done
+  for re in STATUS_TOKEN_TRAILER_RE STATUS_INTERRUPT_RE EFFORT_CHIP_RE; do
+    grep -qF "$re" server/src/pty.js \
+      && pass "pty.js: imports $re for _extractStatus" \
+      || fail "pty.js: $re not consumed — status chip will be empty"
+  done
+  # Each new transcript role / JSONL type must be wired in both the
+  # parser (server) and the renderer (client). Sentinels protect both
+  # ends of the pipeline.
+  for kind in plan_mode plan_mode_exit auto_mode command_permissions queued_command api_error; do
+    grep -qF "'$kind'" server/src/transcript.js \
+      && pass "transcript.js: handles $kind" \
+      || fail "transcript.js: $kind not handled — viewer will silently drop it"
+  done
+  for role in conv-msg-thinking conv-msg-mode conv-msg-error conv-msg-permission conv-msg-queued; do
+    grep -qF "$role" web/public/app.js \
+      && pass "app.js: renders $role" \
+      || fail "app.js: $role render branch missing"
+  done
+  # Mode-change WS frame must be wired in both attach handlers (owner +
+  # viewer) so the readonly viewer also receives live transition pills.
+  grep -qF "session.on('mode-change'" server/src/pty.js \
+    && pass "pty.js: mode-change WS handler wired" \
+    || fail "pty.js: mode-change handler missing — viewer pills will lag by JSONL flush latency"
+  grep -qF "_onLiveModeChange" web/public/app.js \
+    && pass "app.js: _onLiveModeChange handler defined" \
+    || fail "app.js: _onLiveModeChange missing — live mode-change frames will be dropped"
+  # Regression: captureClaudeSessionId used to only watch the "newest
+  # jsonl in the project dir" — fragile when multiple sessions get
+  # touched (e.g. the user does /resume in claude's TUI, which re-execs
+  # claude into a different sessionId and silently bypasses our spawn-
+  # time poll). readActiveClaudeSessionForCwd reads claude's authoritative
+  # ~/.claude/sessions/<pid>.json tracker and resolveTranscriptPath
+  # prefers it.
+  if have_node; then
+    if node test/active-claude-session.test.js >/dev/null 2>&1; then
+      pass "test/active-claude-session.test.js (8 cases)"
+    else
+      fail "test/active-claude-session.test.js — re-run with 'node test/active-claude-session.test.js' to see failures"
+    fi
+  else
+    skip "test/active-claude-session.test.js (no host node)"
+  fi
+  grep -qF 'function readActiveClaudeSessionForCwd' server/src/sessions.js \
+    && pass "sessions.js: readActiveClaudeSessionForCwd helper defined" \
+    || fail "sessions.js: readActiveClaudeSessionForCwd missing"
+  grep -qF 'readActiveClaudeSessionForCwd(rec.absCwd)' server/src/transcript.js \
+    && pass "transcript.js: resolveTranscriptPath consults the live tracker first" \
+    || fail "transcript.js: resolveTranscriptPath still relies only on rec.claudeSessionId / newest-jsonl"
+  if awk '/^function captureClaudeSessionId\(/,/^}$/' server/src/sessions.js | grep -q 'readActiveClaudeSessionForCwd'; then
+    pass "sessions.js: captureClaudeSessionId polls the live tracker too"
+  else
+    fail "sessions.js: captureClaudeSessionId still ignores the live tracker"
   fi
   grep -qF 'MENU_CHECKBOX_RE' server/src/pty-patterns.js \
     && pass "pty-patterns.js: MENU_CHECKBOX_RE defined" \

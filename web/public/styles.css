@@ -2555,6 +2555,92 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   text-transform: uppercase;
 }
 
+/* ── New roles surfaced by the expanded parser ── */
+
+/* Mode-boundary pill (entered/exited plan or auto mode). Single line,
+   centered, muted background — visually subordinate to chat. */
+.conv-msg-mode {
+  display: flex;
+  justify-content: center;
+  margin: 6px 0;
+}
+.conv-mode-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78em;
+  color: #8b949e;
+  background: #161b22;
+  border: 1px solid #30363d;
+}
+.conv-msg-mode-plan-mode .conv-mode-pill { color: #d2a8ff; border-color: #553a8b; }
+.conv-msg-mode-auto-mode .conv-mode-pill { color: #79c0ff; border-color: #2c5282; }
+
+/* Thinking blocks — collapsible reasoning. Dimmed by default so they
+   stay subordinate to the final assistant text. */
+.conv-msg-thinking {
+  margin: 4px 0;
+  font-size: 0.9em;
+}
+.conv-thinking {
+  border-left: 2px solid #30363d;
+  padding: 2px 0 2px 8px;
+  margin: 4px 0;
+}
+.conv-thinking > summary {
+  color: #6e7681;
+  cursor: pointer;
+  user-select: none;
+  font-style: italic;
+}
+.conv-thinking[open] > summary { color: #8b949e; }
+.conv-thinking-body {
+  padding: 6px 0 2px;
+  color: #8b949e;
+  white-space: pre-wrap;
+}
+
+/* Framework / API errors — red callout so failures don't blend in. */
+.conv-msg-error {
+  margin: 6px 0;
+  padding: 8px 12px;
+  background: rgba(248, 81, 73, 0.08);
+  border-left: 3px solid #f85149;
+  border-radius: 4px;
+}
+.conv-error-head {
+  color: #ffa198;
+  font-weight: 600;
+  font-size: 0.85em;
+  text-transform: lowercase;
+}
+.conv-error-body {
+  color: #f0f6fc;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+/* Muted system events — permission updates, queued slash commands. */
+.conv-msg-permission,
+.conv-msg-queued {
+  margin: 4px 0;
+  padding: 2px 0;
+  font-size: 0.85em;
+  color: #8b949e;
+  font-style: italic;
+}
+
+/* Structured status chips inside #claude-typing's label. */
+.claude-typing-primary { font-weight: 500; }
+.claude-typing-chip {
+  color: #8b949e;
+  font-size: 0.92em;
+  margin-left: 2px;
+}
+.claude-typing-tokens { color: #79c0ff; }
+.claude-typing-interrupt { color: #d2a8ff; }
+.claude-typing-effort { color: #f0883e; }
+
 /* ── markdown inside .conv-text ── */
 .conv-text {
   word-break: break-word;

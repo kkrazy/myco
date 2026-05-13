@@ -504,6 +504,91 @@ function renderConvMessage(m) {
     return div;
   }
 
+  // Chain-of-thought reasoning. Collapsed by default — older models
+  // redact this field (encrypted blob, empty `.thinking`) so when the
+  // parser surfaces it, the text is from a model that exposed its
+  // reasoning. Dimmed body keeps it visually subordinate to the
+  // assistant's final reply. Surfaced from `assistant.thinking[]` —
+  // the parser folds them into the same frame as the text so chrono
+  // order is preserved.
+  if (m.role === 'thinking' || (Array.isArray(m.thinking) && m.thinking.length)) {
+    const list = m.role === 'thinking' ? [m.text] : m.thinking;
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-thinking';
+    for (const text of list) {
+      if (!text) continue;
+      const details = document.createElement('details');
+      details.className = 'conv-thinking';
+      const summary = document.createElement('summary');
+      summary.textContent = '✻ Thinking';
+      details.appendChild(summary);
+      const body = document.createElement('div');
+      body.className = 'conv-thinking-body';
+      body.textContent = text;
+      details.appendChild(body);
+      div.appendChild(details);
+    }
+    return div;
+  }
+
+  // Mode-boundary pills — single-line markers signifying entry/exit
+  // of plan mode or auto mode. The pty.js mode-change emit produces
+  // identical-shape frames live (~750ms latency) so the same render
+  // path serves both transcript replay and live PTY observation;
+  // upstream dedup keeps a (role,state,near-ts) collision from
+  // showing up twice.
+  if (m.role === 'plan_mode' || m.role === 'auto_mode') {
+    const div = document.createElement('div');
+    div.className = `conv-msg conv-msg-mode conv-msg-mode-${m.role.replace('_', '-')}`;
+    const pill = document.createElement('span');
+    pill.className = 'conv-mode-pill';
+    const verb = m.state === 'exited' ? 'Exited'
+      : m.state === 'reentered' ? 'Re-entered'
+      : 'Entered';
+    const label = m.role === 'plan_mode' ? 'plan mode' : 'auto mode';
+    pill.textContent = `● ${verb} ${label}`;
+    div.appendChild(pill);
+    return div;
+  }
+
+  // Framework-level errors (api_error, authentication_error, …).
+  // Red callout so a viewer immediately sees that a turn failed.
+  if (m.role === 'error') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-error';
+    const head = document.createElement('div');
+    head.className = 'conv-error-head';
+    head.textContent = `⚠ ${m.kind || 'error'}`;
+    div.appendChild(head);
+    if (m.text) {
+      const body = document.createElement('div');
+      body.className = 'conv-error-body';
+      body.textContent = m.text;
+      div.appendChild(body);
+    }
+    return div;
+  }
+
+  // Permission-set changes ("/permissions reset", "/allow Bash(npm test)").
+  // Muted italics — informational, not interactive in the viewer.
+  if (m.role === 'permission_change') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-permission';
+    const n = Array.isArray(m.tools) ? m.tools.length : 0;
+    const label = n === 0 ? 'permissions reset' : `permissions updated (${n} tool${n === 1 ? '' : 's'})`;
+    div.textContent = `🔒 ${label}`;
+    return div;
+  }
+
+  // Queued slash-command — the user typed a command while claude was
+  // mid-turn; it'll execute after the current turn finishes.
+  if (m.role === 'queued') {
+    const div = document.createElement('div');
+    div.className = 'conv-msg conv-msg-queued';
+    div.textContent = `⏳ Queued: ${m.text || ''}`;
+    return div;
+  }
+
   if (m.role === 'tool_result') {
     const div = document.createElement('div');
     div.className = 'conv-msg conv-msg-result';
@@ -1203,10 +1288,21 @@ function openSession(id, opts = {}) {
       } else if (msg.t === 'chat') {
         appendChatMessage(msg.message);
       } else if (msg.t === 'claude-status') {
-        // Live spinner-line readout from the server's headless terminal —
-        // text is something like "· Cerebrating… (40s · ↓ 3.4k tokens ·
-        // thought for 2s)" when claude is busy, null when it goes idle.
-        _setClaudeStatusLine(msg.text);
+        // Live spinner-line readout from the server's headless terminal.
+        // Frame shape:  {t:'claude-status', text, status}
+        //   text   = the raw spinner line (legacy field, always set)
+        //   status = structured decomposition (new field, may be null on
+        //            older servers): {verb, durationS, tokens, interruptible,
+        //            effort}. Renderer falls back to `text` when absent.
+        _setClaudeStatusLine(msg.text, msg.status || null);
+      } else if (msg.t === 'mode-change') {
+        // Live mode transition observed by the PTY scanner (~750ms after
+        // the user toggles Shift+Tab on the owner). Both owner and viewer
+        // receive this. Synthesize a transcript-shaped frame and route it
+        // through the same pill renderer the JSONL replay uses. Dedup
+        // against any near-timestamp duplicate (the JSONL flush will
+        // eventually deliver the equivalent record with a different uuid).
+        _onLiveModeChange(msg);
       } else if (msg.t === 'exit') {
         state.term?.writeln('\r\n[session ended]');
       } else if (msg.t === 'error') {
@@ -2210,20 +2306,61 @@ function _postClaudeStreamToChat(text, uuid) {
   _renderClaudeTyping();
 }
 
+// Repaint #claude-typing's label with the structured status chips
+// (token throughput, interrupt badge, effort). Extracted from
+// _renderClaudeTyping so the static check that enforces "the indicator
+// is declared statically — _renderClaudeTyping is a pure flip" stays
+// valid: DOM creation lives here, slot toggling stays there.
+function _renderClaudeTypingLabel(label, status, struct) {
+  label.textContent = '';
+  if (struct) {
+    const primary = document.createElement('span');
+    primary.className = 'claude-typing-primary';
+    const head = struct.verb
+      ? `${struct.verb}${struct.durationS != null ? ` ${struct.durationS}s` : ''}`
+      : status.split(/\s*·\s*/)[0] || '';
+    primary.textContent = head;
+    label.appendChild(primary);
+    if (struct.tokens && struct.tokens.count) {
+      const chip = document.createElement('span');
+      chip.className = 'claude-typing-chip claude-typing-tokens';
+      const dirGlyph = struct.tokens.dir === 'up' ? '↑' : '↓';
+      chip.textContent = ` ${dirGlyph} ${_humanizeTokens(struct.tokens.count)}`;
+      label.appendChild(chip);
+    }
+    if (struct.interruptible) {
+      const chip = document.createElement('span');
+      chip.className = 'claude-typing-chip claude-typing-interrupt';
+      chip.textContent = ' · esc to interrupt';
+      label.appendChild(chip);
+    }
+    if (struct.effort) {
+      const chip = document.createElement('span');
+      chip.className = 'claude-typing-chip claude-typing-effort';
+      chip.textContent = ` · ◉ ${struct.effort}`;
+      label.appendChild(chip);
+    }
+  } else {
+    label.textContent = status;
+  }
+}
+
 function _renderClaudeTyping() {
   // #claude-typing is declared statically in index.html as a direct
   // child of #chatpane (sibling of #chat-messages and #chat-form).
   // The 30px flex slot is permanently reserved via CSS (display:flex
   // is preserved even when [hidden] is set, with visibility:hidden
   // hiding the visuals). All this function does is flip [hidden] and
-  // update the label text — zero side effects on chat layout.
+  // update the label content — zero side effects on chat layout.
+  // Chip rendering is delegated to _renderClaudeTypingLabel so the
+  // static check enforcing "no DOM creation here" stays valid.
   const host = document.getElementById('claude-typing');
   if (!host) return;
   const status = state.claudeStatusLine || '';
   const visible = state.awaitingClaude || !!status;
   host.hidden = !visible;
   const label = host.querySelector('.claude-typing-label');
-  if (label) label.textContent = status;
+  if (label) _renderClaudeTypingLabel(label, status, state.claudeStatus);
   // No scrollIntoView on updates — status ticks every ~750ms via the
   // periodic safety scan, and the indicator's slot is decoupled from
   // chat-messages's flex slot by construction.
@@ -2240,9 +2377,21 @@ function _renderClaudeTyping() {
 // This makes the indicator stop within a couple seconds of claude
 // finishing instead of waiting for the 30s idle-timer fallback.
 const CLAUDE_POST_SPINNER_GRACE_MS = 2500;
-function _setClaudeStatusLine(text) {
+
+// "3400" → "3.4k", "1500000" → "1.5m". Used by the status-chip
+// renderer to keep the token-throughput chip a fixed width regardless
+// of magnitude.
+function _humanizeTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'm';
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(n);
+}
+
+function _setClaudeStatusLine(text, structured) {
   const trimmed = (text && String(text).trim()) || null;
   state.claudeStatusLine = trimmed;
+  state.claudeStatus = structured || null;
   if (trimmed) {
     state._spinnerSeen = true;
     if (state._spinnerStopTimer) { clearTimeout(state._spinnerStopTimer); state._spinnerStopTimer = null; }
@@ -2257,6 +2406,48 @@ function _setClaudeStatusLine(text) {
     }, CLAUDE_POST_SPINNER_GRACE_MS);
   }
   _renderClaudeTyping();
+}
+
+// Live PTY mode transition handler. Appends a transcript-shaped pill
+// frame ({role:'plan_mode'|'auto_mode', state, ts}) so renderConvMessage
+// emits the same pill it would for a JSONL-replayed event. Dedup window
+// is 5 seconds — the JSONL flush eventually delivers an equivalent
+// record (often with a slightly different timestamp), so without this
+// guard the viewer would see "Entered plan mode" twice.
+function _onLiveModeChange(msg) {
+  if (!msg || !msg.to) return;
+  // 'default' is the absence of a mode — render as "Exited <prior>"
+  // pill so the viewer sees a single transition narrative rather than
+  // a contentless "Entered default" line.
+  const toMode = msg.to === 'default' ? msg.from : msg.to;
+  if (!toMode || toMode === 'default') return;
+  const role = (toMode === 'plan') ? 'plan_mode'
+    : (toMode === 'accept' || toMode === 'auto') ? 'auto_mode'
+    : null;
+  if (!role) return;
+  const state_ = msg.to === 'default' ? 'exited' : 'entered';
+  const frame = { role, state: state_, ts: msg.ts, _live: true };
+  if (_isDuplicateModeFrame(frame)) return;
+  if (!Array.isArray(state.transcriptMessages)) state.transcriptMessages = [];
+  state.transcriptMessages.push(frame);
+  appendTranscriptMessages([frame]);
+}
+
+// True if an existing transcript row already announces this mode
+// transition within ±5s — guards against JSONL replay + live PTY
+// dual-delivery for the same event.
+function _isDuplicateModeFrame(frame) {
+  const list = state.transcriptMessages;
+  if (!Array.isArray(list) || !list.length) return false;
+  const ts = Date.parse(frame.ts || '');
+  if (!Number.isFinite(ts)) return false;
+  for (let i = list.length - 1; i >= Math.max(0, list.length - 20); i--) {
+    const m = list[i];
+    if (!m || m.role !== frame.role || m.state !== frame.state) continue;
+    const prevTs = Date.parse(m.ts || '');
+    if (Number.isFinite(prevTs) && Math.abs(prevTs - ts) < 5000) return true;
+  }
+  return false;
 }
 
 // Send an inline menu pick via the dedicated WS frame. Bypasses chat
