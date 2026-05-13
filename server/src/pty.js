@@ -12,7 +12,7 @@ const menuMod = require('./menu');
 const {
   MODE_ACCEPT_RE, MODE_PLAN_RE, MODE_BYPASS_RE,
   SPINNER_RUNNING_RE, SPINNER_DURATION_RE,
-  MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE,
+  MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE, MENU_OPT_LINE_RE,
   STATUS_TOKEN_TRAILER_RE, STATUS_INTERRUPT_RE, EFFORT_CHIP_RE,
 } = require('./pty-patterns');
 const slashcmds = require('./slashcmds');
@@ -502,24 +502,70 @@ function handleMenuToggle(sessionId, session, n, hash) {
 // non-checkbox row (e.g. on Submit itself, in which case navCount = 0
 // and we just hit Enter).
 const ARROW_DOWN = '\x1b[B';
+// Diagnostic dump for the cursor→Submit nav calculation. Off by
+// default; flip MYCO_MENU_SUBMIT_DEBUG=1 in the container env (or set
+// it in the deploy config) to capture every parse step the next time
+// the user reports a "moved past Next / past last selection" failure.
+// Logs include each scanned row + its classification (cursor / option
+// / submit / other) so the user can paste a snippet back and we can
+// see exactly what claude rendered.
+const MENU_SUBMIT_DEBUG = process.env.MYCO_MENU_SUBMIT_DEBUG === '1';
+
 function _findSubmitNavCount(session) {
   if (!session.headless || !session.headless.buffer) return 6;
   try {
     const buf = session.headless.buffer.active;
     const rows = session.headless.rows;
     let cursorRow = -1, fallbackCursorRow = -1, submitRow = -1;
+    const scanned = [];                  // (row, text, tag) for debug
     for (let i = 0; i < rows; i++) {
       const line = buf.getLine(buf.viewportY + i);
       if (!line) continue;
       const txt = line.translateToString(true);
-      if (cursorRow < 0 && MULTI_SELECT_CURSOR_RE.test(txt)) cursorRow = i;
-      if (fallbackCursorRow < 0 && txt.includes('❯')) fallbackCursorRow = i;
-      if (SUBMIT_ROW_RE.test(txt)) submitRow = i;       // last-match wins
+      let tag = '';
+      if (cursorRow < 0 && MULTI_SELECT_CURSOR_RE.test(txt)) { cursorRow = i; tag = 'cursor'; }
+      else if (fallbackCursorRow < 0 && txt.includes('❯')) { fallbackCursorRow = i; if (!tag) tag = 'cursor-fallback'; }
+      if (SUBMIT_ROW_RE.test(txt)) { submitRow = i; tag = (tag ? tag + '+' : '') + 'submit'; }
+      else if (MENU_OPT_LINE_RE.test(txt)) { tag = tag || 'option'; }
+      if (MENU_SUBMIT_DEBUG && (tag || txt.trim())) {
+        scanned.push({ row: i, tag, text: txt.replace(/\s+$/, '').slice(0, 100) });
+      }
     }
     if (cursorRow < 0) cursorRow = fallbackCursorRow;
-    if (cursorRow < 0 || submitRow <= cursorRow) return 6;
-    return Math.min(20, submitRow - cursorRow);
-  } catch { return 6; }
+    if (cursorRow < 0 || submitRow <= cursorRow) {
+      if (MENU_SUBMIT_DEBUG) {
+        console.log(`[menu-submit-parse] ${session.sessionId} fallback=6 (cursorRow=${cursorRow} submitRow=${submitRow})`);
+        for (const r of scanned) console.log(`[menu-submit-parse]   row=${r.row} tag=${r.tag || '-'} ${JSON.stringify(r.text)}`);
+      }
+      return 6;
+    }
+    // Count NAVIGABLE ITEMS between cursor (exclusive) and submit
+    // (inclusive). Claude's TUI navigates option-by-option — pressing
+    // ↓ skips multi-line description rows and lands on the next
+    // numbered option or the submit row. A line-distance count
+    // (submitRow - cursorRow) overcounts whenever an option has a
+    // description row underneath it, the cursor overshoots Next, and
+    // claude lands Enter on the wrong row — interpreted as decline.
+    // Verified live on mycobeta demo010 (2026-05-13): the Features
+    // multi-select had 9 lines from cursor to Next but only 5 nav
+    // steps (options 2,3,4,5 + Next).
+    let items = 0;
+    for (let i = cursorRow + 1; i <= submitRow; i++) {
+      const line = buf.getLine(buf.viewportY + i);
+      if (!line) continue;
+      const txt = line.translateToString(true);
+      if (MENU_OPT_LINE_RE.test(txt) || SUBMIT_ROW_RE.test(txt)) items++;
+    }
+    const navCount = Math.min(20, items || 6);
+    if (MENU_SUBMIT_DEBUG) {
+      console.log(`[menu-submit-parse] ${session.sessionId} cursorRow=${cursorRow} submitRow=${submitRow} items=${items} navCount=${navCount}`);
+      for (const r of scanned) console.log(`[menu-submit-parse]   row=${r.row} tag=${r.tag || '-'} ${JSON.stringify(r.text)}`);
+    }
+    return navCount;
+  } catch (err) {
+    if (MENU_SUBMIT_DEBUG) console.log(`[menu-submit-parse] ${session.sessionId} threw: ${err.message}`);
+    return 6;
+  }
 }
 function handleMenuSubmit(sessionId, session, hash) {
   if (!session || !session.alive) return;

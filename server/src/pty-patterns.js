@@ -44,6 +44,14 @@
 // (e.g. "[4] Type something. [5] Chat about this").
 const MENU_OPT_MARKER_RE = /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/g;
 
+// Line-level "is this a numbered option line?" predicate. Same shape
+// as MENU_OPT_MARKER_RE but WITHOUT the /g flag so it can be used as a
+// stateless line existence test (no lastIndex pollution). Consumers
+// that want to extract each marker on a line still use the /g version;
+// callers that only need to count or detect option lines use this one.
+const MENU_OPT_LINE_RE =
+  /(?<=^|\s)(?:\[(\d+)\]|\((\d+)\)|(\d+)[.)])(?!\d)/;
+
 // Multi-select option marker — claude code renders a checkbox after the
 // numbered prefix when the dialog is a multi-select. Each digit press
 // TOGGLES one checkbox; Enter submits the whole set. Examples observed:
@@ -481,4 +489,5 @@ module.exports = {
   STATUS_TOKEN_TRAILER_RE,
   STATUS_INTERRUPT_RE,
   EFFORT_CHIP_RE,
+  MENU_OPT_LINE_RE,
 };
