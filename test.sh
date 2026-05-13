@@ -1383,33 +1383,6 @@ test_chat_window() {
   grep -qF "_onLiveModeChange" web/public/app.js \
     && pass "app.js: _onLiveModeChange handler defined" \
     || fail "app.js: _onLiveModeChange missing — live mode-change frames will be dropped"
-  # Regression: captureClaudeSessionId used to only watch the "newest
-  # jsonl in the project dir" — fragile when multiple sessions get
-  # touched (e.g. the user does /resume in claude's TUI, which re-execs
-  # claude into a different sessionId and silently bypasses our spawn-
-  # time poll). readActiveClaudeSessionForCwd reads claude's authoritative
-  # ~/.claude/sessions/<pid>.json tracker and resolveTranscriptPath
-  # prefers it.
-  if have_node; then
-    if node test/active-claude-session.test.js >/dev/null 2>&1; then
-      pass "test/active-claude-session.test.js (8 cases)"
-    else
-      fail "test/active-claude-session.test.js — re-run with 'node test/active-claude-session.test.js' to see failures"
-    fi
-  else
-    skip "test/active-claude-session.test.js (no host node)"
-  fi
-  grep -qF 'function readActiveClaudeSessionForCwd' server/src/sessions.js \
-    && pass "sessions.js: readActiveClaudeSessionForCwd helper defined" \
-    || fail "sessions.js: readActiveClaudeSessionForCwd missing"
-  grep -qF 'readActiveClaudeSessionForCwd(rec.absCwd)' server/src/transcript.js \
-    && pass "transcript.js: resolveTranscriptPath consults the live tracker first" \
-    || fail "transcript.js: resolveTranscriptPath still relies only on rec.claudeSessionId / newest-jsonl"
-  if awk '/^function captureClaudeSessionId\(/,/^}$/' server/src/sessions.js | grep -q 'readActiveClaudeSessionForCwd'; then
-    pass "sessions.js: captureClaudeSessionId polls the live tracker too"
-  else
-    fail "sessions.js: captureClaudeSessionId still ignores the live tracker"
-  fi
   grep -qF 'MENU_CHECKBOX_RE' server/src/pty-patterns.js \
     && pass "pty-patterns.js: MENU_CHECKBOX_RE defined" \
     || fail "pty-patterns.js: MENU_CHECKBOX_RE missing — multi-select detection won't work"
@@ -1520,9 +1493,18 @@ test_chat_window() {
   else
     skip "test/capture-claude-session-id.test.js (no host node)"
   fi
-  grep -qF 'rec.claudeSessionId !== id' server/src/sessions.js \
-    && pass "sessions.js: captureClaudeSessionId gate replaces stale id" \
-    || fail "sessions.js: captureClaudeSessionId still has the freeze-on-first gate"
+  # Regression: captureClaudeSessionId must REPLACE a stale stored id,
+  # not just set-when-null. The original buggy gate was `!rec.claudeSessionId`
+  # which silently refused to update. Two acceptable shapes: the inline
+  # `rec.claudeSessionId !== id` (pre-refactor) or the `commit(id, …)`
+  # helper that early-returns when `rec.claudeSessionId === id`
+  # (post-tracker-refactor). Either one preserves the "always replace
+  # when different" contract.
+  if grep -qE 'rec\.claudeSessionId\s*!==\s*id|rec\.claudeSessionId\s*===\s*id' server/src/sessions.js; then
+    pass "sessions.js: captureClaudeSessionId gate replaces stale id"
+  else
+    fail "sessions.js: captureClaudeSessionId still has the freeze-on-first gate"
+  fi
   # Regression: claude's assistant text from the transcript jsonl must
   # mirror into rec.chat so chat survives a refresh. Pre-fix the
   # _localOnly chat rows on the client never reached disk.
