@@ -1373,6 +1373,10 @@ function setChatPane(visible) {
     }
     // List was 0-height while hidden — pin to the bottom now it has dimensions.
     scrollChatToLatest();
+    // Reset unread badge: opening the pane = user is looking at the
+    // latest content. (Bumped by _bumpChatUnreadIfHidden whenever a
+    // claude message arrives while the pane is collapsed.)
+    _resetChatUnread();
   }
   updateChatButton();
   // The xterm shrunk/grew because the chatpane sidebar's edge moved
@@ -1746,6 +1750,44 @@ function appendChatMessage(message) {
   _appendChatMessageDom(message);
   _updatePendingMenuFromMessage(message);
   _renderPendingMenuCallout();
+  _bumpChatUnreadIfHidden(message);
+}
+
+// Notification surfacing — when claude posts new content (assistant text
+// reply, menu callout, etc.) AND the chat sidebar is collapsed, increment
+// the unread counter so the #btn-chat icon shows a badge. Without this,
+// a user who closed the chat pane to focus on the terminal had no signal
+// that claude had finished a turn / asked a follow-up question; they had
+// to remember to peek at the chat. Especially load-bearing for the
+// plan-mode wizard, where the final reply is the actionable next step.
+//
+// Skips:
+//   - messages from the current user (own echo)
+//   - menu-toggle re-broadcasts that just re-render an existing row
+//     (handled by the hash-dedup early return above — those return before
+//     reaching here)
+//   - when the chat pane is already open (the user is looking at it)
+function _bumpChatUnreadIfHidden(message) {
+  if (!message || message.user === state.chatUser) return;
+  if (state.chatPaneVisible) return;
+  state.chatUnread = (state.chatUnread || 0) + 1;
+  _renderChatUnreadBadge();
+}
+
+function _renderChatUnreadBadge() {
+  const btn = document.getElementById('btn-chat');
+  if (!btn) return;
+  const n = state.chatUnread || 0;
+  if (n > 0) {
+    btn.dataset.unread = String(Math.min(n, 99));
+  } else {
+    delete btn.dataset.unread;
+  }
+}
+
+function _resetChatUnread() {
+  state.chatUnread = 0;
+  _renderChatUnreadBadge();
 }
 
 // Append a single message's DOM node to #chat-messages without rebuilding

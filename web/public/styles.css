@@ -1711,6 +1711,35 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #btn-chat:active { transform: scale(.92); }
 #btn-chat.active { background: rgba(80, 120, 200, .35); }
 
+/* Unread badge on the chat toggle when the pane is collapsed and new
+   claude content has arrived. Counter ("1".."99") comes from
+   data-unread; pure CSS render keeps the button itself a plain
+   single-glyph icon. Pulses briefly on first appearance so the user
+   notices a new turn arrived (e.g. plan generated post-wizard). */
+#btn-chat[data-unread]::after {
+  content: attr(data-unread);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: #f85149;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px rgba(40, 40, 40, .9);
+  animation: btn-chat-pulse 1.4s ease-out 2;
+}
+@keyframes btn-chat-pulse {
+  0%   { transform: scale(1);   box-shadow: 0 0 0 2px rgba(40, 40, 40, .9), 0 0 0 0 rgba(248, 81, 73, .55); }
+  60%  { transform: scale(1.18); box-shadow: 0 0 0 2px rgba(40, 40, 40, .9), 0 0 0 8px rgba(248, 81, 73, 0); }
+  100% { transform: scale(1);   box-shadow: 0 0 0 2px rgba(40, 40, 40, .9), 0 0 0 0 rgba(248, 81, 73, 0); }
+}
+
 /* Files toggle sits left of #btn-chat in the same fixed cluster. */
 #btn-files {
   position: fixed;

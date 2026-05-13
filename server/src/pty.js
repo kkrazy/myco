@@ -626,11 +626,12 @@ function persistAssistantTextToChat(sessionId, newMsgs) {
     if (c && c.meta && c.meta.transcriptUuid) seen.add(c.meta.transcriptUuid);
   }
   const session = sessions.get(sessionId);
+  let mirrored = 0, skipped = 0;
   for (const m of newMsgs) {
     if (!m || m.role !== 'assistant') continue;
-    if (!m.text || !m.text.trim()) continue;
-    if (!m.uuid) continue;          // no stable dedup key → skip
-    if (seen.has(m.uuid)) continue;
+    if (!m.text || !m.text.trim()) { skipped++; continue; }
+    if (!m.uuid) { skipped++; continue; }      // no stable dedup key → skip
+    if (seen.has(m.uuid)) { skipped++; continue; }
     seen.add(m.uuid);
     const reply = {
       user: 'claude',
@@ -640,6 +641,16 @@ function persistAssistantTextToChat(sessionId, newMsgs) {
     };
     sessionsMod.appendChatMessage(sessionId, reply);
     if (session) session.emit('chat', reply);
+    mirrored++;
+  }
+  // Diagnostic — counts how many assistant-text messages were mirrored
+  // into rec.chat vs skipped (dedup hit, empty text, no uuid). The user
+  // reported plan-mode output not showing in the chat sidebar even
+  // though the row IS in rec.chat; this log line lets us correlate the
+  // server's persist activity with client-side visibility on the next
+  // repro. Quiet on no-op calls.
+  if (mirrored > 0) {
+    console.log(`[persist-chat] ${sessionId} mirrored=${mirrored} skipped=${skipped} (rec.chat now ${rec.chat.length})`);
   }
 }
 

@@ -1027,6 +1027,21 @@ test_chat_window() {
   grep -qF '#btn-chat.active' web/public/styles.css \
     && pass "css: #btn-chat.active styling present" \
     || fail "css: #btn-chat.active styling missing"
+  # Regression: when a claude message lands while the chat pane is
+  # collapsed, the user had NO signal that new content was waiting —
+  # particularly painful for the plan-mode wizard, where the generated
+  # plan sits silently in chat until the user remembers to peek.
+  # An unread badge on #btn-chat surfaces the count via a data
+  # attribute; CSS renders the pill and pulses on bump.
+  grep -qF '_bumpChatUnreadIfHidden' web/public/app.js \
+    && pass "app.js: chat-unread badge bumps when pane is collapsed" \
+    || fail "app.js: chat-unread badge missing — silent claude replies"
+  grep -qF '_resetChatUnread' web/public/app.js \
+    && pass "app.js: chat-unread badge resets on setChatPane(true)" \
+    || fail "app.js: chat-unread reset missing"
+  grep -qF '#btn-chat[data-unread]' web/public/styles.css \
+    && pass "css: chat-unread badge styling present" \
+    || fail "css: chat-unread badge styling missing"
   # The chatpane is now a main-pane view (mutually exclusive with
   # terminal/conversation/files/plan/arch/test) instead of an aside
   # sidebar. This fixes mobile — the old z-index:60 overlay sat ON TOP
