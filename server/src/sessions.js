@@ -99,6 +99,43 @@ function getSessionRecord(id) { return loadStore().sessions[id] || null; }
 function projectsDir() { return path.join(os.homedir(), '.claude', 'projects'); }
 function encodeCwdForClaude(cwd) { return cwd.replace(/\//g, '-'); }
 
+// Claude code keeps a per-process tracker in ~/.claude/sessions/<pid>.json:
+//
+//   { "pid": 27, "sessionId": "355313f5-…", "cwd": "/wks/kkrazy/myco",
+//     "startedAt": 1778658106360, "status": "busy",
+//     "updatedAt": 1778658560926, "kind": "interactive", ... }
+//
+// This is the AUTHORITATIVE current-session-id for an actively-running
+// claude process, and it survives in-TUI `/resume` re-execs that
+// captureClaudeSessionId is blind to (the polling window only runs for
+// ~60s after spawn, and an in-process /resume doesn't trigger a new
+// spawn). We use it as the primary source when resolving the transcript
+// path; the polled `rec.claudeSessionId` and the "newest jsonl in dir"
+// fallback both come second. If multiple `<pid>.json` files match the
+// cwd (stale entries from dead processes happen), the freshest
+// `updatedAt` wins — the running process is constantly heartbeating
+// while dead ones froze at exit.
+function _claudeSessionsDir() { return path.join(os.homedir(), '.claude', 'sessions'); }
+function readActiveClaudeSessionForCwd(absCwd) {
+  if (!absCwd) return null;
+  const dir = _claudeSessionsDir();
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch { return null; }
+  let bestId = null;
+  let bestUpdated = 0;
+  for (const f of entries) {
+    if (!f.endsWith('.json')) continue;
+    let info;
+    try { info = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); }
+    catch { continue; }
+    if (!info || info.cwd !== absCwd) continue;
+    if (!isClaudeSessionId(info.sessionId)) continue;
+    const updated = Number(info.updatedAt || 0);
+    if (updated > bestUpdated) { bestUpdated = updated; bestId = info.sessionId; }
+  }
+  return bestId;
+}
+
 // Claude session-id shape (UUID v4): the basename of `<project>/<uuid>.jsonl`.
 // Task-tool subagent transcripts use the shape `agent-<hex>.jsonl` and live
 // under a `subagents/` subdirectory — those are NOT resumable session ids
@@ -258,8 +295,29 @@ function captureClaudeSessionId(sessionId, absCwd, spawnedAtMs) {
   // Snapshot what exists before spawn
   findNewestJsonl(dir).then((r) => { prevBest = r; });
 
+  function commit(id, source) {
+    if (!isClaudeSessionId(id)) return false;
+    const rec = loadStore().sessions[sessionId];
+    if (!rec) return false;
+    if (rec.claudeSessionId === id) return true;
+    const prev = rec.claudeSessionId;
+    rec.claudeSessionId = id;
+    saveStore();
+    console.log(`[capture] claudeSessionId=${id} for ${sessionId} (${source}${prev ? `, replaced ${prev}` : ''})`);
+    return true;
+  }
+
   const tick = async () => {
     attempts += 1;
+    // SOURCE OF TRUTH (added): claude code's own active-session tracker
+    // at ~/.claude/sessions/<pid>.json. When we find an entry whose
+    // `cwd` matches ours, it is the authoritative current session id —
+    // even if the user did an in-TUI /resume that bypasses our spawn
+    // pipeline. Heuristic fallback below kicks in when claude isn't
+    // running yet (the tracker file gets written shortly after start).
+    const liveId = readActiveClaudeSessionForCwd(absCwd);
+    if (liveId) { commit(liveId, `live tracker, attempt ${attempts}`); return; }
+
     const newest = await findNewestJsonl(dir);
     if (newest && newest.mtimeMs >= spawnedAtMs - 2000) {
       let id = newest.file.replace(/\.jsonl$/, '');
@@ -268,22 +326,7 @@ function captureClaudeSessionId(sessionId, absCwd, spawnedAtMs) {
         id = m ? m[1] : id;
       }
       if (!isClaudeSessionId(id)) { if (attempts < 120) setTimeout(tick, 500); return; }
-      const rec = loadStore().sessions[sessionId];
-      if (rec && rec.claudeSessionId !== id) {
-        // Two paths land here:
-        //   - fresh spawn: rec.claudeSessionId was null, capture for the
-        //     first time.
-        //   - --resume respawn: rec.claudeSessionId was the OLD jsonl, and
-        //     claude code created a NEW jsonl when it resumed. The old
-        //     gate (`!rec.claudeSessionId`) refused to update, so the
-        //     readonly viewer + every subsequent --resume kept pointing
-        //     at a frozen transcript while the live session kept writing
-        //     to the new file. Always store the freshly-discovered id.
-        const prev = rec.claudeSessionId;
-        rec.claudeSessionId = id;
-        saveStore();
-        console.log(`[capture] claudeSessionId=${id} for ${sessionId} (attempt ${attempts}${prev ? `, replaced ${prev}` : ''})`);
-      }
+      commit(id, `newest-jsonl, attempt ${attempts}`);
       return;
     }
     if (attempts < 120) setTimeout(tick, 500);
@@ -558,6 +601,7 @@ Object.assign(module.exports, {
   encodeCwdForClaude,
   isClaudeSessionId,
   findNewestJsonl,
+  readActiveClaudeSessionForCwd,
   captureClaudeSessionId,
   getSessionRecord,
   readDescriptionForCwd,

@@ -1411,6 +1411,30 @@ test_chat_window() {
   grep -qF "_onLiveModeChange" web/public/app.js \
     && pass "app.js: _onLiveModeChange handler defined" \
     || fail "app.js: _onLiveModeChange missing — live mode-change frames will be dropped"
+  # Regression: claude code re-execs into a new sessionId when the user
+  # hits /resume in the TUI. The polled rec.claudeSessionId only fires
+  # at mycod-spawn time, so it gets stuck on the original id while the
+  # JSONL file the new claude writes is named after the NEW id.
+  # Without reading claude code's per-process tracker we keep watching
+  # the stale jsonl and miss every assistant reply on the re-execed
+  # session. Verified mycobeta demo010 (2026-05-13): user's plan
+  # response landed in the new jsonl (c8ce8492-…) but the watcher was
+  # on 49d7d4da-… → chat row never persisted live.
+  if have_node; then
+    if node test/active-claude-session.test.js >/dev/null 2>&1; then
+      pass "test/active-claude-session.test.js (8 cases)"
+    else
+      fail "test/active-claude-session.test.js — re-run with 'node test/active-claude-session.test.js' to see failures"
+    fi
+  else
+    skip "test/active-claude-session.test.js (no host node)"
+  fi
+  grep -qF 'function readActiveClaudeSessionForCwd' server/src/sessions.js \
+    && pass "sessions.js: readActiveClaudeSessionForCwd helper defined" \
+    || fail "sessions.js: readActiveClaudeSessionForCwd missing — transcript watcher won't follow claude /resume re-execs"
+  grep -qF 'readActiveClaudeSessionForCwd(rec.absCwd)' server/src/transcript.js \
+    && pass "transcript.js: resolveTranscriptPath consults the live tracker first" \
+    || fail "transcript.js: resolveTranscriptPath still relies only on rec.claudeSessionId — re-exec'd sessions will lose assistant text"
   grep -qF 'MENU_CHECKBOX_RE' server/src/pty-patterns.js \
     && pass "pty-patterns.js: MENU_CHECKBOX_RE defined" \
     || fail "pty-patterns.js: MENU_CHECKBOX_RE missing — multi-select detection won't work"

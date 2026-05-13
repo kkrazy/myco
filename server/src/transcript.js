@@ -11,11 +11,30 @@ function resolveTranscriptPath(sessionId) {
   if (!rec || !rec.absCwd) return null;
   const dir = path.join(sessionsMod.projectsDir(), sessionsMod.encodeCwdForClaude(rec.absCwd));
 
-  // Prefer the specific resumable session's jsonl; fall back to the newest in
-  // the project dir when there's no cached claudeSessionId yet.
+  // Source-of-truth: claude code's own per-process tracker
+  // (~/.claude/sessions/<pid>.json) for an actively-running claude in
+  // this cwd. This catches the case where claude was spawned with
+  // --resume <A>, then the user hit /resume in claude's TUI and
+  // re-execed into session <B> — captureClaudeSessionId only runs at
+  // mycod-spawn time, so rec.claudeSessionId stays stuck at <A> even
+  // though claude is now writing to <B>.jsonl. The active tracker
+  // gives us <B> directly. See sessions.readActiveClaudeSessionForCwd.
+  const liveId = sessionsMod.readActiveClaudeSessionForCwd(rec.absCwd);
+  if (liveId) {
+    const liveFile = path.join(dir, liveId + '.jsonl');
+    if (fs.existsSync(liveFile)) return liveFile;
+    // Some claude variants nest the jsonl under <id>/. Try that too.
+    const nested = findNewestJsonl(path.join(dir, liveId));
+    if (nested) return nested;
+  }
+
+  // No live process — fall through to the polled value, then to the
+  // "newest jsonl in the project dir" heuristic.
   if (rec.claudeSessionId) {
     const specific = findNewestJsonl(path.join(dir, rec.claudeSessionId));
     if (specific) return specific;
+    const direct = path.join(dir, rec.claudeSessionId + '.jsonl');
+    if (fs.existsSync(direct)) return direct;
   }
   return findNewestJsonl(dir);
 }
