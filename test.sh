@@ -1435,6 +1435,17 @@ test_chat_window() {
   grep -qF 'readActiveClaudeSessionForCwd(rec.absCwd)' server/src/transcript.js \
     && pass "transcript.js: resolveTranscriptPath consults the live tracker first" \
     || fail "transcript.js: resolveTranscriptPath still relies only on rec.claudeSessionId — re-exec'd sessions will lose assistant text"
+  # Regression: streamTranscriptToWs used to call resolveTranscriptPath
+  # ONCE at attach time and pin the watcher to that file. Even with the
+  # live-tracker fix, a mid-connection claude /resume re-exec writes to
+  # a NEW <id>.jsonl while the watcher keeps reading the stale path.
+  # Symptom: transcript view and chat sidebar both freeze at the
+  # pre-re-exec content — only a page refresh recovers (re-runs
+  # resolveTranscriptPath at the fresh attach). The fix polls
+  # resolveTranscriptPath every 3s and rebinds when it changes.
+  grep -qF '[transcript-rebind]' server/src/pty.js \
+    && pass "pty.js: streamTranscriptToWs rebinds watcher when live jsonl path changes" \
+    || fail "pty.js: streamTranscriptToWs no longer rebinds — mid-session re-execs lose transcript-delta"
   grep -qF 'MENU_CHECKBOX_RE' server/src/pty-patterns.js \
     && pass "pty-patterns.js: MENU_CHECKBOX_RE defined" \
     || fail "pty-patterns.js: MENU_CHECKBOX_RE missing — multi-select detection won't work"

@@ -791,8 +791,10 @@ function streamTranscriptToWs(sessionId, ws) {
   let pollTimer = null;
   let unwatch = null;
   let closed = false;
+  let watchingPath = null;     // jsonl file the current watcher is bound to
 
   function startWatching(filePath) {
+    watchingPath = filePath;
     transcriptMod.readNewMessages(filePath, 0).then(({ messages, bytesRead }) => {
       if (closed || ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({ t: 'transcript-init', messages, bytes: bytesRead }));
@@ -822,17 +824,38 @@ function streamTranscriptToWs(sessionId, ws) {
     startWatching(initialPath);
   } else {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'transcript-waiting' }));
-    pollTimer = setInterval(() => {
-      if (closed || ws.readyState !== ws.OPEN) { clearInterval(pollTimer); pollTimer = null; return; }
-      const p = transcriptMod.resolveTranscriptPath(sessionId);
-      if (p) { clearInterval(pollTimer); pollTimer = null; startWatching(p); }
-    }, 2000);
   }
+
+  // Re-resolve the live JSONL every 3s. Claude code re-execs into a
+  // new sessionId (and a new <newId>.jsonl) any time the user invokes
+  // /resume in the TUI — at which point the existing watcher is
+  // pinned to the stale file and misses every assistant reply going
+  // forward. The watcher itself can't follow because fs.watch is
+  // file-bound. This poll detects the path change, tears down the
+  // stale watcher, and starts a fresh one on the new file. Until the
+  // first path resolves (new-session race), the same poll picks it
+  // up — replacing the older 2s `pollTimer` startup-only loop with a
+  // single unified path-tracking interval. Verified on mycobeta
+  // demo010 (2026-05-13): user's plan reply landed in
+  // 887750c4-….jsonl after the attach watcher had been bound to an
+  // earlier 49d7d4da-….jsonl; without this poll, chat sidebar and
+  // transcript view stayed empty for the whole new session.
+  pollTimer = setInterval(() => {
+    if (closed || ws.readyState !== ws.OPEN) {
+      clearInterval(pollTimer); pollTimer = null; return;
+    }
+    const p = transcriptMod.resolveTranscriptPath(sessionId);
+    if (!p || p === watchingPath) return;
+    // Path changed (or first appeared). Rebind.
+    console.log(`[transcript-rebind] ${sessionId} ${watchingPath || '(none)'} -> ${p}`);
+    if (unwatch) { try { unwatch(); } catch {} unwatch = null; }
+    startWatching(p);
+  }, 3000);
 
   return function cleanup() {
     closed = true;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    if (unwatch) { unwatch(); unwatch = null; }
+    if (unwatch) { try { unwatch(); } catch {} unwatch = null; }
   };
 }
 
