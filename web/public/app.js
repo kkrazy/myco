@@ -1574,9 +1574,71 @@ function appendChatMessage(message) {
     }
   }
   state.chatMessages.push(message);
-  renderChatPane(/*scrollToBottom*/ true);
+  _appendChatMessageDom(message);
   _updatePendingMenuFromMessage(message);
   _renderPendingMenuCallout();
+}
+
+// Append a single message's DOM node to #chat-messages without rebuilding
+// the rest of the list. Existing rows (and their already-rendered mermaid
+// SVGs, hljs spans, scroll position, etc.) are preserved. Full rebuilds
+// are reserved for applyChatHistory and clearChat — the rare events that
+// truly need a clean reload. Previously every append went through
+// renderChatPane, which did `list.innerHTML = ...`, tearing down every
+// chat row on every streamed assistant text block — visible as the chat
+// pane "reloading entire history from time to time" during a live turn.
+//
+// Special case: a 'menu' or 'menu-auto' broadcast supersedes any earlier
+// menu row that still has clickable buttons. We re-render those rows
+// individually with isActiveMenu=false so their DOM matches what
+// renderChatPane would have produced (an answered menu becomes the
+// "✓ Picked [N] label" summary; an unanswered superseded menu becomes
+// "(no longer active)").
+function _appendChatMessageDom(message) {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  const empty = document.getElementById('chat-empty');
+  if (empty) empty.hidden = true;
+
+  const isMenu = !!(message && message.meta && message.meta.kind === 'menu'
+    && message.meta.menu && Array.isArray(message.meta.menu.options));
+  const isMenuAuto = !!(message && message.meta && message.meta.kind === 'menu-auto');
+  if (isMenu || isMenuAuto) _deactivatePriorMenuRows(list);
+
+  const html = renderChatMessage(message, /*isActiveMenu*/ isMenu);
+  const node = _htmlToNode(html);
+  if (!node) return;
+  list.appendChild(node);
+  scrollChatToLatest();
+  _bindChatMenuClicks();
+  // Mermaid runs only on the newly-appended node — existing SVGs (and
+  // any user interaction state inside them) stay intact.
+  renderMermaidInContainer(node).catch(() => {});
+}
+
+function _htmlToNode(html) {
+  const tmpl = document.createElement('template');
+  tmpl.innerHTML = (html || '').trim();
+  return tmpl.content.firstChild;
+}
+
+// Re-render every prior menu row in place with isActiveMenu=false. The
+// new node replaces the old one, so an answered menu collapses to
+// "✓ Picked [N] label" and an unanswered superseded one to
+// "(no longer active)". Indexes align because every append goes through
+// _appendChatMessageDom and applyChatHistory rebuilds from state, so
+// list.children[i] tracks state.chatMessages[i].
+function _deactivatePriorMenuRows(list) {
+  const children = list.children;
+  for (let i = 0; i < state.chatMessages.length && i < children.length; i++) {
+    const m = state.chatMessages[i];
+    if (!m || !m.meta || m.meta.kind !== 'menu') continue;
+    if (!m.meta.menu || !Array.isArray(m.meta.menu.options)) continue;
+    const oldEl = children[i];
+    if (!oldEl || !oldEl.querySelector('.chat-menu-opts')) continue;
+    const newEl = _htmlToNode(renderChatMessage(m, /*isActiveMenu*/ false));
+    if (newEl) oldEl.replaceWith(newEl);
+  }
 }
 
 // Pending-menu surfacing
@@ -1990,10 +2052,10 @@ function _postClaudeStreamToChat(text, uuid) {
   };
   if (uuid) row.meta = { transcriptUuid: uuid };
   state.chatMessages.push(row);
-  renderChatPane(/*scrollToBottom*/ true);
+  _appendChatMessageDom(row);
   // Re-render the typing indicator so it slots back below the newest
-  // message (renderChatPane only touched the list innerHTML; the
-  // sibling indicator is unchanged but the new message bumps it).
+  // message (the indicator is a sibling of the list; the new message
+  // bumps it visually).
   _renderClaudeTyping();
 }
 

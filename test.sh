@@ -399,6 +399,39 @@ test_new_session_readonly() {
   grep -qF 'renderMermaidInContainer(list)' web/public/app.js \
     && pass "app.js: renderChatPane runs mermaid pass on the chat list" \
     || fail "app.js: chat pane does not process mermaid blocks"
+  # Regression: appendChatMessage and _postClaudeStreamToChat must NOT
+  # do a full innerHTML rebuild on every new row. The original
+  # implementation called renderChatPane(true) on each append, which
+  # wiped and rebuilt the entire chat DOM (re-parsing markdown and
+  # re-rendering mermaid for every prior row) on every streamed Claude
+  # text block — visible as the chat pane flashing/reloading entire
+  # history during a live turn. Switch to incremental _appendChatMessageDom.
+  grep -qF '_appendChatMessageDom(message)' web/public/app.js \
+    && pass "app.js: incremental chat append helper defined" \
+    || fail "app.js: missing _appendChatMessageDom helper"
+  grep -qF '_appendChatMessageDom(row)' web/public/app.js \
+    && pass "app.js: _postClaudeStreamToChat uses incremental append" \
+    || fail "app.js: streaming claude path still does a full chat rebuild"
+  # Negative guard: neither hot append path should reference renderChatPane.
+  # (renderChatPane is still allowed in applyChatHistory + clearChat — the
+  # full-rebuild events.)
+  if awk '/^function appendChatMessage\(/,/^}$/' web/public/app.js | grep -q 'renderChatPane('; then
+    fail "app.js: appendChatMessage still calls renderChatPane (causes full rebuild on every chat frame)"
+  else
+    pass "app.js: appendChatMessage does not trigger full chat rebuild"
+  fi
+  if awk '/^function _postClaudeStreamToChat\(/,/^}$/' web/public/app.js | grep -q 'renderChatPane('; then
+    fail "app.js: _postClaudeStreamToChat still calls renderChatPane (causes full rebuild on every streamed text block)"
+  else
+    pass "app.js: _postClaudeStreamToChat does not trigger full chat rebuild"
+  fi
+  # Surgical menu deactivation: when a new menu (or menu-auto) lands, the
+  # prior menu's clickable buttons must be replaced in-place. Without this,
+  # a stale row could fire a pick at a dialog Claude has long since moved
+  # past — the same race the data-hash plumbing also guards against.
+  grep -qF '_deactivatePriorMenuRows' web/public/app.js \
+    && pass "app.js: prior menu rows are surgically deactivated on new menu append" \
+    || fail "app.js: missing _deactivatePriorMenuRows — new menu won't deactivate older clickable menus"
   grep -qF '.chat-msg .chat-text blockquote' web/public/styles.css \
     && pass "css: chat-text blockquote styled" \
     || fail "css: chat-text blockquote not styled"
@@ -461,6 +494,30 @@ test_new_session_readonly() {
   grep -qF '.chat-msg.chat-msg-menu' web/public/styles.css \
     && pass "styles.css: chat-msg-menu unified card style" \
     || fail "styles.css: chat-msg-menu unified card style"
+  # The inner .chat-text inside a menu card must be flattened — otherwise
+  # the from-claude bubble (green tint + left border + padding) draws a
+  # second card *inside* the outer menu card, wasting horizontal space.
+  # Test: the chat-msg-menu .chat-text rule sets background: transparent
+  # so the from-claude tint can't bleed through.
+  if have_node; then
+    node -e "
+      const css = require('fs').readFileSync('web/public/styles.css', 'utf8');
+      const m = css.match(/\.chat-msg\.chat-msg-menu\s+\.chat-text\s*\{([^}]*)\}/);
+      if (!m) { console.error('selector missing'); process.exit(1); }
+      const body = m[1];
+      const checks = [
+        [/background:\s*transparent/, 'background: transparent'],
+        [/border-left:\s*none/,        'border-left: none'],
+      ];
+      for (const [re, label] of checks) {
+        if (!re.test(body)) { console.error('missing: ' + label); process.exit(1); }
+      }
+    " >/dev/null 2>&1 \
+      && pass "styles.css: menu .chat-text flattened (no nested card)" \
+      || fail "styles.css: menu .chat-text flattened (no nested card)"
+  else
+    skip "styles.css: menu .chat-text flattened (no host node)"
+  fi
   # When a menu is answered, the inline option buttons collapse to a
   # single "✓ Picked [N] <label>" line — no disabled-buttons graveyard
   # cluttering the chat scroll.

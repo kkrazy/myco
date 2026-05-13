@@ -111,6 +111,78 @@ const no = (m, why) => { fail++; console.log(`  ✗ ${m}${why ? ` — ${why}` : 
   const chatHidden = await page.evaluate(() => document.getElementById('chatpane').hidden);
   chatHidden ? ok('chatpane hidden after close') : no('chatpane hidden after close');
 
+  // 4b. Incremental chat append — appendChatMessage and _postClaudeStreamToChat
+  // must NOT wipe-and-rebuild #chat-messages on every new row. Regression:
+  // a Claude turn that streams N text blocks used to tear down every prior
+  // row N times (innerHTML rewrite), re-parsing markdown, re-rendering
+  // mermaid, and flashing the whole chat — visible to the user as the chat
+  // pane "reloading entire history from time to time".
+  console.log('── Browser: incremental chat append ──');
+  await page.evaluate(() => setChatPane(true));
+  const inc = await page.evaluate(() => {
+    state.chatMessages = [];
+    const list = document.getElementById('chat-messages');
+    list.innerHTML = '';
+    applyChatHistory([
+      { user: 'alice', text: 'first', ts: '2026-05-13T00:00:00Z' },
+      { user: 'bob',   text: 'second', ts: '2026-05-13T00:00:01Z' },
+    ]);
+    const beforeCount = list.children.length;
+    // Sentinel marks the existing rows; if the list gets innerHTML'd these
+    // attributes disappear because the nodes are torn down and rebuilt.
+    Array.from(list.children).forEach((el, i) => { el.dataset.sentinel = 's' + i; });
+    // Live 'chat' WS frame path
+    appendChatMessage({ user: 'alice', text: 'third', ts: '2026-05-13T00:00:02Z' });
+    // Streaming assistant text path
+    _postClaudeStreamToChat('partial reply', 'uuid-stream-1');
+    const after = Array.from(list.children).map((el) => ({
+      sentinel: el.dataset.sentinel || null,
+      text: el.textContent || '',
+    }));
+    return { beforeCount, after };
+  });
+  inc.beforeCount === 2 ? ok('seed: 2 rows after applyChatHistory') : no('seed row count', inc.beforeCount);
+  inc.after.length === 4 ? ok('list has 4 rows after 2 appends') : no('post-append row count', inc.after.length);
+  inc.after[0].sentinel === 's0' && inc.after[1].sentinel === 's1'
+    ? ok('original rows preserved (sentinel intact — no full rebuild)')
+    : no('original rows torn down on append', JSON.stringify(inc.after.map((a) => a.sentinel)));
+  inc.after[2] && inc.after[2].text.includes('third') ? ok('appendChatMessage adds new row at tail') : no('third row text', inc.after[2] && inc.after[2].text);
+  inc.after[3] && inc.after[3].text.includes('partial reply') ? ok('_postClaudeStreamToChat adds new row at tail') : no('fourth row text', inc.after[3] && inc.after[3].text);
+
+  // 4c. Prior menu rows must lose their active picker when a new menu (or
+  // menu-auto) lands. Without the surgical deactivation pass, a stale menu
+  // would remain clickable and could fire a pick against a dialog Claude
+  // has long since moved past.
+  console.log('── Browser: prior menu deactivates on new menu append ──');
+  const menuT = await page.evaluate(() => {
+    state.chatMessages = [];
+    const list = document.getElementById('chat-messages');
+    list.innerHTML = '';
+    const m1 = {
+      user: 'claude', text: 'menu-1', ts: '2026-05-13T00:01:00Z',
+      meta: { kind: 'menu', menu: { question: 'Q1', options: [{ n: 1, label: 'A' }, { n: 2, label: 'B' }], hash: 'h1' } },
+    };
+    const m2 = {
+      user: 'claude', text: 'menu-2', ts: '2026-05-13T00:01:01Z',
+      meta: { kind: 'menu', menu: { question: 'Q2', options: [{ n: 1, label: 'X' }], hash: 'h2' } },
+    };
+    applyChatHistory([m1]);
+    const initialOptCount = document.querySelectorAll('.chat-menu-opt').length;
+    appendChatMessage(m2);
+    return {
+      initialOptCount,
+      rowCount: list.children.length,
+      firstHasButtons: !!list.children[0].querySelector('.chat-menu-opt'),
+      firstHasResolved: !!list.children[0].querySelector('.chat-menu-resolved'),
+      secondHasButtons: !!list.children[1].querySelector('.chat-menu-opt'),
+    };
+  });
+  menuT.initialOptCount === 2 ? ok('initial menu rendered with 2 option buttons') : no('initial menu buttons', menuT.initialOptCount);
+  menuT.rowCount === 2 ? ok('chat has both menu rows') : no('menu rowCount', menuT.rowCount);
+  !menuT.firstHasButtons ? ok('prior menu buttons removed after new menu append') : no('prior menu still clickable');
+  menuT.firstHasResolved ? ok('prior menu shows (no longer active) placeholder') : no('prior menu missing resolved label');
+  menuT.secondHasButtons ? ok('new menu has active option buttons') : no('new menu missing buttons');
+
   // 5. Layout — sidebar + main grid
   console.log('── Browser: layout ──');
   const layout = await page.evaluate(() => {

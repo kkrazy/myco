@@ -2890,9 +2890,18 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 /* Card header — the lead + question line(s). Subtle divider below it
    visually separates the header from the option rows. */
+/* Flatten the inner from-claude bubble when it sits inside a menu card —
+   otherwise the green-tinted .chat-text background + left border draws a
+   nested card inside the outer menu card, doubling padding and wasting
+   horizontal space. The outer .chat-msg-menu IS the card; the text is
+   just its header (separated from the option rows by a subtle divider). */
 .chat-msg.chat-msg-menu .chat-text {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  margin: 0 0 8px 0;
+  padding: 0 0 8px 0;
   border-bottom: 1px solid #21262d;
 }
 .chat-menu-opts {
