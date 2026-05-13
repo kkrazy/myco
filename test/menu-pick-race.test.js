@@ -276,6 +276,41 @@ t('pick: WITH trailing CR when no wizard tab bar (trust/permission dialogs)', ()
   assert.deepStrictEqual(session.writes, ['1\r'], 'non-wizard pick keeps the commit CR');
 });
 
+t('pick: RICH wizard variant needs Enter — digit + CR', () => {
+  // The plan-mode interview wizard has two variants. The RICH variant
+  // shows expanded option content (pros/cons table, notes affordance)
+  // and its footer reads "Enter to select · ↑/↓ to navigate · n to
+  // add notes · Tab to switch questions · Esc to cancel". In this
+  // variant the digit alone MOVES the cursor but does NOT commit —
+  // Enter is required to confirm and advance. Without CR, the user
+  // clicks an option and the wizard sits on the same screen until a
+  // refresh. Verified mycobeta demo010 (2026-05-13): "Which
+  // architecture" option 1 click sent bare "1" → wizard frozen.
+  const sid = 'sess-wizard-pick-rich';
+  const opts = [{ n: 1, label: 'Monolith' }, { n: 2, label: 'Microservices' }, { n: 3, label: 'Serverless' }];
+  const menu = { hash: 'h_arch', question: 'Which architecture?', options: opts, kind: 'plan' };
+  seedStore(sid, [menu]);
+  const session = makeMockSession();
+  session.pendingMenu = menu;
+  session.headless = fakeHeadlessWithLines([
+    '───────────────────────────────────────',
+    '←  ☒ Language  ☒ Framework  ☐ Architecture  ✔ Submit  →',
+    '',
+    'Which architecture should the order-processing service use?',
+    '',
+    '❯ 1. Monolith',
+    '  Pros: simple to deploy',
+    '  2. Microservices',
+    '  3. Serverless',
+    '',
+    'Notes: press n to add notes',
+    '',
+    'Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel',
+  ]);
+  ptyMod.handleMenuPick(sid, session, 1, 'h_arch');
+  assert.deepStrictEqual(session.writes, ['1\r'], 'rich wizard pick must include CR — Enter is the commit key');
+});
+
 t('pick: missing headless safely falls back to digit + CR', () => {
   // Defensive: if _isWizardActive can't read the headless (no session.
   // headless, throw, etc.), we should treat it as not-wizard so the

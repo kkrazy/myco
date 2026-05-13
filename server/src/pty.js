@@ -14,7 +14,7 @@ const {
   SPINNER_RUNNING_RE, SPINNER_DURATION_RE,
   MULTI_SELECT_CURSOR_RE, SUBMIT_ROW_RE, MENU_OPT_LINE_RE,
   STATUS_TOKEN_TRAILER_RE, STATUS_INTERRUPT_RE, EFFORT_CHIP_RE,
-  WIZARD_TAB_BAR_RE,
+  WIZARD_TAB_BAR_RE, WIZARD_RICH_FOOTER_RE,
 } = require('./pty-patterns');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
@@ -425,22 +425,40 @@ function handleMenuPick(sessionId, session, n, hash) {
   //     the Submit tab. "\r" landed on the Submit tab's default cursor
   //     position (Cancel) → wizard returned "user rejected".
   //
-  // Detection by WIZARD_TAB_BAR_RE in the viewport. Non-wizard dialogs
-  // (trust prompt, permission prompt, plan-confirm) all still need the
-  // CR — those don't auto-advance on digit alone.
-  const wizard = _isWizardActive(session);
-  const bytes = wizard ? String(n) : String(n) + '\r';
+  // Detection by WIZARD_TAB_BAR_RE in the viewport. BUT — the wizard
+  // has two rendering variants:
+  //
+  //   SIMPLE  → digit auto-commits + advances; CR LEAKS. Send bare digit.
+  //   RICH    → digit moves cursor, Enter commits + advances. Send "n\r".
+  //
+  // Detected by the rich variant's distinctive footer (the "n to add
+  // notes" / "Tab to switch questions" affordances are unique to it).
+  // Non-wizard dialogs (trust prompt, permission prompt, plan-confirm)
+  // all still need CR. Verified on mycobeta demo010 (2026-05-13):
+  // simple wizard's "2\r" skipped Database; rich wizard's bare "1"
+  // moved cursor but never committed.
+  const wizardInfo = _detectWizard(session);
+  const useCr = !wizardInfo.simple;     // true when no wizard OR rich wizard
+  const bytes = useCr ? String(n) + '\r' : String(n);
   session.write(bytes);
-  console.log(`[menu-pick] ${sessionId} wrote ${JSON.stringify(bytes)} wizard=${wizard}`);
+  console.log(`[menu-pick] ${sessionId} wrote ${JSON.stringify(bytes)} wizard=${wizardInfo.kind}`);
   session.pendingMenu = null;
 }
 
-// True if the plan-mode interview wizard's tab bar
-// (← ☒ Step ☐ Step … →) is somewhere in the visible viewport. Used to
-// gate the trailing-CR-on-pick fix: with the wizard, digit alone
-// auto-commits and advances; CR after lands on the next screen.
-function _isWizardActive(session) {
-  if (!session || !session.headless || !session.headless.buffer) return false;
+// Classify the current dialog into one of:
+//
+//   { kind: 'none',   simple: false }  — no wizard on screen, send digit+CR
+//   { kind: 'simple', simple: true  }  — wizard tab bar present, NO rich footer,
+//                                         send bare digit (R-02)
+//   { kind: 'rich',   simple: false }  — wizard tab bar present AND rich
+//                                         footer ("n to add notes" / "Tab to
+//                                         switch questions"); send digit+CR
+//                                         because Enter is needed to commit.
+function _detectWizard(session) {
+  if (!session || !session.headless || !session.headless.buffer) {
+    return { kind: 'none', simple: false };
+  }
+  let tabBar = false, richFooter = false;
   try {
     const buf = session.headless.buffer.active;
     const rows = session.headless.rows;
@@ -448,11 +466,19 @@ function _isWizardActive(session) {
       const line = buf.getLine(buf.viewportY + i);
       if (!line) continue;
       const txt = line.translateToString(true);
-      if (WIZARD_TAB_BAR_RE.test(txt)) return true;
+      if (!tabBar && WIZARD_TAB_BAR_RE.test(txt)) tabBar = true;
+      if (!richFooter && WIZARD_RICH_FOOTER_RE.test(txt)) richFooter = true;
+      if (tabBar && richFooter) break;
     }
   } catch {}
-  return false;
+  if (!tabBar) return { kind: 'none', simple: false };
+  if (richFooter) return { kind: 'rich', simple: false };
+  return { kind: 'simple', simple: true };
 }
+
+// Back-compat alias: _isWizardActive returns a boolean for callers that
+// just need a single yes/no. The richer state comes from _detectWizard.
+function _isWizardActive(session) { return _detectWizard(session).kind !== 'none'; }
 
 // Multi-select half of menu-pick: TOGGLE one checkbox without submitting.
 // Claude code's multi-select dialog responds to a bare digit (no CR) by

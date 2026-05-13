@@ -33,12 +33,12 @@ Ink's `SelectInput` widget. Digit moves the cursor; Enter commits.
 - **test.sh sentinel:** "pty.js: handleMenuPick gates trailing CR on
   `_isWizardActive`"
 
-## R-02 — Single-select pick INSIDE the plan-mode wizard → `digit` only
+## R-02 — Single-select pick INSIDE the plan-mode wizard (SIMPLE variant) → `digit` only
 
 The plan-mode interview wizard renders a breadcrumb tab bar
-(`← ☒ Step ☐ Step ✔ Submit →`) and auto-commits + auto-advances on a
-single digit. The wizard treats Enter as "advance past this screen,"
-so a trailing CR leaks to the *next* screen.
+(`← ☒ Step ☐ Step ✔ Submit →`). The SIMPLE variant auto-commits +
+auto-advances on a single digit. The wizard treats Enter as "advance
+past this screen," so a trailing CR leaks to the *next* screen.
 
 - **Send:** `String(n)` (bare digit, no CR)
 - **Why (observed mycobeta demo010, 2026-05-13):**
@@ -48,12 +48,37 @@ so a trailing CR leaks to the *next* screen.
     `"\r"` landed on the Submit tab's default cursor (Cancel) and
     the wizard returned "user rejected".
 - **Detection:** `WIZARD_TAB_BAR_RE` matches `← [^]* ☐|☒|✔ [^]* →`
-  somewhere in the viewport.
-- **Code:** `server/src/pty.js handleMenuPick` wizard branch via
-  `_isWizardActive(session)`
+  AND the rich-footer regex `WIZARD_RICH_FOOTER_RE` does NOT match.
+- **Code:** `server/src/pty.js handleMenuPick` via `_detectWizard()`
+  returning `kind: 'simple'`
 - **Test:** `test/menu-pick-race.test.js`
   → "pick: NO trailing CR when the wizard tab bar is visible"
 - **test.sh sentinel:** "pty.js: `_isWizardActive` helper defined"
+
+## R-02b — Single-select pick INSIDE the RICH wizard variant → `digit + "\r"`
+
+The rich variant of the plan-mode interview wizard expands each
+option inline (description, pros/cons table, optional Notes field).
+Footer reads "Enter to select · ↑/↓ to navigate · n to add notes ·
+Tab to switch questions · Esc to cancel". In this variant the digit
+key MOVES the cursor and renders the option's detail panel — it
+does NOT commit. Enter is required.
+
+- **Send:** `String(n) + "\r"`
+- **Why (observed mycobeta demo010, 2026-05-13):**
+  - "Which architecture should the order-processing service use?"
+    click on option 1 sent bare `"1"` → cursor moved to Monolith
+    and rendered its detail panel; the wizard sat on the same screen
+    indefinitely. User reported "click on the option didn't submit
+    the selection."
+- **Detection:** `WIZARD_TAB_BAR_RE` matches AND `WIZARD_RICH_FOOTER_RE`
+  (`/\bn\s+to\s+add\s+notes\b|\bTab\s+to\s+switch\s+questions\b/i`)
+  matches — both signals required to flip back to digit+CR.
+- **Code:** `server/src/pty.js _detectWizard()` returning `kind: 'rich'`.
+- **Test:** `test/menu-pick-race.test.js`
+  → "pick: RICH wizard variant needs Enter — digit + CR"
+- **test.sh sentinel:** "pty-patterns.js: WIZARD_RICH_FOOTER_RE defined" +
+  "pty.js: _detectWizard distinguishes simple vs rich wizard"
 
 ## R-03 — Multi-select toggle → bare `digit`
 

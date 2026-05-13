@@ -1327,7 +1327,7 @@ test_chat_window() {
   # row; stale picks drop the PTY write.
   if have_node; then
     if node test/menu-pick-race.test.js >/dev/null 2>&1; then
-      pass "test/menu-pick-race.test.js (11 cases)"
+      pass "test/menu-pick-race.test.js (12 cases)"
     else
       fail "test/menu-pick-race.test.js — re-run with 'node test/menu-pick-race.test.js' to see failures"
     fi
@@ -1489,6 +1489,19 @@ test_chat_window() {
   grep -qF 'function _isWizardActive' server/src/pty.js \
     && pass "pty.js: _isWizardActive helper defined" \
     || fail "pty.js: _isWizardActive missing — wizard gate broken"
+  # Regression: the plan-mode interview wizard has TWO variants. SIMPLE
+  # auto-commits on digit (drop trailing CR — R-02). RICH expands each
+  # option inline ("n to add notes", "Tab to switch questions") and
+  # requires Enter to commit (KEEP trailing CR). Verified mycobeta
+  # demo010 (2026-05-13): "Which architecture" rich-wizard click sent
+  # bare "1" → cursor moved, wizard never advanced. Now distinguished
+  # by WIZARD_RICH_FOOTER_RE.
+  grep -qF 'WIZARD_RICH_FOOTER_RE' server/src/pty-patterns.js \
+    && pass "pty-patterns.js: WIZARD_RICH_FOOTER_RE defined" \
+    || fail "pty-patterns.js: WIZARD_RICH_FOOTER_RE missing — rich wizard picks won't commit"
+  grep -qF 'function _detectWizard' server/src/pty.js \
+    && pass "pty.js: _detectWizard distinguishes simple vs rich wizard" \
+    || fail "pty.js: _detectWizard missing — simple/rich variants not separated"
   # INTERACTION_RULES.md is the single-source-of-truth for claude code
   # TUI ⇄ myco contract — every rule maps to a regex/handler + a test +
   # a sentinel in this file. When you discover a new failure mode on

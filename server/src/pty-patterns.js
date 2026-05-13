@@ -315,6 +315,37 @@ const TUI_KEY_HINT_RE =
 const WIZARD_TAB_BAR_RE =
   /←[^←→]*[☐☒✔✓◯●xX][^←→]*[☐☒✔✓◯●xX][^←→]*→/;
 
+// Plan-mode interview wizard has TWO rendering variants:
+//
+//   SIMPLE — footer: "Enter to select · Tab/Arrow keys to navigate ·
+//                     Esc to cancel"
+//     The digit key both selects AND commits — one keystroke advances
+//     to the next question. Trailing CR LEAKS to the next screen and
+//     presses whatever sits under the default cursor (per R-02:
+//     skipping the next question entirely or landing on Cancel).
+//     Send bare digit; no CR.
+//
+//   RICH — footer: "Enter to select · ↑/↓ to navigate · n to add
+//                   notes · Tab to switch questions · Esc to cancel"
+//     Each option expands inline (description, pros/cons table,
+//     optional Notes field). The digit MOVES the cursor and renders
+//     the option's detail panel — it does NOT commit. Enter is
+//     required to confirm + advance. Without CR, the user clicks an
+//     option in the chat picker and the wizard appears to do nothing
+//     (cursor moved but no advance). Verified on mycobeta demo010
+//     2026-05-13: user clicked "Which architecture" option 1 → server
+//     wrote "1" → wizard sat on the same screen until rebuilt.
+//     Send digit + CR.
+//
+// Distinguishing marker: the RICH footer contains "n to add notes"
+// (the notes-affordance is unique to the rich variant) AND/OR
+// "Tab to switch questions" (the rich variant moves between top-level
+// questions via Tab, while the simple variant lets the cursor walk
+// option lists with arrows alone). Either string in isolation is a
+// strong signal — match with `|`.
+const WIZARD_RICH_FOOTER_RE =
+  /\bn\s+to\s+add\s+notes\b|\bTab\s+to\s+switch\s+questions\b/i;
+
 // ───────────────────────────────────────────────────────────────────────
 // pty.handleMenuSubmit — arrow-navigating to the Submit row of a
 // multi-select dialog. We must count the cursor → Submit row distance
@@ -490,4 +521,5 @@ module.exports = {
   STATUS_INTERRUPT_RE,
   EFFORT_CHIP_RE,
   MENU_OPT_LINE_RE,
+  WIZARD_RICH_FOOTER_RE,
 };
