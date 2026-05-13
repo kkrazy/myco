@@ -27,7 +27,11 @@ const isDone    = (s) => SPINNER_DONE_RE.test(s);
 
 console.log('── spinner regex: -ing vs -ed ──');
 
-// Active (-ing): drives the typing indicator.
+// Active (-ing): drives the typing indicator. The teardrop-asterisk
+// (✢=U+2722) and six-pointed/asterisk variants (✶ ✷ ✸ ✱) were missing
+// from the original glyph class — a turn like "✢ Writing exportRoutes…"
+// silently failed to register and the chat-pane status went blank
+// mid-phase.
 for (const text of [
   '· Moonwalking',
   '✽ Crunching',
@@ -37,6 +41,12 @@ for (const text of [
   '· Cerebrating for 12s',
   '· Cerebrating for 1m 5s',
   '✽ Cerebrating for 12s · ↓ 3.4k tokens',
+  '✢ Writing exportRoutes',
+  '✢ Writing exportRoutes for 1m 40s · ↓ 7.6k tokens',
+  '✣ Pondering',
+  '✱ Brewing',
+  '✶ Synthesizing for 8s',
+  '✼ Composing',
 ]) {
   t(`ACTIVE: ${JSON.stringify(text)}`, () => {
     assert.strictEqual(isRunning(text), true, `should match running: ${text}`);

@@ -116,7 +116,13 @@ class PtySession extends EventEmitter {
     try {
       const buf = this.headless.buffer.active;
       const rows = this.headless.rows;
-      for (let i = rows - 1; i >= Math.max(0, rows - 12); i--) {
+      // Walk from the bottom up to find the most recent spinner line.
+      // The attached detail block (corner ⎿ + indented checklist) is
+      // deliberately ignored — only the top spinner row goes to the
+      // chat-pane status strip. Look further than the original 12-row
+      // window (20 rows) since the detail block can push the spinner
+      // higher up the viewport.
+      for (let i = rows - 1; i >= Math.max(0, rows - 20); i--) {
         const line = buf.getLine(buf.viewportY + i);
         if (!line) continue;
         const text = line.translateToString(true).trim();

@@ -75,8 +75,17 @@
         </div>
       </div>
       <div id="chatpane" class="chat-main-view" hidden>
+        <!-- Drag handle on the chatpane's LEFT edge (desktop-only). The
+             chatpane is anchored to the right edge of #terminal-pane;
+             dragging left grows it, dragging right shrinks it. Width
+             persisted in localStorage. -->
+        <div id="chatpane-resize" title="Drag to resize"></div>
         <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
         <div id="chat-messages"></div>
+        <div id="claude-typing" class="claude-typing" hidden>
+          <span class="claude-typing-dots"><span></span><span></span><span></span></span>
+          <span class="claude-typing-label"></span>
+        </div>
         <div id="chat-autocomplete" hidden></div>
         <form id="chat-form" autocomplete="off">
           <textarea id="chat-input" rows="3" placeholder="Message…  (Ctrl/⌘+Enter to send · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>

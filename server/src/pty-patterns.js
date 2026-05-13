@@ -224,11 +224,23 @@ const MODE_BYPASS_RE = /bypass permissions/i;
 //
 // Duration tail tolerates compound formats: "25s", "1m 25s", "2h 5m".
 //
-// Glyph class: ✻ ✦ ✺ ✽ · • ▮ ⏳ (Unicode block ✻=U+273B, ✽=U+273D,
-// the rest are common bullet/middle-dot/etc.).
-const SPINNER_DURATION_RE = /[✻✦✺✽·•▮⏳]\s*[A-Z][a-z]+ing\s+for\s+(?:\d+h\s+)?(?:\d+m\s+)?\d+s\b/;
-const SPINNER_RUNNING_RE  = /[✻✦✺✽·•▮⏳]\s*[A-Z][a-z]+ing\b/;
-const SPINNER_DONE_RE     = /[✻✦✺✽·•▮⏳]\s*[A-Z][a-z]+ed\s+for\s+(?:\d+h\s+)?(?:\d+m\s+)?\d+s\b/;
+// Glyph class — covers the full set claude cycles through. The
+// teardrop-asterisk (✢=U+2722) and friends were missing initially,
+// so a turn like "✢ Writing exportRoutes…" never registered as a
+// spinner and the chat-pane status went silent mid-phase. Sources:
+//   - U+2731..U+273C dingbat asterisks  (✱ ✲ ✳ ✴ ✵ ✶ ✷ ✸ ✹ ✺ ✻ ✼)
+//   - U+2722..U+2725 teardrop/balloon/club asterisks  (✢ ✣ ✤ ✥)
+//   - U+273D..U+273F other dingbat stars/florets       (✽ ✾ ✿)
+//   - Plus bullets/dots claude has used historically:   · • ▮ ⏳ ✦ ✺
+const SPINNER_GLYPH_CLASS = '[✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿✢✣✤✥✦·•▮⏳]';
+const SPINNER_DURATION_RE = new RegExp(`${SPINNER_GLYPH_CLASS}\\s*[A-Z][a-z]+ing\\s+for\\s+(?:\\d+h\\s+)?(?:\\d+m\\s+)?\\d+s\\b`);
+const SPINNER_RUNNING_RE  = new RegExp(`${SPINNER_GLYPH_CLASS}\\s*[A-Z][a-z]+ing\\b`);
+const SPINNER_DONE_RE     = new RegExp(`${SPINNER_GLYPH_CLASS}\\s*[A-Z][a-z]+ed\\s+for\\s+(?:\\d+h\\s+)?(?:\\d+m\\s+)?\\d+s\\b`);
+
+// (Multi-line continuation block — ⎿ corner + indented checklist rows
+// — was added then reverted: the chat-pane status strip only shows the
+// top spinner line. The detail block is still visible to anyone who
+// flips to the live xterm view.)
 
 // Claude's welcome / resume banner (inside a box-drawn frame). We don't
 // rely on this for routing yet, but it's handy when classifying snapshot

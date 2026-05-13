@@ -432,35 +432,37 @@ test_new_session_readonly() {
   grep -qF '_deactivatePriorMenuRows' web/public/app.js \
     && pass "app.js: prior menu rows are surgically deactivated on new menu append" \
     || fail "app.js: missing _deactivatePriorMenuRows — new menu won't deactivate older clickable menus"
-  # Regression: the claude-typing indicator must be OUT of the chatpane
-  # flex flow so its show/hide toggle never resizes #chat-messages. The
-  # earlier design used a fixed-height flex sibling whose display:none ↔
-  # display:flex transition resized chat-messages by 30px — mobile users
-  # perceived this as the chat content "jumping up and down" on every
-  # turn start/end. Fix: absolute-position the indicator just above
-  # #chat-form (same pattern as #chat-autocomplete) and reserve the
-  # overlay zone with permanent padding-bottom on #chat-messages.
-  grep -qF "form.insertBefore(host, form.firstChild)" web/public/app.js \
-    && pass "app.js: typing indicator mounted inside #chat-form (out of flex flow)" \
-    || fail "app.js: typing indicator no longer mounted inside chat-form — will reflow on toggle"
-  # Negative guard: _renderClaudeTyping must NOT scroll-anchor. The
-  # earlier scroll-anchor was a workaround for the now-removed reflow;
-  # leaving it in would yank a scrolled-up reader to the bottom on every
-  # status update because there's no more wasAtBottom gate to guard it.
+  # Regression: the claude-typing indicator lives in the chatpane flex
+  # column as a PERMANENT-SLOT sibling of #chat-messages and #chat-form.
+  # The slot is always 30px tall — `.claude-typing[hidden]` keeps
+  # `display: flex` plus `visibility: hidden` so the chat-messages
+  # flex slot never resizes across the indicator's open/closed/text-
+  # change cycles. Earlier designs (display:none toggle, absolute
+  # overlay above chat-form) each let users perceive the chat content
+  # moving up/down on every spinner tick — this fixed-slot layout is
+  # the durable fix.
+  grep -qF 'id="claude-typing"' web/public/index.html \
+    && pass "index.html: #claude-typing declared as a static element" \
+    || fail "index.html: #claude-typing missing — JS-only mount path can race the first spinner tick"
+  if awk '/^function _renderClaudeTyping\(/,/^}$/' web/public/app.js | grep -q 'createElement\|insertBefore'; then
+    fail "app.js: _renderClaudeTyping still creates/relocates the indicator at runtime — declare it statically in HTML so the slot is reserved from page load"
+  else
+    pass "app.js: _renderClaudeTyping is a pure update (no DOM creation)"
+  fi
   if awk '/^function _renderClaudeTyping\(/,/^}$/' web/public/app.js | grep -q 'scrollChatToLatest\|isChatAtBottom'; then
-    fail "app.js: _renderClaudeTyping still scroll-anchors — drop it now that the indicator is a floating overlay"
+    fail "app.js: _renderClaudeTyping still scroll-anchors — the permanent flex slot makes that unnecessary"
   else
     pass "app.js: _renderClaudeTyping is layout-neutral (no scroll-anchor needed)"
   fi
-  grep -Pzoq '\.claude-typing\s*\{[^}]*position:\s*absolute' web/public/styles.css \
-    && pass "css: .claude-typing is absolutely positioned" \
-    || fail "css: .claude-typing is not absolutely positioned — will still reflow chat on toggle"
+  grep -Pzoq '\.claude-typing\s*\{[^}]*flex:\s*0\s+0\s+30px' web/public/styles.css \
+    && pass "css: .claude-typing reserves a permanent 30px flex slot" \
+    || fail "css: .claude-typing slot isn't a fixed 30px flex item — chat content will move on spinner toggles"
   grep -Pzoq '\.claude-typing\[hidden\]\s*\{[^}]*visibility:\s*hidden' web/public/styles.css \
-    && pass "css: .claude-typing[hidden] uses visibility (not display:none)" \
-    || fail "css: .claude-typing[hidden] still toggles display — defeats the floating overlay"
-  grep -Pzoq '#chat-messages\s*\{[^}]*padding:\s*12px\s+14px\s+42px' web/public/styles.css \
-    && pass "css: #chat-messages reserves overlay zone via padding-bottom" \
-    || fail "css: #chat-messages missing padding-bottom reservation for typing-indicator overlay"
+    && pass "css: .claude-typing[hidden] uses visibility (slot stays reserved)" \
+    || fail "css: .claude-typing[hidden] no longer uses visibility:hidden — slot will collapse and reflow chat"
+  grep -qF 'contain: layout style paint' web/public/styles.css \
+    && pass "css: .claude-typing is contained (glyph/text changes don't reflow siblings)" \
+    || fail "css: .claude-typing missing CSS containment"
   grep -qF '.chat-msg .chat-text blockquote' web/public/styles.css \
     && pass "css: chat-text blockquote styled" \
     || fail "css: chat-text blockquote not styled"
@@ -598,9 +600,15 @@ test_new_session_readonly() {
     grep -qF 'host.scrollIntoView(' \
     && fail "app.js: _renderClaudeTyping still calls scrollIntoView (yanks chat viewport on every tick)" \
     || pass "app.js: _renderClaudeTyping no longer auto-scrolls on tick"
-  grep -qF 'height: 30px;' web/public/styles.css \
-    && pass "css: claude-typing has fixed height (no reflow on status update)" \
-    || fail "css: claude-typing missing fixed height — status updates will reflow chat"
+  # Fixed slot height. Was `height: 30px` historically; the permanent-
+  # flex-slot design uses `flex: 0 0 30px` (same visual outcome, gives
+  # the flex parent an explicit basis that won't grow/shrink). Either
+  # spelling counts as "fixed".
+  if grep -qE 'flex:\s*0\s+0\s+30px|height:\s*30px' web/public/styles.css; then
+    pass "css: claude-typing has fixed slot dimensions (no reflow on status update)"
+  else
+    fail "css: claude-typing missing fixed height — status updates will reflow chat"
+  fi
   grep -qF '.claude-typing-label' web/public/styles.css \
     && pass "css: claude-typing-label has overflow-ellipsis rules" \
     || fail "css: claude-typing-label not styled"

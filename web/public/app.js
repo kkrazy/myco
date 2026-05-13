@@ -39,7 +39,12 @@ const state = {
   // Discussion state, scoped per active session. Cleared on switch.
   chatMessages: [],
   chatUser: null,
-  chatPaneVisible: window.innerWidth > 900,
+  // Default false on all viewports — chat is a toggle-on view now, not
+  // a default-on sidebar. Earlier `window.innerWidth > 900` left the
+  // bit set to true on desktop boot, so the very first click on the
+  // 💬 icon computed `setChatPane(!true)` → setChatPane(false), which
+  // routes to showTerminalView() and the chat appears never to open.
+  chatPaneVisible: false,
   shareMode: false, // kept for compat — no longer gates UI
   // Per-session file explorer state. Cleared when session changes.
   files: {
@@ -201,11 +206,12 @@ const IS_TOUCH_DEVICE = (() => {
   } catch { return false; }
 })();
 
-// The main pane has seven mutually-exclusive sub-panes. Always hide the
+// The main pane has six mutually-exclusive sub-panes. Always hide the
 // others when switching; otherwise the panes stack and the inactive one
-// disappears behind / beside the active one. `chatpane` joined this set
-// when chat became a top-level view (was a right-aside sidebar before).
-const MAIN_PANE_IDS = ['terminal-wrap', 'conversation-wrap', 'files-wrap', 'chatpane', 'plan-wrap', 'arch-wrap', 'test-wrap'];
+// disappears behind / beside the active one. Chat is NOT in this list —
+// it's a left-sidebar overlay (desktop) / full-pane overlay (mobile)
+// that can coexist with whatever main-pane view is active underneath.
+const MAIN_PANE_IDS = ['terminal-wrap', 'conversation-wrap', 'files-wrap', 'plan-wrap', 'arch-wrap', 'test-wrap'];
 
 function _hideMainPaneSiblings(keep) {
   for (const id of MAIN_PANE_IDS) {
@@ -217,10 +223,6 @@ function _hideMainPaneSiblings(keep) {
     state.files.visible = false;
     document.getElementById('btn-files')?.classList.remove('active');
   }
-  if (keep !== 'chatpane') {
-    state.chatPaneVisible = false;
-    document.getElementById('btn-chat')?.classList.remove('active');
-  }
   // Clear the artifact-toggle active class for any view that's no longer up.
   for (const t of ['plan', 'arch', 'test']) {
     if (keep === t + '-wrap') continue;
@@ -229,6 +231,11 @@ function _hideMainPaneSiblings(keep) {
       state.artifactView.active = null;
     }
   }
+  // Mobile: the chatpane covers the whole pane (no side-by-side), so a
+  // switch to another view from the chrome cluster has to close chat
+  // too — otherwise the user clicks plan/arch/test and just sees chat.
+  // Desktop chat is a 320px sidebar; it coexists with the other views.
+  if (window.innerWidth <= 900 && state.chatPaneVisible) setChatPane(false);
 }
 
 function showConversationView() {
@@ -1250,27 +1257,31 @@ function setSidebar(collapsed) {
 }
 
 function setChatPane(visible) {
+  const pane = document.getElementById('chatpane');
+  if (!pane) return;
+  pane.hidden = !visible;
+  state.chatPaneVisible = !!visible;
+  document.getElementById('btn-chat')?.classList.toggle('active', !!visible);
+  // Push the underlying main-pane view (terminal / conv / files / plan
+  // / arch / test) to the right of the chat sidebar on desktop. Mobile
+  // sidebar fills the pane, so no shift is needed there.
+  const main = document.getElementById('terminal-pane');
+  if (main) main.classList.toggle('chat-open', !!visible && window.innerWidth > 900);
   if (visible) {
-    // Switching INTO chat — hide every other main-pane view, mark
-    // btn-chat active. Mobile: also dismiss the sidebar overlay so the
-    // chat view isn't covered by it.
-    _hideMainPaneSiblings('chatpane');
-    document.getElementById('chatpane').hidden = false;
-    state.chatPaneVisible = true;
-    document.getElementById('btn-chat')?.classList.add('active');
+    // Mobile: chat takes the full pane — dismiss the session sidebar
+    // overlay so it doesn't sit on top of the chat. Desktop chat is
+    // only ~320px wide so the session sidebar can stay open beside it.
     if (window.innerWidth <= 900) {
       document.getElementById('sidebar').hidden = true;
       document.getElementById('btn-expand').hidden = false;
     }
     // List was 0-height while hidden — pin to the bottom now it has dimensions.
     scrollChatToLatest();
-  } else {
-    // Closing chat returns the user to the terminal (the default
-    // primary view). Switching directly to another chrome button
-    // skips this branch — _hideMainPaneSiblings clears chat state.
-    showTerminalView();
   }
   updateChatButton();
+  // The xterm shrunk/grew because the chatpane sidebar's edge moved
+  // (it overlays the left portion of #terminal-pane). Refit so the
+  // terminal redraws at the new width.
   if (state.fitAddon) requestAnimationFrame(() => state.fitAddon.fit());
 }
 
@@ -2189,38 +2200,22 @@ function _postClaudeStreamToChat(text, uuid) {
 }
 
 function _renderClaudeTyping() {
+  // #claude-typing is declared statically in index.html as a direct
+  // child of #chatpane (sibling of #chat-messages and #chat-form).
+  // The 30px flex slot is permanently reserved via CSS (display:flex
+  // is preserved even when [hidden] is set, with visibility:hidden
+  // hiding the visuals). All this function does is flip [hidden] and
+  // update the label text — zero side effects on chat layout.
+  const host = document.getElementById('claude-typing');
+  if (!host) return;
   const status = state.claudeStatusLine || '';
   const visible = state.awaitingClaude || !!status;
-  let host = document.getElementById('claude-typing');
-  if (!host) {
-    // Mounted INSIDE #chat-form (which is position:relative) and
-    // absolutely positioned via CSS to float just above chat-form's
-    // top edge — same pattern #chat-autocomplete uses. Out of flex
-    // flow means show/hide toggles never resize the #chat-messages
-    // slot, so the chat content can't "jump up and down" on mobile
-    // when a turn starts or ends. #chat-messages carries a permanent
-    // padding-bottom equal to the strip height so the latest message
-    // is never covered by the overlay.
-    const form = document.getElementById('chat-form');
-    if (!form) return;
-    host = document.createElement('div');
-    host.id = 'claude-typing';
-    host.className = 'claude-typing';
-    host.hidden = !visible;
-    host.innerHTML = '<span class="claude-typing-dots"><span></span><span></span><span></span></span> <span class="claude-typing-label"></span>';
-    form.insertBefore(host, form.firstChild);
-  } else {
-    host.hidden = !visible;
-  }
+  host.hidden = !visible;
   const label = host.querySelector('.claude-typing-label');
-  // Label is the live spinner text only — no "Claude is working…"
-  // fallback chatter. When the server hasn't surfaced a spinner line
-  // yet (the brief window between @myco send and claude code's first
-  // spinner render), the dots alone signal activity.
   if (label) label.textContent = status;
   // No scrollIntoView on updates — status ticks every ~750ms via the
-  // periodic safety scan, and the overlay is decoupled from the chat
-  // scroll viewport anyway.
+  // periodic safety scan, and the indicator's slot is decoupled from
+  // chat-messages's flex slot by construction.
 }
 
 // Update the claude-status line cached from the server. When non-null,

@@ -1134,21 +1134,73 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 :root { --chatpane-w: 320px; }
 
-/* Chat is a main-pane view now — same layout slot as #terminal-wrap /
-   #conversation-wrap / #plan-wrap / etc. Fills the #terminal-pane via
-   absolute positioning, reserves the top strip for the safe-area + the
-   chrome buttons so the chat list never sits underneath them. The
-   "Discussion" header was removed at the same time — the chat icon's
-   own .active state is the only state indicator we need.
-   (Earlier this was an <aside> sidebar on desktop and a z-index:60
-   overlay on mobile; on mobile the overlay blocked the chrome buttons.) */
+/* Chat layout:
+     desktop — a RIGHT sidebar (var(--chatpane-w) wide, resizable via
+       the left-edge handle). The terminal / plan / arch / test / files
+       view stays visible to the LEFT of it.
+     mobile  — fills the whole main pane (full-width).
+   In both cases it sits inside #terminal-pane (position:relative) via
+   absolute positioning, so the chrome buttons (z:50) stay above and
+   are reachable while chat is open. */
 #chatpane.chat-main-view {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: var(--chatpane-w);
   display: flex;
   flex-direction: column;
   background: var(--surface);
   padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
+  border-left: 1px solid var(--border);
+  /* Above the underlying main-pane views (terminal/conv/plan/arch/test)
+     but below the floating chrome cluster (z:50) so files/plan/arch/test
+     toggles remain clickable while chat is open. */
+  z-index: 30;
+}
+@media (max-width: 900px) {
+  /* On mobile screens the sidebar fills the pane — desktop's "see the
+     terminal alongside chat" doesn't fit. */
+  #chatpane.chat-main-view {
+    width: 100%;
+    border-left: none;
+  }
+}
+
+/* Drag handle on the chatpane's LEFT edge — desktop only. Drag left to
+   grow, right to shrink. Width persisted to localStorage as the
+   --chatpane-w CSS variable. Hidden on mobile (chatpane fills pane). */
+#chatpane-resize {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 35;
+  transition: background-color .12s;
+  touch-action: none;
+}
+#chatpane-resize:hover,
+#chatpane-resize.dragging { background: rgba(120, 160, 230, .35); }
+@media (max-width: 900px) { #chatpane-resize { display: none; } }
+
+/* Desktop only: when chat is open, the underlying view (terminal /
+   conversation / files / plan / arch / test) gets pushed LEFT (its
+   right edge moved in) by the chatpane sidebar's width so its content
+   stays fully visible to the left of the sidebar instead of being
+   covered. Mobile is unaffected because the sidebar takes the whole
+   pane there. */
+@media (min-width: 901px) {
+  #terminal-pane.chat-open #terminal-wrap,
+  #terminal-pane.chat-open #conversation-wrap,
+  #terminal-pane.chat-open #files-wrap {
+    margin-right: var(--chatpane-w);
+  }
+  #terminal-pane.chat-open .artifact-main-view {
+    right: var(--chatpane-w);
+  }
 }
 
 /* Tab bar inside the chatpane header. Holds Discussion / Plan / Arch / Test. */
@@ -1422,13 +1474,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #chat-messages {
   flex: 1;
   overflow-y: auto;
-  /* Bottom padding reserves the overlay zone for the floating
-     .claude-typing indicator (30px tall, absolute-positioned just above
-     #chat-form). The reservation is permanent so the toggle has zero
-     reflow impact on chat content. Worst case when claude is idle: a
-     30px empty strip below the last message — acceptable trade for
-     never jolting the chat on a turn start/end. */
-  padding: 12px 14px 42px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2808,23 +2854,30 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
    working…" fallback chatter — so when claude is idle the strip is
    invisible (visibility:hidden, layout unchanged). */
 .claude-typing {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 1px);        /* sit just above chat-form's border-top */
+  /* Declared in HTML as a direct child of #chatpane (sibling of
+     #chat-messages and #chat-form). Always rendered as a 30px tall
+     flex item so the chat scroll region's height is constant — the
+     spinner's hidden↔visible toggle, glyph cycles (✻→✦→✺…), and
+     status-line text updates never reflow the chat content above it.
+     When idle, visibility:hidden hides the dots+label while the slot
+     stays reserved (see .claude-typing[hidden] below). Earlier this
+     was an absolute overlay floating above #chat-form which still
+     left enough visual ambiguity (overlapping chat content, rapid
+     glyph repaints) for users to perceive movement. */
+  flex: 0 0 30px;
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
   padding: 0 12px;
   color: #8b949e;
   font-size: 0.85rem;
   border-top: 1px dashed #21262d;
-  background: rgba(22, 27, 34, 0.92); /* opaque enough to obscure padding-bottom zone if any content peeks */
+  background: rgba(22, 27, 34, 0.4);
   overflow: hidden;
   white-space: nowrap;
-  z-index: 4;                       /* below #chat-autocomplete (z:50), above chat content */
-  pointer-events: none;             /* purely informational — never intercept clicks */
+  /* Tell the browser this strip is layout/paint-independent — glyph
+     swaps and text changes inside don't propagate reflow to siblings. */
+  contain: layout style paint;
 }
 .claude-typing-label {
   flex: 1 1 auto;
@@ -2834,11 +2887,12 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   white-space: nowrap;
 }
 .claude-typing[hidden] {
-  /* Keep the element absolutely-positioned and out of flex flow even
-     when "hidden" — display:none would still be layout-neutral here
-     (we're already position:absolute), but using visibility lets us
-     transition opacity later without remounting. */
-  display: flex;
+  /* The global !important display:none rule on the `hidden` attribute
+     at the top of this file would otherwise collapse the slot on
+     every spinner toggle, undoing the permanent-slot scheme — hence
+     the mirroring !important here. visibility hides the visuals; the
+     30px slot stays reserved. */
+  display: flex !important;
   visibility: hidden;
 }
 .claude-typing-dots {
