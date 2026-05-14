@@ -1,0 +1,197 @@
+{
+  "items": [
+    {
+      "id": "695feda01a0a",
+      "text": "After redoply, the claude session enter resume window and unable to auto recover from it.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-12T10:07:39.716Z",
+      "addedBy": "ryan-blues",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "462c8ed1f20b",
+          "user": "ryan-blues",
+          "text": "It is after reployment, the old session unable to recover from the resume window and need manual intervention to continue",
+          "ts": "2026-05-12T10:08:47.744Z"
+        }
+      ]
+    },
+    {
+      "id": "4e9874b7030e",
+      "text": "the file explorer doesnt occupy the entire screen when enabled on mobile.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-14T00:32:47.150Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "78391bbf88b7",
+      "text": "refresh the architecture md with the latest information and implementation",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-14T00:36:10.992Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "bafc4f67a6d1",
+          "user": "ryan-blues",
+          "text": "automatically update architecture and refresh arch tab window",
+          "ts": "2026-05-14T02:10:22.636Z"
+        }
+      ]
+    },
+    {
+      "id": "543044a3cc05",
+      "text": "stop switching to the readonly viewer automatically, make the chat pane the main working window",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-14T00:40:21.328Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "f79f560f961e",
+      "text": "make the scroll bar the same color as the surrounding components",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-14T01:04:31.517Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "797323a10ee1",
+      "text": "ensure the session is in auto mode when is request is sent to claude",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-14T01:06:00.213Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "061cd4feeadf",
+      "text": "keep seeing \"claude09:05 AM\nNo response requested.\", investigate why it's happening on mycobeta",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-14T01:07:50.344Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "2a939971da03",
+          "user": "kkrazy",
+          "text": "it's also showing the following: (Claude ran 1 tool call and didn't post a text reply.) from time to time",
+          "ts": "2026-05-14T01:09:38.407Z"
+        }
+      ]
+    },
+    {
+      "id": "6ed5783f4586",
+      "text": "make file explorer occupy full screen when enabled on mobile",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "b3c78949e8f1",
+      "text": "stop auto-switching to readonly viewer; keep chat pane as the main working window",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "f6eea615ca27",
+      "text": "match scroll bar color to surrounding components",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "a85cb7792d7f",
+      "text": "ensure session is in auto mode when a request is sent to claude",
+      "layer": "Server",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "7d6acf804985",
+      "text": "investigate recurring 'No response requested.' messages on mycobeta",
+      "layer": "Server",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "7b88c50743cd",
+      "text": "render the same session independently on mobile, browser, and vscode",
+      "layer": "Server",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "b7898926a2ab",
+      "text": "refresh architecture.md with latest information and implementation; auto-load on tab open",
+      "layer": "Docs",
+      "done": false,
+      "addedAt": "2026-05-14T02:11:42.047Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "2f369aebcc52",
+      "text": "make responses requires user input a pop up blocking pane any questions will be responded in the right order as they came in",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-14T03:40:34.511Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "e318b4fab138",
+          "user": "kkrazy",
+          "text": "the response is referring to the clause session output which requires user interaction.  the pop pane disappears once all required responses are submitted.",
+          "ts": "2026-05-14T04:08:23.015Z"
+        }
+      ]
+    },
+    {
+      "id": "6e4701cb2485",
+      "text": "ensure it works with gitee, allow saving tokens for gitee",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-14T03:43:13.099Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    }
+  ],
+  "updatedAt": "2026-05-14T03:43:13.099Z"
+}
