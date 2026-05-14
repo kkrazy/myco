@@ -86,48 +86,60 @@ const ARTIFACT_FILE_BY_TYPE = {
   arch: 'architecture.md',
 };
 
-// Directory names skipped when scanning one level deeper for _myco_/.
-// Keeps the scan cheap and avoids false-positive hits inside heavy or
-// non-project directories. Names starting with `.` are also skipped.
+// Directory names skipped when scanning for a nested project root.
+// Keeps the scan cheap and avoids latching onto non-project dirs.
+// Names starting with `.` are also skipped.
 const NESTED_SCAN_SKIP = new Set([
-  'node_modules', 'vendor', 'dist', 'build', 'target', '.git',
+  'node_modules', 'vendor', 'dist', 'build', 'target',
   '__pycache__', 'coverage', '.cache', '.next', '.nuxt',
 ]);
 
-// Resolve the directory that holds `_myco_/`. Two layouts supported:
+// Locate the project root that owns _myco_/ for this session. The
+// project is identified by a `.git/` directory — that's the unambiguous
+// marker that "this directory is a checked-out repo." Two supported
+// layouts:
 //
-//   1. Session.absCwd IS the project root (the common case):
+//   1. Session.absCwd IS the project root:
+//        /wks/kkrazy/myco/.git/
 //        /wks/kkrazy/myco/_myco_/plan.json
-//      → resolved = /wks/kkrazy/myco/_myco_
 //
-//   2. Session.absCwd is a workspace ABOVE the project (the user has
-//      cloned the repo into a subdirectory of the session's cwd):
+//   2. Session.absCwd is a workspace ABOVE the project — the project
+//      lives one level deeper, matching <wks>/<user>/<session>/<project>:
+//        /wks/kkrazy/myco2/myco/.git/
 //        /wks/kkrazy/myco2/myco/_myco_/plan.json
-//      → resolved = /wks/kkrazy/myco2/myco/_myco_
-//      (picked by scanning one level deeper for any subdir that has
-//      _myco_/; alphabetical order, deterministic.)
 //
-// If neither layout has an existing _myco_/, returns the session-root
-// path as the default write target so a fresh session still creates
-// the directory at <absCwd>/_myco_/ (preserves the original contract).
-function resolveMycoDir(rec) {
+// When neither layout has a .git/ — i.e. the session's cwd isn't a
+// repo and doesn't contain a repo — return null. The artifact code
+// then skips the file mirror entirely; there's no project to share
+// with, so writing _myco_/ would be meaningless.
+function findProjectRoot(rec) {
   if (!rec || !rec.absCwd) return null;
-  const direct = path.join(rec.absCwd, MYCO_DIR);
-  try { if (fs.statSync(direct).isDirectory()) return direct; } catch {}
-  // Scan immediate children for a nested _myco_/. Heavy / hidden /
-  // build dirs are skipped — we're looking for project roots, not
-  // dependency mirrors.
+  // Direct hit: session.absCwd is itself a checkout.
+  try {
+    if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory()) return rec.absCwd;
+  } catch {}
+  // Nested hit: find the immediate subdir that's a checkout.
+  // Alphabetical for determinism when multiple repos share a workspace.
   try {
     const entries = fs.readdirSync(rec.absCwd, { withFileTypes: true })
       .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !NESTED_SCAN_SKIP.has(d.name))
       .map((d) => d.name)
       .sort();
     for (const name of entries) {
-      const nested = path.join(rec.absCwd, name, MYCO_DIR);
-      try { if (fs.statSync(nested).isDirectory()) return nested; } catch {}
+      try {
+        if (fs.statSync(path.join(rec.absCwd, name, '.git')).isDirectory()) {
+          return path.join(rec.absCwd, name);
+        }
+      } catch {}
     }
   } catch {}
-  return direct;
+  return null;
+}
+
+function resolveMycoDir(rec) {
+  const projectRoot = findProjectRoot(rec);
+  if (!projectRoot) return null;
+  return path.join(projectRoot, MYCO_DIR);
 }
 
 function mycoDirPath(rec) {
@@ -143,8 +155,9 @@ function artifactFilePath(rec, type) {
 }
 
 function legacyArchFilePath(rec) {
-  if (!rec || !rec.absCwd) return null;
-  return path.join(rec.absCwd, LEGACY_ARCH_FILE);
+  const projectRoot = findProjectRoot(rec);
+  if (!projectRoot) return null;
+  return path.join(projectRoot, LEGACY_ARCH_FILE);
 }
 
 function ensureMycoDir(rec) {
@@ -558,6 +571,7 @@ module.exports = {
     MYCO_DIR,
     mycoDirPath,
     resolveMycoDir,
+    findProjectRoot,
     artifactFilePath,
     readArtifactFromFile,
     writeArtifactToFile,

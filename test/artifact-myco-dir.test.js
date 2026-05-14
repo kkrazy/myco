@@ -31,10 +31,22 @@ function t(name, fn) {
   catch (err) { console.log('  ✗ ' + name + ' — ' + (err && err.stack ? err.stack : err)); failed++; }
 }
 
+// Build a session rec whose absCwd is a project (has .git/ directly).
+// This is the common case — session points at a real checkout.
 function makeRec(name) {
   const cwd = path.join(tmpRoot, 'proj-' + name);
-  fs.mkdirSync(cwd, { recursive: true });
+  fs.mkdirSync(path.join(cwd, '.git'), { recursive: true });
   return { id: 'rec-' + name, absCwd: cwd };
+}
+
+// Build a session rec whose absCwd is a WORKSPACE (no .git/ directly),
+// with the project nested one level deeper. Returns { rec, repo } so
+// the test can plant files inside the repo directly.
+function makeWorkspaceRec(name, projectName = 'myrepo') {
+  const cwd = path.join(tmpRoot, 'wks-' + name);
+  const repo = path.join(cwd, projectName);
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  return { rec: { id: 'rec-' + name, absCwd: cwd }, repo };
 }
 
 console.log('── _myco_/ mirror ──');
@@ -134,56 +146,61 @@ t('readArtifactFromFile returns null when _myco_/ dir does not exist', () => {
   assert.ok(fs.existsSync(path.join(rec.absCwd, '_myco_', 'plan.json')));
 });
 
-t('resolveMycoDir finds _myco_ at session cwd directly', () => {
-  const rec = makeRec('k');
-  fs.mkdirSync(path.join(rec.absCwd, '_myco_'), { recursive: true });
-  fs.writeFileSync(path.join(rec.absCwd, '_myco_', 'plan.json'), '{"items":[],"updatedAt":null}\n');
+t('findProjectRoot returns session.absCwd when it has .git directly', () => {
+  const rec = makeRec('k');  // makeRec creates .git/ at absCwd
+  assert.strictEqual(__test.findProjectRoot(rec), rec.absCwd);
   assert.strictEqual(__test.resolveMycoDir(rec), path.join(rec.absCwd, '_myco_'));
 });
 
-t('resolveMycoDir finds nested project _myco_ one level deeper', () => {
-  // Layout: /tmp/.../proj-l/myrepo/_myco_/  — the session points at
-  // the parent of the actual git checkout, mirroring the user's
-  // /wks/kkrazy/myco2/myco/ pattern.
-  const rec = makeRec('l');
-  const repo = path.join(rec.absCwd, 'myrepo');
+t('findProjectRoot finds nested project (<wks>/<user>/<session>/<project>)', () => {
+  // Layout matches the user's spec literally:
+  //   /tmp/.../wks-l/myrepo/.git/
+  //   /tmp/.../wks-l/myrepo/_myco_/plan.json
+  // Session points at the workspace level (wks-l); the project is the
+  // inner myrepo/ (only that subdir has .git/).
+  const { rec, repo } = makeWorkspaceRec('l');
   fs.mkdirSync(path.join(repo, '_myco_'), { recursive: true });
   fs.writeFileSync(path.join(repo, '_myco_', 'plan.json'), '{"items":[{"id":"a","text":"x"}],"updatedAt":null}\n');
-  const resolved = __test.resolveMycoDir(rec);
-  assert.strictEqual(resolved, path.join(repo, '_myco_'));
-  // readArtifactFromFile should follow through.
+  assert.strictEqual(__test.findProjectRoot(rec), repo);
+  assert.strictEqual(__test.resolveMycoDir(rec), path.join(repo, '_myco_'));
   const r = __test.readArtifactFromFile(rec, 'plan');
   assert.ok(r);
-  assert.strictEqual(r.items.length, 1);
   assert.strictEqual(r.items[0].id, 'a');
 });
 
-t('resolveMycoDir skips node_modules / .git / build during nested scan', () => {
-  const rec = makeRec('m');
-  // Plant decoys in heavy / hidden dirs that should be skipped.
-  for (const name of ['node_modules', '.git', 'dist', 'build']) {
-    fs.mkdirSync(path.join(rec.absCwd, name, '_myco_'), { recursive: true });
-    fs.writeFileSync(path.join(rec.absCwd, name, '_myco_', 'plan.json'), '{"items":[{"id":"DECOY"}],"updatedAt":null}\n');
-  }
-  // No real project _myco_/ exists, and no direct _myco_/ at root —
-  // resolver must NOT latch onto a decoy; falls back to the default
-  // write target (session-root _myco_/).
-  const resolved = __test.resolveMycoDir(rec);
-  assert.strictEqual(resolved, path.join(rec.absCwd, '_myco_'));
+t('findProjectRoot returns null when no .git/ exists at cwd or any child', () => {
+  // Workspace dir with no checkout anywhere. The strict spec says
+  // there's no project here; the loader must skip _myco_/ entirely.
+  const cwd = path.join(tmpRoot, 'empty-workspace');
+  fs.mkdirSync(cwd, { recursive: true });
+  const rec = { id: 'rec-empty', absCwd: cwd };
+  assert.strictEqual(__test.findProjectRoot(rec), null);
+  assert.strictEqual(__test.resolveMycoDir(rec), null);
+  // Downstream writes/reads are no-ops on null.
+  assert.strictEqual(__test.writeArtifactToFile(rec, 'plan', { items: [] }), false);
+  assert.strictEqual(__test.readArtifactFromFile(rec, 'plan'), null);
 });
 
-t('resolveMycoDir prefers direct hit over nested hit', () => {
-  // If BOTH layouts exist, the session-root _myco_/ wins — it's the
-  // explicit signal that the user intended this session's cwd to be
-  // the project root.
-  const rec = makeRec('n');
-  fs.mkdirSync(path.join(rec.absCwd, '_myco_'), { recursive: true });
-  fs.writeFileSync(path.join(rec.absCwd, '_myco_', 'plan.json'), '{"items":[{"id":"DIRECT"}],"updatedAt":null}\n');
-  fs.mkdirSync(path.join(rec.absCwd, 'subproj', '_myco_'), { recursive: true });
-  fs.writeFileSync(path.join(rec.absCwd, 'subproj', '_myco_', 'plan.json'), '{"items":[{"id":"NESTED"}],"updatedAt":null}\n');
-  const r = __test.readArtifactFromFile(rec, 'plan');
-  assert.ok(r);
-  assert.strictEqual(r.items[0].id, 'DIRECT', 'direct hit must win when both layouts exist');
+t('findProjectRoot skips heavy / hidden dirs while searching', () => {
+  // Plant .git/ inside heavy dirs that should NOT count as a project.
+  const cwd = path.join(tmpRoot, 'heavy-decoy');
+  fs.mkdirSync(cwd, { recursive: true });
+  for (const name of ['node_modules', 'dist', 'build', '.cache']) {
+    fs.mkdirSync(path.join(cwd, name, '.git'), { recursive: true });
+  }
+  const rec = { id: 'rec-decoy', absCwd: cwd };
+  assert.strictEqual(__test.findProjectRoot(rec), null,
+    'must skip node_modules/.cache/etc. — those aren\'t real projects');
+});
+
+t('findProjectRoot picks alphabetical first when multiple repos coexist', () => {
+  // Session.absCwd has two checkouts side-by-side. Resolution is
+  // deterministic — alphabetical winner.
+  const cwd = path.join(tmpRoot, 'multi-repo');
+  fs.mkdirSync(path.join(cwd, 'aaa', '.git'), { recursive: true });
+  fs.mkdirSync(path.join(cwd, 'bbb', '.git'), { recursive: true });
+  const rec = { id: 'rec-multi', absCwd: cwd };
+  assert.strictEqual(__test.findProjectRoot(rec), path.join(cwd, 'aaa'));
 });
 
 t('rec without absCwd is a no-op (no crash)', () => {
