@@ -2509,7 +2509,13 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
     min-width: 0;
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, .06);
-    max-height: 40vh;
+    /* Mobile: tree-pane and viewer-pane are mutually exclusive (opening
+       a file hides the tree per openFileInViewer in app.js), so the
+       tree should fill the entire available area when shown — not
+       capped at 40vh leaving 60% empty space. flex:1 + min-height:0
+       lets it grow within the column-flex parent. */
+    flex: 1;
+    min-height: 0;
   }
   /* Bump the shared header height + chrome-button size on mobile (single
      variable cascade — no per-button overrides needed). */
