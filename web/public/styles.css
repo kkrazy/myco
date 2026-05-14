@@ -599,7 +599,20 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   overflow-y: auto !important;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: auto;
+  /* Match the thin scrollbar used by #chat-messages / #conv-messages so
+     all three scrollers share the same affordance. Default xterm.js
+     ships with the browser's default scrollbar (thick, OS-styled) which
+     looked white against the dark terminal. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
+#terminal .xterm-viewport::-webkit-scrollbar { width: 8px; }
+#terminal .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+#terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 145, .35);
+  border-radius: 4px;
+}
+#terminal .xterm-viewport::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 175, .55); }
 
 /* ── keyboard ─────────────────────────────────────────────────── */
 
