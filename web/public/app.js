@@ -2690,13 +2690,18 @@ function _applyMenuStateUpdate(msg) {
     if (!match) continue;
     m.meta = msg.meta || m.meta;
     const list = document.getElementById('chat-messages');
+    const childCount = list ? list.children.length : 0;
+    console.log('[state-update] menu match idx=' + i + ' chatMessagesLen=' + state.chatMessages.length + ' domChildren=' + childCount + ' pickedN=' + (m.meta && m.meta.pickedN) + ' superseded=' + !!(m.meta && m.meta.superseded));
     if (list && list.children[i]) {
       const newEl = _htmlToNode(renderChatMessage(m, /*isActiveMenu*/ false));
       if (newEl) list.children[i].replaceWith(newEl);
+    } else {
+      console.warn('[state-update] menu match but DOM child missing at idx=' + i);
     }
     _bindChatMenuClicks();
     return;
   }
+  console.warn('[state-update] menu state-update did NOT match any row — uuid=' + uuid + ' hash=' + (hash ? hash.slice(0,60) : 'null'));
 }
 
 // Refresh any open artifact tab when the cache changes. Type-specific

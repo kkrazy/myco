@@ -921,10 +921,13 @@ function _emitMenuStateUpdate(sessionId, m) {
   if (!m || !m.meta) return;
   const session = sessions.get(sessionId);
   if (!session) return;
+  const hash = (m.meta.menu && m.meta.menu.hash) || null;
+  const listenerCount = session.listenerCount('state-update');
+  console.log(`[state-update] ${sessionId} kind=menu pickedN=${m.meta.pickedN} answered=${!!m.meta.answered} superseded=${!!m.meta.superseded} listeners=${listenerCount} hash=${hash ? hash.slice(0, 60) : 'null'}`);
   session.emit('state-update', {
     kind: 'menu',
     messageUuid: m.meta.transcriptUuid || null,
-    hash: (m.meta.menu && m.meta.menu.hash) || null,
+    hash,
     meta: m.meta,
   });
 }
