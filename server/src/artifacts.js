@@ -62,38 +62,142 @@ function buildArtifactQuorumText(type, item) {
   return [`@myco ${header}`, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 
-// The Arch artifact (markdown body) is mirrored to <session-cwd>/architecture.md
-// so it lives with the project (version-controllable, editable from claude
-// or directly), instead of only inside myco's sessions.json. GET prefers
-// the file when present; refresh writes the freshly-extracted markdown to it.
-const ARCH_FILE = 'architecture.md';
+// All three artifacts (plan / test / arch) are mirrored into
+// `<session-cwd>/_myco_/` so the project can be committed and shared
+// across sessions. The mirror is the source of truth on read: a
+// teammate cloning the repo and starting a fresh myco session sees the
+// same plan items, test plan, and architecture notes that the original
+// author left behind. Hand-editing the files works too — myco reads on
+// the next GET and reconciles the in-memory copy.
+//
+// Files in _myco_/:
+//   plan.json          — items + comments + voters + done state
+//   test.json          — items + comments + done state (no votes)
+//   architecture.md    — long-form arch markdown
+//   README.md          — explainer for humans browsing the repo
+//
+// Backward compat: an existing root-level `<cwd>/architecture.md` (from
+// the pre-_myco_ layout) is still readable as a fallback.
+const MYCO_DIR = '_myco_';
+const LEGACY_ARCH_FILE = 'architecture.md';   // root-of-project, pre-_myco_
+const ARTIFACT_FILE_BY_TYPE = {
+  plan: 'plan.json',
+  test: 'test.json',
+  arch: 'architecture.md',
+};
 
-function archFilePath(rec) {
+function mycoDirPath(rec) {
   if (!rec || !rec.absCwd) return null;
-  return path.join(rec.absCwd, ARCH_FILE);
+  return path.join(rec.absCwd, MYCO_DIR);
 }
 
-function readArchFromFile(rec) {
-  const p = archFilePath(rec);
+function artifactFilePath(rec, type) {
+  const dir = mycoDirPath(rec);
+  if (!dir) return null;
+  const fname = ARTIFACT_FILE_BY_TYPE[type];
+  if (!fname) return null;
+  return path.join(dir, fname);
+}
+
+function legacyArchFilePath(rec) {
+  if (!rec || !rec.absCwd) return null;
+  return path.join(rec.absCwd, LEGACY_ARCH_FILE);
+}
+
+function ensureMycoDir(rec) {
+  const dir = mycoDirPath(rec);
+  if (!dir) return false;
+  try { fs.mkdirSync(dir, { recursive: true }); return true; }
+  catch (err) {
+    console.error(`[artifact] failed to mkdir ${dir}: ${err.message}`);
+    return false;
+  }
+}
+
+// Parse a single _myco_/<type> file off disk into the in-memory shape.
+// Returns null if the file is absent OR malformed (JSON parse failure on
+// plan/test). Arch gets a synthetic updatedAt from the file mtime since
+// markdown doesn't carry it. Plan/test JSON should already have one,
+// but we backfill from mtime if missing for sanity.
+function readArtifactFromFile(rec, type) {
+  const p = artifactFilePath(rec, type);
   if (!p) return null;
   let stat, body;
+  try { stat = fs.statSync(p); body = fs.readFileSync(p, 'utf8'); }
+  catch { return null; }
+  if (type === 'arch') {
+    return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
+  }
   try {
-    stat = fs.statSync(p);
-    body = fs.readFileSync(p, 'utf8');
-  } catch { return null; }
-  return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
+    const parsed = JSON.parse(body);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Array.isArray(parsed.items)) return null;
+    if (!parsed.updatedAt) parsed.updatedAt = new Date(stat.mtimeMs).toISOString();
+    return parsed;
+  } catch (err) {
+    console.error(`[artifact] failed to parse ${p}: ${err.message}`);
+    return null;
+  }
 }
 
-function writeArchToFile(rec, markdown) {
-  const p = archFilePath(rec);
+function writeArtifactToFile(rec, type, artifact) {
+  if (!artifact) return false;
+  if (!ensureMycoDir(rec)) return false;
+  const p = artifactFilePath(rec, type);
   if (!p) return false;
   try {
-    fs.writeFileSync(p, String(markdown || ''));
+    const body = type === 'arch'
+      ? String(artifact.markdown || '')
+      : JSON.stringify(artifact, null, 2) + '\n';
+    fs.writeFileSync(p, body);
     return true;
   } catch (err) {
     console.error(`[artifact] failed to write ${p}: ${err.message}`);
     return false;
   }
+}
+
+// One-shot README explaining what _myco_/ is. Written lazily the first
+// time the dir is created so a teammate browsing the repo via GitHub
+// (or `ls`) understands what they're looking at. We DO NOT overwrite
+// an existing README — the user may have customised it.
+const MYCO_README_BODY = `# _myco_
+
+This directory holds the **plan / test / architecture artifacts** for this
+project, surfaced by [myco](https://github.com/kkrazy/myco) (the Claude
+Code dashboard).
+
+Files here are safe to **commit and push** — they migrate to other
+sessions (or other developers) cloning this repo.
+
+## Files
+
+- \`plan.json\` — open and completed plan items, including comments + voters.
+- \`test.json\` — verification plan items + comments.
+- \`architecture.md\` — long-form architecture notes (editable directly).
+
+Generated and rewritten on each artifact mutation (refresh, mark, vote,
+comment, item delete). Hand-editing the files is fine — myco reads them
+on the next load and reconciles with the in-memory copy.
+`;
+function writeMycoReadmeIfMissing(rec) {
+  const dir = mycoDirPath(rec);
+  if (!dir) return;
+  const p = path.join(dir, 'README.md');
+  try { if (fs.existsSync(p)) return; } catch { return; }
+  try { fs.writeFileSync(p, MYCO_README_BODY); }
+  catch (err) { console.error(`[artifact] failed to write README at ${p}: ${err.message}`); }
+}
+
+// Backward-compat reader for the pre-_myco_ root-level architecture.md.
+// Used only when _myco_/architecture.md is absent.
+function readLegacyArchFromFile(rec) {
+  const p = legacyArchFilePath(rec);
+  if (!p) return null;
+  let stat, body;
+  try { stat = fs.statSync(p); body = fs.readFileSync(p, 'utf8'); }
+  catch { return null; }
+  return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
 }
 
 // Plan items only — see autoFireIfQuorum below. Two distinct voters dispatch
@@ -111,6 +215,13 @@ function persistArtifact(rec, type, artifact) {
   if (!rec.artifacts) rec.artifacts = {};
   rec.artifacts[type] = artifact;
   saveStore();
+  // Mirror to <cwd>/_myco_/<type>.<ext> so the project can be committed
+  // and shared. Write happens on every mutation — files are small, and
+  // a teammate cloning the repo gets the latest plan/test/arch state
+  // without any session-state migration step. The README is written
+  // lazily so newcomers browsing the dir understand what it is.
+  writeArtifactToFile(rec, type, artifact);
+  writeMycoReadmeIfMissing(rec);
 }
 
 function findItem(rec, type, itemId) {
@@ -143,13 +254,22 @@ function register(app, deps) {
     if (!ctx) return;
     const type = String(req.query.type || '');
     if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    // Read priority for all three types:
+    //   1. <cwd>/_myco_/<type>.<ext>    — canonical, version-controlled
+    //   2. <cwd>/architecture.md         — pre-_myco_ legacy (arch only)
+    //   3. rec.artifacts[type]           — in-memory state-dir fallback
+    // When the file is present we mirror into rec.artifacts so other
+    // code paths (UI cache, refresh, legacy clients) stay consistent.
+    const fromFile = readArtifactFromFile(ctx.rec, type);
+    if (fromFile) {
+      persistArtifact(ctx.rec, type, fromFile);
+      return res.json({ artifact: fromFile });
+    }
     if (type === 'arch') {
-      const fromFile = readArchFromFile(ctx.rec);
-      if (fromFile) {
-        // Mirror back into rec.artifacts so other code paths (UI cache,
-        // legacy clients) see a consistent shape.
-        persistArtifact(ctx.rec, type, fromFile);
-        return res.json({ artifact: fromFile });
+      const fromLegacy = readLegacyArchFromFile(ctx.rec);
+      if (fromLegacy) {
+        persistArtifact(ctx.rec, type, fromLegacy);
+        return res.json({ artifact: fromLegacy });
       }
     }
     const stored = ctx.rec.artifacts && ctx.rec.artifacts[type];
@@ -183,13 +303,10 @@ function register(app, deps) {
         artifact.items = [...userItems, ...artifact.items];
       }
     }
+    // persistArtifact also mirrors to <cwd>/_myco_/<type>.<ext> on disk,
+    // so a teammate cloning the repo sees the fresh extraction without
+    // needing a session-state migration step.
     persistArtifact(ctx.rec, type, artifact);
-    // Mirror the Arch markdown to <cwd>/architecture.md so it lives with
-    // the project (next GET will read from there, and the file can be
-    // committed / edited externally).
-    if (type === 'arch' && artifact && typeof artifact.markdown === 'string') {
-      writeArchToFile(ctx.rec, artifact.markdown);
-    }
     res.json({ artifact });
   });
 
@@ -364,4 +481,22 @@ function register(app, deps) {
   });
 }
 
-module.exports = { register, ARTIFACT_TYPES, AUTO_EXECUTE_VOTE_THRESHOLD, buildArtifactRunText, buildArtifactQuorumText };
+module.exports = {
+  register,
+  ARTIFACT_TYPES,
+  AUTO_EXECUTE_VOTE_THRESHOLD,
+  buildArtifactRunText,
+  buildArtifactQuorumText,
+  // _myco_/ persistence helpers — exported for unit tests that exercise
+  // the file-mirror path without spinning up the full express + sessions
+  // plumbing. Not part of the public route surface.
+  __test: {
+    MYCO_DIR,
+    mycoDirPath,
+    artifactFilePath,
+    readArtifactFromFile,
+    writeArtifactToFile,
+    writeMycoReadmeIfMissing,
+    readLegacyArchFromFile,
+  },
+};

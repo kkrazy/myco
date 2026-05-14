@@ -1200,6 +1200,27 @@ test_chat_window() {
   grep -q "AUTO_EXECUTE_VOTE_THRESHOLD" server/src/artifacts.js \
     && pass "vote auto-execute threshold defined" \
     || fail "vote auto-execute threshold defined"
+  # _myco_/ mirror: plan.json + test.json + architecture.md + README.md
+  # under <session-cwd>/_myco_/ so a teammate cloning the repo and
+  # starting a fresh myco session sees the same plan items, comments,
+  # voters, and arch notes. Hand-editing and round-trips through
+  # mutation paths (refresh/run/mark/vote/comment/delete) all flow
+  # through writeArtifactToFile.
+  if have_node; then
+    if node test/artifact-myco-dir.test.js >/dev/null 2>&1; then
+      pass "test/artifact-myco-dir.test.js (10 cases)"
+    else
+      fail "test/artifact-myco-dir.test.js — re-run with 'node test/artifact-myco-dir.test.js' to see failures"
+    fi
+  else
+    skip "test/artifact-myco-dir.test.js (no host node)"
+  fi
+  grep -qF 'writeArtifactToFile(rec, type, artifact)' server/src/artifacts.js \
+    && pass "artifacts.js: persistArtifact mirrors to disk on every mutation" \
+    || fail "artifacts.js: persistArtifact missing disk mirror — _myco_/ state will go stale"
+  grep -qF "MYCO_DIR = '_myco_'" server/src/artifacts.js \
+    && pass "artifacts.js: _myco_ directory constant defined" \
+    || fail "artifacts.js: MYCO_DIR constant missing — sharing layout unsettled"
   # When an artifact item is dispatched (manual /run or auto-quorum) the
   # text that lands in BOTH the chat history and Claude's PTY input must
   # carry: the @myco prefix (so the PTY pipeline forwards it), a title
