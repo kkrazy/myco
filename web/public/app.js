@@ -57,6 +57,17 @@ const state = {
   // Which artifact view (Plan / Arch / Test) is currently open in the main
   // pane, plus the pane we should restore on close. null means none.
   artifactView: { active: null, prev: 'terminal' },
+  // Cached artifact payloads, keyed by type. Populated on attach via the
+  // `artifacts-init` WS frame; updated live via `state-update` frames.
+  // loadArtifact() prefers this cache over an HTTP GET so tab switches
+  // are instant and always in sync with what the server just broadcast.
+  artifacts: {},
+  // In-flight tool-call tracker mirrored from the server. Keyed by
+  // tool_use_id; populated by `state-update { kind: 'tool-progress' }`
+  // frames. The chat pane surfaces a "waiting on Agent · 47s"
+  // indicator when this has entries so long-running tools (Agent,
+  // Monitor, etc.) don't look like the session has hung.
+  openToolCalls: [],
 };
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -440,6 +451,23 @@ function appendTranscriptMessages(messages) {
   if (Array.isArray(state.transcriptMessages) && state.transcriptMessages.length > TRANSCRIPT_RENDER_CAP) {
     renderTranscriptMessages(state.transcriptMessages);
     return;
+  }
+  // Defensive out-of-order guard. The caller pushes `messages` onto
+  // state.transcriptMessages BEFORE invoking us. If any incoming msg
+  // carries a ts older than the last pre-push entry, the array is now
+  // out of order — typically after a reconnect that delivered a delta
+  // for a transcript-flush that happened mid-network-blip, or after a
+  // subagent/Monitor event arriving asynchronously. Sort + re-render
+  // so the chronology stays correct. Rare path; cheap when it fires.
+  if (Array.isArray(state.transcriptMessages) && state.transcriptMessages.length > messages.length) {
+    const prevLen = state.transcriptMessages.length - messages.length;
+    const lastPrevTs = state.transcriptMessages[prevLen - 1] && state.transcriptMessages[prevLen - 1].ts;
+    const anyOlder = lastPrevTs && messages.some((m) => m && m.ts && m.ts < lastPrevTs);
+    if (anyOlder) {
+      state.transcriptMessages.sort((a, b) => String(a.ts || '').localeCompare(String(b.ts || '')));
+      renderTranscriptMessages(state.transcriptMessages);
+      return;
+    }
   }
   const content = document.getElementById('conv-content');
   if (!content) return;
@@ -1327,6 +1355,26 @@ function openSession(id, opts = {}) {
         // against any near-timestamp duplicate (the JSONL flush will
         // eventually deliver the equivalent record with a different uuid).
         _onLiveModeChange(msg);
+      } else if (msg.t === 'mode-snapshot') {
+        // Snapshot of the current mode at attach time. The live
+        // `mode-change` event only fires on transition; without this
+        // snapshot a viewer reconnecting in steady-state never sees
+        // a pill until the next Shift+Tab. We synthesise a transition
+        // FROM 'default' if the snapshot is non-default; if it's
+        // already 'default' there's nothing to render and we just
+        // cache it for future diffs.
+        _applyModeSnapshot(msg.mode);
+      } else if (msg.t === 'state-update') {
+        // Server-pushed mutation that any attached client needs to
+        // apply (menu meta change, artifact replace, tool-progress
+        // tracker update). Routed by `kind` discriminator.
+        _applyStateUpdate(msg);
+      } else if (msg.t === 'artifacts-init') {
+        // Bootstrap the artifact cache on attach so opening a Plan /
+        // Test / Arch tab is instant + always in sync — no HTTP GET
+        // round-trip required.
+        state.artifacts = msg.artifacts || {};
+        _onArtifactsCacheUpdated();
       } else if (msg.t === 'exit') {
         state.term?.writeln('\r\n[session ended]');
       } else if (msg.t === 'error') {
@@ -2221,13 +2269,16 @@ function renderChatMessage(m, isActiveMenu) {
     : null;
   const isMulti = !!(menuOpts && m.meta && m.meta.menu && m.meta.menu.multi);
   const wasSubmitted = !!(m.meta && (m.meta.submitted || m._submitted));
-  // Once answered (or once superseded by a newer menu), the whole card
-  // collapses to a single resolved line — no lead, no question, no
-  // option buttons. The full question is preserved as a tooltip on the
-  // bubble so context is one hover away without consuming scroll space.
-  // Active menus stay full-height so the question is visible while
-  // picking.
-  const isResolvedMenu = !!(menuOpts && (wasSubmitted || pickedN != null || !isActiveMenu));
+  // Once answered (or once superseded by a newer menu, or once it's no
+  // longer the active dialog), the whole card collapses to a single
+  // resolved line — no lead, no question, no option buttons. The full
+  // question is preserved as a tooltip on the bubble so context is one
+  // hover away without consuming scroll space. Active menus stay full-
+  // height so the question is visible while picking. `meta.superseded`
+  // is stamped by the server when claude advances past a menu without
+  // the user answering it (see _supersedeStaleMenus in pty.js).
+  const isSuperseded = !!(m.meta && m.meta.superseded);
+  const isResolvedMenu = !!(menuOpts && (wasSubmitted || pickedN != null || isSuperseded || !isActiveMenu));
   if (isResolvedMenu) cls += ' chat-msg-menu-collapsed';
   let optsHtml = '';
   if (menuOpts && wasSubmitted) {
@@ -2241,6 +2292,11 @@ function renderChatMessage(m, isActiveMenu) {
     const matched = menuOpts.find((o) => o.n === pickedN);
     const label = matched ? matched.label : '';
     optsHtml = `<div class="chat-menu-resolved">✓ Picked [${pickedN}]${label ? ' ' + escHtml(label) : ''}</div>`;
+  } else if (menuOpts && isSuperseded) {
+    // Claude advanced the dialog before this menu was answered. Show a
+    // muted note instead of leaving stale buttons live (which would
+    // silently no-op against the hash-guard on the server side).
+    optsHtml = '<div class="chat-menu-resolved">↪ Superseded by a newer dialog</div>';
   } else if (menuOpts && isActiveMenu) {
     // data-hash stamps the click with the specific menu's identity so
     // the server can validate that the user's pick still corresponds
@@ -2571,6 +2627,87 @@ function _onLiveModeChange(msg) {
   if (!Array.isArray(state.transcriptMessages)) state.transcriptMessages = [];
   state.transcriptMessages.push(frame);
   appendTranscriptMessages([frame]);
+}
+
+// Apply a mode-snapshot received on attach. Pre-fix, mode pills only
+// rendered on the next Shift+Tab because mode-change emits only on
+// transition. The snapshot lets a viewer reconnecting mid-session see
+// the current mode without waiting for the next change. Idempotent:
+// if the snapshot mode matches the most-recent rendered pill, no-op.
+function _applyModeSnapshot(mode) {
+  state.currentMode = mode || 'default';
+  if (state.currentMode === 'default') return;          // nothing to render
+  const role = state.currentMode === 'plan' ? 'plan_mode'
+    : state.currentMode === 'accept' ? 'auto_mode'
+    : null;
+  if (!role) return;                                      // bypass / unknown — no pill
+  const frame = { role, state: 'entered', ts: new Date().toISOString(), _live: true };
+  if (_isDuplicateModeFrame(frame)) return;
+  if (!Array.isArray(state.transcriptMessages)) state.transcriptMessages = [];
+  state.transcriptMessages.push(frame);
+  appendTranscriptMessages([frame]);
+}
+
+// Dispatch a state-update WS frame to the right local applier based on
+// its `kind`. The server emits one of three shapes:
+//   { kind: 'menu',     messageUuid, hash, meta }
+//   { kind: 'artifact', artifactType, artifact }
+//   { kind: 'tool-progress', open: [{ id, name, summary, sinceMs }] }
+function _applyStateUpdate(msg) {
+  if (!msg || !msg.kind) return;
+  if (msg.kind === 'menu') {
+    _applyMenuStateUpdate(msg);
+    return;
+  }
+  if (msg.kind === 'artifact') {
+    if (msg.artifactType && msg.artifact) {
+      state.artifacts[msg.artifactType] = msg.artifact;
+      _onArtifactsCacheUpdated(msg.artifactType);
+    }
+    return;
+  }
+  if (msg.kind === 'tool-progress') {
+    state.openToolCalls = Array.isArray(msg.open) ? msg.open : [];
+    _renderClaudeTyping();   // strip reuses the existing typing-indicator render path
+    return;
+  }
+}
+
+// Find a menu chat row by transcriptUuid (preferred) or menu-hash
+// (fallback for menus broadcast before transcriptUuid was stamped),
+// replace its meta, and re-render that single row in place. Reuses
+// the same DOM-swap pattern appendChatMessage uses on a dedup hit
+// (app.js:1763-1771).
+function _applyMenuStateUpdate(msg) {
+  const uuid = msg.messageUuid || null;
+  const hash = msg.hash || null;
+  for (let i = state.chatMessages.length - 1; i >= 0; i--) {
+    const m = state.chatMessages[i];
+    if (!m || !m.meta || m.meta.kind !== 'menu') continue;
+    const muUuid = m.meta.transcriptUuid || null;
+    const muHash = (m.meta.menu && m.meta.menu.hash) || null;
+    const match = (uuid && muUuid === uuid) || (hash && muHash === hash);
+    if (!match) continue;
+    m.meta = msg.meta || m.meta;
+    const list = document.getElementById('chat-messages');
+    if (list && list.children[i]) {
+      const newEl = _htmlToNode(renderChatMessage(m, /*isActiveMenu*/ false));
+      if (newEl) list.children[i].replaceWith(newEl);
+    }
+    _bindChatMenuClicks();
+    return;
+  }
+}
+
+// Refresh any open artifact tab when the cache changes. Type-specific
+// when called from a state-update; called with no arg from
+// artifacts-init to refresh whatever's open.
+function _onArtifactsCacheUpdated(type) {
+  const active = state.artifactView && state.artifactView.active;
+  if (!active) return;
+  if (type && type !== active) return;
+  // Re-run the existing loadArtifact path; it'll prefer the cache.
+  loadArtifact(active).catch(() => {});
 }
 
 // True if an existing transcript row already announces this mode
@@ -2936,6 +3073,20 @@ async function loadArtifact(type) {
   if (!sid) return;
   const body = document.getElementById(`artifact-body-${type}`);
   if (!body) return;
+  // Prefer the cache populated by the artifacts-init / state-update WS
+  // frames — that's the freshest authoritative state. Tab switches are
+  // instant + always in sync without an HTTP round-trip.
+  const cached = state.artifacts && state.artifacts[type];
+  const cachedHas = cached && (
+    (type === 'arch' && typeof cached.markdown === 'string' && cached.markdown.trim()) ||
+    (type !== 'arch' && Array.isArray(cached.items) && cached.items.length)
+  );
+  if (cachedHas) {
+    renderArtifact(type, cached);
+    return;
+  }
+  // Cache miss — fall back to HTTP. Happens on cold reload of an
+  // artifact tab before the WS attach delivers artifacts-init.
   try {
     const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/artifact?type=${encodeURIComponent(type)}`);
     if (!res || !res.ok) return;
@@ -2945,7 +3096,10 @@ async function loadArtifact(type) {
     // state copy in place is friendlier than overwriting it with a blank.
     const hasContent = (type === 'arch' && artifact && artifact.markdown && artifact.markdown.trim())
       || (type !== 'arch' && artifact && Array.isArray(artifact.items) && artifact.items.length);
-    if (hasContent) renderArtifact(type, artifact);
+    if (hasContent) {
+      renderArtifact(type, artifact);
+      state.artifacts[type] = artifact;   // populate cache so the next call is instant
+    }
   } catch {}
 }
 

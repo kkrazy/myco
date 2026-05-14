@@ -347,6 +347,83 @@ t('AskUserQuestion summary renders questions + options as readable text', () => 
   assert.ok(s.split('\n').length >= 4, 'expected multi-line summary, got: ' + JSON.stringify(s));
 });
 
+// ─── Output-pattern coverage (Task* family, ToolSearch, EnterPlanMode) ────
+
+t('TaskCreate / TaskUpdate / TaskOutput summarise to readable text', () => {
+  // Task* tools are the most-used unhandled family in real JSONLs
+  // (~650 occurrences in the local survey). Generic JSON.stringify[:150]
+  // produced unreadable braces; the new branches yield human-readable
+  // identifiers + status transitions.
+  const mk = (toolName, input) => JSON.stringify({
+    type: 'assistant',
+    uuid: 'task-' + toolName,
+    timestamp: '2026-05-14T07:00:00.000Z',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 't' + toolName, name: toolName, input }],
+    },
+  });
+  const r1 = parseLine(mk('TaskCreate', { subject: 'Wire chat-pane sync', description: '…' }));
+  assert.ok(r1.toolCalls[0].summary.includes('Wire chat-pane sync'),
+    'TaskCreate summary must use input.subject — got: ' + JSON.stringify(r1.toolCalls[0].summary));
+
+  const r2 = parseLine(mk('TaskUpdate', { taskId: '7', status: 'completed', subject: 'tool tracker' }));
+  const s2 = r2.toolCalls[0].summary;
+  assert.ok(s2.includes('#7') && s2.includes('completed'),
+    'TaskUpdate summary must show #id → status — got: ' + JSON.stringify(s2));
+
+  const r3 = parseLine(mk('TaskOutput', { taskId: '12' }));
+  assert.ok(r3.toolCalls[0].summary.includes('#12') && r3.toolCalls[0].summary.includes('output'),
+    'TaskOutput summary must reference task id — got: ' + JSON.stringify(r3.toolCalls[0].summary));
+});
+
+t('ToolSearch + EnterPlanMode + WebSearch summarise to readable text', () => {
+  const mk = (name, input) => JSON.stringify({
+    type: 'assistant',
+    uuid: 'misc-' + name,
+    timestamp: 't',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'ts' + name, name, input }],
+    },
+  });
+  assert.strictEqual(parseLine(mk('ToolSearch', { query: 'select:Read,Write' })).toolCalls[0].summary, 'select:Read,Write');
+  assert.strictEqual(parseLine(mk('EnterPlanMode', {})).toolCalls[0].summary, '(entering plan mode)');
+  assert.strictEqual(parseLine(mk('WebSearch', { query: 'Shenzhen weather' })).toolCalls[0].summary, 'Shenzhen weather');
+});
+
+t('agent-name top-level record surfaces as subagent frame', () => {
+  // 183 of these in the local JSONLs; pre-fix they were silently
+  // dropped. They mark subagent session-name transitions and should
+  // render as inline markers in the readonly viewer.
+  const fix = JSON.stringify({
+    type: 'agent-name',
+    agentName: 'Explore session summarization',
+    sessionId: 'abc',
+    uuid: 'an-uuid',
+    timestamp: '2026-05-14T07:00:00.000Z',
+  });
+  const r = parseLine(fix);
+  assert.ok(r);
+  assert.strictEqual(r.role, 'subagent');
+  assert.strictEqual(r.text, 'Explore session summarization');
+});
+
+t('attachment permission-mode surfaces as mode_change frame', () => {
+  // 194 of these in the local JSONLs; pre-fix silently dropped.
+  // Distinct from command_permissions (which carries an allow-list).
+  const fix = JSON.stringify({
+    type: 'attachment',
+    attachment: { type: 'permission-mode', mode: 'plan' },
+    uuid: 'pm-uuid',
+    timestamp: '2026-05-14T07:00:00.000Z',
+  });
+  const r = parseLine(fix);
+  assert.ok(r);
+  assert.strictEqual(r.role, 'mode_change');
+  assert.strictEqual(r.mode, 'plan');
+});
+
 // ─── Pre-existing branches still work (regression guards) ─────────────
 
 t('user message branch still works after parser changes', () => {

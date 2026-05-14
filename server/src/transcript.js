@@ -75,6 +75,30 @@ function summarizeToolInput(name, input) {
   if (name === 'Bash') return (input.command || '').substring(0, 200);
   if (name === 'Read' || name === 'Edit' || name === 'Write') return input.file_path || '';
   if (name === 'Agent') return input.description || '';
+  // Task* family — counted at ~650 occurrences across local JSONLs.
+  // Generic JSON.stringify[:150] for these collapsed to escaped quotes
+  // and unreadable braces; named accessors give a human-readable token.
+  if (name === 'TaskCreate') return (input.subject || input.description || '').toString().slice(0, 200);
+  if (name === 'TaskUpdate') {
+    const id = input.taskId ? `#${input.taskId}` : '';
+    const status = input.status ? ` → ${input.status}` : '';
+    const subject = input.subject ? ` ${input.subject}` : '';
+    const owner = input.owner ? ` (owner=${input.owner})` : '';
+    return (id + status + subject + owner).trim() || 'TaskUpdate';
+  }
+  if (name === 'TaskOutput') return input.taskId ? `#${input.taskId} (output)` : 'TaskOutput';
+  if (name === 'TaskStop') return input.taskId ? `#${input.taskId} (stop)` : 'TaskStop';
+  if (name === 'TaskList') return 'TaskList';
+  if (name === 'TaskGet') return input.taskId ? `#${input.taskId}` : 'TaskGet';
+  if (name === 'ToolSearch') return (input.query || '').toString().slice(0, 200);
+  if (name === 'EnterPlanMode') return '(entering plan mode)';
+  if (name === 'WebSearch') return (input.query || '').toString().slice(0, 200);
+  if (name === 'WebFetch') return (input.url || '').toString().slice(0, 200);
+  if (name === 'Grep' || name === 'Glob') {
+    const q = input.pattern || input.query || '';
+    const p = input.path ? ` in ${input.path}` : '';
+    return (q + p).toString().slice(0, 200);
+  }
   // AskUserQuestion's input shape:
   //   { questions: [{ question, header, multiSelect, options: [{label, description}, …] }, …] }
   // Without a custom summarizer this collapses to ~150 chars of escaped
@@ -109,6 +133,16 @@ function parseLine(line) {
   // ai-title
   if (obj.type === 'ai-title' && obj.aiTitle) {
     return { role: 'title', text: obj.aiTitle, uuid, ts };
+  }
+
+  // agent-name — marks the start of a subagent session segment. Claude
+  // writes 183 of these in the local JSONLs surveyed; pre-fix they fell
+  // through to `return null` and viewers had no signal that a subagent
+  // boundary was crossed. Emitting them as a 'subagent' role lets the
+  // readonly viewer paint a small inline marker between the parent's
+  // Agent tool_use and the eventual tool_result.
+  if (obj.type === 'agent-name' && obj.agentName) {
+    return { role: 'subagent', text: obj.agentName, uuid, ts };
   }
 
   // user message
@@ -253,6 +287,21 @@ function parseLine(line) {
         };
       case 'queued_command':
         return { role: 'queued', text: att.prompt || '', mode: att.commandMode || '', uuid, ts };
+      case 'permission-mode':
+        // Distinct from `command_permissions` (which carries an allow-list
+        // of specific tool patterns). `permission-mode` records claude's
+        // top-level permission mode transition — accept-edits, plan,
+        // bypass, default. 194 of these in the local JSONLs; previously
+        // dropped to default null so viewers had no signal that the user
+        // had toggled Shift+Tab. Surface as a mode_change frame the
+        // readonly viewer can render as a pill, paralleling the live
+        // `mode-change` WS event.
+        return {
+          role: 'mode_change',
+          mode: att.mode || att.permissionMode || 'default',
+          state: 'changed',
+          uuid, ts,
+        };
       default:
         return null; // unknown attachment kind — passive metadata, skip
     }

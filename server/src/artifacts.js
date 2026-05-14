@@ -310,6 +310,21 @@ function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 function register(app, deps) {
   const { fileApiPreamble, getPtySession, handleChatMessage } = deps;
 
+  // Push an artifact replace to every attached client. Called from every
+  // mutation route (refresh, run, mark, vote, comment, item delete) so
+  // concurrent viewers see voter counts / comment threads / item lists
+  // update without a round-trip. Silently no-ops if the PTY session
+  // isn't tracked (cleared / exited).
+  function broadcastArtifact(sessionId, type, artifact) {
+    const session = getPtySession(sessionId);
+    if (!session) return;
+    session.emit('state-update', {
+      kind: 'artifact',
+      artifactType: type,
+      artifact,
+    });
+  }
+
   // GET — return the persisted artifact (or an empty stub of the right shape).
   // For type=arch we prefer the on-disk <cwd>/architecture.md when present
   // so a user (or claude) editing the file is the source of truth, not the
@@ -384,6 +399,7 @@ function register(app, deps) {
     // so a teammate cloning the repo sees the fresh extraction without
     // needing a session-state migration step.
     persistArtifact(ctx.rec, type, artifact);
+    broadcastArtifact(ctx.id, type, artifact);
     res.json({ artifact });
   });
 
@@ -414,6 +430,7 @@ function register(app, deps) {
     item.done = true;
     item.ranAt = new Date().toISOString();
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({ ok: true, item, artifact: ctx.rec.artifacts[type] });
   });
 
@@ -432,6 +449,7 @@ function register(app, deps) {
     if (!item) return res.status(404).json({ error: 'no such item' });
     item.done = done;
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({ ok: true, item });
   });
 
@@ -478,6 +496,7 @@ function register(app, deps) {
 
     const autoFired = action === 'added' ? autoFireIfQuorum(ctx, type, item) : null;
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({
       ok: true,
       item,
@@ -515,6 +534,7 @@ function register(app, deps) {
       item.comments = item.comments.slice(-COMMENTS_PER_ITEM_MAX);
     }
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({ ok: true, comment, item });
   });
 
@@ -532,6 +552,7 @@ function register(app, deps) {
     artifact.items = artifact.items.filter((it) => it.id !== itemId);
     if (artifact.items.length === before) return res.status(404).json({ error: 'no such item' });
     persistArtifact(ctx.rec, type, artifact);
+    broadcastArtifact(ctx.id, type, artifact);
     res.json({ ok: true, artifact });
   });
 
@@ -554,6 +575,7 @@ function register(app, deps) {
     item.comments = item.comments.filter((c) => !(c.id === commentId && (c.user === user || isOwner)));
     if (item.comments.length === before) return res.status(403).json({ error: 'not your comment' });
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({ ok: true, item });
   });
 }

@@ -19,6 +19,7 @@ const {
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 const authMod = require('./auth');
+const artifactsMod = require('./artifacts');
 
 // "@<word> <body>" chat messages get routed to the running Claude PTY.
 // Historically this only matched "@myco"; users typed "@generate" /
@@ -83,6 +84,16 @@ class PtySession extends EventEmitter {
     this.menuInterceptor = new MenuInterceptor();
     this.pendingMenu = null;
     this._menuDebounce = null;
+    // In-flight tool-call tracker. Keyed by tool_use id; populated when
+    // an assistant message lands with a tool_use block, drained when the
+    // matching user-message tool_result arrives. The chat pane uses this
+    // to surface a "waiting on Agent · 47s" indicator so long-running
+    // tools (Agent, Monitor, Bash with sleeps, …) don't look like the
+    // session has hung. _seenToolMsgUuids dedups the cross-fire from
+    // multiple transcript watchers (one per attached WS) all seeing the
+    // same JSONL append.
+    this.openToolCalls = new Map();
+    this._seenToolMsgUuids = new Set();
     // Separate throttle for status emits. Decoupled from menu detection
     // because status frames don't need the 250ms alt-screen quiet period
     // (the spinner line lives in main scrollback, not the alt-screen
@@ -285,6 +296,14 @@ class PtySession extends EventEmitter {
       }
     }
     if (!change) return;
+    if (change.kind === 'newMenu' || change.kind === 'cleared') {
+      // Stamp any prior unanswered menu rows as superseded before
+      // broadcasting the new one (or clearing). The chat-pane picker
+      // collapses superseded rows to a one-line resolved card (see
+      // isResolvedMenu in app.js) so old buttons can't be clicked
+      // against a dialog claude has already advanced past.
+      _supersedeStaleMenus(this.sessionId);
+    }
     if (change.kind === 'newMenu') {
       this.pendingMenu = change.menu;
       this.emit('menu', change.menu);
@@ -337,6 +356,55 @@ class PtySession extends EventEmitter {
     return lines.join('\n');
   }
 
+  // Walk a batch of transcript-delta messages and update openToolCalls.
+  // Each WS attach spins up its own transcript watcher, so the same
+  // batch can arrive multiple times — `_seenToolMsgUuids` dedups by the
+  // parsed message uuid so we update the map (and emit) at most once
+  // per message. Assistant frames with `toolCalls` insert; tool_result
+  // user frames delete. Emits a `state-update { kind: 'tool-progress' }`
+  // when anything changed; idempotent if not.
+  ingestTranscriptForToolProgress(messages) {
+    if (!Array.isArray(messages) || !messages.length) return;
+    let changed = false;
+    for (const m of messages) {
+      if (!m || !m.uuid) continue;
+      if (this._seenToolMsgUuids.has(m.uuid)) continue;
+      this._seenToolMsgUuids.add(m.uuid);
+      if (m.role === 'assistant' && Array.isArray(m.toolCalls)) {
+        for (const tc of m.toolCalls) {
+          if (!tc || !tc.id) continue;
+          if (this.openToolCalls.has(tc.id)) continue;
+          this.openToolCalls.set(tc.id, {
+            name: tc.name || 'tool',
+            summary: (tc.summary || '').slice(0, 200),
+            ts: m.ts || new Date().toISOString(),
+          });
+          changed = true;
+        }
+      } else if (m.role === 'tool_result' && Array.isArray(m.results)) {
+        for (const r of m.results) {
+          if (!r || !r.toolUseId) continue;
+          if (this.openToolCalls.delete(r.toolUseId)) changed = true;
+        }
+      }
+    }
+    if (changed) this._emitToolProgress();
+  }
+
+  _emitToolProgress() {
+    const now = Date.now();
+    const open = [];
+    for (const [id, info] of this.openToolCalls) {
+      open.push({
+        id,
+        name: info.name,
+        summary: info.summary,
+        sinceMs: Math.max(0, now - new Date(info.ts).getTime()),
+      });
+    }
+    this.emit('state-update', { kind: 'tool-progress', open });
+  }
+
   kill() {
     if (this.alive) {
       try { this.pty.kill(); } catch {}
@@ -346,6 +414,8 @@ class PtySession extends EventEmitter {
     this.headless = null;
     this.buffer = [];
     this.bufferSize = 0;
+    this.openToolCalls.clear();
+    this._seenToolMsgUuids.clear();
     this.removeAllListeners();
   }
 }
@@ -799,12 +869,64 @@ function _markMenuChatAnswered(sessionId, n, hash, submit) {
       }
       m.meta.answered = true;
       sessionsMod.saveStore();
+      // Push the meta change to every attached client so concurrent
+      // viewers see the picker collapse to a resolved card immediately
+      // — pre-fix the answered stamp was only visible after reconnect.
+      _emitMenuStateUpdate(sessionId, m);
       console.log(`[menu-pick] ${sessionId} stamped answered=true ${submit ? 'submitted' : `pickedN=${n}`}${hash ? ' (byHash)' : ''}`);
       return;
     }
   } catch (err) {
     console.error(`[menu-pick] persist failed for ${sessionId}: ${err.message}`);
   }
+}
+
+// Walk the chat history and stamp every unanswered, unsuperseded menu
+// row with meta.superseded = true. Called when claude advances the TUI
+// past a menu without the user picking (MenuInterceptor returns
+// `newMenu` for a replacement, or `cleared` when the dialog disappears).
+// Each stamped row gets a state-update emit so concurrent viewers
+// collapse the picker to a one-line resolved card — pre-fix, the
+// stale picker stayed live and the hash-guard silently dropped any
+// click as a no-op.
+function _supersedeStaleMenus(sessionId) {
+  if (!sessionId) return;
+  try {
+    const store = sessionsMod.loadStore();
+    const rec = store.sessions[sessionId];
+    if (!rec || !Array.isArray(rec.chat)) return;
+    let changed = false;
+    for (let i = rec.chat.length - 1; i >= 0; i--) {
+      const m = rec.chat[i];
+      if (!m || !m.meta || m.meta.kind !== 'menu') continue;
+      if (m.meta.answered) continue;
+      if (m.meta.superseded) continue;
+      m.meta.superseded = true;
+      changed = true;
+      _emitMenuStateUpdate(sessionId, m);
+    }
+    if (changed) sessionsMod.saveStore();
+  } catch (err) {
+    console.error(`[menu-supersede] failed for ${sessionId}: ${err.message}`);
+  }
+}
+
+// Push a menu row's updated meta to every attached client. The chat
+// pane locates the row by transcriptUuid (the stable per-message id
+// stamped at broadcast time) and re-renders that single row in place
+// using the dedup-hit pattern that appendChatMessage already uses
+// (web/public/app.js:1763-1771). No-op if the session isn't tracked
+// (cleared / exited).
+function _emitMenuStateUpdate(sessionId, m) {
+  if (!m || !m.meta) return;
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  session.emit('state-update', {
+    kind: 'menu',
+    messageUuid: m.meta.transcriptUuid || null,
+    hash: (m.meta.menu && m.meta.menu.hash) || null,
+    meta: m.meta,
+  });
 }
 
 // Flip the `checked` flag on option <n> of the multi-select chat row
@@ -828,6 +950,9 @@ function _toggleMenuChatCheckbox(sessionId, n, hash) {
       if (!opt || !opt.checkbox) return;
       opt.checked = !opt.checked;
       sessionsMod.saveStore();
+      // Same broadcast as the answered stamp — viewers need to see
+      // the checkbox flip without waiting for a reconnect.
+      _emitMenuStateUpdate(sessionId, m);
       return;
     }
   } catch (err) {
@@ -851,6 +976,7 @@ function streamTranscriptToWs(sessionId, ws) {
   let unwatch = null;
   let closed = false;
   let watchingPath = null;     // jsonl file the current watcher is bound to
+  const session = sessions.get(sessionId);
 
   function startWatching(filePath) {
     watchingPath = filePath;
@@ -861,6 +987,11 @@ function streamTranscriptToWs(sessionId, ws) {
       // jsonl into rec.chat. This catches messages claude produced
       // BEFORE any client was attached. Idempotent via uuid dedup.
       persistAssistantTextToChat(sessionId, messages);
+      // Drive the session's in-flight tool-call tracker from the same
+      // batch. Dedups internally by message uuid, so multiple watchers
+      // (one per attached WS) firing on the same JSONL append don't
+      // double-count.
+      if (session) session.ingestTranscriptForToolProgress(messages);
       // Hand bytesRead to watchTranscript so its watcher starts from where
       // we left off, not from byte 0. Without this, the watcher's own
       // initial-read would replay the entire transcript a second time as
@@ -874,6 +1005,7 @@ function streamTranscriptToWs(sessionId, ws) {
         // on the client adds `_localOnly: true` rows that never reach
         // disk, leaving the chat pane blank on reload.
         persistAssistantTextToChat(sessionId, newMsgs);
+        if (session) session.ingestTranscriptForToolProgress(newMsgs);
       }, { startByte: bytesRead });
     }).catch(() => {});
   }
@@ -934,6 +1066,13 @@ function attachWebSocket(session, ws, opts = {}) {
   if (history.length) {
     ws.send(JSON.stringify({ t: 'chat-history', messages: history }));
   }
+  // Bootstrap PTY-derived state so a fresh / reconnecting client lands at
+  // full parity without waiting for the next emit. See the chat-pane
+  // sync plan: status/mode/artifacts all need an attach-time snapshot,
+  // otherwise viewers can sit on stale state indefinitely on a steady-
+  // state PTY (no `claude-status` / `mode-change` emit fires unless a
+  // value CHANGES).
+  _sendAttachSnapshot(session, ws);
 
   // Owners also receive the structured transcript so they can flip to a
   // "preview as viewer" mode in the UI without re-fetching. The helper
@@ -967,15 +1106,19 @@ function attachWebSocket(session, ws, opts = {}) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(JSON.stringify({ t: 'mode-change', ...change }));
   };
+  // state-update carries any state mutation that needs to push to every
+  // attached client (menu meta change, artifact replace, tool-progress
+  // update). The kind discriminator routes it on the client side.
+  const onStateUpdate = (payload) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'state-update', ...payload }));
+  };
   session.on('data', onData);
   session.on('exit', onExit);
   session.on('chat', onChat);
   session.on('claude-status', onStatus);
   session.on('mode-change', onModeChange);
-  // Send the CURRENT status snapshot on attach so a fresh client
-  // immediately knows whether claude is busy (no need to wait for a
-  // transition).
-  if (session._lastStatus !== undefined) onStatus(session._lastStatus);
+  session.on('state-update', onStateUpdate);
 
   ws.on('message', (raw) => {
     let msg;
@@ -1031,8 +1174,76 @@ function attachWebSocket(session, ws, opts = {}) {
     session.off('chat', onChat);
     session.off('claude-status', onStatus);
     session.off('mode-change', onModeChange);
+    session.off('state-update', onStateUpdate);
     stopTranscript();
   });
+}
+
+// Send the PTY-derived state snapshot to a freshly-attached WS. Used
+// for BOTH attachWebSocket (owner) and attachViewerWebSocket. Lets
+// every chat-pane / readonly view land at parity with the live PTY
+// without waiting for the next on-change emit.
+//
+// Frame order matches the live channels so the client's existing
+// handlers can replay them transparently:
+//   1. claude-status — spinner + token chips + interrupt badge. Always
+//      sent; status===null means "PTY idle, clear the strip."
+//   2. mode-snapshot — current plan/accept/bypass/default mode. The
+//      live `mode-change` event only fires on transition, so without
+//      this snapshot a viewer reconnecting in steady-state never sees
+//      a pill until the next Shift+Tab.
+//   3. artifacts-init — full plan/test/arch artifacts so the artifact
+//      tabs are instant on switch + always in sync. Read priority is
+//      <project>/_myco_/<type>.<ext> (canonical, shared via git) then
+//      in-memory rec.artifacts as fallback — same priority the GET
+//      /artifact route uses (artifacts.js).
+function _sendAttachSnapshot(session, ws) {
+  if (!ws || ws.readyState !== ws.OPEN) return;
+  try {
+    const status = session._lastStatus || null;
+    const text = status && status.text ? status.text : null;
+    ws.send(JSON.stringify({ t: 'claude-status', text, status }));
+  } catch {}
+  try {
+    ws.send(JSON.stringify({ t: 'mode-snapshot', mode: session._lastMode || 'default' }));
+  } catch {}
+  try {
+    const sessionId = session.sessionId;
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    if (!rec) return;
+    const artifacts = {};
+    for (const type of ['plan', 'test', 'arch']) {
+      // On-disk wins (committed _myco_/<type>.<ext>); fall back to the
+      // in-memory rec.artifacts[type] when no project root is resolved
+      // (e.g. session.absCwd doesn't contain a .git/).
+      const fromFile = artifactsMod.__test.readArtifactFromFile(rec, type);
+      const inMem = rec.artifacts && rec.artifacts[type];
+      const picked = fromFile || inMem || null;
+      if (picked) artifacts[type] = picked;
+    }
+    ws.send(JSON.stringify({ t: 'artifacts-init', artifacts }));
+  } catch (err) {
+    console.error(`[attach-snapshot] artifacts-init failed: ${err.message}`);
+  }
+  // Tool-progress snapshot: the in-flight tool list at the moment the
+  // client connects. Sent as a state-update (same kind the live stream
+  // uses) so the client handler is one path. Idempotent — re-sending
+  // when the list hasn't changed just produces a redundant render.
+  try {
+    if (session.openToolCalls && session.openToolCalls.size >= 0) {
+      const now = Date.now();
+      const open = [];
+      for (const [id, info] of session.openToolCalls) {
+        open.push({
+          id,
+          name: info.name,
+          summary: info.summary,
+          sinceMs: Math.max(0, now - new Date(info.ts).getTime()),
+        });
+      }
+      ws.send(JSON.stringify({ t: 'state-update', kind: 'tool-progress', open }));
+    }
+  } catch {}
 }
 
 function attachViewerWebSocket(session, ws, opts = {}) {
@@ -1044,6 +1255,9 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   if (history.length) {
     ws.send(JSON.stringify({ t: 'chat-history', messages: history }));
   }
+  // Bootstrap PTY-derived state — see _sendAttachSnapshot for rationale.
+  _sendAttachSnapshot(session, ws);
+
   const onChat = (message) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'chat', message }));
   };
@@ -1058,10 +1272,13 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const onModeChange = (change) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'mode-change', ...change }));
   };
+  const onStateUpdate = (payload) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'state-update', ...payload }));
+  };
   session.on('chat', onChat);
   session.on('claude-status', onStatus);
   session.on('mode-change', onModeChange);
-  if (session._lastStatus !== undefined) onStatus(session._lastStatus);
+  session.on('state-update', onStateUpdate);
 
   // viewer-mode includes the owner login so the client can render a
   // "Read-only — owned by @kkrazy" badge above the transcript.
@@ -1110,6 +1327,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     session.off('chat', onChat);
     session.off('claude-status', onStatus);
     session.off('mode-change', onModeChange);
+    session.off('state-update', onStateUpdate);
     stopTranscript();
   });
 }

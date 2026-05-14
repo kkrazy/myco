@@ -1570,12 +1570,24 @@ test_chat_window() {
   # readonly viewers see the same narrative the owner does in their TUI.
   if have_node; then
     if node test/transcript-parser-types.test.js >/dev/null 2>&1; then
-      pass "test/transcript-parser-types.test.js (17 cases)"
+      pass "test/transcript-parser-types.test.js (21 cases)"
     else
       fail "test/transcript-parser-types.test.js — re-run with 'node test/transcript-parser-types.test.js' to see failures"
     fi
   else
     skip "test/transcript-parser-types.test.js (no host node)"
+  fi
+  # state-update broadcast paths — chat-pane ↔ PTY sync. Covers menu
+  # mutation emits, artifact mutation emits, in-flight tool tracker,
+  # attach snapshot frames, and client-side dispatcher wiring.
+  if have_node; then
+    if node test/state-update.test.js >/dev/null 2>&1; then
+      pass "test/state-update.test.js (17 cases)"
+    else
+      fail "test/state-update.test.js — re-run with 'node test/state-update.test.js' to see failures"
+    fi
+  else
+    skip "test/state-update.test.js (no host node)"
   fi
   # Regression: the PTY mode-change observer must emit ONLY on
   # transitions, not on every periodic safety scan. First scan
