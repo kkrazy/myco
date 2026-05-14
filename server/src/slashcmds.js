@@ -100,6 +100,12 @@ const COMMANDS = [
     handler: handleAllowList,
   },
   {
+    names: ['clear'],
+    summary: 'Wipe this session\'s discussion-pane chat (server-side + every attached client)',
+    usage: '/clear',
+    handler: handleClear,
+  },
+  {
     names: ['help'],
     summary: 'List available chat commands',
     usage: '/help',
@@ -385,6 +391,36 @@ async function handleAllowList(ctx) {
   out.push('Anything not matching allow (and not matching deny) is auto-rejected.');
   out.push('Use `/allow <pattern>` or `/deny <pattern>` to mutate.');
   ctx.reply(out.join('\n'));
+}
+
+// /clear — wipe rec.chat for this session and broadcast a chat-clear
+// state-update so every attached client wipes its local chat list. The
+// confirmation reply lands AFTER the clear, so the chat ends up holding
+// just that one row. The user's own "/clear" line was appended by
+// pty.handleChatMessage immediately before dispatch fired, but it's
+// part of rec.chat which we're about to empty — so it disappears too.
+function handleClear(ctx) {
+  const sessionId = ctx.sessionId;
+  if (!sessionId) { ctx.reply('(no session context — slash command dropped)'); return; }
+  let cleared = 0;
+  try {
+    cleared = sessionsMod.clearChatHistory(sessionId);
+  } catch (err) {
+    ctx.reply(`(failed to clear chat: ${err.message})`);
+    return;
+  }
+  try {
+    // Prefer ctx.session (passed by pty.handleChatMessage) and fall back to
+    // pty.getSession(id) so the slash-todo-inject-style unit tests, which
+    // only supply { sessionId, absCwd, reply }, still observe a no-op
+    // instead of a crash.
+    let session = ctx.session || null;
+    if (!session) {
+      try { session = require('./pty').getSession(sessionId); } catch {}
+    }
+    if (session) session.emit('state-update', { kind: 'chat-clear' });
+  } catch {}
+  ctx.reply(`✓ cleared ${cleared} chat message${cleared === 1 ? '' : 's'}`);
 }
 
 function handleHelp(ctx) {

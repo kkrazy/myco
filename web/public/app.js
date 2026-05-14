@@ -2699,10 +2699,11 @@ function _applyModeSnapshot(mode) {
 }
 
 // Dispatch a state-update WS frame to the right local applier based on
-// its `kind`. The server emits one of three shapes:
-//   { kind: 'menu',     messageUuid, hash, meta }
-//   { kind: 'artifact', artifactType, artifact }
+// its `kind`. The server emits one of these shapes:
+//   { kind: 'menu',          messageUuid, hash, meta }
+//   { kind: 'artifact',      artifactType, artifact }
 //   { kind: 'tool-progress', open: [{ id, name, summary, sinceMs }] }
+//   { kind: 'chat-clear' }   // /clear slash command — wipe local chat
 function _applyStateUpdate(msg) {
   if (!msg || !msg.kind) return;
   if (msg.kind === 'menu') {
@@ -2719,6 +2720,13 @@ function _applyStateUpdate(msg) {
   if (msg.kind === 'tool-progress') {
     state.openToolCalls = Array.isArray(msg.open) ? msg.open : [];
     _renderClaudeTyping();   // strip reuses the existing typing-indicator render path
+    return;
+  }
+  if (msg.kind === 'chat-clear') {
+    // /clear slash command — wipe local chat list. The server has
+    // already emptied rec.chat; a confirmation reply will arrive on the
+    // following 'chat' frame.
+    clearChat();
     return;
   }
 }

@@ -369,6 +369,27 @@ test_best_practices_template() {
   else
     skip "test/slash-todo-inject.test.js (no host node)"
   fi
+  # /clear must wipe rec.chat AND emit a chat-clear state-update so all
+  # attached chat panes drop their local list. Pair of static greps +
+  # the runtime regression test below.
+  grep -q "names: \['clear'\]" server/src/slashcmds.js \
+    && pass "slashcmds: /clear command registered" \
+    || fail "slashcmds: /clear command registered"
+  grep -q "kind: 'chat-clear'" server/src/slashcmds.js \
+    && pass "slashcmds: /clear emits chat-clear state-update" \
+    || fail "slashcmds: /clear emits chat-clear state-update"
+  grep -q "msg.kind === 'chat-clear'" web/public/app.js \
+    && pass "app.js: state-update handles chat-clear kind" \
+    || fail "app.js: state-update handles chat-clear kind"
+  if have_node; then
+    if node test/slash-clear.test.js >/dev/null 2>&1; then
+      pass "test/slash-clear.test.js (4 cases)"
+    else
+      fail "test/slash-clear.test.js — re-run with 'node test/slash-clear.test.js' to see failures"
+    fi
+  else
+    skip "test/slash-clear.test.js (no host node)"
+  fi
 }
 
 test_conv_view_css() {

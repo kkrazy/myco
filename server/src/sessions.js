@@ -579,6 +579,22 @@ function appendChatMessage(sessionId, msg) {
   return msg;
 }
 
+// Wipe the discussion-pane chat history for a session and persist.
+// Returns the number of messages removed (0 if the session is missing
+// or had no chat yet). The /clear slash command pairs this with a
+// `state-update { kind: 'chat-clear' }` broadcast so live clients wipe
+// their local list — without that broadcast, attached panes would keep
+// rendering the now-orphaned messages until reload.
+function clearChatHistory(sessionId) {
+  const store = loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return 0;
+  const n = Array.isArray(rec.chat) ? rec.chat.length : 0;
+  rec.chat = [];
+  saveStore();
+  return n;
+}
+
 // ─── per-file Claude threads (file viewer) ──────────────────────────────────
 //
 // Schema: rec.fileChats = { "<relPath>": { messages: [...], lastTouched } }
@@ -660,6 +676,7 @@ Object.assign(module.exports, {
   importExistingTranscripts,
   getChatHistory,
   appendChatMessage,
+  clearChatHistory,
   // exposed for summarizer + share-info
   loadStore,
   saveStore,
