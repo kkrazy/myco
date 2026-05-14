@@ -275,6 +275,25 @@ function showTerminalView() {
   if (state.term) requestAnimationFrame(() => { try { state.term.scrollToBottom(); } catch {} });
 }
 
+// 📜 transcript chrome icon — unconditional "show the readonly
+// transcript viewer." For owners this also flips state.previewAsViewer
+// so the artifact-toggle/main-view machinery treats us as being in
+// readonly mode (matches what 👁 preview does when toggling INTO
+// readonly). Mutually-exclusive with the artifact / files panes via
+// _hideMainPaneSiblings inside showConversationView.
+function showTranscriptView() {
+  showConversationView();
+  state.previewAsViewer = true;
+  document.getElementById('btn-preview-readonly')?.classList.add('active');
+  document.getElementById('btn-transcript')?.classList.add('active');
+  // Clear active class from sibling chrome buttons so the active-state
+  // indicator stays at most on one icon. Files/artifact panes get
+  // hidden by showConversationView → _hideMainPaneSiblings.
+  for (const id of ['btn-files', 'btn-plan', 'btn-arch', 'btn-test']) {
+    document.getElementById(id)?.classList.remove('active');
+  }
+}
+
 function showTranscriptWaiting() {
   showConversationView();
   const content = document.getElementById('conv-content');
@@ -1514,6 +1533,13 @@ function updateChatButton() {
     const el = document.getElementById('btn-' + t);
     if (el) el.hidden = !state.activeId || !hasContent;
   }
+  // 📜 transcript: available to everyone with an active session — same
+  // gate as the artifact toggles. Brings up the readonly conversation
+  // viewer (which is the same surface viewers default to). For owners
+  // it's a quick way to flip to readonly without going through the
+  // toggle-style 👁 preview.
+  const tbtn = document.getElementById('btn-transcript');
+  if (tbtn) tbtn.hidden = !state.activeId || !hasContent;
 }
 
 // Touch scroll handler. Synthesizes WheelEvents from finger deltas + has a
@@ -2995,6 +3021,12 @@ function bindChatUi() {
   //     other is always visible in the main pane).
   document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(true));
   document.getElementById('btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview);
+  // 📜 transcript — single-click activator (same show-only contract as
+  // the other chrome icons). Always brings up the readonly conversation
+  // view regardless of which main pane is currently active. Distinct
+  // from 👁 preview: preview toggles between terminal ↔ readonly, this
+  // one is unconditional "show me the transcript".
+  document.getElementById('btn-transcript')?.addEventListener('click', showTranscriptView);
   // The legacy chatpane-close × was removed; #btn-chat itself toggles
   // open/closed via its .active state. Optional-chain still leaves this
   // a no-op for any cached page that still has the old element.

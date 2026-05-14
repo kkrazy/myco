@@ -1247,6 +1247,17 @@ test_chat_window() {
   grep -qF "btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview)" web/public/app.js \
     && pass "app.js: btn-preview-readonly remains the only two-state toggle" \
     || fail "app.js: btn-preview-readonly no longer toggles between terminal/readonly"
+  # 📜 transcript chrome icon — show-only activator for the readonly
+  # conversation viewer. Sits first in the right-side chrome cluster.
+  grep -qF 'id="btn-transcript"' web/public/index.html \
+    && pass "index.html: btn-transcript declared in chrome cluster" \
+    || fail "index.html: btn-transcript missing"
+  grep -qF "btn-transcript')?.addEventListener('click', showTranscriptView)" web/public/app.js \
+    && pass "app.js: btn-transcript click is show-only (showTranscriptView)" \
+    || fail "app.js: btn-transcript click handler not wired"
+  grep -qF 'function showTranscriptView' web/public/app.js \
+    && pass "app.js: showTranscriptView helper defined" \
+    || fail "app.js: showTranscriptView helper missing"
   # Always-tail contract: chat/conv/xterm are tail-readers — they
   # should always pin to the latest content. New transcript messages
   # must unconditionally scroll; the previous isConvAtBottom() guard
