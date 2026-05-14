@@ -19,7 +19,20 @@ const {
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 const authMod = require('./auth');
-const artifactsMod = require('./artifacts');
+// Late-bound: requiring artifacts.js at module load time pulled
+// extractor.js into the partial-load window of the
+// sessions.js ↔ pty.js cycle. extractor.js destructures
+// { projectsDir, encodeCwdForClaude, getChatHistory } from sessions —
+// which at that point hadn't yet evaluated its module.exports
+// assignment, so the destructured names were undefined. Result:
+// "projectsDir is not a function" at every /artifact/refresh call.
+// Resolve lazily inside _sendAttachSnapshot via this getter so the
+// require runs AFTER all cycle modules have finished loading.
+let _artifactsMod = null;
+function getArtifactsMod() {
+  if (!_artifactsMod) _artifactsMod = require('./artifacts');
+  return _artifactsMod;
+}
 
 // "@<word> <body>" chat messages get routed to the running Claude PTY.
 // Historically this only matched "@myco"; users typed "@generate" /
@@ -1225,7 +1238,7 @@ function _sendAttachSnapshot(session, ws) {
       // On-disk wins (committed _myco_/<type>.<ext>); fall back to the
       // in-memory rec.artifacts[type] when no project root is resolved
       // (e.g. session.absCwd doesn't contain a .git/).
-      const fromFile = artifactsMod.__test.readArtifactFromFile(rec, type);
+      const fromFile = getArtifactsMod().__test.readArtifactFromFile(rec, type);
       const inMem = rec.artifacts && rec.artifacts[type];
       const picked = fromFile || inMem || null;
       if (picked) artifacts[type] = picked;
