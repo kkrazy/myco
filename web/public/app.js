@@ -1435,6 +1435,12 @@ function openSession(id, opts = {}) {
 function setSidebar(collapsed) {
   document.getElementById('sidebar').hidden = collapsed;
   document.getElementById('btn-expand').hidden = !collapsed;
+  // Mirror the visibility into a class on <html> so the chatpane width
+  // calc can drop the --sidebar-w subtraction when the sidebar isn't
+  // taking horizontal space. Without this, --chatpane-w stays at
+  // (100vw - 280px)/2 even after the sidebar is hidden, leaving an
+  // unbalanced layout when the user collapses the session list.
+  document.documentElement.classList.toggle('sidebar-collapsed', !!collapsed);
   // Mobile: sidebar and chatpane are mutually exclusive — only one full-screen
   // overlay at a time. Showing sidebar dismisses chat.
   if (!collapsed && window.innerWidth <= 900) setChatPane(false);

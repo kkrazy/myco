@@ -1177,8 +1177,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
    50/50 split by default. The drag-handle (#chatpane-resize) overrides
    this with a px value persisted in localStorage when the user resizes;
    without a stored value, the calc() applies on each load and
-   auto-adjusts to viewport size. */
+   auto-adjusts to viewport size. When the sidebar is collapsed
+   (html.sidebar-collapsed, toggled by setSidebar in app.js), drop the
+   --sidebar-w subtraction so the split is half of the FULL viewport. */
 :root { --chatpane-w: calc((100vw - var(--sidebar-w)) / 2); }
+html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 
 /* Chat layout:
      desktop — a RIGHT sidebar (var(--chatpane-w) wide, resizable via
