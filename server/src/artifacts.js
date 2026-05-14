@@ -16,6 +16,52 @@ const { saveStore } = require('./sessions');
 
 const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
 
+// Type glyph used in the chat-message title when an artifact item is
+// dispatched. Mirrors the chrome buttons in index.html (📋/🧪/🏗️) so
+// the chat row visually matches the artifact pane the item came from.
+const ARTIFACT_TYPE_GLYPH = { plan: '📋', test: '🧪', arch: '🏗️' };
+
+// Build the text that lands in BOTH the chat-history (for viewer
+// awareness) and the running Claude PTY (`@myco <body>` prefix is
+// stripped server-side, the rest becomes Claude's input). Format:
+//
+//   @myco [📋 Plan item · submitted by @kkrazy]
+//   {item.text}
+//
+//   Comments:
+//   - @alice: …
+//   - @bob: …
+//
+// The title line keeps the type + submitter visible at a glance in
+// chat; the body is what Claude executes on; comments come last so
+// they augment but don't bury the primary instruction.
+function _artifactLabel(type) {
+  return type === 'plan' ? 'Plan item' : type === 'test' ? 'Test item' : 'Item';
+}
+function _artifactCommentsBlock(item) {
+  const comments = Array.isArray(item.comments) ? item.comments : [];
+  if (!comments.length) return [];
+  const lines = ['', 'Comments:'];
+  for (const c of comments) {
+    if (!c || !c.text) continue;
+    const author = c.user ? `@${c.user}` : 'anon';
+    const body = String(c.text).replace(/\s+/g, ' ').trim();
+    lines.push(`- ${author}: ${body}`);
+  }
+  return lines;
+}
+function buildArtifactRunText(type, item, user) {
+  const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
+  const header = `[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
+  return [`@myco ${header}`, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
+}
+function buildArtifactQuorumText(type, item) {
+  const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
+  const voters = (item.voters || []).map((v) => `@${v}`).join(', ');
+  const header = `[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
+  return [`@myco ${header}`, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
+}
+
 // The Arch artifact (markdown body) is mirrored to <session-cwd>/architecture.md
 // so it lives with the project (version-controllable, editable from claude
 // or directly), instead of only inside myco's sessions.json. GET prefers
@@ -165,7 +211,8 @@ function register(app, deps) {
     if (!session) return res.status(409).json({ error: 'session not running' });
 
     try {
-      handleChatMessage(ctx.id, session, reqUser(req, ctx), `@myco ${item.text}`);
+      const user = reqUser(req, ctx);
+      handleChatMessage(ctx.id, session, user, buildArtifactRunText(type, item, user));
     } catch (err) {
       console.error(`[artifact] run failed: ${err.message}`);
       return res.status(500).json({ error: 'dispatch failed', detail: err.message });
@@ -204,7 +251,10 @@ function register(app, deps) {
     const session = getPtySession(ctx.id);
     if (!session) return { err: 'session not running, vote stored but not dispatched' };
     try {
-      handleChatMessage(ctx.id, session, 'auto-quorum', `@myco ${item.text}`);
+      // Quorum dispatch — title names the voters so both chat viewers
+      // and Claude see who drove the auto-fire. Same body+comments
+      // shape as manual run for visual consistency.
+      handleChatMessage(ctx.id, session, 'auto-quorum', buildArtifactQuorumText(type, item));
     } catch (err) {
       return { err: `dispatch failed: ${err.message}` };
     }
@@ -314,4 +364,4 @@ function register(app, deps) {
   });
 }
 
-module.exports = { register, ARTIFACT_TYPES, AUTO_EXECUTE_VOTE_THRESHOLD };
+module.exports = { register, ARTIFACT_TYPES, AUTO_EXECUTE_VOTE_THRESHOLD, buildArtifactRunText, buildArtifactQuorumText };

@@ -1200,6 +1200,45 @@ test_chat_window() {
   grep -q "AUTO_EXECUTE_VOTE_THRESHOLD" server/src/artifacts.js \
     && pass "vote auto-execute threshold defined" \
     || fail "vote auto-execute threshold defined"
+  # When an artifact item is dispatched (manual /run or auto-quorum) the
+  # text that lands in BOTH the chat history and Claude's PTY input must
+  # carry: the @myco prefix (so the PTY pipeline forwards it), a title
+  # line naming the artifact type + the submitter, the item body, and
+  # any per-item comments. Chat viewers see who triggered what at a
+  # glance; Claude executes against the full instruction (body +
+  # comments). Tests run via node since the helper is exported.
+  if have_node; then
+    node -e "
+      const a = require('./server/src/artifacts');
+      // Manual run — submitter is a real user.
+      const t1 = a.buildArtifactRunText('plan', {
+        text: 'Wire up the /v2/orders cursor pager',
+        comments: [
+          { user: 'alice', text: 'don\\'t forget the limit clamp' },
+          { user: 'bob',   text: 'tenant scoping at query time, please' },
+        ],
+      }, 'kkrazy');
+      if (!t1.startsWith('@myco ')) throw new Error('manual-run text must start with @myco prefix');
+      if (!/\[📋 Plan item · submitted by @kkrazy\]/.test(t1)) throw new Error('manual-run title missing type+submitter — got: ' + JSON.stringify(t1));
+      if (!t1.includes('Wire up the /v2/orders cursor pager')) throw new Error('manual-run text missing body');
+      if (!t1.includes('- @alice: don\\'t forget the limit clamp')) throw new Error('manual-run text missing alice comment');
+      if (!t1.includes('- @bob: tenant scoping at query time, please')) throw new Error('manual-run text missing bob comment');
+      // Test artifact uses the 🧪 glyph.
+      const t2 = a.buildArtifactRunText('test', { text: 'k6 load run at 100 RPS', comments: [] }, 'kkrazy');
+      if (!/\[🧪 Test item · submitted by @kkrazy\]/.test(t2)) throw new Error('test title wrong glyph/label: ' + JSON.stringify(t2));
+      if (t2.includes('Comments:')) throw new Error('empty comments must NOT render a Comments: block');
+      // Quorum dispatch.
+      const t3 = a.buildArtifactQuorumText('plan', {
+        text: 'Ship the feature',
+        voters: ['alice', 'bob', 'charlie'],
+        comments: [{ user: 'alice', text: 'rolling out behind a flag' }],
+      });
+      if (!t3.startsWith('@myco ')) throw new Error('quorum text must start with @myco prefix');
+      if (!/quorum reached \\(3 voters: @alice, @bob, @charlie\\)/.test(t3)) throw new Error('quorum title missing voter list: ' + JSON.stringify(t3));
+      if (!t3.includes('- @alice: rolling out behind a flag')) throw new Error('quorum text missing comment');
+    " && pass "artifact run/quorum dispatch text carries type+submitter+comments" \
+      || fail "artifact buildArtifactRunText / buildArtifactQuorumText shape wrong"
+  fi
   grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"
   grep -q "onArtifactComment"     web/public/app.js && pass "onArtifactComment handler"     || fail "onArtifactComment handler"
   grep -q "onArtifactItemDelete"  web/public/app.js && pass "onArtifactItemDelete handler"  || fail "onArtifactItemDelete handler"
