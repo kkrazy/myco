@@ -148,14 +148,19 @@ compute_mycobeta_since() {
   if [[ -n "$mycobeta_since_override" ]]; then echo "$mycobeta_since_override"; return; fi
   local marker="${LOGS_DIR}/.last-fetch.mycobeta"
   if [[ -f "$marker" ]]; then
-    local last last_epoch since_epoch
+    local last
     last="$(cat "$marker" 2>/dev/null || true)"
     if [[ -n "$last" ]]; then
-      last_epoch="$(date -u -d "$last" +%s 2>/dev/null || echo 0)"
-      if [[ "$last_epoch" -gt 0 ]]; then
-        since_epoch=$((last_epoch - MYCOBETA_OVERLAP))
-        date -u -d "@$since_epoch" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null && return
-      fi
+      # BusyBox `date -d` doesn't grok RFC3339 with the 'T' or 'Z', so
+      # parse via node which handles ISO-8601 natively. Subtract a small
+      # OVERLAP so a line landing exactly on the marker boundary isn't
+      # dropped (dedup handles the resulting duplicates cheaply).
+      node -e '
+        const t = Date.parse(process.argv[1]);
+        if (!Number.isFinite(t)) process.exit(1);
+        const since = new Date(t - (parseInt(process.argv[2], 10) * 1000));
+        process.stdout.write(since.toISOString().replace(/\.\d{3}Z$/, "Z"));
+      ' "$last" "$MYCOBETA_OVERLAP" 2>/dev/null && return
     fi
   fi
   echo "1h"
