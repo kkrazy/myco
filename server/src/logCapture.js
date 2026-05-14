@@ -1,4 +1,8 @@
-const CAPACITY = 500;
+// Was 500. Bumped 2026-05-14 so the /loop diagnostic tick (every 30 min)
+// catches ~30 min of log activity instead of ~10 min — at the current
+// chatty rate (mostly /sessions polling + state-update bursts) the 500
+// cap was wrapping inside one tick window and the loop lost the middle.
+const CAPACITY = 5000;
 
 const buffer = [];
 let writeIdx = 0;
