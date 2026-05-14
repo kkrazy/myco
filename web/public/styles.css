@@ -1899,7 +1899,19 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   display: flex;
   flex-direction: column;
   background: #0a0e14;
+  /* Match the thin scrollbar used by #chat-messages, #conv-messages,
+     and the xterm viewport so the file explorer doesn't stand out
+     with the browser's default OS-styled scrollbar. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
+#files-tree-pane::-webkit-scrollbar { width: 8px; }
+#files-tree-pane::-webkit-scrollbar-track { background: transparent; }
+#files-tree-pane::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 145, .35);
+  border-radius: 4px;
+}
+#files-tree-pane::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 175, .55); }
 /* Both pane headers (tree + viewer) share the same min-height so the split
    reads as one banded row, and reserve enough horizontal space for the
    floating chrome buttons (☰ / 📁 / 💬) that overlay the top edge. */
@@ -2240,7 +2252,18 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   overflow: auto;
   background: #0d1117;
   -webkit-overflow-scrolling: touch;
+  /* Same thin scrollbar as #chat-messages / #conv-messages / xterm /
+     #files-tree-pane so all scrollers share one visual language. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
+#files-view-body::-webkit-scrollbar { width: 8px; height: 8px; }
+#files-view-body::-webkit-scrollbar-track { background: transparent; }
+#files-view-body::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 145, .35);
+  border-radius: 4px;
+}
+#files-view-body::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 175, .55); }
 .code-chunk {
   display: flex;
   font: 13px 'JetBrains Mono', 'SF Mono', Menlo, monospace;
