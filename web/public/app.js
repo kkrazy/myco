@@ -2689,11 +2689,20 @@ function _applyMenuStateUpdate(msg) {
     const match = (uuid && muUuid === uuid) || (hash && muHash === hash);
     if (!match) continue;
     m.meta = msg.meta || m.meta;
+    // CRITICAL: recompute isActiveMenu the same way renderChatPane does
+    // — `i === _findLastMenuMessageIdx(state.chatMessages)`. Hardcoding
+    // false here was the bug: a multi-select CHECKBOX TOGGLE emits a
+    // state-update for the same (still-unanswered) row, and the row
+    // re-rendered as not-active with no pickedN / not-submitted /
+    // not-superseded → renderChatMessage fell into the "(no longer
+    // active)" branch the moment the user clicked a checkbox.
+    const lastMenuIdx = _findLastMenuMessageIdx(state.chatMessages);
+    const isActive = (i === lastMenuIdx);
     const list = document.getElementById('chat-messages');
     const childCount = list ? list.children.length : 0;
-    console.log('[state-update] menu match idx=' + i + ' chatMessagesLen=' + state.chatMessages.length + ' domChildren=' + childCount + ' pickedN=' + (m.meta && m.meta.pickedN) + ' superseded=' + !!(m.meta && m.meta.superseded));
+    console.log('[state-update] menu match idx=' + i + ' isActive=' + isActive + ' chatMessagesLen=' + state.chatMessages.length + ' domChildren=' + childCount + ' pickedN=' + (m.meta && m.meta.pickedN) + ' answered=' + !!(m.meta && m.meta.answered) + ' superseded=' + !!(m.meta && m.meta.superseded));
     if (list && list.children[i]) {
-      const newEl = _htmlToNode(renderChatMessage(m, /*isActiveMenu*/ false));
+      const newEl = _htmlToNode(renderChatMessage(m, isActive));
       if (newEl) list.children[i].replaceWith(newEl);
     } else {
       console.warn('[state-update] menu match but DOM child missing at idx=' + i);

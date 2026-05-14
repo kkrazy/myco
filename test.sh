@@ -1582,7 +1582,7 @@ test_chat_window() {
   # attach snapshot frames, and client-side dispatcher wiring.
   if have_node; then
     if node test/state-update.test.js >/dev/null 2>&1; then
-      pass "test/state-update.test.js (17 cases)"
+      pass "test/state-update.test.js (18 cases)"
     else
       fail "test/state-update.test.js — re-run with 'node test/state-update.test.js' to see failures"
     fi

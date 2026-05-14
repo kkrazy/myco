@@ -222,6 +222,25 @@ t('app.js: appendTranscriptMessages has defensive timestamp sort', () => {
   assert.ok(/sort\(/.test(fn[0]), 'sort call missing');
 });
 
+t('app.js: _applyMenuStateUpdate recomputes isActiveMenu, does NOT hardcode false', () => {
+  // Regression: hardcoded `isActiveMenu=false` collapsed unanswered
+  // multi-select rows to "(no longer active)" the moment the user
+  // ticked a checkbox — the state-update broadcast for the toggle
+  // re-rendered the row as not-active, and since meta.pickedN was
+  // null + meta.answered was false + meta.superseded was false +
+  // isActiveMenu was now false, renderChatMessage fell into the
+  // catch-all "(no longer active)" branch. Fix: call
+  // _findLastMenuMessageIdx and pass `i === lastMenuIdx` so
+  // unanswered rows stay active across state-update re-renders.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  const fn = src.match(/function _applyMenuStateUpdate[\s\S]+?\n}/);
+  assert.ok(fn, '_applyMenuStateUpdate not found');
+  assert.ok(/_findLastMenuMessageIdx\(state\.chatMessages\)/.test(fn[0]),
+    '_applyMenuStateUpdate does not consult _findLastMenuMessageIdx — checkbox toggle will collapse the row');
+  assert.ok(/renderChatMessage\(m,\s*isActive\)/.test(fn[0]),
+    '_applyMenuStateUpdate still passing a fixed boolean instead of the computed isActive');
+});
+
 // --- Keepalive regression — pin the 30s server ping so it doesn't silently shrink
 t('index.js: server PING_INTERVAL_MS pinned at 30000', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'index.js'), 'utf8');
