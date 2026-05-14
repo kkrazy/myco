@@ -218,6 +218,70 @@ t('assistant with REDACTED thinking (empty .thinking) drops the thinking field',
   assert.ok(!r.thinking, 'no thinking array when content was redacted');
 });
 
+// ─── ExitPlanMode (plan markdown lives in tool_use.input.plan) ────────
+
+const FIX_EXIT_PLAN_MODE = JSON.stringify({
+  type: 'assistant',
+  uuid: 'exit-plan-uuid',
+  timestamp: '2026-05-14T00:04:51.985Z',
+  message: {
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'toolu_plan_01',
+        name: 'ExitPlanMode',
+        input: {
+          plan: '# /v2/orders — Cursor Pagination\n\n## Context\n\nKeyset query etc.',
+          planFilePath: '/root/.claude/plans/foo.md',
+        },
+      },
+    ],
+  },
+});
+
+t('ExitPlanMode tool_use lifts plan markdown into assistant.text', () => {
+  // Regression: demo010 plan generated 2026-05-14T00:04 never showed
+  // in the chat pane (persistAssistantTextToChat gates on non-empty
+  // text and a tool-only turn has none) and rendered as truncated
+  // JSON in the readonly viewer. The plan body must be surfaced as
+  // assistant text so both surfaces get the full markdown.
+  const r = parseLine(FIX_EXIT_PLAN_MODE);
+  assert.ok(r);
+  assert.strictEqual(r.role, 'assistant');
+  assert.ok(r.text.includes('# /v2/orders — Cursor Pagination'),
+    'plan markdown must appear in assistant.text — got: ' + JSON.stringify(r.text.slice(0, 200)));
+  // ExitPlanMode itself should NOT remain in toolCalls — it would
+  // double-surface (once as the text, once as a collapsed callout).
+  const planTcs = (r.toolCalls || []).filter((tc) => tc.name === 'ExitPlanMode');
+  assert.strictEqual(planTcs.length, 0, 'ExitPlanMode should be lifted out of toolCalls');
+});
+
+t('ExitPlanMode + text + sibling tool_use coexist correctly', () => {
+  // Edge case: claude could conceivably narrate alongside the plan,
+  // or pair ExitPlanMode with another tool_use. The plan goes into
+  // text; the OTHER tool_use stays in toolCalls.
+  const fix = JSON.stringify({
+    type: 'assistant',
+    uuid: 'mixed-uuid',
+    timestamp: 't',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Quick narration before the plan.' },
+        { type: 'tool_use', id: 'tu1', name: 'ExitPlanMode', input: { plan: '## The Plan', planFilePath: '/x' } },
+        { type: 'tool_use', id: 'tu2', name: 'Bash', input: { command: 'ls' } },
+      ],
+    },
+  });
+  const r = parseLine(fix);
+  assert.ok(r);
+  assert.ok(r.text.includes('## The Plan'), 'plan must appear in text');
+  assert.ok(r.text.includes('Quick narration'), 'narration must coexist with plan');
+  assert.strictEqual(r.toolCalls.length, 1, 'only the Bash call should remain in toolCalls');
+  assert.strictEqual(r.toolCalls[0].name, 'Bash');
+});
+
 // ─── Pre-existing branches still work (regression guards) ─────────────
 
 t('user message branch still works after parser changes', () => {

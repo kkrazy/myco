@@ -150,7 +150,21 @@ function parseLine(line) {
     if (!Array.isArray(content)) return null;
 
     const textBlocks = content.filter((b) => b && b.type === 'text' && b.text);
-    const toolBlocks = content.filter((b) => b && b.type === 'tool_use');
+    // ExitPlanMode is special: claude's plan markdown rides inside the
+    // tool_use's `input.plan` instead of a text block. If we route it
+    // through the regular toolCall path, the readonly viewer shows a
+    // truncated JSON summary and the chat-pane mirror skips the turn
+    // entirely (its persist gate ignores assistant messages whose text
+    // is empty). Pull plan-mode tool_uses out and treat their plan body
+    // as if it were a text block — both surfaces then render the plan
+    // as markdown, and the chat pane gets the row via the standard
+    // assistant-text persistence path.
+    const planBlocks = content.filter(
+      (b) => b && b.type === 'tool_use' && b.name === 'ExitPlanMode' && b.input && typeof b.input.plan === 'string' && b.input.plan.trim()
+    );
+    const toolBlocks = content.filter(
+      (b) => b && b.type === 'tool_use' && !(b.name === 'ExitPlanMode' && b.input && typeof b.input.plan === 'string')
+    );
     // Thinking blocks are claude's chain-of-thought reasoning. The
     // `.thinking` field carries the visible text on newer models;
     // older models redact it (encrypted blob in `.signature`, empty
@@ -166,7 +180,12 @@ function parseLine(line) {
 
     // Same trim as the user branch — strip leading/trailing whitespace so
     // the transcript pane renders cleanly without a leading blank line.
-    const text = textBlocks.map((b) => b.text).join('\n').trim();
+    // Plan markdown comes FIRST (it's the headline content of the turn);
+    // any narration text follows. Most ExitPlanMode turns have no text
+    // alongside the plan, but we keep the join robust for the edge.
+    const planText = planBlocks.map((b) => b.input.plan.trim()).filter(Boolean).join('\n\n');
+    const narrationText = textBlocks.map((b) => b.text).join('\n').trim();
+    const text = [planText, narrationText].filter(Boolean).join('\n\n');
     const toolCalls = toolBlocks.map((b) => ({
       name: b.name,
       id: b.id,
