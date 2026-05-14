@@ -1175,6 +1175,24 @@ test_chat_window() {
   grep -qF 'setChatPane(window.innerWidth > 900)' web/public/app.js \
     && fail "app.js: init still auto-opens chat on desktop — hides terminal at boot" \
     || pass "app.js: init no longer auto-opens chat (boots on terminal)"
+  # Chrome-icon click contract: every button except 👁 preview is a
+  # show-only activator (no toggle-off on second click). 👁 preview is
+  # the only two-state toggle, switching between terminal and readonly.
+  # Pre-fix, all five buttons toggled, so a second tap closed the view
+  # the user was on. The new contract makes the icons behave like a
+  # mutually-exclusive tab row.
+  grep -qF "setChatPane(true)" web/public/app.js \
+    && pass "app.js: btn-chat click is show-only (setChatPane(true))" \
+    || fail "app.js: btn-chat still toggles via setChatPane(!visible)"
+  grep -qF "showArtifactView(btn.dataset.type)" web/public/app.js \
+    && pass "app.js: plan/arch/test buttons are show-only" \
+    || fail "app.js: artifact buttons still call toggleArtifactView (closes on second click)"
+  grep -qF "btn.addEventListener('click', showFilesView)" web/public/app.js \
+    && pass "app.js: btn-files click is show-only" \
+    || fail "app.js: btn-files still toggles (closes on second click)"
+  grep -qF "btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview)" web/public/app.js \
+    && pass "app.js: btn-preview-readonly remains the only two-state toggle" \
+    || fail "app.js: btn-preview-readonly no longer toggles between terminal/readonly"
   # Plan / Arch / Test artifact views (promoted to top-level chrome buttons,
   # commit 15187ea). Each has its own main-pane container and a chrome button.
   for view in plan arch test; do

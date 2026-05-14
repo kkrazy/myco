@@ -2789,7 +2789,18 @@ function bindChatUi() {
     submitChat();
   });
 
-  document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(!state.chatPaneVisible));
+  // Chrome icon click contract:
+  //   chat / plan / arch / test / files  →  SHOW the corresponding
+  //     view. Each button has a single state action ("activate"); a
+  //     second click on the same button is a no-op (the view stays
+  //     open). To switch away, click a different view's icon — main-
+  //     pane buttons are mutually exclusive; chat lives alongside the
+  //     main view as a side panel.
+  //   preview                              →  TOGGLE between terminal
+  //     and readonly transcript. This is the only button with two
+  //     states, because the two views are reciprocal (one or the
+  //     other is always visible in the main pane).
+  document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(true));
   document.getElementById('btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview);
   // The legacy chatpane-close × was removed; #btn-chat itself toggles
   // open/closed via its .active state. Optional-chain still leaves this
@@ -2823,7 +2834,10 @@ function bindArtifactToggles() {
   document.querySelectorAll('.artifact-toggle').forEach((btn) => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = '1';
-    btn.addEventListener('click', () => toggleArtifactView(btn.dataset.type));
+    // Show-only on click — see the chrome-icon contract near
+    // bindChrome(). Switching away happens by clicking a different
+    // main-pane view (terminal/preview/files/plan/arch/test).
+    btn.addEventListener('click', () => showArtifactView(btn.dataset.type));
   });
   document.querySelectorAll('.artifact-refresh').forEach((btn) => {
     if (btn.dataset.bound) return;
@@ -3342,7 +3356,10 @@ function bindFilesUi() {
   const btn = document.getElementById('btn-files');
   if (!btn || btn.dataset.bound) return;
   btn.dataset.bound = '1';
-  btn.addEventListener('click', toggleFilesPane);
+  // Show-only on click — see the chrome-icon contract in bindChrome().
+  // Switching away from the files view happens by clicking another
+  // main-pane button (terminal/preview/plan/arch/test).
+  btn.addEventListener('click', showFilesView);
   document.getElementById('files-tree-back')?.addEventListener('click', () => {
     if (state.files.history.length === 0) return;
     const prev = state.files.history.pop();
