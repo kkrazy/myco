@@ -39,12 +39,14 @@ const state = {
   // Discussion state, scoped per active session. Cleared on switch.
   chatMessages: [],
   chatUser: null,
-  // Default true on desktop — the chat pane is the primary interaction
-  // surface and the readonly transcript on the left needs to be visible
-  // alongside it (50/50 split via --chatpane-w on desktop). Mobile keeps
-  // it false because the chat pane fills the main pane on narrow widths
-  // and a default-on would cover the session list on first paint.
-  chatPaneVisible: typeof window !== 'undefined' && window.innerWidth > 900,
+  // Default true on real desktop widths (≥1200px) — the chat pane is
+  // the primary interaction surface and the readonly transcript on the
+  // left needs to be visible alongside it (50/50 split via
+  // --chatpane-w). Tablets and mobile keep it false: chat is too cramped
+  // when split with the transcript, and on mobile the pane fills the
+  // whole main area so a default-on would cover the session list on
+  // first paint.
+  chatPaneVisible: typeof window !== 'undefined' && window.innerWidth >= 1200,
   shareMode: false, // kept for compat — no longer gates UI
   // Per-session file explorer state. Cleared when session changes.
   files: {
@@ -1261,9 +1263,9 @@ function openSession(id, opts = {}) {
     state.previewAsViewer = true;
     document.getElementById('btn-preview-readonly')?.classList.add('active');
   }
-  // Open the chat pane alongside on desktop. setChatPane(true) is a
-  // no-op if it's already open.
-  if (window.innerWidth > 900) setChatPane(true);
+  // Open the chat pane alongside on real desktop widths only. Tablets
+  // and mobile keep chat closed by default (toggle via 💬 if wanted).
+  if (window.innerWidth >= 1200) setChatPane(true);
 
   // websocket with auto-reconnect. `connect` is closure-bound to `id` and
   // `qs` so reconnect-after-close stays on this session; the `state.ws !==
@@ -3492,10 +3494,21 @@ function bindChatpaneResize() {
 
   const MIN_W = 240;
 
-  // Restore last-saved width.
+  // Restore last-saved width — but clamp against the current viewport
+  // so a value persisted at a wider window doesn't end up consuming
+  // 2/3 of a narrower screen. The CSS default calc((100vw -
+  // var(--sidebar-w)) / 2) already targets a 50/50 split of the main
+  // pane; saved values above 55% of (vw - sidebar) just look too wide
+  // and we fall back to the CSS calc.
   const saved = parseInt(localStorage.getItem('myco_chatpane_w') || '', 10);
-  if (Number.isFinite(saved) && saved >= MIN_W && saved <= 1200) {
+  const sidebarPx = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10) || 280;
+  const maxSensible = Math.floor((window.innerWidth - sidebarPx) * 0.55);
+  if (Number.isFinite(saved) && saved >= MIN_W && saved <= maxSensible) {
     document.documentElement.style.setProperty('--chatpane-w', saved + 'px');
+  } else if (Number.isFinite(saved) && saved > maxSensible) {
+    // Persisted width is too wide for this viewport — drop it so the
+    // CSS calc default takes over and the user lands on 50/50.
+    try { localStorage.removeItem('myco_chatpane_w'); } catch {}
   }
 
   let dragging = false;
