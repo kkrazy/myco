@@ -75,6 +75,26 @@ function summarizeToolInput(name, input) {
   if (name === 'Bash') return (input.command || '').substring(0, 200);
   if (name === 'Read' || name === 'Edit' || name === 'Write') return input.file_path || '';
   if (name === 'Agent') return input.description || '';
+  // AskUserQuestion's input shape:
+  //   { questions: [{ question, header, multiSelect, options: [{label, description}, …] }, …] }
+  // Without a custom summarizer this collapses to ~150 chars of escaped
+  // JSON braces in the readonly viewer's tool callout — unreadable for
+  // multi-question turns. Render each question + options as plain text
+  // (newlines preserved by .conv-tool-body { white-space: pre-wrap }).
+  // We DON'T lift this into the assistant.text field the way ExitPlanMode
+  // does — claude code's TUI surfaces AskUserQuestion as an interactive
+  // wizard whose menu broadcasts already land in chat via the menu
+  // interceptor; mirroring the question into chat too would double-post.
+  if (name === 'AskUserQuestion') {
+    const qs = Array.isArray(input.questions) ? input.questions : [];
+    if (!qs.length) return '(no questions)';
+    return qs.map((q, i) => {
+      const opts = Array.isArray(q.options) ? q.options : [];
+      const optsTxt = opts.map((o) => `  • ${o.label || ''}${o.description ? ' — ' + o.description : ''}`).join('\n');
+      const header = q.question || q.header || `Q${i + 1}`;
+      return `Q${i + 1}: ${header}${optsTxt ? '\n' + optsTxt : ''}`;
+    }).join('\n\n').substring(0, 4000);
+  }
   try { return JSON.stringify(input).substring(0, 150); } catch { return ''; }
 }
 

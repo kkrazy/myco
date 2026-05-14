@@ -282,6 +282,71 @@ t('ExitPlanMode + text + sibling tool_use coexist correctly', () => {
   assert.strictEqual(r.toolCalls[0].name, 'Bash');
 });
 
+// ─── AskUserQuestion summary (readable, not 150-char JSON stub) ───────
+
+t('AskUserQuestion summary renders questions + options as readable text', () => {
+  // Regression: demo010 had 24 AskUserQuestion tool_uses whose .input
+  // was a rich questions/options shape, but summarizeToolInput's generic
+  // fallback collapsed each to ~150 chars of escaped JSON — unreadable
+  // in the readonly viewer's tool callout. The custom branch must render
+  // question text + option labels on their own lines (newlines are
+  // preserved by .conv-tool-body { white-space: pre-wrap }).
+  const fix = JSON.stringify({
+    type: 'assistant',
+    uuid: 'auq-uuid',
+    timestamp: '2026-05-12T17:14:41.000Z',
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'toolu_auq_01',
+          name: 'AskUserQuestion',
+          input: {
+            questions: [
+              {
+                question: 'Pagination style?',
+                header: 'Page',
+                multiSelect: false,
+                options: [
+                  { label: 'Cursor', description: 'Opaque base64 keyset' },
+                  { label: 'Offset', description: 'Legacy limit/offset' },
+                ],
+              },
+              {
+                question: 'Telemetry hooks?',
+                header: 'Tel',
+                multiSelect: true,
+                options: [
+                  { label: 'Slow-query alert', description: 'Sentry rule' },
+                  { label: 'Decode counter', description: 'Prometheus' },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  const r = parseLine(fix);
+  assert.ok(r);
+  assert.strictEqual(r.toolCalls.length, 1);
+  const s = r.toolCalls[0].summary;
+  // Sanity: not JSON soup
+  assert.ok(!s.startsWith('{"questions":'), 'summary should not be raw JSON');
+  // Both questions present
+  assert.ok(s.includes('Pagination style?'), 'Q1 text missing');
+  assert.ok(s.includes('Telemetry hooks?'), 'Q2 text missing');
+  // Option labels present
+  assert.ok(s.includes('Cursor'), 'option label Cursor missing');
+  assert.ok(s.includes('Slow-query alert'), 'option label Slow-query alert missing');
+  // Option descriptions joined onto their labels
+  assert.ok(s.includes('Opaque base64 keyset'), 'option description missing');
+  // Multi-line shape so .conv-tool-body { white-space: pre-wrap } can
+  // render each question + option on its own line.
+  assert.ok(s.split('\n').length >= 4, 'expected multi-line summary, got: ' + JSON.stringify(s));
+});
+
 // ─── Pre-existing branches still work (regression guards) ─────────────
 
 t('user message branch still works after parser changes', () => {

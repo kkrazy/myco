@@ -2883,6 +2883,11 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   max-height: 400px;
   overflow-y: auto;
   border-left: 2px solid #30363d;
+  /* Preserve newlines in the body so multi-question / multi-line tool
+     summaries (AskUserQuestion, multi-step Bash heredocs) render
+     readably. textContent assigns newlines verbatim; default
+     white-space: normal collapses them into single spaces. */
+  white-space: pre-wrap;
 }
 /* Rendered-markdown layout inside tool output: trim default block margins,
    give code blocks the same look as the chat-text variant. The body's

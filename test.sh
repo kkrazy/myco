@@ -1405,7 +1405,7 @@ test_chat_window() {
   # readonly viewers see the same narrative the owner does in their TUI.
   if have_node; then
     if node test/transcript-parser-types.test.js >/dev/null 2>&1; then
-      pass "test/transcript-parser-types.test.js (16 cases)"
+      pass "test/transcript-parser-types.test.js (17 cases)"
     else
       fail "test/transcript-parser-types.test.js — re-run with 'node test/transcript-parser-types.test.js' to see failures"
     fi
