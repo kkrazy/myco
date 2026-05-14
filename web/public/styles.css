@@ -3234,6 +3234,39 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 8px;
   padding: 10px 12px;
 }
+/* Active (unanswered) menu cards get a brighter highlight — tinted
+   background, glowing left accent, and a soft outer shadow so a fresh
+   "🤔 Claude is waiting" prompt is impossible to miss in a long chat
+   scroll. The collapsed/resolved variant below opts out of all of this
+   so history stays calm. */
+.chat-msg.chat-msg-menu:not(.chat-msg-menu-collapsed) {
+  background: linear-gradient(180deg, rgba(210, 153, 34, .10) 0%, rgba(210, 153, 34, .04) 100%);
+  border-color: rgba(210, 153, 34, .35);
+  border-left-width: 4px;
+  border-left-color: #f0b440;
+  box-shadow:
+    0 0 0 1px rgba(210, 153, 34, .18),
+    0 2px 10px -2px rgba(210, 153, 34, .28);
+  animation: chat-menu-pulse 2.4s ease-in-out infinite;
+}
+@keyframes chat-menu-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(210, 153, 34, .18),
+      0 2px 10px -2px rgba(210, 153, 34, .28);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(210, 153, 34, .35),
+      0 2px 18px -2px rgba(210, 153, 34, .55);
+  }
+}
+/* Respect reduced-motion: keep the highlight, drop the pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg.chat-msg-menu:not(.chat-msg-menu-collapsed) {
+    animation: none;
+  }
+}
 /* Card header — the lead + question line(s). Subtle divider below it
    visually separates the header from the option rows. */
 /* Flatten the inner from-claude bubble when it sits inside a menu card —
