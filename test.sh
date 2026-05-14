@@ -1193,6 +1193,31 @@ test_chat_window() {
   grep -qF "btn-preview-readonly')?.addEventListener('click', toggleOwnerReadonlyPreview)" web/public/app.js \
     && pass "app.js: btn-preview-readonly remains the only two-state toggle" \
     || fail "app.js: btn-preview-readonly no longer toggles between terminal/readonly"
+  # Always-tail contract: chat/conv/xterm are tail-readers — they
+  # should always pin to the latest content. New transcript messages
+  # must unconditionally scroll; the previous isConvAtBottom() guard
+  # stranded users on old content if their scroll position was even
+  # 60px above the bottom.
+  if awk '/^function appendTranscriptMessages\(/,/^}$/' web/public/app.js | grep -q 'if (wasAtBottom)'; then
+    fail "app.js: appendTranscriptMessages still gates scrollConvToBottom on wasAtBottom — strands users on old content"
+  else
+    pass "app.js: appendTranscriptMessages always pins to latest"
+  fi
+  if awk '/msg\.t === .output./,/} else if/' web/public/app.js | grep -q 'state.term?.scrollToBottom'; then
+    pass "app.js: xterm output frame pins to latest via scrollToBottom"
+  else
+    fail "app.js: xterm output no longer auto-scrolls — new output may not appear without user input"
+  fi
+  if awk '/^function showConversationView\(/,/^}$/' web/public/app.js | grep -q 'scrollConvToBottom'; then
+    pass "app.js: showConversationView lands at latest on pane show"
+  else
+    fail "app.js: showConversationView no longer pins to bottom when shown"
+  fi
+  if awk '/^function showTerminalView\(/,/^}$/' web/public/app.js | grep -q 'scrollToBottom'; then
+    pass "app.js: showTerminalView lands at latest on pane show"
+  else
+    fail "app.js: showTerminalView no longer pins to bottom when shown"
+  fi
   # Plan / Arch / Test artifact views (promoted to top-level chrome buttons,
   # commit 15187ea). Each has its own main-pane container and a chrome button.
   for view in plan arch test; do

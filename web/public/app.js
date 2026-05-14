@@ -242,6 +242,11 @@ function showConversationView() {
   _hideMainPaneSiblings('conversation-wrap');
   document.getElementById('conversation-wrap').hidden = false;
   updateChatButton();
+  // Always land on the latest content when the conv pane opens. While
+  // the pane was hidden it had 0 height, so any earlier scrollConvToBottom
+  // call was effectively a no-op; without this re-pin the user sees the
+  // top of the transcript on each show.
+  scrollConvToBottom();
 }
 
 function showTerminalView() {
@@ -250,6 +255,9 @@ function showTerminalView() {
   updateChatButton();
   // xterm canvas needs a refit after being unhidden since clientWidth was 0.
   if (state.fitAddon) requestAnimationFrame(() => state.fitAddon.fit());
+  // Same rationale as showConversationView — land on the latest output
+  // every time the terminal becomes visible.
+  if (state.term) requestAnimationFrame(() => { try { state.term.scrollToBottom(); } catch {} });
 }
 
 function showTranscriptWaiting() {
@@ -433,7 +441,6 @@ function appendTranscriptMessages(messages) {
     renderTranscriptMessages(state.transcriptMessages);
     return;
   }
-  const wasAtBottom = isConvAtBottom();
   const content = document.getElementById('conv-content');
   if (!content) return;
   let turnEl = content.lastElementChild;
@@ -451,7 +458,12 @@ function appendTranscriptMessages(messages) {
       content.appendChild(el);
     }
   }
-  if (wasAtBottom) scrollConvToBottom();
+  // Always pin to latest — per the chat-pane/conv contract, these views
+  // are tail-readers: new messages should always pull the viewport
+  // down. Previously this only scrolled when isConvAtBottom() was true,
+  // which silently stranded the user on old content if they were
+  // anywhere above the last ~60px of the scroller.
+  scrollConvToBottom();
   renderMermaidInContainer(content);
 }
 
@@ -1281,6 +1293,12 @@ function openSession(id, opts = {}) {
         showTranscriptWaiting();
       } else if (msg.t === 'output') {
         state.term?.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
+        // Pin to the latest output. xterm's default behavior only
+        // auto-scrolls when the viewport was already at the bottom;
+        // per the always-tail contract for chat/conv/xterm, force the
+        // scroll on every output frame. Users who want to inspect
+        // history can pause output by sending Ctrl+S to the shell.
+        try { state.term?.scrollToBottom(); } catch {}
       } else if (msg.t === 'pong') {
         state.lastPongAt = Date.now();
       } else if (msg.t === 'chat-history') {
