@@ -1203,7 +1203,12 @@ test_chat_window() {
   else
     pass "app.js: appendTranscriptMessages always pins to latest"
   fi
-  if awk '/msg\.t === .output./,/} else if/' web/public/app.js | grep -q 'state.term?.scrollToBottom'; then
+  # Use a step-through-the-handler awk so the range doesn't collapse on
+  # the single `} else if (msg.t === 'output')` line (the closing
+  # `} else if` would otherwise match the SAME row that opens the range,
+  # emitting just one line with no body to grep). p flag opens after
+  # the output match and closes on the NEXT `} else if`.
+  if awk "/msg\\.t === 'output'/{p=1;next} p && /} else if/{exit} p" web/public/app.js | grep -q 'state.term?.scrollToBottom'; then
     pass "app.js: xterm output frame pins to latest via scrollToBottom"
   else
     fail "app.js: xterm output no longer auto-scrolls — new output may not appear without user input"
