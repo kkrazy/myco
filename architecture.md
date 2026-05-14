@@ -96,6 +96,60 @@ The single source of truth. Shape:
 
 Owned by Claude Code, not us. We poll mtimes here to derive `last_activity` and `status` (active / recent / stale / idle), to find the resume target, and to import sessions that exist in Claude's history but aren't yet in our store.
 
+### `<wks>/<user>/<session>/<project>/_myco_/` — portable artifact mirror
+
+The plan / test / architecture artifacts (`rec.artifacts.plan`, `rec.artifacts.test`, `rec.artifacts.arch`) are **always mirrored to a `_myco_/` directory inside the project root**, where the project root is the directory that contains `.git/`. This is the single, canonical location — the artifact code does not write or read these files anywhere else.
+
+```
+<wks>/<user>/<session>/<project>/
+├── .git/                     ← marks this dir as the project root
+├── <source>…
+└── _myco_/
+    ├── plan.json             ← items + comments + voters + done state
+    ├── test.json             ← items + comments + done state (no votes)
+    ├── architecture.md       ← long-form arch markdown
+    └── README.md             ← written once explaining the dir (preserved if user-edited)
+```
+
+**Why a directory committed alongside source.** The state that lives in `store.json` (`MYCO_STATE_DIR/sessions.json`) is *session*-scoped — tied to one user's myco instance. The `_myco_/` mirror is *project*-scoped: a teammate clones the repo, starts a fresh myco session at the project root, and the next GET on the Plan / Test / Arch tab reads the on-disk files and renders the same items + comments the original author left behind. No session-state migration step, no manual export. **Commit the dir, push it, and it travels with the source.**
+
+**Project-root resolution** — done in `server/src/artifacts.js` via `findProjectRoot(rec)`:
+
+1. If `session.absCwd/.git/` exists → project root = `session.absCwd` (the session points directly at a checkout).
+2. Else, the *first* immediate subdirectory of `session.absCwd` that contains `.git/` (alphabetical for determinism when multiple repos coexist) → project root = that subdir (the session points at a workspace ABOVE the checkout, matching the literal `<wks>/<user>/<session>/<project>` path pattern).
+3. Else → no project; the artifact code skips the file mirror entirely. Heavy / hidden directories (`node_modules`, `dist`, `.cache`, `.next`, etc.) are skipped during the scan so a stray `.git/` inside a dependency can't impersonate a project.
+
+**Read / write contract**:
+
+- **Read priority on GET `/sessions/:id/artifact`**: `<project>/_myco_/<type>.<ext>` first; if absent, the legacy root-level `<project>/architecture.md` (for arch only); else fall back to `rec.artifacts[type]` from `store.json`. When the file wins, its content is mirrored back into `rec.artifacts[type]` so other code paths see a consistent shape.
+- **Write on every mutation** (`refresh` / `run` / `mark` / `vote` / `comment` / `item delete`): `persistArtifact(rec, type, artifact)` saves `store.json` *and* writes the canonical file under `<project>/_myco_/`. `README.md` is written once on first use and never overwritten (so a hand-customised README survives).
+- **Backfill on first read**: if the file is absent but `rec.artifacts[type]` already has content (e.g. a pre-`_myco_/` session that never mutated since the deploy), the GET handler eagerly writes the file so the directory materialises in the file explorer immediately and the user can `git add _myco_/` without first triggering a mutation.
+
+**File format**:
+
+- `plan.json` / `test.json` — pretty-printed JSON, trailing newline:
+
+  ```json
+  {
+    "items": [
+      {
+        "id": "695feda01a0a",
+        "text": "After redeploy, the claude session enters resume window and …",
+        "layer": "Bug",
+        "done": false,
+        "addedAt": "2026-05-12T10:07:39.717Z",
+        "addedBy": "kkrazy",
+        "source": "user",
+        "voters": [],
+        "comments": [{ "id": "...", "user": "...", "text": "...", "ts": "..." }]
+      }
+    ],
+    "updatedAt": "2026-05-14T03:43:13.099Z"
+  }
+  ```
+
+- `architecture.md` — plain markdown body.
+
 ---
 
 ## API
