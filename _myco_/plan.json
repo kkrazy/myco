@@ -101,69 +101,6 @@
       ]
     },
     {
-      "id": "6ed5783f4586",
-      "text": "make file explorer occupy full screen when enabled on mobile",
-      "layer": "Frontend",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "b3c78949e8f1",
-      "text": "stop auto-switching to readonly viewer; keep chat pane as the main working window",
-      "layer": "Frontend",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "f6eea615ca27",
-      "text": "match scroll bar color to surrounding components",
-      "layer": "Frontend",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "a85cb7792d7f",
-      "text": "ensure session is in auto mode when a request is sent to claude",
-      "layer": "Server",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "7d6acf804985",
-      "text": "investigate recurring 'No response requested.' messages on mycobeta",
-      "layer": "Server",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "7b88c50743cd",
-      "text": "render the same session independently on mobile, browser, and vscode",
-      "layer": "Server",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "b7898926a2ab",
-      "text": "refresh architecture.md with latest information and implementation; auto-load on tab open",
-      "layer": "Docs",
-      "done": false,
-      "addedAt": "2026-05-14T02:11:42.047Z",
-      "voters": [],
-      "comments": []
-    },
-    {
       "id": "2f369aebcc52",
       "text": "make responses requires user input a pop up blocking pane any questions will be responded in the right order as they came in",
       "layer": "Todo",
@@ -191,7 +128,106 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "dfeff6698b4a",
+      "text": "render menu selection as modal dialog blocking further inputs until user decides",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "93e25406400d",
+      "text": "match status bar background to surrounding chat pane and readonly viewer (currently white)",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "525272724030",
+      "text": "match scroll bar color to surrounding components",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "3905988bdd58",
+      "text": "stop auto-switching to readonly viewer; keep chat pane as main working window",
+      "layer": "Frontend",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "41dda01c85d0",
+      "text": "move auth token out of WebSocket URL query (use subprotocol or first-message handshake) — CRITICAL",
+      "layer": "Server",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "14794ade5b9c",
+      "text": "auto-update architecture.md on changes and reload Arch tab without manual refresh",
+      "layer": "Server",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "e4dd83f2188f",
+      "text": "add gitee support; allow saving gitee tokens alongside github tokens",
+      "layer": "Server",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "f0250ecdb2d0",
+      "text": "auto-recover from claude resume window after redeploy (no manual intervention)",
+      "layer": "Sessions",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "884ccffcd6e1",
+      "text": "render the same session independently across mobile, browser, and vscode",
+      "layer": "Sessions",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "75f606c08ce3",
+      "text": "ensure session enters auto mode when a request is sent to claude",
+      "layer": "Sessions",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "1b6c05450b9a",
+      "text": "investigate spurious 'No response requested' / 'Claude ran 1 tool call and didn't post a text reply' on mycobeta",
+      "layer": "Sessions",
+      "done": false,
+      "addedAt": "2026-05-14T14:16:40.644Z",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-14T03:43:13.099Z"
+  "updatedAt": "2026-05-14T14:16:40.645Z"
 }
