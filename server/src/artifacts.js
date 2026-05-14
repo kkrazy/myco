@@ -86,9 +86,52 @@ const ARTIFACT_FILE_BY_TYPE = {
   arch: 'architecture.md',
 };
 
-function mycoDirPath(rec) {
+// Directory names skipped when scanning one level deeper for _myco_/.
+// Keeps the scan cheap and avoids false-positive hits inside heavy or
+// non-project directories. Names starting with `.` are also skipped.
+const NESTED_SCAN_SKIP = new Set([
+  'node_modules', 'vendor', 'dist', 'build', 'target', '.git',
+  '__pycache__', 'coverage', '.cache', '.next', '.nuxt',
+]);
+
+// Resolve the directory that holds `_myco_/`. Two layouts supported:
+//
+//   1. Session.absCwd IS the project root (the common case):
+//        /wks/kkrazy/myco/_myco_/plan.json
+//      → resolved = /wks/kkrazy/myco/_myco_
+//
+//   2. Session.absCwd is a workspace ABOVE the project (the user has
+//      cloned the repo into a subdirectory of the session's cwd):
+//        /wks/kkrazy/myco2/myco/_myco_/plan.json
+//      → resolved = /wks/kkrazy/myco2/myco/_myco_
+//      (picked by scanning one level deeper for any subdir that has
+//      _myco_/; alphabetical order, deterministic.)
+//
+// If neither layout has an existing _myco_/, returns the session-root
+// path as the default write target so a fresh session still creates
+// the directory at <absCwd>/_myco_/ (preserves the original contract).
+function resolveMycoDir(rec) {
   if (!rec || !rec.absCwd) return null;
-  return path.join(rec.absCwd, MYCO_DIR);
+  const direct = path.join(rec.absCwd, MYCO_DIR);
+  try { if (fs.statSync(direct).isDirectory()) return direct; } catch {}
+  // Scan immediate children for a nested _myco_/. Heavy / hidden /
+  // build dirs are skipped — we're looking for project roots, not
+  // dependency mirrors.
+  try {
+    const entries = fs.readdirSync(rec.absCwd, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !NESTED_SCAN_SKIP.has(d.name))
+      .map((d) => d.name)
+      .sort();
+    for (const name of entries) {
+      const nested = path.join(rec.absCwd, name, MYCO_DIR);
+      try { if (fs.statSync(nested).isDirectory()) return nested; } catch {}
+    }
+  } catch {}
+  return direct;
+}
+
+function mycoDirPath(rec) {
+  return resolveMycoDir(rec);
 }
 
 function artifactFilePath(rec, type) {
@@ -514,6 +557,7 @@ module.exports = {
   __test: {
     MYCO_DIR,
     mycoDirPath,
+    resolveMycoDir,
     artifactFilePath,
     readArtifactFromFile,
     writeArtifactToFile,

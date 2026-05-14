@@ -134,6 +134,58 @@ t('readArtifactFromFile returns null when _myco_/ dir does not exist', () => {
   assert.ok(fs.existsSync(path.join(rec.absCwd, '_myco_', 'plan.json')));
 });
 
+t('resolveMycoDir finds _myco_ at session cwd directly', () => {
+  const rec = makeRec('k');
+  fs.mkdirSync(path.join(rec.absCwd, '_myco_'), { recursive: true });
+  fs.writeFileSync(path.join(rec.absCwd, '_myco_', 'plan.json'), '{"items":[],"updatedAt":null}\n');
+  assert.strictEqual(__test.resolveMycoDir(rec), path.join(rec.absCwd, '_myco_'));
+});
+
+t('resolveMycoDir finds nested project _myco_ one level deeper', () => {
+  // Layout: /tmp/.../proj-l/myrepo/_myco_/  — the session points at
+  // the parent of the actual git checkout, mirroring the user's
+  // /wks/kkrazy/myco2/myco/ pattern.
+  const rec = makeRec('l');
+  const repo = path.join(rec.absCwd, 'myrepo');
+  fs.mkdirSync(path.join(repo, '_myco_'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '_myco_', 'plan.json'), '{"items":[{"id":"a","text":"x"}],"updatedAt":null}\n');
+  const resolved = __test.resolveMycoDir(rec);
+  assert.strictEqual(resolved, path.join(repo, '_myco_'));
+  // readArtifactFromFile should follow through.
+  const r = __test.readArtifactFromFile(rec, 'plan');
+  assert.ok(r);
+  assert.strictEqual(r.items.length, 1);
+  assert.strictEqual(r.items[0].id, 'a');
+});
+
+t('resolveMycoDir skips node_modules / .git / build during nested scan', () => {
+  const rec = makeRec('m');
+  // Plant decoys in heavy / hidden dirs that should be skipped.
+  for (const name of ['node_modules', '.git', 'dist', 'build']) {
+    fs.mkdirSync(path.join(rec.absCwd, name, '_myco_'), { recursive: true });
+    fs.writeFileSync(path.join(rec.absCwd, name, '_myco_', 'plan.json'), '{"items":[{"id":"DECOY"}],"updatedAt":null}\n');
+  }
+  // No real project _myco_/ exists, and no direct _myco_/ at root —
+  // resolver must NOT latch onto a decoy; falls back to the default
+  // write target (session-root _myco_/).
+  const resolved = __test.resolveMycoDir(rec);
+  assert.strictEqual(resolved, path.join(rec.absCwd, '_myco_'));
+});
+
+t('resolveMycoDir prefers direct hit over nested hit', () => {
+  // If BOTH layouts exist, the session-root _myco_/ wins — it's the
+  // explicit signal that the user intended this session's cwd to be
+  // the project root.
+  const rec = makeRec('n');
+  fs.mkdirSync(path.join(rec.absCwd, '_myco_'), { recursive: true });
+  fs.writeFileSync(path.join(rec.absCwd, '_myco_', 'plan.json'), '{"items":[{"id":"DIRECT"}],"updatedAt":null}\n');
+  fs.mkdirSync(path.join(rec.absCwd, 'subproj', '_myco_'), { recursive: true });
+  fs.writeFileSync(path.join(rec.absCwd, 'subproj', '_myco_', 'plan.json'), '{"items":[{"id":"NESTED"}],"updatedAt":null}\n');
+  const r = __test.readArtifactFromFile(rec, 'plan');
+  assert.ok(r);
+  assert.strictEqual(r.items[0].id, 'DIRECT', 'direct hit must win when both layouts exist');
+});
+
 t('rec without absCwd is a no-op (no crash)', () => {
   const rec = { id: 'no-cwd' };
   assert.strictEqual(__test.mycoDirPath(rec), null);
