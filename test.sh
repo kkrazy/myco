@@ -277,6 +277,35 @@ test_cache_busters() {
   test -n "$css_v" && pass "styles.css cache buster = v$css_v" || fail "styles.css cache buster"
 }
 
+test_pwa_icon() {
+  # PWA install icon (mobile Chrome "Add to Home Screen", iOS Safari
+  # apple-touch-icon, browser tab favicon) all point at /hetu.jpg.
+  # Without these wired, installing as a Chrome app renders the
+  # auto-generated SVG initial — not the brand icon the user expects.
+  test -f web/public/hetu.jpg \
+    && pass "web/public/hetu.jpg exists" \
+    || fail "web/public/hetu.jpg missing — PWA install will fall back to SVG initial"
+  grep -qF '"src": "/hetu.jpg' web/public/manifest.json \
+    && pass "manifest.json: lists hetu.jpg as an install icon" \
+    || fail "manifest.json: hetu.jpg not referenced"
+  grep -qF 'rel="icon"' web/public/index.html \
+    && pass "index.html: <link rel=icon> for favicon/tab" \
+    || fail "index.html: <link rel=icon> missing"
+  grep -qF 'rel="apple-touch-icon"' web/public/index.html \
+    && pass "index.html: <link rel=apple-touch-icon> for iOS home screen" \
+    || fail "index.html: apple-touch-icon missing — iOS Add to Home Screen uses default"
+  # JPEG magic byte sanity: first two bytes must be FF D8. A stray PNG
+  # or HTML at this path would still satisfy the existence check but
+  # render as a broken-image glyph in the install dialog.
+  if have_node; then
+    node -e "
+      const b = require('fs').readFileSync('web/public/hetu.jpg');
+      if (b[0] !== 0xFF || b[1] !== 0xD8) throw new Error('hetu.jpg not a JPEG (magic = ' + b.slice(0,2).toString('hex') + ')');
+    " && pass "hetu.jpg has valid JPEG magic bytes" \
+      || fail "hetu.jpg has wrong magic — install icon will render broken"
+  fi
+}
+
 test_conv_view_css() {
   grep -q 'conversation-wrap' web/public/styles.css && pass "conversation-wrap CSS" || fail "conversation-wrap CSS"
   grep -q 'conv-msg-user' web/public/styles.css && pass "user message CSS" || fail "user message CSS"
@@ -946,6 +975,7 @@ run_static_checks() {
   test_text_utils
   test_pty_patterns
   test_cache_busters
+  test_pwa_icon
   test_conv_view_css
   test_conv_view_js
   test_at_myco_chat_handler
@@ -2132,6 +2162,19 @@ test_vendor_serving() {
   curl -sf "http://127.0.0.1:$SMOKE_PORT/vendor/highlight.min.js" -o /dev/null 2>/dev/null && pass "highlight.min.js served" || fail "highlight.min.js served"
   curl -sf "http://127.0.0.1:$SMOKE_PORT/vendor/github-dark.min.css" -o /dev/null 2>/dev/null && pass "github-dark.css served" || fail "github-dark.css served"
   curl -sf "http://127.0.0.1:$SMOKE_PORT/vendor/mermaid.min.js" -o /dev/null 2>/dev/null && pass "mermaid.min.js served" || fail "mermaid.min.js served"
+  # PWA install icon: must be served as image/jpeg so Chrome's
+  # manifest-icon validator accepts it. The MIME type is derived from
+  # the .jpg extension by express.static — no explicit handler needed —
+  # but it's worth pinning so a future renamed/repackaged file doesn't
+  # silently regress to application/octet-stream.
+  local ct
+  ct=$(curl -sf -o /dev/null -w '%{content_type}' "http://127.0.0.1:$SMOKE_PORT/hetu.jpg" 2>/dev/null)
+  [[ "$ct" == image/jpeg* ]] && pass "hetu.jpg served as image/jpeg ($ct)" || fail "hetu.jpg content-type wrong: $ct"
+  # And manifest.json must include the icon entry once served (catches
+  # a stale-bundle scenario where the Dockerfile COPY missed a layer).
+  curl -sf "http://127.0.0.1:$SMOKE_PORT/manifest.json" 2>/dev/null | grep -qF '"/hetu.jpg' \
+    && pass "manifest.json served references hetu.jpg" \
+    || fail "manifest.json served does not include /hetu.jpg — install icon will fall back"
 }
 
 test_index_html_contents() {
