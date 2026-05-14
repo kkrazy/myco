@@ -1480,13 +1480,10 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: 1px 0px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  /* Thin scrollbar — the browser default (~16px) eats a chunk of the
-     narrow chat pane. Half-width (8px webkit, "thin" for Firefox) keeps
-     the affordance visible but reclaims horizontal space for content. */
+  gap: 2px;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
