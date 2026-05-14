@@ -39,14 +39,16 @@ const state = {
   // Discussion state, scoped per active session. Cleared on switch.
   chatMessages: [],
   chatUser: null,
-  // Default true on real desktop widths (≥1200px) — the chat pane is
-  // the primary interaction surface and the readonly transcript on the
-  // left needs to be visible alongside it (50/50 split via
-  // --chatpane-w). Tablets and mobile keep it false: chat is too cramped
-  // when split with the transcript, and on mobile the pane fills the
-  // whole main area so a default-on would cover the session list on
-  // first paint.
-  chatPaneVisible: typeof window !== 'undefined' && window.innerWidth >= 1200,
+  // Default true on real desktop (≥1200px) AND on mobile (≤900px):
+  //   - Desktop: chat pane + readonly transcript in 50/50 split.
+  //   - Mobile: chat IS the default view — it fills the whole main
+  //     area at ≤900px and is where the user drives interaction.
+  // Tablets (901–1199) stay false: the 50/50 split is cramped at that
+  // width and the chat pane covering the main pane would feel like a
+  // modal. Once a session opens, openSession's setChatPane(true) is
+  // gated on the same width thresholds for consistency.
+  chatPaneVisible: typeof window !== 'undefined' &&
+    (window.innerWidth >= 1200 || window.innerWidth <= 900),
   shareMode: false, // kept for compat — no longer gates UI
   // Per-session file explorer state. Cleared when session changes.
   files: {
@@ -1247,25 +1249,35 @@ function openSession(id, opts = {}) {
 
   document.getElementById('no-session').hidden = true;
 
+  const isMobile = window.innerWidth <= 900;
   if (isShared) {
     showConversationView();
     const conv = document.getElementById('conv-content');
     if (conv) conv.innerHTML = '<div class="conv-waiting">Connecting…</div>';
+  } else if (isMobile) {
+    // Mobile owner default: skip the readonly-viewer auto-flip entirely
+    // and land in the chat pane. The chat pane fills the whole main
+    // area at ≤900px (per the mobile media query) — it IS the default
+    // view on phones. The xterm is still built so 👁 has a target when
+    // the user explicitly flips to readonly later.
+    _initOwnerXterm();
   } else {
-    // Build the xterm so the 👁 toggle has a target to flip back to,
-    // but land on the readonly transcript view by default. Combined
-    // with the default-on chat pane (state.chatPaneVisible = true on
-    // desktop boot), the user sees the structured transcript on the
-    // left and the chat on the right in a 50/50 split — both surfaces
-    // they actually drive interaction from.
+    // Desktop owner default: build the xterm so the 👁 toggle has a
+    // target to flip back to, but land on the readonly transcript view
+    // by default. Combined with the default-on chat pane
+    // (state.chatPaneVisible = true on desktop boot), the user sees the
+    // structured transcript on the left and the chat on the right in a
+    // 50/50 split — both surfaces they actually drive interaction from.
     _initOwnerXterm();
     showConversationView();
     state.previewAsViewer = true;
     document.getElementById('btn-preview-readonly')?.classList.add('active');
   }
-  // Open the chat pane alongside on real desktop widths only. Tablets
-  // and mobile keep chat closed by default (toggle via 💬 if wanted).
-  if (window.innerWidth >= 1200) setChatPane(true);
+  // Open the chat pane:
+  //   - mobile  (≤900px): unconditionally — chat is the primary view
+  //   - desktop (≥1200px): yes — 50/50 split alongside the transcript
+  //   - tablet  (901–1199): keep closed; user toggles 💬 if wanted
+  if (isMobile || window.innerWidth >= 1200) setChatPane(true);
 
   // websocket with auto-reconnect. `connect` is closure-bound to `id` and
   // `qs` so reconnect-after-close stays on this session; the `state.ws !==
