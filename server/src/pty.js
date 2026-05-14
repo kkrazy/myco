@@ -509,7 +509,13 @@ function handleMenuPick(sessionId, session, n, hash) {
   // longer the one claude is showing — the digit would land on a
   // different question.
   if (hash && pending.hash && pending.hash !== hash) {
-    console.log(`[menu-pick] ${sessionId} dropped pick n=${n} — stale (clicked hash=${hash.slice(0,16)} != pending=${pending.hash.slice(0,16)})`);
+    // Find where the two hashes diverge so we can tell whether the
+    // mismatch is the question, the option labels, or trailing chars.
+    let div = 0;
+    while (div < hash.length && div < pending.hash.length && hash[div] === pending.hash[div]) div++;
+    console.log(`[menu-pick] ${sessionId} dropped pick n=${n} — stale (diverge@${div} clickedLen=${hash.length} pendingLen=${pending.hash.length})`);
+    console.log(`[menu-pick]   clicked: ${JSON.stringify(hash)}`);
+    console.log(`[menu-pick]   pending: ${JSON.stringify(pending.hash)}`);
     return;
   }
   if (!pending.options.some((o) => o.n === n)) return;
