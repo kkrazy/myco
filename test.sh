@@ -1310,7 +1310,11 @@ test_chat_user_capture() {
 }
 
 test_session_switching_clears_panes() {
-  grep -q "conversation-wrap.*hidden.*true" web/public/app.js && pass "pane clear on switch" || fail "pane clear on switch"
+  # Phase 9 step 3: #conversation-wrap is gone. The teardown still
+  # null-guards the lookup as a back-compat shim for cached pages.
+  grep -q "convWrap.hidden = true" web/public/app.js \
+    && pass "pane clear on switch (null-guarded conv-wrap hide)" \
+    || fail "pane clear on switch"
   # openSession is split into focused helpers so each concern (teardown,
   # state reset, owner xterm init, WS attach URL) can change without
   # rewriting the others. Regression guard: keep the seams in place.
