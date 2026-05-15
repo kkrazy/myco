@@ -1347,7 +1347,7 @@ test_new_session_readonly() {
   grep -q "function _migrateLegacyMemory" server/src/sessions.js \
     && pass "sessions.js: _migrateLegacyMemory helper defined" \
     || fail "sessions.js: _migrateLegacyMemory helper missing"
-  grep -Pzoq "respawned agent[\s\S]{0,1400}_migrateLegacyMemory" server/src/sessions.js \
+  grep -Pzoq "_migrateLegacyMemory\(rec\.absCwd\)[\s\S]{0,800}spawnAgent" server/src/sessions.js \
     && pass "sessions.js: ensureLiveSession invokes _migrateLegacyMemory before spawnAgent" \
     || fail "sessions.js: ensureLiveSession does not run the memory migration"
   # Smoke test the helper itself: copy a tmp fixture from a fake
