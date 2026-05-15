@@ -2038,13 +2038,24 @@ function renderChatMessage(m, isActiveMenu) {
     ? m.meta.menu.options : null;
   let body = m.text || '';
   if (menuOpts) {
-    cls += ' chat-msg-menu';   // unifies the bubble + the option rows into one card (see styles.css)
+    cls += ' chat-msg-menu';
+    // Compact one-liner: "<question>: <opt1>, <opt2>, …". The
+    // "🤔 Claude is waiting on a decision" lead + "[SINGLE-SELECT] "
+    // / "[MULTI-SELECT] " prefix that claude prepends to AskUserQuestion
+    // titles are both stripped — the chat row reads as plain text.
+    // Permission requests show the tool target instead of the question
+    // (since there's no human-friendly question for those).
     const tgt = m.meta.target;
-    const lead = tgt
-      ? `🤔 Claude wants permission to run \`${tgt.tool}(${tgt.input || ''})\``
-      : '🤔 Claude is waiting on a decision';
-    const q = m.meta.menu && m.meta.menu.question ? '\n\n> ' + m.meta.menu.question : '';
-    body = lead + q;
+    const rawQ = (m.meta.menu && m.meta.menu.question) || '';
+    const cleanQ = String(rawQ).replace(/^\s*\[(?:SINGLE|MULTI)-SELECT\]\s*/i, '').replace(/[:?]+\s*$/, '').trim();
+    const labels = menuOpts.map((o) => String(o.label || '').trim()).filter(Boolean).join(', ');
+    if (tgt && tgt.tool) {
+      body = `Allow \`${tgt.tool}${tgt.input ? '(' + tgt.input + ')' : ''}\`?  ${labels}`;
+    } else if (cleanQ) {
+      body = `${cleanQ}: ${labels}`;
+    } else {
+      body = labels;
+    }
   }
   // Picked option number from either the local click (m._pickedN) or
   // the server-persisted record (m.meta.pickedN). The server source is
@@ -2100,10 +2111,16 @@ function renderChatMessage(m, isActiveMenu) {
   // that quoted the same wording, users read the recap as a fresh
   // unanswered question.) For active menus the original lead+question
   // body still renders, since the picker buttons are right below.
+  // Resolved-menu question shown above the ✓ Picked line. Same prefix
+  // strip ("[SINGLE-SELECT] " / "[MULTI-SELECT] ") + trailing-colon
+  // trim as the active row, so the question text looks identical
+  // before and after the answer lands. No blockquote (the flat-row
+  // styling makes the blockquote bar visually distracting).
   const resolvedQuestion = isResolvedMenu && m.meta && m.meta.menu && m.meta.menu.question
-    ? m.meta.menu.question : '';
+    ? String(m.meta.menu.question).replace(/^\s*\[(?:SINGLE|MULTI)-SELECT\]\s*/i, '').trim()
+    : '';
   const textHtml = isResolvedMenu
-    ? (resolvedQuestion ? `<div class="chat-text chat-text-resolved">${renderMd('> ' + resolvedQuestion)}</div>` : '')
+    ? (resolvedQuestion ? `<div class="chat-text chat-text-resolved">${renderMd(resolvedQuestion)}</div>` : '')
     : `<div class="chat-text">${renderMd(body)}</div>`;
   return `<div class="${cls}">
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
