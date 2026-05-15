@@ -98,8 +98,10 @@ class AgentSession extends EventEmitter {
 
     // SDK session id captured from the first system/init event — used
     // to resume on subsequent turns so cache stays warm and context
-    // persists across user messages.
-    this.sdkSessionId = null;
+    // persists across user messages. May be seeded by ensureLiveSession
+    // when respawning an AgentSession after a server restart so the
+    // SDK conversation picks up where the prior process left off.
+    this.sdkSessionId = opts.resumeSdkSessionId || null;
     // Latest model + tool list reported by system/init; useful for the
     // attach-snapshot a freshly-connecting client should see.
     this._initSnapshot = null;
@@ -225,7 +227,27 @@ class AgentSession extends EventEmitter {
   // future SDK upgrades that rename fields are absorbed in one place.
   _handleEvent(m) {
     if (m.type === 'system' && m.subtype === 'init') {
-      this.sdkSessionId = m.session_id || (m.data && m.data.session_id) || this.sdkSessionId;
+      const newSdkId = m.session_id || (m.data && m.data.session_id) || this.sdkSessionId;
+      if (newSdkId && newSdkId !== this.sdkSessionId) {
+        this.sdkSessionId = newSdkId;
+        // Persist on the rec so ensureLiveSession can resume the SDK
+        // session after a server restart. Don't require sessionsMod
+        // at the top of the file (would create a circular import via
+        // pty.js); lazy-require here.
+        try {
+          const sessionsMod = require('./sessions');
+          const rec = sessionsMod.getSessionRecord
+            && sessionsMod.getSessionRecord(this.sessionId);
+          if (rec) {
+            rec.sdkSessionId = this.sdkSessionId;
+            sessionsMod.saveStore();
+          }
+        } catch (err) {
+          console.error(`[agent-session] failed to persist sdkSessionId: ${err.message}`);
+        }
+      } else if (newSdkId) {
+        this.sdkSessionId = newSdkId;
+      }
       this._initSnapshot = {
         sdkSessionId: this.sdkSessionId,
         model: m.model || (m.data && m.data.model) || null,

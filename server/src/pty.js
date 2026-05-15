@@ -1354,7 +1354,14 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
   if (Array.isArray(session.buffer) && session.buffer.length) {
     ws.send(JSON.stringify({ t: 'agent-replay', events: session.buffer }));
   }
-  console.log(`[ws-attach] ${sessionId} user=${user || 'unknown'} mode=agent replay-events=${(session.buffer || []).length}`);
+  console.log(`[agent-attach] ${sessionId} user=${user || 'unknown'} mode=agent replay-events=${(session.buffer || []).length} sdk-session=${session.sdkSessionId || 'none'}`);
+  // [agent-resume] fires when the AgentSession was respawned with a
+  // pre-seeded sdkSessionId (i.e. ensureLiveSession brought it back
+  // after the server process died). The SDK will silently resume the
+  // conversation when the next write() lands.
+  if (session.sdkSessionId && !session._iterating && (!session.buffer || !session.buffer.length)) {
+    console.log(`[agent-resume] ${sessionId} ready to resume sdk-session=${session.sdkSessionId} on next user message`);
+  }
 
   // Chat history mirrors the PTY path — same persisted rec.chat.
   const history = sessionsMod.getChatHistory(sessionId);

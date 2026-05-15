@@ -603,6 +603,18 @@ test_best_practices_template() {
   grep -q "session.mode === 'agent'" server/src/slashcmds.js \
     && pass "slashcmds.js: handleDecide routes to resolveMenuPick for agent" \
     || fail "slashcmds.js: handleDecide routes to resolveMenuPick for agent"
+  # Phase 5: session resume on respawn. ensureLiveSession spawns a fresh
+  # AgentSession seeded with rec.sdkSessionId so the SDK conversation
+  # continues from where the prior process died.
+  grep -q "rec.mode === 'agent'" server/src/sessions.js \
+    && pass "sessions.js: ensureLiveSession agent-mode branch present" \
+    || fail "sessions.js: ensureLiveSession agent-mode branch present"
+  grep -q "resumeSdkSessionId" server/src/agent-session.js \
+    && pass "agent-session.js: resumeSdkSessionId seed accepted" \
+    || fail "agent-session.js: resumeSdkSessionId seed accepted"
+  grep -q "\\[agent-resume\\]\\|\\[agent-attach\\]" server/src/pty.js \
+    && pass "pty.js: [agent-attach]/[agent-resume] diagnostic logs present" \
+    || fail "pty.js: [agent-attach]/[agent-resume] diagnostic logs present"
   # dedupePlanItems prompt enrichment: project CLAUDE.md + auto-memory
   # are inlined ahead of the item list so the LLM has project-specific
   # context when judging "same underlying concern".

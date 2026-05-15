@@ -469,6 +469,22 @@ async function ensureLiveSession(sessionId) {
   const rec = getSessionRecord(sessionId);
   if (!rec) throw new Error(`unknown session: ${sessionId}`);
 
+  // Agent-mode session (phase 1+ of the agent-sdk-research migration).
+  // The previous AgentSession died (server restart, process exit, etc.) —
+  // respawn one with resume=rec.sdkSessionId so the SDK conversation
+  // continues from where it left off. No JSONL-watcher dance needed —
+  // the SDK owns its own session-id semantics.
+  if (rec.mode === 'agent') {
+    const { spawnAgent } = require('./agent-session');
+    const session = spawnAgent(sessionId, {
+      cwd: rec.absCwd,
+      resumeSdkSessionId: rec.sdkSessionId || null,
+    });
+    ptyMod._registerExternalSession(sessionId, session);
+    console.log(`[ensureLive] respawned agent for ${sessionId} cwd=${rec.absCwd} resume=${rec.sdkSessionId || 'none'}`);
+    return session;
+  }
+
   // Only capture transcript session ID on first connect (no cached ID yet).
   // After that, the spawn + captureClaudeSessionId handles updates.
   if (!rec.claudeSessionId) {

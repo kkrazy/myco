@@ -311,6 +311,18 @@ function collectEvents(session, { until, timeoutMs = 60000 }) {
     s.kill();
   });
 
+  // Phase 5 — resume across process restart via the persisted sdkSessionId.
+
+  await t('AgentSession seeds sdkSessionId from opts.resumeSdkSessionId', () => {
+    const s = new AgentSession('test-resume-seed', {
+      cwd: process.cwd(),
+      resumeSdkSessionId: 'sdk-pretend-session-abc',
+    });
+    assert.strictEqual(s.sdkSessionId, 'sdk-pretend-session-abc',
+      'pre-seeded sdkSessionId should be live on the new instance');
+    s.kill();
+  });
+
   await t('AsyncMessageQueue: push/iter/close behaves correctly', async () => {
     // Pull the internal class out via the module's filename so we
     // don't have to add it to exports just for tests.
