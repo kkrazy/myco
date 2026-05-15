@@ -490,6 +490,22 @@ async function ensureLiveSession(sessionId) {
     });
     ptyMod._registerExternalSession(sessionId, session);
     console.log(`[ensureLive] respawned agent for ${sessionId} cwd=${rec.absCwd} resume=${rec.sdkSessionId || 'none'}`);
+    // Zombie menu cleanup. A respawned AgentSession has a fresh
+    // _pendingPermissions Map (no in-flight canUseTool callbacks
+    // carry across a server restart). Any chat row still flagged
+    // kind=menu without answered/superseded refers to a promise
+    // that no live receiver could resolve — clicking it would just
+    // log `handled=false` and the modal queue would keep showing
+    // it forever. Stamp them all .superseded so the user's chat
+    // is a clean slate after a deploy.
+    try {
+      if (typeof ptyMod._supersedeStaleMenus === 'function') {
+        ptyMod._supersedeStaleMenus(sessionId);
+        console.log(`[ensureLive] swept stale chat menus for respawned agent ${sessionId}`);
+      }
+    } catch (err) {
+      console.error(`[ensureLive] supersede sweep failed: ${err.message}`);
+    }
     return session;
   }
 

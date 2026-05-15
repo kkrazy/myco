@@ -2555,6 +2555,14 @@ test_chat_window() {
   grep -q "_supersedeStaleMenus" server/src/menu.js \
     && pass "menu.js: broadcasts supersede stale menus" \
     || fail "menu.js: broadcasts don't supersede stale menus"
+  # Companion regression: a respawned AgentSession has a fresh
+  # _pendingPermissions map; any chat row still flagged kind=menu
+  # without answered/superseded refers to a canUseTool promise that
+  # no live receiver could resolve. Sweep them all .superseded so
+  # the user's chat is a clean slate after a deploy/restart.
+  grep -Pzoq "respawned agent[\s\S]{0,400}_supersedeStaleMenus" server/src/sessions.js \
+    && pass "sessions.js: ensureLiveSession sweeps zombie menus on agent respawn" \
+    || fail "sessions.js: ensureLiveSession does not sweep zombie menus"
   # Companion regression: a menu state-update (server confirmed pick /
   # supersede) must rebuild the client's modal queue + re-render the
   # popup, otherwise resolved menus stay visible in the modal.
