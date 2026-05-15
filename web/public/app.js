@@ -2047,7 +2047,7 @@ function renderChatMessage(m, isActiveMenu) {
     // (since there's no human-friendly question for those).
     const tgt = m.meta.target;
     const rawQ = (m.meta.menu && m.meta.menu.question) || '';
-    const cleanQ = String(rawQ).replace(/^\s*\[(?:SINGLE|MULTI)-SELECT\]\s*/i, '').replace(/[:?]+\s*$/, '').trim();
+    const cleanQ = String(rawQ).replace(/^\s*\[(?:SINGLE-SELECT|MULTI-SELECT|TYPED-TEXT)\]\s*/i, '').replace(/[:?]+\s*$/, '').trim();
     const labels = menuOpts.map((o) => String(o.label || '').trim()).filter(Boolean).join(', ');
     if (tgt && tgt.tool) {
       body = `Allow \`${tgt.tool}${tgt.input ? '(' + tgt.input + ')' : ''}\`?  ${labels}`;
@@ -2097,10 +2097,11 @@ function renderChatMessage(m, isActiveMenu) {
     // Phase 2.5: the inline button row is retired. The modal popup
     // (perm-modal) is the single answer surface; multi-agent / parallel
     // pendings are queued there with prev/next nav, and every click
-    // sends the hash that uniquely identifies the menu. This chat row
-    // now serves only as history + a re-entry hint if the user
-    // dismissed the modal.
-    optsHtml = `<div class="chat-menu-resolved chat-menu-deferred" data-perm-reopen="1">↗ Awaiting answer — open in popup</div>`;
+    // sends the hash that uniquely identifies the menu. Active rows
+    // are click-to-reopen via the data-perm-reopen attribute set on
+    // the chat-msg div below — no visible hint line.
+    optsHtml = '';
+    cls += ' chat-msg-menu-active';
   } else if (menuOpts) {
     optsHtml = '<div class="chat-menu-resolved">(no longer active)</div>';
   }
@@ -2117,12 +2118,17 @@ function renderChatMessage(m, isActiveMenu) {
   // before and after the answer lands. No blockquote (the flat-row
   // styling makes the blockquote bar visually distracting).
   const resolvedQuestion = isResolvedMenu && m.meta && m.meta.menu && m.meta.menu.question
-    ? String(m.meta.menu.question).replace(/^\s*\[(?:SINGLE|MULTI)-SELECT\]\s*/i, '').trim()
+    ? String(m.meta.menu.question).replace(/^\s*\[(?:SINGLE-SELECT|MULTI-SELECT|TYPED-TEXT)\]\s*/i, '').trim()
     : '';
   const textHtml = isResolvedMenu
     ? (resolvedQuestion ? `<div class="chat-text chat-text-resolved">${renderMd(resolvedQuestion)}</div>` : '')
     : `<div class="chat-text">${renderMd(body)}</div>`;
-  return `<div class="${cls}">
+  // Active menu rows are click-to-reopen-modal — the data-perm-reopen
+  // attribute is hooked by _bindChatMenuClicks. No visible affordance
+  // line ('↗ Awaiting answer — open in popup' was retired); the row
+  // itself is the affordance and gets `cursor: pointer` via CSS.
+  const rowAttrs = (menuOpts && !isResolvedMenu) ? ' data-perm-reopen="1"' : '';
+  return `<div class="${cls}"${rowAttrs}>
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
     ${textHtml}
     ${optsHtml}

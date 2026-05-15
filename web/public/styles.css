@@ -3314,6 +3314,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: transparent;
   border: none;
 }
+/* Active menu row is click-to-reopen-modal — the cursor + subtle
+   hover background tell the user this row is interactive. The old
+   '↗ Awaiting answer — open in popup' hint line was retired in
+   favour of clicking the row itself. */
+.chat-msg.chat-msg-menu.chat-msg-menu-active {
+  cursor: pointer;
+}
+.chat-msg.chat-msg-menu.chat-msg-menu-active:hover {
+  background: rgba(255, 255, 255, .02);
+}
 .chat-msg.chat-msg-menu .chat-text {
   background: transparent;
   border: none;
