@@ -2440,9 +2440,12 @@ const AGENT_CHROME_TYPES = new Set([
   'permission_resolved',
   'rate_limit',
   'unknown_event',
-  // tool_result is chrome too — the actual output rarely needs
-  // surfacing inline; expanding the batch shows each result.
   'tool_result',
+  // turn_result folds in too — its `result` text payload is usually
+  // a duplicate of claude's last assistant_text block (the SDK
+  // appends the same content as the "final answer"). The cost +
+  // token usage is still visible when the batch row expands.
+  'turn_result',
 ]);
 
 // Single-line live status strip above the chat input. Updated by
@@ -2688,6 +2691,11 @@ function _chromeEventLine(ev, ts) {
     const bytes = (ev.content || '').length;
     kind = ev.isError ? '⚠ result' : '✓ result';
     summary = bytes + ' bytes · for=' + (ev.tool_use_id || '').slice(-8);
+  } else if (ev.type === 'turn_result') {
+    const cost = ev.totalCostUsd != null ? '$' + ev.totalCostUsd.toFixed(4) : '$?';
+    const u = ev.usage || {};
+    kind = '■ ' + (ev.subtype || 'done');
+    summary = cost + ' · in=' + (u.input_tokens || 0) + ' out=' + (u.output_tokens || 0) + ' cache-r=' + (u.cache_read_input_tokens || 0);
   } else if (ev.type === 'tool_use') {
     if (ev.name === 'AskUserQuestion') {
       kind = '? ask';
@@ -2769,6 +2777,10 @@ function _chromeShortLabel(ev) {
   if (ev.type === 'tool_result') {
     const bytes = (ev.content || '').length;
     return (ev.isError ? '⚠ result · ' : '✓ result · ') + bytes + ' bytes';
+  }
+  if (ev.type === 'turn_result') {
+    const cost = ev.totalCostUsd != null ? '$' + ev.totalCostUsd.toFixed(4) : '';
+    return '■ ' + (ev.subtype || 'done') + (cost ? ' · ' + cost : '');
   }
   if (ev.type === 'tool_use') {
     if (ev.name === 'AskUserQuestion') {
