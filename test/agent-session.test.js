@@ -313,6 +313,96 @@ function collectEvents(session, { until, timeoutMs = 60000 }) {
 
   // Phase 5 — resume across process restart via the persisted sdkSessionId.
 
+  // Phase 6 — per-session allow-list as a PreToolUse hook.
+
+  await t('PreToolUse hook auto-allows tools matching the session allow-list', async () => {
+    // Seed a session record with an allow-list entry.
+    const sessionsMod = require('../server/src/sessions');
+    const store = sessionsMod.loadStore();
+    const sid = 'test-hook-allow';
+    store.sessions[sid] = {
+      id: sid,
+      user: 'kkrazy',
+      absCwd: process.cwd(),
+      cwd: '.',
+      createdAt: new Date().toISOString(),
+      mode: 'agent',
+      allowList: ['Bash(git)'],
+      denyList: [],
+    };
+    sessionsMod.saveStore();
+
+    const s = new AgentSession(sid, { cwd: process.cwd() });
+    const out = await s._preToolUseHook({
+      tool_name: 'Bash',
+      tool_input: { command: 'git status' },
+      tool_use_id: 'tu_hook_allow_1',
+    });
+    assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'allow');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /allow-list matched/);
+    s.kill();
+  });
+
+  await t('PreToolUse hook auto-denies tools matching the session deny-list', async () => {
+    const sessionsMod = require('../server/src/sessions');
+    const store = sessionsMod.loadStore();
+    const sid = 'test-hook-deny';
+    store.sessions[sid] = {
+      id: sid,
+      user: 'kkrazy',
+      absCwd: process.cwd(),
+      cwd: '.',
+      createdAt: new Date().toISOString(),
+      mode: 'agent',
+      allowList: [],
+      denyList: ['Bash(rm)'],
+    };
+    sessionsMod.saveStore();
+
+    const s = new AgentSession(sid, { cwd: process.cwd() });
+    const chatNotes = [];
+    s.on('chat', (m) => chatNotes.push(m));
+    const out = await s._preToolUseHook({
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf /' },
+      tool_use_id: 'tu_hook_deny_1',
+    });
+    assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /deny-list matched/);
+    // Chat note should have fired so the user sees WHY.
+    assert.strictEqual(chatNotes.length, 1, 'expected a "denied" chat note');
+    assert.match(chatNotes[0].text, /auto-denied/);
+    s.kill();
+  });
+
+  await t('PreToolUse hook passes through (empty result) when no rule matches', async () => {
+    const sessionsMod = require('../server/src/sessions');
+    const store = sessionsMod.loadStore();
+    const sid = 'test-hook-ask';
+    store.sessions[sid] = {
+      id: sid,
+      user: 'kkrazy',
+      absCwd: process.cwd(),
+      cwd: '.',
+      createdAt: new Date().toISOString(),
+      mode: 'agent',
+      allowList: [],
+      denyList: [],
+    };
+    sessionsMod.saveStore();
+
+    const s = new AgentSession(sid, { cwd: process.cwd() });
+    const out = await s._preToolUseHook({
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/x', content: '...' },
+      tool_use_id: 'tu_hook_ask_1',
+    });
+    // No hookSpecificOutput → SDK continues to canUseTool.
+    assert.deepStrictEqual(out, {}, 'expected pass-through (empty result)');
+    s.kill();
+  });
+
   await t('AgentSession seeds sdkSessionId from opts.resumeSdkSessionId', () => {
     const s = new AgentSession('test-resume-seed', {
       cwd: process.cwd(),

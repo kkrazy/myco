@@ -86,6 +86,19 @@ function _summariseToolInput(name, input) {
   } catch { return ''; }
 }
 
+// Reduce a structured tool_input object to the single string that
+// permissions.matchesPattern compares against. Mirrors what
+// permissions.extractPermissionTarget produced from PTY-scraped menus
+// in the legacy path.
+function _matchingInputFor(toolName, toolInput) {
+  if (!toolInput || typeof toolInput !== 'object') return '';
+  if (toolName === 'Bash') return String(toolInput.command || '');
+  if (['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName)) return String(toolInput.file_path || '');
+  if (['Glob', 'Grep'].includes(toolName)) return String(toolInput.pattern || toolInput.query || '');
+  if (toolName === 'WebFetch') return String(toolInput.url || '');
+  return '';
+}
+
 class AgentSession extends EventEmitter {
   constructor(sessionId, opts = {}) {
     super();
@@ -172,6 +185,17 @@ class AgentSession extends EventEmitter {
       permissionMode: 'default',
       abortSignal: this._abortController.signal,
       canUseTool: (toolName, input, ctx) => this._canUseTool(toolName, input, ctx),
+      // Phase 6: per-session allow-list as a PreToolUse hook. Runs BEFORE
+      // canUseTool so matching rules auto-approve/auto-deny without
+      // popping a chat-pane menu card. Falls through to canUseTool when
+      // no rule matches.
+      hooks: {
+        PreToolUse: [{
+          // matcher omitted ⇒ "all tools" — we always consult the
+          // allow-list, then fall through if no match.
+          hooks: [(input, toolUseID, ctx) => this._preToolUseHook(input, toolUseID, ctx)],
+        }],
+      },
     };
     if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
 
@@ -315,6 +339,70 @@ class AgentSession extends EventEmitter {
     }
     // Unknown event types — passthrough so phase 2+ can decide what to do.
     this._emit({ type: 'unknown_event', raw_type: m.type, raw: m });
+  }
+
+  // PreToolUse hook — consult this session's allow/deny list before
+  // canUseTool fires. Used to be PtySession + menuMod's auto-respond
+  // path; in agent mode the SDK does this for us via the hooks API.
+  //
+  // Returns one of:
+  //   - permissionDecision='allow'  → SDK proceeds without canUseTool
+  //   - permissionDecision='deny'   → SDK blocks + tells claude why
+  //   - {} (pass-through)           → SDK continues to canUseTool
+  //
+  // The deny path also re-emits a chat note (parallel to the legacy
+  // auto-respond message) so users still see WHY a tool was blocked.
+  async _preToolUseHook(input /* HookInput */) {
+    try {
+      const toolName = input && input.tool_name;
+      const toolInput = input && input.tool_input;
+      const tool_use_id = input && input.tool_use_id;
+      const inputForMatching = _matchingInputFor(toolName, toolInput);
+      // Lazy-require to dodge the pty.js → sessions.js → agent-session.js
+      // import-cycle hazard.
+      const sessionsMod = require('./sessions');
+      const permissions = require('./permissions');
+      const rec = sessionsMod.getSessionRecord
+        && sessionsMod.getSessionRecord(this.sessionId);
+      const decision = permissions.decide(rec, toolName, inputForMatching);
+
+      if (decision === 'allow') {
+        const reason = `myco session allow-list matched (${toolName}${inputForMatching ? '(' + inputForMatching.slice(0, 60) + ')' : ''})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'}`);
+        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
+      if (decision === 'deny') {
+        const reason = `myco session deny-list matched (${toolName}${inputForMatching ? '(' + inputForMatching.slice(0, 60) + ')' : ''})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=deny ${toolName} tool_use_id=${tool_use_id || '?'}`);
+        this._emit({ type: 'hook_deny', toolName, tool_use_id, reason });
+        // Mirror the legacy menuMod.autoRespondToMenu chat note so the
+        // user knows WHY their session's deny rule fired.
+        try {
+          const ASSISTANT = 'claude';
+          const txt = `🚫 auto-denied \`${toolName}(${inputForMatching || ''})\` (matched session deny list). Run \`/deny\` / \`/allow\` to mutate.`;
+          this.emit('chat', { user: ASSISTANT, text: txt, ts: new Date().toISOString(), meta: { kind: 'menu-auto', verb: 'deny', toolName } });
+        } catch {}
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
+      // 'ask' / unknown → no opinion; canUseTool will handle it.
+      return {};
+    } catch (err) {
+      console.error(`[agent-hook] ${this.sessionId} PreToolUse threw: ${err.message}`);
+      return {};
+    }
   }
 
   // Synthesize a chat-pane menu from a canUseTool fire, broadcast it via

@@ -633,6 +633,21 @@ test_best_practices_template() {
   grep -q "@anthropic-ai/claude-agent-sdk" server/src/claude-cli.js \
     && pass "claude-cli.js: imports claude-agent-sdk" \
     || fail "claude-cli.js: imports claude-agent-sdk"
+  # Phase 6: per-session allow-list as a PreToolUse hook in AgentSession.
+  # Matching rules auto-allow/auto-deny BEFORE canUseTool fires, so the
+  # chat-pane menu card only pops for tools the user hasn't pre-decided.
+  grep -q "_preToolUseHook" server/src/agent-session.js \
+    && pass "agent-session.js: PreToolUse hook present" \
+    || fail "agent-session.js: PreToolUse hook present"
+  grep -q "permissionDecision: 'allow'\\|permissionDecision: 'deny'" server/src/agent-session.js \
+    && pass "agent-session.js: hook returns permissionDecision allow/deny" \
+    || fail "agent-session.js: hook returns permissionDecision allow/deny"
+  grep -q "PreToolUse:" server/src/agent-session.js \
+    && pass "agent-session.js: PreToolUse wired into sdkOpts.hooks" \
+    || fail "agent-session.js: PreToolUse wired into sdkOpts.hooks"
+  grep -q "_matchingInputFor" server/src/agent-session.js \
+    && pass "agent-session.js: tool_input → match-string adapter present" \
+    || fail "agent-session.js: tool_input → match-string adapter present"
   # dedupePlanItems prompt enrichment: project CLAUDE.md + auto-memory
   # are inlined ahead of the item list so the LLM has project-specific
   # context when judging "same underlying concern".
