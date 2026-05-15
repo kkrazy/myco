@@ -774,6 +774,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #spawn-mode-label span {
   font-size: 0.85rem;
 }
+#spawn-mode-pty,
 #spawn-mode-agent {
   width: 16px;
   height: 16px;

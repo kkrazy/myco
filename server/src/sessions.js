@@ -380,13 +380,21 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   const rows = clamp(opts.rows, 10, 200, 30);
   const createdAt = new Date().toISOString();
 
-  // mode: 'pty' (default — claude CLI in node-pty, the legacy path)
-  //   or  'agent' (Claude Agent SDK driving structured events; opt-in
-  //                during the multi-phase migration on the
-  //                agent-sdk-research branch).
-  // Persisted on the record so ensureLiveSession reattach respawns
-  // with the same driver class.
-  const mode = opts.mode === 'agent' ? 'agent' : 'pty';
+  // mode: 'agent' (DEFAULT since phase 8 — Claude Agent SDK driving
+  //                 structured events) or 'pty' (legacy: claude CLI in
+  //                 node-pty; the path that ran from 2025-02 through
+  //                 2026-05). Persisted on the record so
+  //                 ensureLiveSession reattach respawns with the same
+  //                 driver class. Override per-session via
+  //                 POST /sessions {"mode":"pty"}; the spawn-modal
+  //                 checkbox flips between them.
+  //
+  //                 To force the old default fleet-wide (escape hatch
+  //                 if agent mode regresses): set the env var
+  //                 MYCO_DEFAULT_MODE=pty on the running container.
+  const explicit = opts.mode === 'pty' || opts.mode === 'agent' ? opts.mode : null;
+  const envDefault = process.env.MYCO_DEFAULT_MODE === 'pty' ? 'pty' : 'agent';
+  const mode = explicit || envDefault;
 
   const record = { id, user, cwd: toRel(absCwd, user), absCwd, claudeSessionId: null, createdAt, mode };
   putSession(record);

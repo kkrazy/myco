@@ -648,6 +648,14 @@ test_best_practices_template() {
   grep -q "_matchingInputFor" server/src/agent-session.js \
     && pass "agent-session.js: tool_input → match-string adapter present" \
     || fail "agent-session.js: tool_input → match-string adapter present"
+  # Phase 8: 'agent' is now the default spawn mode. Legacy PTY is opt-in
+  # via the spawn-modal checkbox OR MYCO_DEFAULT_MODE=pty env var.
+  grep -q "envDefault = process.env.MYCO_DEFAULT_MODE" server/src/sessions.js \
+    && pass "sessions.js: env-var escape hatch for default mode present" \
+    || fail "sessions.js: env-var escape hatch for default mode present"
+  grep -q "spawn-mode-pty" web/public/index.html \
+    && pass "index.html: spawn-modal flipped to 'opt into PTY' (default = agent)" \
+    || fail "index.html: spawn-modal flipped to 'opt into PTY' (default = agent)"
   # dedupePlanItems prompt enrichment: project CLAUDE.md + auto-memory
   # are inlined ahead of the item list so the LLM has project-specific
   # context when judging "same underlying concern".

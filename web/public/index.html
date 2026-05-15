@@ -191,14 +191,13 @@
         <input id="spawn-cwd" type="text" placeholder="ASCII only (a-z, 0-9, -, _, /)" autocomplete="off" pattern="[\x20-\x7E]*" title="ASCII characters only — no CJK, emoji, or other non-ASCII" />
       </label>
       <div id="spawn-suggestions"></div>
-      <!-- Agent-mode toggle (agent-sdk-research migration, phases 1–7).
-           Off = legacy claude-CLI-via-PTY path. On = SDK-driven session
-           using ~/.claude/.credentials.json — structured events,
-           interrupt via esc/ctrl-c, chat-pane menu cards, per-session
-           allow-list as a PreToolUse hook. See agent-sdk-migration-plan.md. -->
-      <label id="spawn-mode-label" title="Use the Claude Agent SDK instead of spawning the claude CLI in a PTY. Experimental — see agent-sdk-research branch.">
-        <input id="spawn-mode-agent" type="checkbox" />
-        <span>Agent (SDK) — experimental</span>
+      <!-- Driver toggle. Default (unchecked) = Claude Agent SDK
+           since phase 8 of the agent-sdk-research migration. Check to
+           opt into the legacy claude-CLI-in-PTY path (a fallback for
+           anything broken in agent mode). -->
+      <label id="spawn-mode-label" title="Tick to spawn the legacy claude-CLI-in-PTY session. Default is the SDK-driven agent session with structured events + chat-pane menu cards.">
+        <input id="spawn-mode-pty" type="checkbox" />
+        <span>Legacy PTY (claude CLI fallback)</span>
       </label>
       <div id="spawn-error" hidden></div>
       <div id="spawn-actions">

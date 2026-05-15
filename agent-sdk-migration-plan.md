@@ -133,17 +133,24 @@ subprocesses today. With the SDK in the project, replace those with SDK
 - [ ] `slashcmds.dedupePlanItems` — same swap (already routes through
       `btw.runClaudeP`).
 
-## Phase 8 — flip the default + deprecate PTY
+## Phase 8 — flip the default ✅ DONE
 
-Once agent-mode sessions reach feature parity AND have been validated for
-a few weeks in production, flip `spawnSession` default to `mode='agent'`.
-PTY code stays in the tree for a release or two as escape hatch, then deletes.
+`spawnSession`'s default is now `mode='agent'`. PTY is opt-in via the
+spawn-modal "Legacy PTY" checkbox or `POST /sessions {"mode":"pty"}`.
+Existing PTY sessions in /data keep working (their rec.mode='pty'
+persists). Env-var escape hatch: `MYCO_DEFAULT_MODE=pty` forces the
+old default fleet-wide.
 
-- [ ] Change `spawnSession` default
+- [x] Change `spawnSession` default
+- [x] Flip the spawn-modal checkbox semantics (was "opt into agent",
+      now "opt into PTY fallback")
+- [x] Document the env-var override in sessions.js
+
+After production validation:
+
 - [ ] Update CLAUDE.md docs (Deployment section, Troubleshooting)
 - [ ] Mark `pty.js`, `menu-interceptor.js`, `menu.js`, `permissions.js`
-      as deprecated in their file headers
-- [ ] After validation: delete them entirely + the xterm.js dep.
+      as deprecated in their file headers (Phase 9 follow-up)
 
 ## Phase 9 — kill the PTY path
 
