@@ -1371,7 +1371,7 @@ test_new_session_readonly() {
   # The legacy PTY path still works for EXISTING rec.mode='pty' records
   # via ensureLiveSession until the actual code deletion lands, but
   # the spawn-modal checkbox is hidden + new spawns are agent-only.
-  grep -q "PTY mode is being retired (Phase 9)" server/src/sessions.js \
+  grep -q "PTY mode is retired (Phase 9)" server/src/sessions.js \
     && pass "sessions.js: spawnSession rejects mode=pty (Phase 9)" \
     || fail "sessions.js: spawnSession still accepts mode=pty"
   ! grep -q 'spawn-mode-label\|"spawn-mode-pty" type="checkbox"' web/public/index.html \
