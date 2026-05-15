@@ -1241,17 +1241,52 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   }
 }
 
-/* Phase 3 retired the chatpane-resize handle. The chatpane fills the
-   full main-pane width; resizing has no meaning in a centered-column
-   layout. The element stays in the DOM for back-compat but is hidden
-   from layout and pointer events. */
+/* Resize handle defaults to hidden — only the side-by-side layout
+   below (#terminal-pane.has-artifact #chatpane:not([hidden])) makes
+   it visible. In single-pane chat mode there's no resize axis. */
 #chatpane-resize { display: none; }
 
-/* Phase 3 also retired the "push the underlying view left when chat
-   is open" rule. The chatpane fills the main pane completely now, so
-   the artifact / terminal views don't need a margin-right reserved
-   for it. .artifact-main-view sits at inset: 0 and overlays the chat
-   cleanly via z-index ordering (artifacts above when active). */
+/* Side-by-side layout (desktop only): when an artifact view
+   (plan/arch/test) or the files-wrap is open AND chat is also open,
+   chat collapses from full-pane to a RIGHT sidebar of width
+   var(--chatpane-w). The artifact view's right edge stops at
+   var(--chatpane-w) instead of 0 so both panes are visible at once.
+   The .chat-main-view centering (max-width: 880px) is also relaxed
+   so chat content fills the narrow sidebar without awkward gutters. */
+@media (min-width: 901px) {
+  #terminal-pane.has-artifact #chatpane.chat-main-view:not([hidden]) {
+    left: auto;
+    right: 0;
+    width: var(--chatpane-w);
+    border-left: 1px solid var(--border);
+  }
+  #terminal-pane.has-artifact #chatpane.chat-main-view #chat-messages,
+  #terminal-pane.has-artifact #chatpane.chat-main-view #chat-form,
+  #terminal-pane.has-artifact #chatpane.chat-main-view #claude-typing,
+  #terminal-pane.has-artifact #chatpane.chat-main-view #chat-autocomplete,
+  #terminal-pane.has-artifact #chatpane.chat-main-view #chat-empty {
+    max-width: none;
+  }
+  #terminal-pane.has-artifact .artifact-main-view,
+  #terminal-pane.has-artifact #files-wrap {
+    right: var(--chatpane-w);
+  }
+  #terminal-pane.has-artifact #chatpane:not([hidden]) #chatpane-resize {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 32;
+  }
+  #terminal-pane.has-artifact #chatpane:not([hidden]) #chatpane-resize:hover,
+  #terminal-pane.has-artifact #chatpane:not([hidden]) #chatpane-resize.dragging {
+    background: rgba(120, 160, 230, .35);
+  }
+}
 
 /* Tab bar inside the chatpane header. Holds Discussion / Plan / Arch / Test. */
 #chatpane-tabs {

@@ -3278,7 +3278,22 @@ function bindChatUi() {
   // Phase 9 step 3 retired the 👁 preview and 📜 transcript toggles —
   // the chatpane is the only session view now (owners + read-only
   // viewers), so there's no longer a terminal ↔ transcript flip.
-  document.getElementById('btn-chat')?.addEventListener('click', () => setChatPane(true));
+  document.getElementById('btn-chat')?.addEventListener('click', () => {
+    // Home = "back to the conversation, full-width." Any artifact pane
+    // (plan/arch/test) or files-wrap currently overlaying chat is
+    // dismissed so the chatpane has the whole main pane to itself.
+    // Otherwise the click looked dead — the artifact stayed on top at
+    // z:31, chat sat unseen behind it at z:30.
+    if (state.artifactView && state.artifactView.active) hideArtifactView();
+    if (state.files && state.files.visible) {
+      const fw = document.getElementById('files-wrap');
+      if (fw) fw.hidden = true;
+      state.files.visible = false;
+      document.getElementById('btn-files')?.classList.remove('active');
+    }
+    setChatPane(true);
+    _updateMainPaneLayout();
+  });
   // The legacy chatpane-close × was removed; #btn-chat itself toggles
   // open/closed via its .active state. Optional-chain still leaves this
   // a no-op for any cached page that still has the old element.
@@ -3372,6 +3387,20 @@ function _wrapIdForArtifact(type) {
   return type + '-wrap';
 }
 
+// Toggle a `.has-artifact` class on #terminal-pane so CSS can flip
+// chatpane from full-pane to right-sidebar while an artifact view
+// (plan/arch/test/files) covers the left. Without this, the chatpane
+// stayed at inset:0 behind the artifact (z-index trick), and the user
+// couldn't see chat + artifact at the same time. Sidebar mode also
+// re-enables the resize handle.
+function _updateMainPaneLayout() {
+  const main = document.getElementById('terminal-pane');
+  if (!main) return;
+  const hasArt = !!(state.artifactView && state.artifactView.active) ||
+                 !!(state.files && state.files.visible);
+  main.classList.toggle('has-artifact', hasArt);
+}
+
 function showArtifactView(type) {
   if (!ARTIFACT_TYPES.includes(type)) return;
   if (!state.activeId) return;
@@ -3385,12 +3414,17 @@ function showArtifactView(type) {
   _hideMainPaneSiblings(wrapId);
   document.getElementById(wrapId).hidden = false;
   state.artifactView.active = type;
+  // Keep chat visible alongside the artifact on desktop — they live
+  // side-by-side now, not stacked. Mobile still mutually-exclusive
+  // (see _hideMainPaneSiblings).
+  if (window.innerWidth > 900) setChatPane(true);
   // Mark the right button active, clear the others.
   for (const t of ARTIFACT_TYPES) {
     document.getElementById('btn-' + t)?.classList.toggle('active', t === type);
   }
   loadArtifact(type).catch(() => {});
   updateChatButton();
+  _updateMainPaneLayout();
 }
 
 function hideArtifactView() {
@@ -3405,6 +3439,7 @@ function hideArtifactView() {
   // means hiding it — the chatpane reappears automatically. Files view
   // is the only sibling we still restore explicitly.
   if (state.artifactView.prev === 'files') showFilesView();
+  _updateMainPaneLayout();
 }
 
 function toggleArtifactView(type) {
@@ -4231,8 +4266,13 @@ function showFilesView() {
   document.getElementById('files-view-pane').hidden = true;
   document.getElementById('btn-files')?.classList.add('active');
   state.files.visible = true;
+  // Same side-by-side intent as showArtifactView: chat stays visible
+  // alongside files on desktop, hidden on mobile (mutually exclusive
+  // there per _hideMainPaneSiblings).
+  if (window.innerWidth > 900) setChatPane(true);
   loadFileTree(state.files.currentPath || '.');
   updateChatButton();
+  _updateMainPaneLayout();
 }
 
 function hideFilesView() {
@@ -4244,6 +4284,7 @@ function hideFilesView() {
   state.files.visible = false;
   state.files.prevView = null;
   updateChatButton();
+  _updateMainPaneLayout();
 }
 
 async function loadFileTree(relPath) {
