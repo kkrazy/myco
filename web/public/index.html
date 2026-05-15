@@ -13,7 +13,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=208" />
+  <link rel="stylesheet" href="styles.css?v=210" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -83,6 +83,12 @@
           <span class="claude-typing-label"></span>
         </div>
         <div id="chat-autocomplete" hidden></div>
+        <!-- Live status strip — single-line indicator of what claude is
+             doing right now (latest tool_use / tool_result / permission
+             request / etc.). Sits between the chat-messages scroll
+             region and the chat-form so the user always knows where
+             the agent is without scrolling. Hidden when idle. -->
+        <div id="agent-status-strip" class="agent-status-strip" hidden></div>
         <form id="chat-form" autocomplete="off">
           <textarea id="chat-input" rows="3" placeholder="Message…  (Enter to send · Shift+Enter for newline · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>
           <button type="submit" id="chat-send">Send</button>
@@ -236,6 +242,6 @@
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=209"></script>
+  <script src="app.js?v=210"></script>
 </body>
 </html>

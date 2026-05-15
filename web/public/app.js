@@ -2428,6 +2428,51 @@ const AGENT_CHROME_TYPES = new Set([
   'tool_result',
 ]);
 
+// Single-line live status strip above the chat input. Updated by
+// every agent event so the user always knows what the agent is doing
+// right now without scrolling the timeline. Clears on turn_result
+// (claude finished) or after 20s of no chrome activity (idle).
+let _agentStatusIdleTimer = null;
+function _updateAgentStatusStrip(ev) {
+  const strip = document.getElementById('agent-status-strip');
+  if (!strip || !ev || !ev.type) return;
+  if (_agentStatusIdleTimer) { clearTimeout(_agentStatusIdleTimer); _agentStatusIdleTimer = null; }
+  let label = '';
+  if (ev.type === 'turn_result') {
+    // Claude finished — show a brief "done" then auto-clear.
+    if (ev.subtype === 'success') label = '✓ done';
+    else if (ev.subtype) label = '■ ' + ev.subtype;
+    if (label) {
+      strip.innerHTML = `<span class="ass-dot" style="background:#3fb950"></span>${escHtml(label)}`;
+      strip.hidden = false;
+      _agentStatusIdleTimer = setTimeout(() => { strip.hidden = true; strip.innerHTML = ''; }, 3000);
+    } else {
+      strip.hidden = true; strip.innerHTML = '';
+    }
+    return;
+  }
+  if (ev.type === 'assistant_text') {
+    // claude is writing the reply — the chat-typing dots cover this
+    // explicit state, hide the strip so we don't double-up.
+    strip.hidden = true; strip.innerHTML = '';
+    return;
+  }
+  if (ev.type === 'fatal') {
+    strip.innerHTML = `<span class="ass-dot" style="background:#ff8282"></span>⚠ fatal · ${escHtml(String(ev.error || '').split('\n')[0].slice(0, 80))}`;
+    strip.hidden = false;
+    return;
+  }
+  if (_isChromeEvent(ev)) {
+    label = _chromeShortLabel(ev);
+  }
+  if (!label) return;
+  strip.innerHTML = `<span class="ass-dot"></span>${escHtml(label)}`;
+  strip.hidden = false;
+  // Auto-hide after 20s of no chrome activity — keeps the strip from
+  // dangling on a stale "$ git status" line after the run finished.
+  _agentStatusIdleTimer = setTimeout(() => { strip.hidden = true; strip.innerHTML = ''; }, 20000);
+}
+
 // All tool_use events fold into the chrome batch. The per-call
 // details (file path, command, query, etc.) are surfaced inside the
 // expanded batch via _chromeEventLine, but they don't each get their
@@ -2450,6 +2495,11 @@ function _isChromeEvent(ev) {
 function _appendAgentEvent(ev) {
   const pane = _ensureAgentLogPane();
   const ts = (ev.ts || '').slice(11, 19) || new Date().toISOString().slice(11, 19);
+
+  // Live status strip — single-line indicator sitting above the chat
+  // input so the user always knows what the agent is doing. Every
+  // chrome event updates it; turn_result clears it.
+  _updateAgentStatusStrip(ev);
 
   // Chrome batching: consecutive chrome events collapse into one
   // compact "▸ N events" indicator. Click the indicator to expand and
