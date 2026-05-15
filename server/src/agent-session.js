@@ -153,13 +153,18 @@ class AgentSession extends EventEmitter {
     // SDK iteration can continue with the user's choice.
     this._pendingPermissions = new Map();
 
-    // If an initial prompt was passed, auto-kick the first turn.
-    if (opts.initialPrompt) {
-      // Defer one tick so listeners attached after construction still
-      // see the first events. PtySession has the same pattern via the
-      // PTY's own onData scheduling.
-      setImmediate(() => this.write(opts.initialPrompt));
-    }
+    // Always emit a ready event so the browser's event-log pane has
+    // something visible from the moment the WS attaches — otherwise a
+    // fresh agent session looks dead until the user types something.
+    // Lands in the per-session ring buffer so it replays on reconnect.
+    setImmediate(() => {
+      this._emit({
+        type: 'session_ready',
+        cwd: this.cwd,
+        resumedFromSdkSessionId: this.sdkSessionId || null,
+      });
+      if (opts.initialPrompt) this.write(opts.initialPrompt);
+    });
   }
 
   // Start (or restart, after an abort) the SDK iteration. One iteration

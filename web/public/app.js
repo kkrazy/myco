@@ -2835,7 +2835,11 @@ function _appendAgentEvent(ev) {
   body.className = 'agent-card-body';
   card.appendChild(body);
 
-  if (ev.type === 'system_init') {
+  if (ev.type === 'session_ready') {
+    head.innerHTML += `<span class="agent-card-kind agent-mute">○ ready</span>`;
+    body.innerHTML = `<span class="agent-mute">Agent-mode session is live and waiting for your first message.
+Type anything in the chat input below.</span>${ev.resumedFromSdkSessionId ? `<br><span class="agent-mute">resuming sdk-session=</span><code>${escHtml(String(ev.resumedFromSdkSessionId).slice(0, 8))}</code>` : ''}`;
+  } else if (ev.type === 'system_init') {
     head.innerHTML += `<span class="agent-card-kind">▶ session</span>`;
     body.innerHTML = `<span class="agent-mute">sdk-session=</span><code>${escHtml((ev.sdkSessionId || '').slice(0, 8))}</code>
       <span class="agent-mute">model=</span><code>${escHtml(ev.model || '?')}</code>
