@@ -436,6 +436,18 @@ test_best_practices_template() {
   grep -q "chat-text-resolved" web/public/styles.css \
     && pass "styles.css: chat-text-resolved muted style present" \
     || fail "styles.css: chat-text-resolved muted style present"
+  # Menu-pick queue-and-retry: handles the post-deploy window where a
+  # user clicks a chat-pane menu row before the headless scan has
+  # hydrated session.pendingMenu. Silent-drop paths now log explicitly.
+  grep -q "_queueMenuPick" server/src/pty.js \
+    && pass "pty.js: _queueMenuPick helper present" \
+    || fail "pty.js: _queueMenuPick helper present"
+  grep -q "_retryQueuedMenuPick" server/src/pty.js \
+    && pass "pty.js: _retryQueuedMenuPick wired into scan()'s newMenu" \
+    || fail "pty.js: _retryQueuedMenuPick wired into scan()'s newMenu"
+  grep -q "silent-drop:" server/src/pty.js \
+    && pass "pty.js: handleMenuPick silent-drop paths now log" \
+    || fail "pty.js: handleMenuPick silent-drop paths now log"
   if have_node; then
     if node test/chat-routing.test.js >/dev/null 2>&1; then
       pass "test/chat-routing.test.js (7 cases)"
@@ -1683,7 +1695,7 @@ test_chat_window() {
   # row; stale picks drop the PTY write.
   if have_node; then
     if node test/menu-pick-race.test.js >/dev/null 2>&1; then
-      pass "test/menu-pick-race.test.js (12 cases)"
+      pass "test/menu-pick-race.test.js (14 cases)"
     else
       fail "test/menu-pick-race.test.js — re-run with 'node test/menu-pick-race.test.js' to see failures"
     fi

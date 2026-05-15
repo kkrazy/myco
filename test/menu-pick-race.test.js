@@ -144,7 +144,53 @@ t('hash path: post-restart click (pendingMenu cleared) still persists on the rig
   assert.strictEqual(chat[0].meta.answered, true, 'menu A row stamped even with no live pendingMenu');
   assert.strictEqual(chat[0].meta.pickedN, 1);
   assert.strictEqual(chat[1].meta.answered, false, 'menu B row untouched');
-  assert.deepStrictEqual(session.writes, [], 'PTY write skipped — claude is past the menu');
+  assert.deepStrictEqual(session.writes, [], 'PTY write skipped synchronously — pendingMenu null');
+  // NEW (2026-05-15): the click should now be QUEUED so the next
+  // newMenu scan can retry it. Validates the queue-and-retry path
+  // added to close the post-deploy silent-drop window.
+  assert.ok(session._queuedPick, 'pick should be queued for retry');
+  assert.strictEqual(session._queuedPick.n, 1);
+  assert.strictEqual(session._queuedPick.hash, 'h_A3');
+  if (session._queuedPick.timeout) clearTimeout(session._queuedPick.timeout);
+});
+
+// Queue-and-retry: pendingMenu hydrates AFTER the click, scan() calls
+// _retryQueuedMenuPick which fires the PTY write iff hashes match.
+t('queue+retry: pendingMenu hydrates after click → digit reaches PTY', () => {
+  const sid = 'sess-queue-1';
+  const opts = [{ n: 1, label: 'Yes' }, { n: 2, label: 'No' }];
+  const menu = { hash: 'h_Q1', question: 'Q?', options: opts, kind: 'plan' };
+  seedStore(sid, [menu]);
+  const session = makeMockSession();
+  session.sessionId = sid;
+  session.pendingMenu = null;                      // post-restart
+  ptyMod.handleMenuPick(sid, session, 2, 'h_Q1');  // user clicks too early
+  assert.ok(session._queuedPick, 'click should queue when pendingMenu is null');
+  assert.deepStrictEqual(session.writes, [], 'no synchronous PTY write yet');
+  // scan() now detects the still-on-screen dialog and hydrates pendingMenu.
+  session.pendingMenu = menu;
+  ptyMod._retryQueuedMenuPick(session);
+  assert.deepStrictEqual(session.writes, ['2\r'], 'queued pick should fire after hydration');
+  assert.strictEqual(session.pendingMenu, null, 'pendingMenu cleared after retry');
+  assert.strictEqual(session._queuedPick, null, 'queue slot cleared');
+});
+
+t('queue+retry: hash mismatch on hydration → drop without PTY write', () => {
+  const sid = 'sess-queue-2';
+  const opts = [{ n: 1, label: 'Yes' }, { n: 2, label: 'No' }];
+  const menuClicked = { hash: 'h_Qclick', question: 'Q1?', options: opts, kind: 'plan' };
+  const menuFresh   = { hash: 'h_Qfresh', question: 'Q2?', options: opts, kind: 'plan' };
+  seedStore(sid, [menuClicked]);
+  const session = makeMockSession();
+  session.sessionId = sid;
+  session.pendingMenu = null;
+  ptyMod.handleMenuPick(sid, session, 2, 'h_Qclick');
+  // scan() detects a DIFFERENT menu (claude advanced past the original
+  // before the user's queued click could fire).
+  session.pendingMenu = menuFresh;
+  ptyMod._retryQueuedMenuPick(session);
+  assert.deepStrictEqual(session.writes, [], 'queued pick must not land on a different menu');
+  assert.strictEqual(session._queuedPick, null, 'queue slot still cleared');
 });
 
 t('hash path: unknown hash → no row stamped, no PTY write', () => {

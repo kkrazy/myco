@@ -336,6 +336,10 @@ class PtySession extends EventEmitter {
     if (change.kind === 'newMenu') {
       this.pendingMenu = change.menu;
       this.emit('menu', change.menu);
+      // Retry any pick that arrived BEFORE this menu was hydrated
+      // (typical: post-restart user clicks a chat-pane menu row before
+      // the first headless scan caught the still-on-screen dialog).
+      _retryQueuedMenuPick(this);
     } else if (change.kind === 'cleared') {
       this.pendingMenu = null;
       this.emit('menu-cleared');
@@ -528,12 +532,79 @@ function killSession(sessionId) {
 // Back-compat: when `hash` is omitted (older client), only `pendingMenu
 // .options` is consulted (the original behaviour). New clients always
 // send the hash and get the race-free path.
+// Queue a chat-pane menu pick that arrived before pendingMenu was
+// hydrated. Single-slot per session — a second click overwrites.
+// 2s timeout drops with a log. See handleMenuPick for the trigger.
+const QUEUED_PICK_TTL_MS = 2000;
+function _queueMenuPick(session, sessionId, n, hash) {
+  if (session._queuedPick && session._queuedPick.timeout) {
+    clearTimeout(session._queuedPick.timeout);
+  }
+  const queuedAt = Date.now();
+  session._queuedPick = {
+    n,
+    hash: hash || null,
+    queuedAt,
+    timeout: setTimeout(() => {
+      if (session._queuedPick && session._queuedPick.queuedAt === queuedAt) {
+        console.log(`[menu-pick] ${sessionId} queued-pick TTL expired (n=${n}, age=${QUEUED_PICK_TTL_MS}ms) — drop`);
+        session._queuedPick = null;
+      }
+    }, QUEUED_PICK_TTL_MS),
+  };
+  console.log(`[menu-pick] ${sessionId} queued pick n=${n} (pendingMenu not yet hydrated)`);
+}
+
+// Called from scan()'s newMenu branch (after pendingMenu is populated).
+// Validates the queued hash against the freshly-detected menu's hash —
+// if they match and option N exists, writes the digit. Otherwise drops
+// with a log so the diag loop can see what happened.
+function _retryQueuedMenuPick(session) {
+  const q = session._queuedPick;
+  if (!q) return;
+  session._queuedPick = null;
+  if (q.timeout) clearTimeout(q.timeout);
+  const sessionId = session.sessionId;
+  const pending = session.pendingMenu;
+  if (!pending || !Array.isArray(pending.options)) {
+    console.log(`[menu-pick] ${sessionId} queued-pick drop n=${q.n} — newMenu fired but pendingMenu still null (race)`);
+    return;
+  }
+  if (q.hash && pending.hash && q.hash !== pending.hash) {
+    console.log(`[menu-pick] ${sessionId} queued-pick drop n=${q.n} — fresh menu has different hash (queuedAge=${Date.now() - q.queuedAt}ms)`);
+    return;
+  }
+  if (!pending.options.some((o) => o.n === q.n)) {
+    console.log(`[menu-pick] ${sessionId} queued-pick drop n=${q.n} — option not in fresh menu (opts=${pending.options.map((o) => o.n).join(',')})`);
+    return;
+  }
+  const wizardInfo = _detectWizard(session);
+  const useCr = !wizardInfo.simple;
+  const bytes = useCr ? String(q.n) + '\r' : String(q.n);
+  session.write(bytes);
+  console.log(`[menu-pick] ${sessionId} queued-pick retry wrote ${JSON.stringify(bytes)} (n=${q.n}, queuedAge=${Date.now() - q.queuedAt}ms, wizard=${wizardInfo.kind})`);
+  session.pendingMenu = null;
+}
+
 function handleMenuPick(sessionId, session, n, hash) {
   if (!Number.isFinite(n) || n < 1 || n > 9) return;
   _markMenuChatAnswered(sessionId, n, hash);
-  if (!session || !session.alive) return;
+  if (!session || !session.alive) {
+    console.log(`[menu-pick] ${sessionId} silent-drop: session not alive (n=${n})`);
+    return;
+  }
   const pending = session.pendingMenu;
-  if (!pending || !Array.isArray(pending.options)) return;
+  if (!pending || !Array.isArray(pending.options)) {
+    // No menu hydrated in memory yet. Common cause: container restart /
+    // session respawn — the user reattached, the persisted chat shows a
+    // menu card, they click it, but the headless scan hasn't yet
+    // detected the still-on-screen dialog and set session.pendingMenu.
+    // Queue the pick so the next `newMenu` change in scan() can retry
+    // it (see PtySession.scan for the retry hook). Single-slot queue;
+    // a follow-up click overwrites. 2s timeout drops it with a log.
+    _queueMenuPick(session, sessionId, n, hash);
+    return;
+  }
   // Reject the PTY write if the click targeted a menu that is no
   // longer the one claude is showing — the digit would land on a
   // different question.
@@ -547,7 +618,10 @@ function handleMenuPick(sessionId, session, n, hash) {
     console.log(`[menu-pick]   pending: ${JSON.stringify(pending.hash)}`);
     return;
   }
-  if (!pending.options.some((o) => o.n === n)) return;
+  if (!pending.options.some((o) => o.n === n)) {
+    console.log(`[menu-pick] ${sessionId} silent-drop: option ${n} not in pending menu (opts=${pending.options.map((o) => o.n).join(',')})`);
+    return;
+  }
   // Plan-mode interview wizard auto-advances on a bare digit — the
   // digit selects + commits + moves to the next question in one event.
   // Sending `digit + "\r"` was harmless on the FIRST screen (the CR
@@ -1685,6 +1759,8 @@ module.exports = {
   handleMenuSubmit,
   // Exposed for chat-routing regression tests.
   _detectMentionTarget,
+  // Exposed for menu-pick race tests (queue + retry).
+  _retryQueuedMenuPick,
   // Re-exported for menu-broadcast.test.js — the live implementations now
   // live in menu.js; this surface stays so the test contract (and any
   // outside caller that pulls the menu helpers off ptyMod) keeps working.
