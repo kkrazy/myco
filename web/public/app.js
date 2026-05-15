@@ -1,34 +1,16 @@
-/* global Terminal, FitAddon, WebglAddon, CanvasAddon, Keyboard */
-
-// Kick off font load as soon as the script runs. The browser doesn't fetch
-// @font-face fonts until something references them, and xterm's WebGL/Canvas
-// renderer caches glyphs at terminal init — if we open xterm before the
-// Nerd Font is loaded, the atlas is built with the fallback font and box
-// drawing characters render at the wrong widths, scrambling Claude's splash.
-const fontsReady = (typeof document !== 'undefined' && document.fonts)
-  ? Promise.all([
-      document.fonts.load("13px 'JetBrains Mono Nerd Font'"),
-      document.fonts.load("bold 13px 'JetBrains Mono Nerd Font'"),
-    ]).catch(() => {})
-  : Promise.resolve();
-
-// Force xterm to rebuild its glyph atlas once the font is actually loaded.
-// Setting fontFamily to itself triggers an internal re-measure; refresh()
-// repaints the visible buffer with the new atlas.
-function refreshXtermAfterFontLoad(term) {
-  if (!term || !fontsReady) return;
-  fontsReady.then(() => {
-    try {
-      const ff = term.options.fontFamily;
-      term.options.fontFamily = ff;
-      term.refresh(0, Math.max(0, (term.rows || 1) - 1));
-    } catch {}
-  });
-}
+// SDK Phase 9 step 2: xterm.js + the PTY byte stream are retired.
+// All sessions are agent-mode and render structured events (cards) in
+// the chat pane — there's no terminal to paint. The state.term /
+// state.fitAddon stubs below stay null so every legacy state.term?.foo
+// optional-chain short-circuits safely without a runtime error.
+function refreshXtermAfterFontLoad(_term) { /* no-op: xterm retired */ }
 
 const state = {
   sessions: [],
   activeId: null,
+  // term + fitAddon stay null (xterm retired Phase 9 step 2); the
+  // legacy optional-chain call sites (state.term?.write(...) etc.)
+  // short-circuit safely so we don't need to scrub every reference.
   term: null,
   fitAddon: null,
   ws: null,
@@ -72,21 +54,6 @@ const state = {
   // indicator when this has entries so long-running tools (Agent,
   // Monitor, etc.) don't look like the session has hung.
   openToolCalls: [],
-  // [diag-resume] diagnostic counters — temporary, paired with the
-  // server-side [ws-attach] log in pty.js. Investigating user-filed
-  // plan item: "when the app is inactive but the claude session might
-  // be still running in the background, when the app become active
-  // again, it wont pick up the new output from pty while the app is
-  // inactive." Counts every `t:'output'` frame so we can see, on
-  // visibilitychange→visible, whether bytes actually arrived while
-  // the tab was hidden (TCP/WS keepalive scenario) vs. zero bytes
-  // (WS was suspended and the resume should be coming via reconnect).
-  diagOutputBytes: 0,
-  diagOutputFrames: 0,
-  diagHiddenAt: null,
-  diagBytesAtHidden: 0,
-  diagFramesAtHidden: 0,
-  diagWsClosedAt: 0,
 };
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -187,43 +154,9 @@ function showShareError(msg) {
     `padding:20px;text-align:center;">${escHtml(msg)}</div>`;
 }
 
-function ensureXtermForFallback() {
-  if (state.term) return;
-  document.getElementById('terminal-wrap').hidden = false;
-  state.term = new Terminal({
-    scrollback: IS_TOUCH_DEVICE ? 1500 : 5000,  // smaller buffer on mobile = less GC pressure
-    fontSize: 13,
-    fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace",
-    cursorBlink: false,                           // idle blinks force needless repaints
-    smoothScrollDuration: 0,                      // we drive scroll ourselves
-  });
-  state.fitAddon = new FitAddon.FitAddon();
-  state.term.loadAddon(state.fitAddon);
-  const el = document.getElementById('terminal');
-  el.innerHTML = '';
-  state.term.open(el);
-  state.fitAddon.fit();
-  // Renderer choice: Canvas on mobile, WebGL on desktop. WebGL on mobile
-  // Safari is expensive — every scroll dirties the canvas, and the
-  // GPU/CPU sync penalty on tile-based mobile GPUs makes scroll feel
-  // chunky. CanvasAddon does direct pixel writes, which is genuinely
-  // faster for terminal-style content on phones.
-  if (IS_TOUCH_DEVICE) {
-    try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
-  } else {
-    try {
-      const webgl = new WebglAddon.WebglAddon();
-      webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
-      state.term.loadAddon(webgl);
-    } catch {
-      try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
-    }
-  }
-  // Custom touch handler on both mobile and desktop — native scroll doesn't
-  // reach .xterm-viewport because .xterm-screen overlays it in the DOM.
-  setupTouchScroll(state.term);
-  refreshXtermAfterFontLoad(state.term);
-}
+// Phase 9 step 2: xterm is retired. Kept as a no-op so legacy call
+// sites (mostly inside showTerminalView) don't bomb.
+function ensureXtermForFallback() { /* no-op: xterm retired */ }
 
 // Touch device detection: narrow viewport OR coarse pointer (matchMedia)
 // OR a touch-capable navigator. Computed once at script load.
@@ -1208,65 +1141,13 @@ function _resetUiForNewSession(id) {
   if (window.innerWidth <= 900) setSidebar(true);
 }
 
-// Owner-only: build the live xterm in #terminal, load addons, hook up
-// touch-scroll + ResizeObserver + virtual keyboard. Viewer sessions skip
-// this and render the structured-transcript pane instead.
+// Phase 9 step 2: xterm + the PTY byte stream are retired. The
+// "owner xterm" was the live PTY render surface; agent-mode sessions
+// render structured event cards in the chat pane instead, so the
+// init is a no-op. Kept as a stub so legacy openSession code paths
+// (mobile / desktop owner branches) still call something.
 function _initOwnerXterm() {
-  document.getElementById('terminal-wrap').hidden = false;
-
-  state.term = new Terminal({
-    scrollback: IS_TOUCH_DEVICE ? 1500 : 5000,
-    fontSize: 13,
-    fontFamily: "'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace",
-    cursorBlink: false,
-    smoothScrollDuration: 0,
-  });
-  state.fitAddon = new FitAddon.FitAddon();
-  state.term.loadAddon(state.fitAddon);
-  const el = document.getElementById('terminal');
-  el.innerHTML = '';
-  state.term.open(el);
-  state.fitAddon.fit();
-
-  // See createTerm — Canvas on mobile, WebGL on desktop.
-  if (IS_TOUCH_DEVICE) {
-    try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
-  } else {
-    try {
-      const webgl = new WebglAddon.WebglAddon();
-      webgl.onContextLoss(() => { try { webgl.dispose(); } catch {} });
-      state.term.loadAddon(webgl);
-    } catch {
-      try { state.term.loadAddon(new CanvasAddon.CanvasAddon()); } catch {}
-    }
-  }
-
-  // Custom touch handler on both mobile and desktop. Native viewport scroll
-  // doesn't work on mobile because .xterm-screen sits on top of
-  // .xterm-viewport in the DOM and absorbs touch events; the JS handler is
-  // the only thing that reliably reaches term.scrollLines.
-  setupTouchScroll(state.term);
-  refreshXtermAfterFontLoad(state.term);
-
-  state.xtermTextarea = el.querySelector('.xterm-helper-textarea');
-  if (state.xtermTextarea) state.xtermTextarea.setAttribute('inputmode', 'none');
-
-  const ro = new ResizeObserver(() => {
-    state.fitAddon.fit();
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
-    }
-  });
-  ro.observe(el);
-
-  if (!state.keyboard) {
-    state.keyboard = new Keyboard(document.getElementById('keyboard-bar'), sendInput);
-  }
-
   showConnOverlay('Connecting', null, 'Establishing session…');
-  // updateChatButton was called earlier when both panes were still hidden,
-  // so the toggle was hidden too. Now that terminal-wrap is visible, the
-  // toggle should reappear (mobile only — desktop keeps the chat pane open).
   updateChatButton();
 }
 
@@ -1345,11 +1226,6 @@ function openSession(id, opts = {}) {
       hideConnOverlay();
       _flushOutboundChat();                      // any chat sends queued during reconnect
       _flushOutboundMenuFrames();                // any modal picks/toggles/submits queued during reconnect
-      if (state.term) {
-        ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
-      }
-      const gap = state.diagWsClosedAt ? Date.now() - state.diagWsClosedAt : 0;
-      console.log('[ws-open] sessionId=' + id + ' gap-since-close=' + gap + 'ms');
     });
 
     ws.addEventListener('message', (ev) => {
@@ -1389,20 +1265,10 @@ function openSession(id, opts = {}) {
       } else if (msg.t === 'transcript-waiting') {
         showTranscriptWaiting();
       } else if (msg.t === 'output') {
-        // [diag-resume] count every output frame so the
-        // visibilitychange→visible log can report how much arrived
-        // while the tab was hidden. Approximation: base64 expands by
-        // ~4/3, so decoded bytes ≈ b64.length * 3/4.
-        const b64 = msg.data || '';
-        state.diagOutputBytes += Math.floor(b64.length * 3 / 4);
-        state.diagOutputFrames += 1;
-        state.term?.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0)));
-        // Pin to the latest output. xterm's default behavior only
-        // auto-scrolls when the viewport was already at the bottom;
-        // per the always-tail contract for chat/conv/xterm, force the
-        // scroll on every output frame. Users who want to inspect
-        // history can pause output by sending Ctrl+S to the shell.
-        try { state.term?.scrollToBottom(); } catch {}
+        // SDK Phase 9 step 2: agent-mode sessions don't emit `t:'output'`
+        // frames — the PTY byte stream is gone. Keep the branch as a
+        // no-op so any stale server (or replay test fixture) doesn't
+        // crash the client; just drop the bytes.
       } else if (msg.t === 'pong') {
         state.lastPongAt = Date.now();
       } else if (msg.t === 'chat-history') {
@@ -1473,8 +1339,6 @@ function openSession(id, opts = {}) {
     });
 
     ws.addEventListener('close', () => {
-      state.diagWsClosedAt = Date.now();
-      console.log('[ws-close] sessionId=' + id);
       if (state.activeId !== id) return; // switched session OR error cleared activeId
       showConnOverlay('Reconnecting', null, 'Restoring session…');
       setTimeout(() => {
@@ -1597,160 +1461,8 @@ function updateChatButton() {
 // GPU-composited momentum is to make .xterm-viewport the top touch target,
 // but its black background then covers the canvas (xterm.js#594). Until
 // upstream solves this, the JS-driven scroll below is the fallback.
-function setupTouchScroll(term) {
-  const root = term.element;
-  if (!root) return;
-
-  const SCROLL_COMMIT_PX = 6;
-  const VERTICAL_RATIO = 1.4;
-  // Discrete-tick scrolling — used on touch only. Emit one wheel tick per
-  // PX_PER_TICK pixels of finger travel, sized to one xterm wheel tick.
-  // This avoids the line-quantization jitter that fractional smoothing
-  // produced on small/slow scrolls (Claude's TUI scrolls in whole lines,
-  // so fractional wheel deltaY rounds inconsistently and visibly chops).
-  // Larger PX_PER_TICK = less sensitive; DELTA_PER_TICK matches xterm's
-  // built-in expectation of ~100px/tick.
-  const PX_PER_TICK = 28;
-  const DELTA_PER_TICK = 50;
-
-  let touchActive = false;
-  let scrolling = false;
-  let moved = false;
-  let dismissedKbd = false;
-  let startX = 0, startY = 0, lastY = 0, lastTime = 0;
-  let pixelDebt = 0, pendingDy = 0;
-  let scrollRaf = null, momentumRaf = null;
-  let cachedCellHeight = 17;
-
-  const SAMPLE_WINDOW_MS = 120;
-  const samples = [];
-  const pruneSamples = (now) => {
-    const cutoff = now - SAMPLE_WINDOW_MS;
-    while (samples.length > 0 && samples[0].t < cutoff) samples.shift();
-  };
-  const flingVelocity = () => {
-    if (samples.length < 2) return 0;
-    const first = samples[0], last = samples[samples.length - 1];
-    const dt = last.t - first.t;
-    if (dt < 8) return 0;
-    return (first.y - last.y) / dt;
-  };
-
-  const dismissSoftKeyboard = () => {
-    const ae = document.activeElement;
-    if (ae && ae.classList && ae.classList.contains('kbd-native-input')) ae.blur();
-  };
-  const recomputeCellHeight = () => {
-    const rows = term.rows || 0;
-    cachedCellHeight = rows > 0 ? root.clientHeight / rows : 17;
-  };
-
-  // Discrete-tick scroll: emit a whole number of xterm wheel ticks per
-  // PX_PER_TICK of accumulated finger movement, holding the sub-tick
-  // residual until enough has built up. Eliminates the line-quantization
-  // jitter that fractional wheel events produced on small/slow scrolls.
-  const flushScroll = () => {
-    scrollRaf = null;
-    if (pendingDy === 0) return;
-    const ticks = (pendingDy > 0 ? Math.floor : Math.ceil)(pendingDy / PX_PER_TICK);
-    if (ticks === 0) return;            // not enough finger travel for a tick
-    pendingDy -= ticks * PX_PER_TICK;
-    const dy = ticks * DELTA_PER_TICK;
-    try {
-      const wheelEvent = new WheelEvent('wheel', {
-        deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true,
-      });
-      root.dispatchEvent(wheelEvent);
-    } catch {
-      // WheelEvent constructor unavailable — scroll xterm's buffer directly.
-      pixelDebt += dy;
-      const ch = cachedCellHeight;
-      if (ch > 0) {
-        const lines = (pixelDebt > 0 ? Math.floor : Math.ceil)(pixelDebt / ch);
-        if (lines !== 0) { term.scrollLines(lines); pixelDebt -= lines * ch; }
-      }
-    }
-  };
-  const queueScroll = (dy) => {
-    pendingDy += dy;
-    if (scrollRaf == null) scrollRaf = requestAnimationFrame(flushScroll);
-  };
-  const cancelMomentum = () => {
-    if (momentumRaf) { cancelAnimationFrame(momentumRaf); momentumRaf = null; }
-    if (scrollRaf)   { cancelAnimationFrame(scrollRaf);   scrollRaf = null;   }
-  };
-
-  let ro = null;
-  try { ro = new ResizeObserver(recomputeCellHeight); ro.observe(root); } catch {}
-
-  root.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    cancelMomentum();
-    recomputeCellHeight();
-    touchActive = true; scrolling = false; moved = false; dismissedKbd = false;
-    pixelDebt = 0; pendingDy = 0; samples.length = 0;
-    const now = performance.now();
-    const t0 = e.touches[0];
-    startX = t0.clientX;
-    startY = lastY = t0.clientY;
-    lastTime = now;
-    samples.push({ t: now, y: startY });
-  }, { passive: true });
-
-  root.addEventListener('touchmove', (e) => {
-    if (!touchActive || e.touches.length !== 1) return;
-    const t0 = e.touches[0];
-    const y = t0.clientY, x = t0.clientX;
-    const now = performance.now();
-    const dy = lastY - y;
-    const totalDy = startY - y, totalDx = startX - x;
-
-    if (!scrolling) {
-      const absDy = Math.abs(totalDy), absDx = Math.abs(totalDx);
-      if (absDy < SCROLL_COMMIT_PX && absDx < SCROLL_COMMIT_PX) {
-        samples.push({ t: now, y }); pruneSamples(now);
-        lastY = y; lastTime = now; return;
-      }
-      if (absDy < absDx * VERTICAL_RATIO) { touchActive = false; return; }
-      scrolling = true;
-      if (!dismissedKbd) { dismissedKbd = true; dismissSoftKeyboard(); }
-    }
-
-    if (Math.abs(dy) > 0) moved = true;
-    samples.push({ t: now, y }); pruneSamples(now);
-    queueScroll(dy);
-    lastY = y; lastTime = now;
-  }, { passive: true });
-
-  root.addEventListener('touchend', () => {
-    if (!touchActive) return;
-    touchActive = false;
-    if (!scrolling) return;
-    scrolling = false;
-    flushScroll();
-    if (!moved) return;
-    let v = flingVelocity();
-    if (Math.abs(v) < 0.10) return;
-    if (v > 6)  v = 6;
-    if (v < -6) v = -6;
-    let prev = performance.now();
-    const tick = () => {
-      if (!root.isConnected) { momentumRaf = null; return; }
-      const now = performance.now();
-      const dt = now - prev; prev = now;
-      pendingDy += v * dt;
-      flushScroll();
-      v *= Math.pow(0.96, dt / 16);
-      if (Math.abs(v) > 0.04) momentumRaf = requestAnimationFrame(tick);
-      else momentumRaf = null;
-    };
-    momentumRaf = requestAnimationFrame(tick);
-  });
-
-  root.addEventListener('touchcancel', () => {
-    touchActive = false; scrolling = false; cancelMomentum();
-  }, { passive: true });
-}
+// Phase 9 step 2: xterm is retired; no terminal to scroll.
+function setupTouchScroll(_term) { /* no-op: xterm retired */ }
 
 function sendInput(data) {
   if (state.ws?.readyState === WebSocket.OPEN) {
@@ -5550,26 +5262,9 @@ function stopVisibilityProbing() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    // [diag-resume] — emit the gap report BEFORE probeWsLiveness so the
-    // log captures the WS state as we observed it on resume, not after
-    // the probe might have already torn the WS down.
-    if (state.diagHiddenAt) {
-      const gap = Date.now() - state.diagHiddenAt;
-      const bytes = state.diagOutputBytes - state.diagBytesAtHidden;
-      const frames = state.diagOutputFrames - state.diagFramesAtHidden;
-      const ws = state.ws;
-      const wsState = ws ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState] : 'NONE';
-      console.log('[diag-resume] hidden-for=' + gap + 'ms ws=' + wsState
-        + ' output-frames-while-hidden=' + frames
-        + ' output-bytes-while-hidden=' + bytes);
-      state.diagHiddenAt = null;
-    }
     probeWsLiveness();
     startVisibilityProbing();
   } else {
-    state.diagHiddenAt = Date.now();
-    state.diagBytesAtHidden = state.diagOutputBytes;
-    state.diagFramesAtHidden = state.diagOutputFrames;
     stopVisibilityProbing();
   }
 });

@@ -33,7 +33,7 @@ app.use((req, res, next) => {
   const ua = (req.headers['user-agent'] || '').slice(0, 30);
   console.log(`${new Date().toISOString().slice(11, 19)} ${req.ip} ${req.method} ${req.url} [${ua}]`);
   // Cache static assets aggressively. /vendor and /fonts are content-stable;
-  // own files (app.js / styles.css / keyboard.js) ride a ?v=<n> cache buster
+  // own files (app.js / styles.css) ride a ?v=<n> cache buster
   // so a long max-age is safe — bumping the buster forces a refetch.
   // Everything else (HTML index, /sessions, /auth, /workspace, …) stays
   // no-store so polled state and the bootstrap doc are always fresh.
@@ -94,8 +94,7 @@ function indexHtml() {
   const stamp = encodeURIComponent(buildStamp());
   _cachedIndexHtml = raw
     .replace(/app\.js\?v=[^"'\s]+/g, `app.js?v=${stamp}`)
-    .replace(/styles\.css\?v=[^"'\s]+/g, `styles.css?v=${stamp}`)
-    .replace(/keyboard\.js\?v=[^"'\s]+/g, `keyboard.js?v=${stamp}`);
+    .replace(/styles\.css\?v=[^"'\s]+/g, `styles.css?v=${stamp}`);
   return _cachedIndexHtml;
 }
 app.get(['/', '/index.html'], (req, res) => {
@@ -105,12 +104,9 @@ app.get(['/', '/index.html'], (req, res) => {
 
 app.use(express.static(PUBLIC_DIR, { etag: false, lastModified: false, maxAge: 0 }));
 
-// Serve xterm assets from node_modules so we don't depend on a CDN
-app.use('/vendor/xterm', express.static(path.join(__dirname, '../node_modules/@xterm/xterm/lib')));
-app.use('/vendor/xterm-css', express.static(path.join(__dirname, '../node_modules/@xterm/xterm/css')));
-app.use('/vendor/xterm-fit', express.static(path.join(__dirname, '../node_modules/@xterm/addon-fit/lib')));
-app.use('/vendor/xterm-webgl', express.static(path.join(__dirname, '../node_modules/@xterm/addon-webgl/lib')));
-app.use('/vendor/xterm-canvas', express.static(path.join(__dirname, '../node_modules/@xterm/addon-canvas/lib')));
+// SDK Phase 9 step 2: xterm.js and its addons (fit/webgl/canvas) are
+// no longer served — the client no longer paints a terminal. ~1.5MB
+// off every cold-cache page load.
 app.use('/vendor/marked', express.static(path.join(__dirname, '../node_modules/marked/lib')));
 app.use('/vendor/highlight.js', express.static(path.join(__dirname, '../node_modules/highlight.js/lib')));
 app.use('/vendor/highlight.js-css', express.static(path.join(__dirname, '../node_modules/highlight.js/styles')));

@@ -13,8 +13,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=134" />
+  <link rel="stylesheet" href="styles.css?v=200" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -50,9 +49,13 @@
         <span class="mw-dot"></span>
         <span class="mw-dot"></span>
       </div>
+      <!-- Phase 9 step 2 retired the xterm pane. #terminal-wrap stays as
+           an empty placeholder so legacy app.js code paths (e.g.
+           _hideMainPaneSiblings) that look it up still get a node, but
+           it never renders anything. #conn-overlay is preserved
+           because it's still used for "Connecting…" feedback during
+           the agent-mode WS handshake. -->
       <div id="terminal-wrap" hidden>
-        <div id="terminal"></div>
-        <div id="keyboard-bar"></div>
         <div id="conn-overlay" hidden>
           <div class="conn-pill">
             <span class="conn-spinner"></span>
@@ -214,7 +217,6 @@
     <div id="log-entries"></div>
   </div>
 
-  <script src="/vendor/xterm/xterm.js"></script>
   <!-- Permission / AskUserQuestion modal. Hidden by default; shown by
        _renderPermModal whenever state.pendingMenuQueue has entries and
        the user hasn't explicitly dismissed it. Routes every click back
@@ -240,14 +242,10 @@
       </div>
     </div>
   </div>
-  <script src="/vendor/xterm-fit/addon-fit.js"></script>
-  <script src="/vendor/xterm-webgl/addon-webgl.js"></script>
-  <script src="/vendor/xterm-canvas/addon-canvas.js"></script>
   <script src="/vendor/marked/marked.umd.js"></script>
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="keyboard.js?v=7"></script>
-  <script src="app.js?v=182"></script>
+  <script src="app.js?v=200"></script>
 </body>
 </html>

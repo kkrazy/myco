@@ -94,7 +94,7 @@ test_text_utils() {
 }
 
 test_frontend_files() {
-  for f in web/public/app.js web/public/styles.css web/public/index.html web/public/keyboard.js; do
+  for f in web/public/app.js web/public/styles.css web/public/index.html; do
     test -f "$f" && pass "$f exists" || fail "$f missing"
   done
 }
@@ -1698,25 +1698,12 @@ test_chat_window() {
   else
     pass "app.js: appendTranscriptMessages always pins to latest"
   fi
-  # Use a step-through-the-handler awk so the range doesn't collapse on
-  # the single `} else if (msg.t === 'output')` line (the closing
-  # `} else if` would otherwise match the SAME row that opens the range,
-  # emitting just one line with no body to grep). p flag opens after
-  # the output match and closes on the NEXT `} else if`.
-  if awk "/msg\\.t === 'output'/{p=1;next} p && /} else if/{exit} p" web/public/app.js | grep -q 'state.term?.scrollToBottom'; then
-    pass "app.js: xterm output frame pins to latest via scrollToBottom"
-  else
-    fail "app.js: xterm output no longer auto-scrolls — new output may not appear without user input"
-  fi
+  # Phase 9 step 2: the xterm output frame is a no-op (PTY retired);
+  # the always-tail contract now only applies to chat + conv panes.
   if awk '/^function showConversationView\(/,/^}$/' web/public/app.js | grep -q 'scrollConvToBottom'; then
     pass "app.js: showConversationView lands at latest on pane show"
   else
     fail "app.js: showConversationView no longer pins to bottom when shown"
-  fi
-  if awk '/^function showTerminalView\(/,/^}$/' web/public/app.js | grep -q 'scrollToBottom'; then
-    pass "app.js: showTerminalView lands at latest on pane show"
-  else
-    fail "app.js: showTerminalView no longer pins to bottom when shown"
   fi
   # Plan / Arch / Test artifact views (promoted to top-level chrome buttons,
   # commit 15187ea). Each has its own main-pane container and a chrome button.
