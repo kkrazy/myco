@@ -2048,7 +2048,10 @@ function renderChatMessage(m, isActiveMenu) {
     // human-readable content.
     if (tgt && tgt.tool) cls += ' chat-msg-menu-perm';
     const rawQ = (m.meta.menu && m.meta.menu.question) || '';
-    const cleanQ = String(rawQ).replace(/^\s*\[(?:SINGLE-SELECT|MULTI-SELECT|TYPED-TEXT)\]\s*/i, '').replace(/[:?]+\s*$/, '').trim();
+    // Strip any leading "[...]" metadata tag claude prepends to the
+    // question (SINGLE-SELECT, MULTI-SELECT, TYPED-TEXT, "SINGLE-SELECT
+    // + PREVIEW", etc.). General [^]] match catches future variants.
+    const cleanQ = String(rawQ).replace(/^\s*\[[^\]]*\]\s*/, '').replace(/[:?]+\s*$/, '').trim();
     const labels = menuOpts.map((o) => String(o.label || '').trim()).filter(Boolean).join(', ');
     if (tgt && tgt.tool) {
       body = `Allow \`${tgt.tool}${tgt.input ? '(' + tgt.input + ')' : ''}\`?  ${labels}`;
@@ -2119,7 +2122,7 @@ function renderChatMessage(m, isActiveMenu) {
   // before and after the answer lands. No blockquote (the flat-row
   // styling makes the blockquote bar visually distracting).
   const resolvedQuestion = isResolvedMenu && m.meta && m.meta.menu && m.meta.menu.question
-    ? String(m.meta.menu.question).replace(/^\s*\[(?:SINGLE-SELECT|MULTI-SELECT|TYPED-TEXT)\]\s*/i, '').trim()
+    ? String(m.meta.menu.question).replace(/^\s*\[[^\]]*\]\s*/, '').trim()
     : '';
   const textHtml = isResolvedMenu
     ? (resolvedQuestion ? `<div class="chat-text chat-text-resolved">${renderMd(resolvedQuestion)}</div>` : '')

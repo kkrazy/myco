@@ -3335,12 +3335,14 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .chat-msg.chat-msg-menu.chat-msg-menu-active:hover {
   background: rgba(255, 255, 255, .02);
 }
+/* Menu chat rows now inherit the .from-claude .chat-text bubble
+   (green wash, 2px accent left bar, rounded corners, 8×12 padding)
+   — claude-authored content is rendered consistently across plain
+   chat rows + menu rows + agent-card-md bodies. The base
+   .chat-msg.chat-msg-menu rule above zeros the OUTER row framing;
+   .from-claude .chat-text supplies the INNER bubble. */
 .chat-msg.chat-msg-menu .chat-text {
-  background: transparent;
-  border: none;
-  border-radius: 0;
   margin: 0 0 4px 0;
-  padding: 0;
 }
 /* Compact resolved-line that REPLACES the option-buttons block once
    the menu is answered. Same selector also handles the "↗ open in
