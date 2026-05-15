@@ -666,6 +666,24 @@ test_best_practices_template() {
   grep -Pzoq "\.perm-modal\s*\{[\s\S]{0,200}position:\s*fixed" web/public/styles.css \
     && pass "styles.css: perm-modal is position:fixed overlay" \
     || fail "styles.css: perm-modal is position:fixed overlay"
+  # Phase 2: agent events render into #chat-messages (single timeline).
+  # _ensureAgentLogPane now returns the chat-messages container so each
+  # tool_use / tool_result / claude-text card sits alongside chat bubbles.
+  # On the first agent frame of an attach we force the chat pane open
+  # and hide #terminal-wrap (which is empty for agent-mode sessions);
+  # session-switch resets the latch so PTY sessions are unaffected.
+  grep -Pzoq "function _ensureAgentLogPane[\s\S]{0,400}getElementById\('chat-messages'\)" web/public/app.js \
+    && pass "app.js: _ensureAgentLogPane targets #chat-messages" \
+    || fail "app.js: _ensureAgentLogPane targets #chat-messages"
+  grep -q "_agentChatPaneArmed" web/public/app.js \
+    && pass "app.js: agent-frame auto-opens chat pane (one-shot per attach)" \
+    || fail "app.js: agent-frame auto-opens chat pane (one-shot per attach)"
+  grep -q "chat-msg-agent" web/public/app.js \
+    && pass "app.js: agent cards tagged chat-msg-agent" \
+    || fail "app.js: agent cards tagged chat-msg-agent"
+  grep -q "#chat-messages \.agent-card" web/public/styles.css \
+    && pass "styles.css: agent-cards styled inside #chat-messages" \
+    || fail "styles.css: agent-cards styled inside #chat-messages"
   # Phase 4: streaming-input + interrupt semantics. AgentSession holds a
   # single long-lived query() with an AsyncMessageQueue prompt;
   # interrupt() aborts via AbortController and the next write() resumes.

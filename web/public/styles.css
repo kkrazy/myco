@@ -3757,6 +3757,21 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding: 0 4px;
 }
 
+/* Phase 2 — agent cards live inside #chat-messages now (single timeline).
+   Override the standalone .agent-card margins so the chat-messages flex
+   gap controls spacing between every row, whether it's a chat bubble or
+   a tool call. The card's own padding/border/background stay intact. */
+#chat-messages .agent-card,
+.chat-msg-agent {
+  margin: 0;
+}
+#chat-messages .agent-card:hover { background: rgba(255, 255, 255, .04); }
+/* Tool cards next to chat-msgs benefit from a slightly tighter row
+   height — drop the head's bottom margin since the body opens below
+   anyway. */
+#chat-messages .agent-card .agent-card-head { margin-bottom: 0; }
+#chat-messages .agent-card.agent-card-expanded .agent-card-head { margin-bottom: 4px; }
+
 /* ─── Permission / AskUserQuestion modal ──────────────────────────────
    Phase 1.5: pop a centered modal whenever the chat-pane menu queue is
    non-empty. The user can't accidentally scroll past an open

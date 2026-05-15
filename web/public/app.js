@@ -1176,6 +1176,19 @@ function _resetUiForNewSession(id) {
   state.transcriptMessages = [];
   state.previewAsViewer = false;             // reset preview toggle on session switch
   state.pendingMenu = null;                  // clear any inline menu callout
+  state.pendingMenuQueue = [];               // and the modal queue
+  state.pendingMenuIdx = 0;
+  state.permModalDismissed = false;
+  state._lastPermQueueLen = 0;
+  state._agentChatPaneArmed = false;         // re-arm auto-open for the next agent frame
+  // Restore terminal-wrap visibility — PTY sessions need it, and the
+  // agent-frame handler will re-hide for agent sessions on the next
+  // frame.
+  const wrap = document.getElementById('terminal-wrap');
+  if (wrap) wrap.hidden = false;
+  // Hide the modal if it was open for the previous session.
+  const modal = document.getElementById('perm-modal');
+  if (modal) modal.hidden = true;
   document.getElementById('btn-preview-readonly')?.classList.remove('active');
   // Hide all Plan/Arch/Test main-pane views so the previous session's
   // extracted content doesn't linger. Chrome-button active classes are
@@ -3042,6 +3055,19 @@ function _applyModeSnapshot(mode) {
 // chat-pane menu cards (phase 2) own that flow.
 function _handleAgentFrame(msg) {
   _ensureAgentLogPane();
+  // Phase 2: agent-mode sessions live entirely in the chat pane now.
+  // The first time we see an agent frame for this attach, force the
+  // chat pane open and hide the otherwise-empty terminal-wrap so the
+  // user's view of the conversation is unobstructed. PTY sessions
+  // never reach this branch; their chat pane behaviour is unchanged.
+  if (!state._agentChatPaneArmed) {
+    state._agentChatPaneArmed = true;
+    if (typeof setChatPane === 'function') {
+      try { setChatPane(true); } catch {}
+    }
+    const wrap = document.getElementById('terminal-wrap');
+    if (wrap && state._agentMainPaneShouldHide !== false) wrap.hidden = true;
+  }
   if (msg.t === 'agent-replay' && Array.isArray(msg.events)) {
     for (const ev of msg.events) _appendAgentEvent(ev);
     return;
@@ -3061,14 +3087,28 @@ function _handleAgentFrame(msg) {
   }
 }
 
+// Phase 2 — the single timeline. Agent events render into #chat-messages
+// (the same DOM container as chat/menu/mention rows). For agent-mode
+// sessions, chat-pane IS the conversation; tool calls, claude text,
+// permission menus, and user/claude chat all interleave chronologically
+// by arrival order. The legacy #agent-log element is retained as a
+// fallback hook for code that called _ensureAgentLogPane historically
+// (e.g., agent-replay frames) so we don't have to refactor every
+// callsite — the function now points at chat-messages directly.
+//
+// PTY-mode sessions are unaffected. They never emit agent events, so
+// chat-messages stays the chat-only stream for those sessions.
 function _ensureAgentLogPane() {
+  const list = document.getElementById('chat-messages');
+  if (list) return list;
+  // Fallback for early-init paths or test pages without the chat
+  // shell — keep the legacy detached pane so renders don't throw.
   let pane = document.getElementById('agent-log');
   if (pane) return pane;
   pane = document.createElement('div');
   pane.id = 'agent-log';
   pane.className = 'agent-log';
-  const host = document.getElementById('terminal-wrap') || document.querySelector('main') || document.body;
-  host.appendChild(pane);
+  (document.querySelector('main') || document.body).appendChild(pane);
   return pane;
 }
 
@@ -3168,7 +3208,12 @@ function _appendAgentEvent(ev) {
   }
 
   const card = document.createElement('div');
-  card.className = 'agent-card agent-card-' + (ev.type || 'unknown');
+  // Phase 2: chat-msg-agent class is the hook that lets agent cards
+  // sit inside #chat-messages alongside user/claude chat bubbles
+  // without the chat-msg gradient/padding interfering. The base
+  // .agent-card styling still controls the card's own padding, border,
+  // and background.
+  card.className = 'agent-card chat-msg-agent agent-card-' + (ev.type || 'unknown');
   card.dataset.evType = ev.type || 'unknown';
   card.dataset.combineCount = '1';
   const head = document.createElement('div');
