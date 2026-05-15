@@ -3480,6 +3480,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-left: 2px solid rgba(255, 255, 255, .06);
   margin-top: 2px;
 }
+/* Assistant text (claude's prose) gets a brighter left bar + deeper
+   indent + more vertical breathing room so the markdown reads
+   comfortably — matches the affordance of user-msg replies but in
+   the assistant-green accent. Targets ONLY .agent-card-md (the
+   markdown-rendered body), so tool input JSON / tool result blobs
+   keep the muted default border above. */
+.agent-card.agent-card-expanded .agent-card-md {
+  padding: 6px 0 6px 18px;
+  border-left: 3px solid rgba(120, 200, 140, .55);
+  margin-top: 4px;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
 /* tool_use input + tool_result preview — single subtle background so
    structured payloads stay visually distinct from surrounding prose. */
 .agent-card-tool-input {
@@ -3521,23 +3534,49 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .agent-card-md p:first-child { margin-top: 0; }
 .agent-card-md p:last-child  { margin-bottom: 0; }
+/* Comfortable per-paragraph + per-list breathing room so claude's
+   markdown doesn't read as one wall of text. The default browser
+   margins are usually 16px; we pick 10px which keeps the card from
+   ballooning while still being clearly separated. */
+.agent-card-md p,
+.agent-card-md ul,
+.agent-card-md ol {
+  margin: 10px 0;
+}
+.agent-card-md ul,
+.agent-card-md ol {
+  padding-left: 24px;
+}
+.agent-card-md li { margin: 4px 0; }
+.agent-card-md h1, .agent-card-md h2, .agent-card-md h3,
+.agent-card-md h4, .agent-card-md h5, .agent-card-md h6 {
+  margin: 14px 0 6px 0;
+  font-weight: 600;
+}
+.agent-card-md blockquote {
+  margin: 8px 0;
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 255, 255, .12);
+  color: var(--muted, #8b949e);
+}
 .agent-card-md pre,
 .agent-card-body pre {
   background: rgba(255, 255, 255, .03);
-  padding: 6px 8px;
-  border-radius: 3px;
+  padding: 8px 10px;
+  border-radius: 4px;
   overflow-x: auto;
-  font-size: 0.76rem;
-  margin: 4px 0;
+  font-size: 0.82rem;
+  margin: 8px 0;
+  line-height: 1.45;
 }
 .agent-card-md code,
 .agent-tool-summary,
 .agent-card-body code {
   background: rgba(255, 255, 255, .05);
-  padding: 0 4px;
-  border-radius: 2px;
+  padding: 1px 5px;
+  border-radius: 3px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78rem;
+  font-size: 0.84rem;
 }
 .agent-prompt {
   font-style: italic;
