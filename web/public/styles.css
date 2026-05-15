@@ -91,7 +91,6 @@ input, textarea { user-select: text; -webkit-user-select: text; }
    and our containers need to forcefully reclaim selectability. */
 #chat-messages, #chat-messages *,
 #chat-empty,
-#conv-messages, #conv-messages *,
 .claude-card .cc-q, .claude-card .cc-a,
 .claude-card .cc-a * {
   user-select: text !important;
@@ -464,14 +463,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   justify-content: center;
   color: var(--muted);
   font-size: .9rem;
-}
-
-#terminal-wrap {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  position: relative;          /* anchor for #conn-overlay */
 }
 
 /* ── @myco "waiting" indicator — minimalist three-dot typing animation.
@@ -2010,35 +2001,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #btn-files:active { transform: scale(.92); }
 #btn-files.active { background: rgba(80, 120, 200, .35); }
 
-/* Preview-as-viewer toggle for session owners. Pinned to the LEFTMOST
-   chrome slot so the always-shown buttons (chat/files/plan/arch/test)
-   cluster together on the right. Only the session owner ever sees it. */
-#btn-preview-readonly {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  /* slot 5 from the right — leftmost in the cluster */
-  right: calc(env(safe-area-inset-right, 0px) + 10px + 5 * (var(--chrome-btn-size) + 8px));
-  z-index: 50;
-  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
-  padding: 0;
-  border-radius: 8px;
-  background: rgba(40, 40, 40, .85);
-  color: var(--text);
-  border: 1px solid rgba(255, 255, 255, .08);
-  font-size: .95rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-#btn-preview-readonly:active { transform: scale(.92); }
-#btn-preview-readonly.active { background: rgba(80, 120, 200, .35); }
-
 /* Plan / Arch / Test toggles. Promoted from in-chatpane tabs to top-level
-   chrome buttons sitting alongside files / preview / chat. Each opens its
+   chrome buttons sitting alongside files / chat. Each opens its
    own main-pane view (.artifact-main-view) and is mutually-exclusive with
-   terminal, conversation, files, and the other artifact views. */
+   files and the other artifact views. */
 #btn-plan, #btn-arch, #btn-test {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 10px);
@@ -2056,44 +2022,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
-/* slot 2 / 3 / 4 from the right (chat=0, files=1, then plan/arch/test).
-   Preview moves to slot 5 so the always-shown buttons stay contiguous.
-   Transcript moves to slot 6 (leftmost) — it's a quick-jump to the
-   readonly viewer alongside the artifact tabs. */
+/* slot 2 / 3 / 4 from the right (chat=0, files=1, then plan/arch/test). */
 #btn-plan { right: calc(env(safe-area-inset-right, 0px) + 10px + 2 * (var(--chrome-btn-size) + 8px)); }
 #btn-arch { right: calc(env(safe-area-inset-right, 0px) + 10px + 3 * (var(--chrome-btn-size) + 8px)); }
 #btn-test { right: calc(env(safe-area-inset-right, 0px) + 10px + 4 * (var(--chrome-btn-size) + 8px)); }
 #btn-plan:active, #btn-arch:active, #btn-test:active { transform: scale(.92); }
 #btn-plan.active, #btn-arch.active, #btn-test.active { background: rgba(80, 120, 200, .35); }
 
-/* 📜 transcript — leftmost chrome slot (slot 6). Without `position:
-   fixed`, the bare <button> rendered as a block-level element on its
-   own row inside #terminal-pane, blowing out the layout. Same fixed
-   shape as the other chrome buttons. */
-#btn-transcript {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  right: calc(env(safe-area-inset-right, 0px) + 10px + 6 * (var(--chrome-btn-size) + 8px));
-  z-index: 50;
-  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
-  padding: 0;
-  border-radius: 8px;
-  background: rgba(40, 40, 40, .85);
-  color: var(--text);
-  border: 1px solid rgba(255, 255, 255, .08);
-  font-size: .95rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-#btn-transcript:active { transform: scale(.92); }
-#btn-transcript.active { background: rgba(80, 120, 200, .35); }
-
 /* Main-pane artifact view container. Fills the terminal-pane like
-   #terminal-wrap / #conversation-wrap / #files-wrap do, with a small
-   header strip on top and a scrollable body underneath. */
+   #files-wrap does, with a small header strip on top and a scrollable
+   body underneath. */
 .artifact-main-view {
   position: absolute;
   inset: 0;
@@ -2765,35 +2703,9 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    it to position:fixed; z-index:60 which sat ON TOP of the chrome
    buttons and made them unreachable while chat was open.) */
 
-/* ── conversation view (read-only viewer) ─────────────────────────────────── */
-/* Layout: [readonly-banner] [conv-messages flex:1 scroller]. The transcript
-   pane is the single scroller; #terminal-tail lives INSIDE it as the always-
-   last child (JS pins it there after each transcript update) so the live
-   PTY xterm scrolls in flow as the in-flight tail of the conversation. */
-
-#conversation-wrap {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 0;
-  background: #0d1117;
-}
-
-#readonly-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  /* Docked at the bottom of #conversation-wrap as a footer — gradient and
-     border flipped so the bright edge sits against the transcript above
-     instead of the screen edge below. */
-  background: linear-gradient(0deg, #1a2233 0%, #0f1620 100%);
-  border-top: 1px solid rgba(122, 178, 255, .2);
-  font: 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  color: rgba(201, 209, 217, .9);
-  flex: 0 0 auto;
-}
+/* Phase 9 step 3 removed the JSONL transcript viewer (#conversation-wrap +
+   #readonly-banner + #conv-messages/.conv-* rules). All session views live
+   in the chat pane now — agent events stream as cards inside #chat-messages. */
 #readonly-banner .ro-label {
   font-weight: 600;
   color: #7ab2ff;
@@ -3620,6 +3532,39 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 /* Phase 1 retired the per-card <details> elements (.agent-card-collapse).
    The whole card body is now toggled via the head's click handler and
    the .agent-card-expanded / .agent-card-collapsed classes above. */
+
+/* Phase 9 step 3 — read-only banner sits at the top of the chatpane
+   for guest / share-token viewers. Compact single row; sticky to the
+   chatpane's top edge so it stays visible as the user scrolls the
+   chat-messages list underneath. The chat input stays enabled because
+   guests can still post discussion replies + /td /fr /bug; the
+   server's handleChatMessage is what gates claude-routing. */
+.chatpane-readonly-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  padding: 8px 14px;
+  background: rgba(210, 153, 34, .12);
+  border-bottom: 1px solid rgba(210, 153, 34, .35);
+  font-size: 0.82rem;
+  color: var(--fg, #c9d1d9);
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
+.chatpane-readonly-banner .ro-label {
+  font-weight: 600;
+  color: #f0b440;
+}
+.chatpane-readonly-banner .ro-owner {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+.chatpane-readonly-banner .ro-hint {
+  color: var(--muted, #8b949e);
+  font-size: 0.76rem;
+}
 
 /* Count badge for combined consecutive cards. Subtle "× 3" appended
    after the kind chip so a long run of reattaches / iter starts / etc.

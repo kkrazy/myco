@@ -1178,25 +1178,13 @@ function openSession(id, opts = {}) {
 
   document.getElementById('no-session').hidden = true;
 
-  const isMobile = window.innerWidth <= 900;
-  if (isShared) {
-    // Shared / read-only viewers still see the structured JSONL
-    // transcript pane — that's still meaningful for sessions started
-    // before Phase 9 retired PTY mode, and harmless for fresh agent
-    // sessions (the conv pane just stays empty when no transcript is
-    // streamed). Owners drop straight into the chatpane below.
-    showConversationView();
-    const conv = document.getElementById('conv-content');
-    if (conv) conv.innerHTML = '<div class="conv-waiting">Connecting…</div>';
-  }
-  // Phase 9 step 2 (post-deploy fix 2026-05-15): for owners, the
-  // chatpane IS the session view. There's no xterm to flip to, the
-  // JSONL conversation-wrap has nothing to show for agent-mode
-  // sessions (they emit structured events, not raw transcripts), and
-  // the prior tablet-width branch (no auto-open) left users staring
-  // at a blank #conversation-wrap. Always open the chatpane on
-  // owner attach, every width.
-  if (!isShared) setChatPane(true);
+  // Phase 9 step 3 — chatpane is THE session view for everyone:
+  // owners get full chat + claude routing; guests / share-token
+  // viewers get the same chatpane with the server-side handleChat-
+  // Message blocking claude-routing for them (the 'viewer-mode' WS
+  // frame triggers applyReadOnly later). The old JSONL transcript
+  // pane (#conversation-wrap) and the xterm fallback are gone.
+  setChatPane(true);
 
   // websocket with auto-reconnect. `connect` is closure-bound to `id` and
   // `qs` so reconnect-after-close stays on this session; the `state.ws !==
@@ -1227,12 +1215,14 @@ function openSession(id, opts = {}) {
       const msg = JSON.parse(ev.data);
       if (msg.t === 'viewer-mode') {
         state.viewerMode = true;
-        if (state.term) { state.term.dispose(); state.term = null; }
-        // Force the conversation pane visible — defensive in case the
-        // server never follows up with transcript-init/transcript-waiting
-        // (e.g. transcript file unreadable). Without this, ryan attaching
-        // to a non-owned session sees an empty <main>.
-        showConversationView();
+        // Phase 9 step 3: guests / read-only viewers land in the
+        // chatpane (the only session view that survived the PTY
+        // delete). Chat history is rendered + agent events stream
+        // in; the chat input stays enabled because guests can still
+        // post discussion replies + run /td /fr /bug (plan-item
+        // adds). The server-side handleChatMessage is what actually
+        // gates claude-routing for read-only users.
+        setChatPane(true);
         applyReadOnly(msg.owner);
       } else if (msg.t === 'transcript-init') {
         state.transcriptMessages = msg.messages || [];

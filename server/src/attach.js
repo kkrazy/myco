@@ -583,7 +583,11 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     }
     if (msg.t === 'chat' && typeof msg.text === 'string' && user) {
       const text = msg.text.trim();
-      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT));
+      // Read-only viewers route through handleChatMessage with the
+      // readOnly flag so the gate inside that function (Phase 9 step 3)
+      // blocks claude-bound paths and only lets through /td /fr /bug
+      // + @user mentions.
+      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT), { readOnly: true });
     }
     if (msg.t === 'menu-pick' && Number.isFinite(msg.n) && user) {
       handleMenuPick(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
@@ -617,7 +621,36 @@ function attachViewerWebSocket(session, ws, opts = {}) {
 //   * Bare digit `1`-`9` while a pendingMenu is open → handleMenuPick
 //     so the SDK promise resolves AND the chat row is stamped.
 //   * EVERYTHING ELSE → session.write(body) so claude consumes it.
-function handleChatMessage(sessionId, session, user, text) {
+function handleChatMessage(sessionId, session, user, text, opts = {}) {
+  const readOnly = !!opts.readOnly;
+  // Phase 9 step 3: guest / share-token viewers can post discussion
+  // replies (@user mentions) and add plan items (/td /fr /bug) but
+  // cannot drive claude. The guard short-circuits BEFORE persistence
+  // for the disallowed paths so the chat record doesn't accumulate
+  // ghost claude-bound rows. Disallowed inputs get a one-shot reply
+  // explaining what they can do instead.
+  if (readOnly && user !== ASSISTANT_USER) {
+    const cmd = text.startsWith('/') ? text.split(/\s+/)[0].toLowerCase() : '';
+    const isMention = !!_detectMentionTarget(text);
+    const GUEST_ALLOWED_CMDS = new Set([
+      '/td', '/fr', '/bug',                  // plan-item adds
+      '/help', '/me', '/whoami',
+      '/task', '/tasks', '/skip', '/cancel', // task-list controls
+      '/allowlist',                           // read-only view of allow/deny lists
+    ]);
+    const guestOK = isMention || (cmd && GUEST_ALLOWED_CMDS.has(cmd));
+    if (!guestOK) {
+      const denyMsg = {
+        user: ASSISTANT_USER,
+        text: '(read-only viewer — claude-routing is owner-only. You can `@<user>` to discuss, or use `/td <text>`, `/fr <text>`, `/bug <text>` to add plan items.)',
+        ts: new Date().toISOString(),
+      };
+      sessionsMod.appendChatMessage(sessionId, denyMsg);
+      session.emit('chat', denyMsg);
+      console.log(`[chat-readonly] ${sessionId} ${user}: blocked '${text.slice(0,40)}…' (not mention/whitelisted slash)`);
+      return;
+    }
+  }
   const message = {
     user,
     text,

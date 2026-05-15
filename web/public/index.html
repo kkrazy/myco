@@ -13,7 +13,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=201" />
+  <link rel="stylesheet" href="styles.css?v=203" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -36,9 +36,7 @@
     <button id="btn-expand" title="Show sessions" hidden>☰</button>
 
     <main id="terminal-pane">
-      <button id="btn-transcript" title="Transcript — readonly viewer" hidden>📜</button>
       <button id="btn-files" title="Files" hidden>📁</button>
-      <button id="btn-preview-readonly" title="Preview as a read-only viewer" hidden>👁</button>
       <button id="btn-plan" class="artifact-toggle" data-type="plan" title="Plan — todos extracted from this session" hidden>📋</button>
       <button id="btn-arch" class="artifact-toggle" data-type="arch" title="Arch — architecture &amp; conventions from this session" hidden>🏗️</button>
       <button id="btn-test" class="artifact-toggle" data-type="test" title="Test — verification plan from this session" hidden>🧪</button>
@@ -49,35 +47,17 @@
         <span class="mw-dot"></span>
         <span class="mw-dot"></span>
       </div>
-      <!-- Phase 9 step 2 retired the xterm pane. #terminal-wrap stays as
-           an empty placeholder so legacy app.js code paths (e.g.
-           _hideMainPaneSiblings) that look it up still get a node, but
-           it never renders anything. #conn-overlay is preserved
-           because it's still used for "Connecting…" feedback during
-           the agent-mode WS handshake. -->
-      <div id="terminal-wrap" hidden>
-        <div id="conn-overlay" hidden>
-          <div class="conn-pill">
-            <span class="conn-spinner"></span>
-            <div class="conn-labels">
-              <span class="conn-text">Connecting</span>
-              <span class="conn-sub">Establishing session…</span>
-            </div>
+      <!-- "Connecting…" feedback during the agent-mode WS handshake.
+           Anchored directly under #terminal-pane (Phase 9 step 3 dropped
+           #terminal-wrap; conn-overlay's CSS positions it absolutely so
+           the parent only needs to be position:relative). -->
+      <div id="conn-overlay" hidden>
+        <div class="conn-pill">
+          <span class="conn-spinner"></span>
+          <div class="conn-labels">
+            <span class="conn-text">Connecting</span>
+            <span class="conn-sub">Establishing session…</span>
           </div>
-        </div>
-      </div>
-      <div id="conversation-wrap" hidden>
-        <div id="conv-messages">
-          <!-- Transcript turns are written into #conv-content (so callers
-               that wipe the transcript via innerHTML don't blow away the
-               sibling #readonly-banner footer). -->
-          <div id="conv-content"></div>
-        </div>
-        <!-- Read-only banner docks at the bottom so the owner-attribution
-             label is always visible but doesn't crowd the latest turn. -->
-        <div id="readonly-banner" hidden>
-          <span class="ro-label">👁 Read-only</span>
-          <span class="ro-owner"></span>
         </div>
       </div>
       <div id="chatpane" class="chat-main-view" hidden>
@@ -86,6 +66,16 @@
              dragging left grows it, dragging right shrinks it. Width
              persisted in localStorage. -->
         <div id="chatpane-resize" title="Drag to resize"></div>
+        <!-- Read-only banner: shown for guests / share-token viewers.
+             applyReadOnly() unhides this + sets the owner login. The
+             chat input stays enabled because guests can still post
+             discussion replies + add plan items via /td /fr /bug;
+             the server-side handleChatMessage blocks claude-routing. -->
+        <div id="readonly-banner" class="chatpane-readonly-banner" hidden>
+          <span class="ro-label">👁 Read-only — owner:</span>
+          <span class="ro-owner"></span>
+          <span class="ro-hint">· /td /fr /bug to add plan items · @user to discuss</span>
+        </div>
         <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
         <div id="chat-messages"></div>
         <div id="claude-typing" class="claude-typing" hidden>
@@ -246,6 +236,6 @@
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/mermaid.min.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=201"></script>
+  <script src="app.js?v=203"></script>
 </body>
 </html>
