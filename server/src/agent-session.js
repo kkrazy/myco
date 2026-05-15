@@ -510,6 +510,14 @@ class AgentSession extends EventEmitter {
         toolUseID,
         summary,
       });
+      // Mirror onto the PtySession-shaped surface so the bare-digit chat
+      // shortcut (pty.handleChatPostfixes → resolveMenuPick) can find
+      // this menu. _handleAskUserQuestion does the same; this branch
+      // missing it was the cause of the 2026-05-15 "I sent 1, still
+      // stuck" incident — the chat-pane menu card was clickable, but
+      // typing the digit silently queued as a user message instead of
+      // resolving the canUseTool promise.
+      this.pendingMenu = menu;
       this.emit('menu', menu);
     });
   }

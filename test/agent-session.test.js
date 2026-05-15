@@ -243,6 +243,30 @@ function collectEvents(session, { until, timeoutMs = 60000 }) {
     s.kill();
   });
 
+  // Regression for the 2026-05-15 incident: a WebSearch canUseTool fired,
+  // the chat broadcast went out, the user typed bare digits in chat to pick
+  // an option, and pty.handleChatPostfixes' bare-digit branch fell through
+  // because session.pendingMenu was null on the AgentSession. Root cause:
+  // _handleAskUserQuestion set this.pendingMenu but _handlePermissionRequest
+  // forgot to. The pendingMenu surface is what the chat-shorthand path
+  // reads; missing it = bare digits silently queued as user messages.
+  await t('Permission request also mirrors the menu onto session.pendingMenu (bare-digit chat pick)', async () => {
+    const s = new AgentSession('test-perm-pending-1', { cwd: process.cwd() });
+    let broadcastMenu = null;
+    s.on('menu', (m) => { broadcastMenu = m; });
+    assert.strictEqual(s.pendingMenu, null, 'starts clean');
+    const p = s._canUseTool('WebSearch', { query: 'weather in Shenzhen' }, { toolUseID: 'tu_pending_1', suggestions: [] });
+    assert.ok(broadcastMenu, 'menu must emit');
+    assert.ok(s.pendingMenu, 'session.pendingMenu must be populated for the bare-digit chat shortcut');
+    assert.strictEqual(s.pendingMenu.hash, broadcastMenu.hash, 'pendingMenu.hash must match broadcast');
+    assert.strictEqual(s.pendingMenu.kind, 'permission');
+    // Same path that pty.handleChatPostfixes uses for chat shorthand "1" / "2" / "3".
+    s.resolveMenuPick(s.pendingMenu.hash, 1);
+    await p;
+    assert.strictEqual(s.pendingMenu, null, 'resolved → cleared');
+    s.kill();
+  });
+
   await t('resolveMenuPick with unknown hash returns false and does not crash', () => {
     const s = new AgentSession('test-unknown-1', { cwd: process.cwd() });
     const handled = s.resolveMenuPick('agent-no-such-hash', 1);
