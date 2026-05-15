@@ -444,41 +444,70 @@ class AgentSession extends EventEmitter {
       // SDK doesn't hang.
       return Promise.resolve({ behavior: 'allow', updatedInput: { questions, answers: {} } });
     }
-    const q0 = questions[0];
-    const opts = Array.isArray(q0 && q0.options) ? q0.options : [];
+    // Multi-question AskUserQuestion: ask sequentially. Phase 2 used to
+    // broadcast only the first question and resolve the SDK promise with
+    // a single-entry answers map — claude then proceeded with partial
+    // input, often immediately re-issuing AskUserQuestion in a slightly
+    // different shape and stranding the user mid-flow. Now each question
+    // gets its own sub-hash (agent-toolUseID-q<i>) and its own modal
+    // pop; resolving the LAST one assembles the full answers map and
+    // settles the SDK promise.
     if (questions.length > 1) {
-      console.log(`[agent-menu] ${this.sessionId} AskUserQuestion with ${questions.length} questions — phase 2 only handles the first one`);
+      console.log(`[agent-menu] ${this.sessionId} AskUserQuestion with ${questions.length} questions — asking sequentially`);
     }
-
     return new Promise((resolve) => {
-      const menu = {
-        kind: 'plan',                     // matches today's plan-mode dialog rendering
-        question: q0.question || '',
-        options: opts.map((o, i) => ({
-          n: i + 1,
-          label: String(o.label || ''),
-          description: o.description || '',
-        })),
-        hash,
-        multi: !!q0.multiSelect,
-      };
-      this._pendingPermissions.set(hash, {
-        kind: 'ask',
+      const shared = {
         toolUseID,
-        rawQuestions: questions,
+        questions,
+        answers: {},
+        askedIdx: 0,
         resolve,
-      });
-      this._emit({
-        type: 'permission_request',
-        toolName: 'AskUserQuestion',
-        hash,
-        toolUseID,
-        question: menu.question,
-        optionCount: menu.options.length,
-      });
-      this.pendingMenu = menu;             // mirror PtySession's surface so bare-digit chat picks work
-      this.emit('menu', menu);             // → menuMod.handleSessionMenu wired in agent registration path
+      };
+      this._askNextSubQuestion(shared);
     });
+  }
+
+  _askNextSubQuestion(shared) {
+    const i = shared.askedIdx;
+    const q = shared.questions[i] || {};
+    const opts = Array.isArray(q.options) ? q.options : [];
+    // Sub-hash distinguishes each question in a multi-question call so
+    // the chat row + modal queue can track them separately. Single-
+    // question calls still get a -q0 suffix; consumers should treat the
+    // hash as opaque.
+    const subHash = `agent-${shared.toolUseID}-q${i}`;
+    const menu = {
+      kind: 'plan',
+      question: q.question || '',
+      options: opts.map((o, k) => ({
+        n: k + 1,
+        label: String(o.label || ''),
+        description: o.description || '',
+      })),
+      hash: subHash,
+      multi: !!q.multiSelect,
+      // Sub-question pager hints — surfaced in chat row + modal pager.
+      subQuestionIdx: i,
+      subQuestionTotal: shared.questions.length,
+    };
+    this._pendingPermissions.set(subHash, {
+      kind: 'ask',
+      toolUseID: shared.toolUseID,
+      questionIdx: i,
+      shared,
+    });
+    this._emit({
+      type: 'permission_request',
+      toolName: 'AskUserQuestion',
+      hash: subHash,
+      toolUseID: shared.toolUseID,
+      question: menu.question,
+      optionCount: menu.options.length,
+      subQuestionIdx: i,
+      subQuestionTotal: shared.questions.length,
+    });
+    this.pendingMenu = menu;
+    this.emit('menu', menu);
   }
 
   _handlePermissionRequest(toolName, input, ctx, hash, toolUseID) {
@@ -535,28 +564,39 @@ class AgentSession extends EventEmitter {
     this.pendingMenu = null;
 
     if (pending.kind === 'ask') {
-      const q0 = pending.rawQuestions[0];
-      const opts = (q0 && q0.options) || [];
+      const shared = pending.shared;
+      const i = pending.questionIdx;
+      const q = (shared && shared.questions && shared.questions[i]) || null;
+      const opts = (q && q.options) || [];
       const picked = opts[n - 1];
       if (!picked) {
-        pending.resolve({ behavior: 'deny', message: 'User picked an invalid option' });
+        if (shared) shared.resolve({ behavior: 'deny', message: 'User picked an invalid option' });
         return true;
       }
-      // SDK expects { questions, answers: { <questionText>: <label> } }
-      // For multi-question packs we only have answers for q[0]; the SDK
-      // currently tolerates missing answers but we log for visibility.
-      const answers = {};
-      answers[q0.question] = picked.label;
+      // Accumulate this sub-question's answer.
+      shared.answers[q.question || ''] = picked.label;
       this._emit({
         type: 'permission_resolved',
         toolName: 'AskUserQuestion',
         hash,
         pickedN: n,
         pickedLabel: picked.label,
+        subQuestionIdx: i,
+        subQuestionTotal: shared.questions.length,
       });
-      pending.resolve({
+      shared.askedIdx = i + 1;
+      if (shared.askedIdx < shared.questions.length) {
+        // More questions remain — broadcast the next one. The SDK
+        // promise stays pending until the final sub-question lands.
+        this._askNextSubQuestion(shared);
+        return true;
+      }
+      // Last question: settle the SDK promise with the assembled
+      // answers map. updatedInput.answers maps every question text to
+      // the user's picked label, exactly the shape the SDK expects.
+      shared.resolve({
         behavior: 'allow',
-        updatedInput: { questions: pending.rawQuestions, answers },
+        updatedInput: { questions: shared.questions, answers: shared.answers },
       });
       return true;
     }

@@ -183,7 +183,10 @@ function collectEvents(session, { until, timeoutMs = 60000 }) {
       broadcastMenu.options.map((o) => ({ n: o.n, label: o.label })),
       [{ n: 1, label: 'Summary' }, { n: 2, label: 'Detailed' }],
     );
-    assert.match(broadcastMenu.hash, /^agent-tu_ask_1$/);
+    // Hash format: agent-<toolUseID>-q<questionIdx>. The q<idx> suffix
+    // is the per-question identity that lets multi-question
+    // AskUserQuestion calls ask sequentially without colliding.
+    assert.match(broadcastMenu.hash, /^agent-tu_ask_1-q0$/);
 
     // Simulate the chat-pane click on option 2.
     const handled = s.resolveMenuPick(broadcastMenu.hash, 2);
@@ -197,6 +200,43 @@ function collectEvents(session, { until, timeoutMs = 60000 }) {
       resolved.updatedInput,
       { questions: input.questions, answers: { 'How should I format the output?': 'Detailed' } },
     );
+    s.kill();
+  });
+
+  // Regression: claude sometimes packs N questions into one AskUserQuestion
+  // call (verified on mycobeta 2026-05-15: "phase 2 only handles the first
+  // one" warning fired, user got stranded with partial answers feeding
+  // back into the SDK). Each question must now broadcast its own menu with
+  // its own sub-hash, the user picks them sequentially, and the SDK
+  // promise resolves only when the LAST sub-question's answer arrives.
+  await t('AskUserQuestion with N questions asks sequentially, settles with all answers', async () => {
+    const s = new AgentSession('test-ask-multi-1', { cwd: process.cwd() });
+    const menus = [];
+    s.on('menu', (m) => menus.push(m));
+    const input = {
+      questions: [
+        { question: 'Q1?', header: 'A', multiSelect: false, options: [{ label: 'A1' }, { label: 'A2' }] },
+        { question: 'Q2?', header: 'B', multiSelect: false, options: [{ label: 'B1' }, { label: 'B2' }, { label: 'B3' }] },
+      ],
+    };
+    const pending = s._canUseTool('AskUserQuestion', input, { toolUseID: 'tu_multi' });
+    assert.strictEqual(menus.length, 1, 'only the first sub-question is broadcast initially');
+    assert.match(menus[0].hash, /^agent-tu_multi-q0$/);
+    assert.strictEqual(menus[0].question, 'Q1?');
+    assert.strictEqual(menus[0].subQuestionIdx, 0);
+    assert.strictEqual(menus[0].subQuestionTotal, 2);
+    // Pick option 2 for Q1 ("A2").
+    s.resolveMenuPick(menus[0].hash, 2);
+    assert.strictEqual(menus.length, 2, 'next sub-question broadcast after first resolve');
+    assert.match(menus[1].hash, /^agent-tu_multi-q1$/);
+    assert.strictEqual(menus[1].question, 'Q2?');
+    assert.strictEqual(menus[1].subQuestionIdx, 1);
+    // Pick option 3 for Q2 ("B3").
+    s.resolveMenuPick(menus[1].hash, 3);
+    const resolved = await pending;
+    assert.strictEqual(resolved.behavior, 'allow');
+    assert.deepStrictEqual(resolved.updatedInput.answers, { 'Q1?': 'A2', 'Q2?': 'B3' });
+    assert.strictEqual(resolved.updatedInput.questions.length, 2);
     s.kill();
   });
 

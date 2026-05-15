@@ -1978,6 +1978,9 @@ function appendChatMessage(message) {
       }
       _updatePendingMenuFromMessage(last);
       _rescanPendingMenuQueue();
+      // Hash-collision dedup → the SAME menu came back (e.g., server
+      // re-broadcast on reconnect). Don't force the modal back open;
+      // honour the user's prior dismissal.
       _renderPermModal();
       _renderPendingMenuCallout();
       return;
@@ -1986,6 +1989,16 @@ function appendChatMessage(message) {
   state.chatMessages.push(message);
   _appendChatMessageDom(message);
   _updatePendingMenuFromMessage(message);
+  // Every NEW menu broadcast (different hash from anything we've seen)
+  // forces the modal back open, even if the user dismissed an earlier
+  // one. Without this, a sequence of Q1→answer→Q2→Q3 leaves the modal
+  // hidden after the user defers / Escs once: the prior queue-grew
+  // check (q.length > _lastPermQueueLen) failed because the queue
+  // length oscillates 1→0→1→0→1 rather than strictly growing.
+  if (message && message.meta && message.meta.kind === 'menu' && message.meta.menu
+      && Array.isArray(message.meta.menu.options) && message.meta.menu.options.length) {
+    state.permModalDismissed = false;
+  }
   _rescanPendingMenuQueue();
   _renderPermModal();
   _renderPendingMenuCallout();
