@@ -118,18 +118,14 @@ test_phase9_retirement() {
     && pass "server/src/attach.js exists (agent-mode WS plumbing)" \
     || fail "server/src/attach.js missing"
 
-  # Permission regexes were inlined into permissions.js when
-  # pty-patterns.js was deleted — verify both are present so the
-  # legacy menu-rawText parser keeps working for pre-Phase-9 chat rows.
-  grep -q "PERMISSION_TOOL_RE" server/src/permissions.js \
-    && pass "permissions.js: PERMISSION_TOOL_RE inlined" \
-    || fail "permissions.js: PERMISSION_TOOL_RE missing"
-  grep -q "PERMISSION_INPUT_RE" server/src/permissions.js \
-    && pass "permissions.js: PERMISSION_INPUT_RE inlined" \
-    || fail "permissions.js: PERMISSION_INPUT_RE missing"
-  ! grep -q "require('./pty-patterns')" server/src/permissions.js \
-    && pass "permissions.js no longer imports pty-patterns" \
-    || fail "permissions.js still imports pty-patterns (deleted)"
+  # Phase 9 step 10 retired the PTY-rawText regex parser. The two
+  # PERMISSION_*_RE regexes + extractPermissionTarget were the last
+  # holdovers from pty-patterns.js; agent-mode menus carry a structured
+  # `target: { tool, input }` so menu.js no longer has to regex-parse a
+  # menu.rawText to recover them. Negative guards lock the deletion in.
+  ! grep -qE "PERMISSION_TOOL_RE|PERMISSION_INPUT_RE|extractPermissionTarget" server/src/permissions.js \
+    && pass "permissions.js: PTY-rawText regex parser retired (Phase 9 step 10)" \
+    || fail "permissions.js: PERMISSION_*_RE / extractPermissionTarget still present"
 
   # Importers must all point at attach.js, not pty.js.
   ! grep -rqE "require\\('\\./pty'\\)" server/src/ \
@@ -142,21 +138,16 @@ test_phase9_retirement() {
     && pass "sessions.js imports from './attach'" \
     || fail "sessions.js does NOT import from './attach'"
 
-  # permissions.extractPermissionTarget still normalises display-form
-  # tool names — agent-mode doesn't go through it (the SDK supplies a
-  # structured toolName), but pre-Phase-9 menu rows persisted in
-  # rec.chat still parse their rawText through this code path on
-  # /artifact replay.
-  if have_node; then
-    node -e "
-      const perms = require('./server/src/permissions');
-      const tgt = perms.extractPermissionTarget('  Web Search(\"weather\")\n  Claude wants to search the web for:\n  weather');
-      if (!tgt || tgt.tool !== 'WebSearch') throw new Error('extractPermissionTarget did not normalise \"Web Search\" → \"WebSearch\": ' + JSON.stringify(tgt));
-    " && pass "permissions: 'Web Search' → 'WebSearch' canonicalisation" \
-      || fail "permissions: display-form tool name not canonicalised"
-  else
-    skip "permissions canonicalisation (no host node)"
-  fi
+  # Agent-mode menus carry the structured permission target on the menu
+  # object itself — menu.js reads menu.target rather than regex-parsing
+  # menu.rawText. The SDK supplies toolName + structured toolInput, so
+  # _matchingInputFor extracts the comparison string directly.
+  grep -qF "target: { tool: toolName, input: _matchingInputFor" server/src/agent-session.js \
+    && pass "agent-session: permission menu carries structured target" \
+    || fail "agent-session: menu.target not stamped on permission menus"
+  grep -qF "target = menu.target" server/src/menu.js \
+    && pass "menu.js: handleSessionMenu reads menu.target directly" \
+    || fail "menu.js: still regex-parsing menu.rawText for target"
 }
 
 test_vendor_assets() {
@@ -1767,7 +1758,6 @@ test_chat_window() {
   # wires the EventEmitter hook in _registerExternalSession.
   grep -q "permissions.decide" server/src/menu.js && pass "menu.js uses permissions.decide" || fail "menu.js uses permissions.decide"
   grep -q "menuMod.handleSessionMenu" server/src/attach.js && pass "attach.js delegates menu events to menu.js" || fail "attach.js delegates menu events to menu.js"
-  grep -q "extractPermissionTarget" server/src/permissions.js && pass "permissions exports extractPermissionTarget" || fail "permissions exports extractPermissionTarget"
   grep -q "names: \['allow'" server/src/slashcmds.js && pass "/allow command registered" || fail "/allow missing"
   grep -q "names: \['deny'" server/src/slashcmds.js && pass "/deny command registered" || fail "/deny missing"
   grep -q "names: \['allowlist'" server/src/slashcmds.js && pass "/allowlist command registered" || fail "/allowlist missing"
@@ -1885,10 +1875,8 @@ test_chat_window() {
       d('Bash', 'git status', 'allow');
       d('Bash', 'rm -rf', 'deny');
       d('Bash', 'curl evil', 'ask');  // not in allow/deny → broadcast to chat for /decide
-      const tgt = p.extractPermissionTarget('Allow Bash command?\n> git status\n1. Yes\n2. No');
-      if (tgt.tool !== 'Bash' || tgt.input !== 'git status') throw new Error('extractPermissionTarget failed: ' + JSON.stringify(tgt));
-    " && pass "permissions.matchesPattern + decide + extract" \
-      || fail "permissions.matchesPattern + decide + extract"
+    " && pass "permissions.matchesPattern + decide" \
+      || fail "permissions.matchesPattern + decide"
   else
     skip "permissions runtime (no host node)"
   fi

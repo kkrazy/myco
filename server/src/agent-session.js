@@ -88,9 +88,9 @@ function _summariseToolInput(name, input) {
 }
 
 // Reduce a structured tool_input object to the single string that
-// permissions.matchesPattern compares against. Mirrors what
-// permissions.extractPermissionTarget produced from PTY-scraped menus
-// in the legacy path.
+// permissions.matchesPattern compares against. Agent-mode replaces
+// the pre-Phase-9 rawText regex parsing — the SDK hands us the
+// structured input, so we extract the relevant field directly.
 function _matchingInputFor(toolName, toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return '';
   if (toolName === 'Bash') return String(toolInput.command || '');
@@ -599,7 +599,12 @@ class AgentSession extends EventEmitter {
           { n: 3, label: 'Deny',         description: 'Block this call; Claude will choose a different approach.' },
         ],
         hash,
-        rawText: `${toolName}(${summary})`,  // shape menuMod.handleSessionMenu's permissions.extractPermissionTarget consumes
+        // Structured target — what menuMod.handleSessionMenu feeds to
+        // permissions.decide(). Pre-Phase-9 menus were PTY-scraped and
+        // had to be regex-parsed to recover (tool, input); agent-mode
+        // already has both structured, so we attach them directly and
+        // skip the rawText round-trip entirely.
+        target: { tool: toolName, input: _matchingInputFor(toolName, input) },
       };
       this._pendingPermissions.set(hash, {
         kind: 'permission',

@@ -20,8 +20,12 @@ const ASSISTANT_USER = 'claude';
 
 function handleSessionMenu(sessionId, session, menu) {
   if (menu.kind === 'permission') {
-    const target = permissions.extractPermissionTarget(menu.rawText);
-    if (target) {
+    // Agent-mode menus carry { tool, input } pre-stamped (see
+    // agent-session._handlePermissionRequest). Pre-Phase-9 menus
+    // would have needed regex parsing of menu.rawText to recover
+    // (tool, input); that path was retired with the PTY driver.
+    const target = menu.target || null;
+    if (target && target.tool) {
       const rec = sessionsMod.loadStore().sessions[sessionId];
       const decision = permissions.decide(rec, target.tool, target.input);
       const allowOpt = pickOptionByLabel(menu.options, /^yes|allow|approve/i, 1);

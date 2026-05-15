@@ -21,28 +21,6 @@ const sessionsMod = require('./sessions');
 const loadStore = (...a) => sessionsMod.loadStore(...a);
 const saveStore = (...a) => sessionsMod.saveStore(...a);
 
-// Tool-name line in claude's permission dialog. Tool names are matched
-// with an OPTIONAL inner space so we catch both the camelCase API name
-// and the display-form claude renders ("Web Search" → "WebSearch"); the
-// caller strips whitespace from the capture before matching against
-// allow/deny patterns. Keep the roster in sync with claude code's known
-// tool set.
-//
-// Inlined from the deleted server/src/pty-patterns.js (Phase 9 step 2)
-// — these two regexes are the only TUI-output patterns still in use now
-// that the PTY scraper is gone; the AgentSession.canUseTool callback
-// supplies a structured `toolName`/`toolInput`, so most patterns died
-// with pty.js. We keep these here because /artifacts and other code
-// paths still parse the rawText of pre-Phase-9 menu broadcasts persisted
-// in rec.chat (legacy chat rows survive the migration).
-const PERMISSION_TOOL_RE =
-  /^(?:Allow|Run|Approve)?\s*(Bash|Edit|Write|Read|Multi ?Edit|Glob|Grep|Web ?Fetch|Web ?Search|Notebook ?Edit|Todo ?Write|Task|Agent|SlashCommand)\b/i;
-
-// Input/target line — claude shows the command/path on its own line
-// prefixed by `>` (plain) or `❯` (highlighted cursor). The capture is
-// the rest of the line. First such line in the dialog body wins.
-const PERMISSION_INPUT_RE = /^\s*[>❯]\s+(.+)$/;
-
 // Conservative default — the user explicitly chose this baseline. Common
 // safe-by-design tools plus a handful of build / test / git Bash families.
 // Anything not on the list (and not on rec.denyList) is auto-denied; the
@@ -144,43 +122,6 @@ function getSessionLists(sessionId) {
   return { allowList: rec.allowList.slice(), denyList: rec.denyList.slice() };
 }
 
-// Parse a Claude permission-dialog rawText (the menu's surrounding text)
-// into the tool name and the input it wants to act on (Bash command, file
-// path, etc.). Heuristic — patterns are loose because Claude Code's TUI
-// varies slightly between dialog types.
-function extractPermissionTarget(rawText) {
-  if (!rawText) return null;
-  const lines = String(rawText).split('\n');
-
-  // Walk the lines looking for the tool name. Common patterns:
-  //   "Allow Bash command?"
-  //   "Bash command"
-  //   "Edit file?"
-  //   "Write file?"
-  //   "Read file?"
-  //   "Run Bash command?"
-  let tool = null;
-  for (const line of lines) {
-    const m = line.trim().match(PERMISSION_TOOL_RE);
-    // Normalise display-form tool names to their canonical no-space API
-    // form ("Web Search" → "WebSearch") so they match the allow/deny
-    // pattern syntax.
-    if (m) { tool = m[1].replace(/\s+/g, ''); break; }
-  }
-  if (!tool) return null;
-
-  // The input is usually on a line prefixed with `>` or `❯`, or inside
-  // the dialog box (sometimes the only non-decoration content above the
-  // options). Take the first `>`-prefixed line; otherwise the longest
-  // non-decoration line above the options.
-  let input = '';
-  for (const line of lines) {
-    const m = line.match(PERMISSION_INPUT_RE);
-    if (m) { input = m[1].trim(); break; }
-  }
-  return { tool, input };
-}
-
 // Object.assign rather than `module.exports = {…}` so attach.js (which
 // captures `const permissions = require('./permissions')` early in a
 // circular chain via sessions.js → attach.js → permissions.js) sees the
@@ -196,5 +137,4 @@ Object.assign(module.exports, {
   addDeny,
   removePattern,
   getSessionLists,
-  extractPermissionTarget,
 });
