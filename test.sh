@@ -1515,7 +1515,7 @@ test_chat_window() {
   grep -Pq '<textarea[^>]*id="chat-input"' web/public/index.html \
     && pass "chat-input is a multi-line textarea" \
     || fail "chat-input is a multi-line textarea"
-  grep -q "Enter to send · Shift+Enter for newline" web/public/index.html \
+  grep -q "Enter sends" web/public/index.html \
     && pass "chat-input placeholder advertises Enter-to-send" \
     || fail "chat-input placeholder advertises Enter-to-send"
   grep -Pzoq "key !== 'Enter'[\s\S]{0,400}shiftKey[\s\S]{0,200}submitChat\(\)" web/public/app.js \

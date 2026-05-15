@@ -1683,26 +1683,38 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #chatpane-close:hover { background: rgba(255, 255, 255, .12); }
 #chatpane-close:active { transform: scale(.92); }
 
+/* Empty-state hint — terse + monospace so the chat-pane opens with
+   a "ready prompt" feel rather than a paragraph of instructions. */
 .chat-empty {
-  padding: 1px 0;
-  font-size: .85rem;
-  color: var(--muted);
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .76rem;
+  color: rgba(140, 150, 165, .65);
   text-align: center;
+  letter-spacing: 0.02em;
 }
 .chat-empty code {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  background: var(--surface-2);
-  padding: 1px 6px;
-  border-radius: 4px;
+  font-family: inherit;
+  background: rgba(255, 255, 255, .05);
+  color: var(--text);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+.chat-empty .ce-arrow {
+  margin: 0 4px;
+  color: rgba(140, 150, 165, .45);
 }
 
 #chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 1px 0px;
+  padding: 6px 4px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* Roomier vertical rhythm between messages — was 2px which made
+     the list feel like a single dense blob. 10px gives each entry
+     visible breathing space without ballooning the scroll height. */
+  gap: 10px;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
@@ -1714,14 +1726,20 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 #chat-messages::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 175, .55); }
 
+/* Meta line reads like a terminal log-line prefix: monospace, muted,
+   tight. The visual hierarchy is "timestamp + user header → body";
+   the mono + muted treatment keeps the header from competing with
+   the message content underneath. */
 .chat-msg .chat-meta {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .72rem;
   color: var(--muted);
-  margin-bottom: 2px;
+  margin-bottom: 4px;
+  letter-spacing: 0.02em;
 }
 .chat-msg .chat-user { font-weight: 600; color: var(--text); }
 .chat-msg.from-claude .chat-user { color: var(--accent); }
-.chat-msg .chat-ts { margin-left: 8px; }
+.chat-msg .chat-ts { margin-left: 10px; color: rgba(140, 150, 165, .65); }
 
 .chat-msg .chat-text {
   font-size: .92rem;
@@ -1740,18 +1758,23 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .chat-msg .chat-text ul,
 .chat-msg .chat-text ol { padding-left: 22px; }
 .chat-msg .chat-text code {
-  background: rgba(255, 255, 255, .08);
+  background: rgba(255, 255, 255, .06);
   padding: 1px 5px;
-  border-radius: 3px;
-  font-family: ui-monospace, SFMono-Regular, monospace;
+  border-radius: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .88em;
 }
+/* Code blocks read like a small terminal pane embedded in the chat:
+   square corners, monospace, slight background. Less rounded than
+   the prose bubble around them. */
 .chat-msg .chat-text pre {
-  background: rgba(0, 0, 0, .25);
-  padding: 8px 10px;
-  border-radius: 6px;
+  background: rgba(0, 0, 0, .30);
+  padding: 8px 12px;
+  border-radius: 3px;
   overflow-x: auto;
-  margin: 6px 0;
+  margin: 8px 0;
+  font-size: .82em;
+  line-height: 1.45;
 }
 .chat-msg .chat-text pre code { background: transparent; padding: 0; }
 /* Full markdown coverage inside chat bubbles — headings, blockquote,
@@ -1809,23 +1832,31 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow-x: auto;
 }
 .chat-msg .chat-text .conv-mermaid svg { max-width: 100%; height: auto; }
+/* Claude's bubble: subtle green wash + 2px left bar; rounded
+   corners stay light (3px) to keep the look "log-pane" rather than
+   "iMessage". Padding matches the user bubble exactly. */
 .chat-msg.from-claude .chat-text {
-  background: rgba(76, 175, 130, .08);
+  background: rgba(76, 175, 130, .07);
   border-left: 2px solid var(--accent);
-  padding: 6px 10px;
-  border-radius: 4px;
+  padding: 8px 12px;
+  border-radius: 3px;
 }
 .chat-msg.from-self {
   text-align: right;
 }
 .chat-msg.from-self .chat-meta {
   justify-content: flex-end;
+  text-align: right;
 }
+/* User's bubble: matching subtle blue wash + 2px right bar. Width
+   capped so a long user message doesn't reach the chatpane edge —
+   easier to scan the boundary between left-stacked claude bubbles
+   and right-stacked user bubbles. */
 .chat-msg.from-self .chat-text {
-  background: rgba(80, 140, 200, .08);
+  background: rgba(80, 140, 200, .07);
   border-right: 2px solid #5a99cf;
-  padding: 6px 10px;
-  border-radius: 4px;
+  padding: 8px 12px;
+  border-radius: 3px;
   text-align: left;
   display: inline-block;
   max-width: 85%;
@@ -3546,18 +3577,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-left: 2px solid rgba(255, 255, 255, .06);
   margin-top: 2px;
 }
-/* Assistant text (claude's prose) is wrapped in the same chat-bubble
-   look the user-msg + from-claude chat rows use: light green wash,
-   2px accent left bar, rounded corners, comfortable padding. This
-   makes claude's reply visually parallel to a user message instead
-   of looking like a debug-log card. Targets ONLY .agent-card-md
-   (the markdown body) — tool input JSON / tool result blobs keep
-   the muted default frame from the rule above. */
+/* Assistant text (claude's prose) wears the exact same from-claude
+   bubble as the chat-msg path — same wash, same 2px accent bar,
+   same 3px corner radius, same padding. Single source of truth
+   for "claude is talking" styling. Tool input / tool result blobs
+   keep the muted default frame from the rule above. */
 .agent-card.agent-card-expanded .agent-card-md {
-  background: rgba(76, 175, 130, .08);
+  background: rgba(76, 175, 130, .07);
   border: none;
   border-left: 2px solid var(--accent);
-  border-radius: 4px;
+  border-radius: 3px;
   padding: 8px 12px;
   margin-top: 4px;
   font-size: 0.92rem;

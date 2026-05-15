@@ -13,7 +13,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=221" />
+  <link rel="stylesheet" href="styles.css?v=222" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -76,7 +76,7 @@
           <span class="ro-owner"></span>
           <span class="ro-hint">· /td /fr /bug to add plan items · @user to discuss</span>
         </div>
-        <div id="chat-empty" class="chat-empty">Use <code>@myco</code> to send a prompt to the running Claude session. <code>/help</code> for commands. Other messages are discussion.</div>
+        <div id="chat-empty" class="chat-empty"><code>@myco</code> <span class="ce-arrow">→</span> claude · <code>/help</code> <span class="ce-arrow">→</span> commands</div>
         <div id="chat-messages"></div>
         <div id="claude-typing" class="claude-typing" hidden>
           <span class="claude-typing-dots"><span></span><span></span><span></span></span>
@@ -84,7 +84,7 @@
         </div>
         <div id="chat-autocomplete" hidden></div>
         <form id="chat-form" autocomplete="off">
-          <textarea id="chat-input" rows="3" placeholder="Message…  (Enter to send · Shift+Enter for newline · @myco runs in Claude · /feature files an issue)" autocomplete="off"></textarea>
+          <textarea id="chat-input" rows="3" placeholder="@myco to prompt claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
           <button type="submit" id="chat-send">Send</button>
         </form>
       </div>
