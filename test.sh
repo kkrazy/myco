@@ -1101,9 +1101,11 @@ test_new_session_readonly() {
   grep -q 'sendChatMessage(\`/decide' web/public/app.js \
     && fail "app.js: callout still sends /decide via chat (regression)" \
     || pass "app.js: callout no longer routes through chat"
-  grep -q '\.chat-menu-opt' web/public/styles.css \
-    && pass "styles.css: .chat-menu-opt styling" \
-    || fail "styles.css: .chat-menu-opt styling"
+  # Phase 2.5: .chat-menu-opt was retired with the inline picker; the
+  # modal's .perm-modal-opt is the equivalent now.
+  grep -q '\.perm-modal-opt' web/public/styles.css \
+    && pass "styles.css: .perm-modal-opt styling (modal picker)" \
+    || fail "styles.css: .perm-modal-opt styling (modal picker)"
   # Whole-card unified menu look: app.js tags the chat-msg div with
   # chat-msg-menu when menu options are present, and the stylesheet
   # styles that combined selector as one bordered container so the
@@ -2351,7 +2353,7 @@ test_chat_window() {
   grep -qF 'perm-modal-submit' web/public/app.js \
     && pass "app.js: modal renders Submit button for multi-select" \
     || fail "app.js: modal renders Submit button for multi-select"
-  grep -qF 'data-checkbox' web/public/app.js \
+  grep -qF 'btn.dataset.checkbox' web/public/app.js \
     && pass "app.js: modal tracks checkbox state for multi-select" \
     || fail "app.js: modal tracks checkbox state for multi-select"
   # Regression: index.html static cache busters (app.js?v=N, styles.css?v=N)
@@ -2529,12 +2531,14 @@ test_chat_window() {
     && pass "pty.js: _statusThrottle cleared on pty exit (no leaked timer)" \
     || fail "pty.js: _statusThrottle not cleared on exit"
   # Quick wire-level checks for the hash field carrying end-to-end.
-  grep -qF 'data-hash="${escHtml(menuHash)}"' web/public/app.js \
-    && pass "app.js: menu buttons stamp data-hash" \
-    || fail "app.js: menu buttons missing data-hash stamp"
-  grep -qF 'btn.dataset.hash' web/public/app.js \
-    && pass "app.js: click handler reads hash from button" \
-    || fail "app.js: click handler not reading hash"
+  # Phase 2.5: hash now stamps onto the modal's option buttons via
+  # btn.dataset.hash = m.hash, not the retired inline picker.
+  grep -qF "btn.dataset.hash = m.hash" web/public/app.js \
+    && pass "app.js: modal option button stamps hash from menu queue entry" \
+    || fail "app.js: modal option button not stamping hash"
+  grep -qF 'optBtn.dataset.hash' web/public/app.js \
+    && pass "app.js: modal click handler reads hash from option button" \
+    || fail "app.js: modal click handler not reading hash"
   grep -qF "sendMenuPick(n, hash)" web/public/app.js \
     && pass "app.js: sendMenuPick accepts hash arg" \
     || fail "app.js: sendMenuPick signature missing hash"
