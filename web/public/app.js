@@ -1342,7 +1342,8 @@ function openSession(id, opts = {}) {
     ws.addEventListener('open', () => {
       reconnectDelay = 1000;
       hideConnOverlay();
-      _flushOutboundChat();                      // any sends queued during reconnect
+      _flushOutboundChat();                      // any chat sends queued during reconnect
+      _flushOutboundMenuFrames();                // any modal picks/toggles/submits queued during reconnect
       if (state.term) {
         ws.send(JSON.stringify({ t: 'resize', cols: state.term.cols, rows: state.term.rows }));
       }
@@ -3375,14 +3376,39 @@ function _isDuplicateModeFrame(frame) {
 // the same dialog is still on screen before injecting the digit into
 // the PTY — without it, rapid dialog turnover (parallel tool calls,
 // auto-resolved menus) could land a stale pick on the wrong menu.
+// Outbound menu-pick / menu-toggle / menu-submit queue. Same shape as
+// state.outboundChat: when the WS is reconnecting, frames queue here
+// instead of silently dropping (the 2026-05-15 test006 incident was a
+// click landing during a WS reconnect window — the modal hid because
+// the click handler short-circuited, but the server never received it).
+// Flushed alongside outboundChat on every WS `open` event.
+function _flushOutboundMenuFrames() {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!state.outboundMenuFrames || !state.outboundMenuFrames.length) return;
+  const queue = state.outboundMenuFrames;
+  state.outboundMenuFrames = [];
+  for (const frame of queue) {
+    try { ws.send(JSON.stringify(frame)); }
+    catch { state.outboundMenuFrames.push(frame); break; }
+  }
+}
+function _queueMenuFrame(frame) {
+  if (!state.outboundMenuFrames) state.outboundMenuFrames = [];
+  state.outboundMenuFrames.push(frame);
+}
+
 function sendMenuPick(n, hash) {
   if (!Number.isFinite(n) || n < 1) return false;
-  const ws = state.ws;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   const frame = { t: 'menu-pick', n };
   if (hash) frame.hash = hash;
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    _queueMenuFrame(frame);
+    return true;                                // caller treats as sent
+  }
   try { ws.send(JSON.stringify(frame)); return true; }
-  catch { return false; }
+  catch { _queueMenuFrame(frame); return true; }
 }
 
 // Multi-select toggle — flip one checkbox without submitting. Writes a
@@ -3390,23 +3416,29 @@ function sendMenuPick(n, hash) {
 // composing the answer; the actual answer goes when they click Submit.
 function sendMenuToggle(n, hash) {
   if (!Number.isFinite(n) || n < 1) return false;
-  const ws = state.ws;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   const frame = { t: 'menu-toggle', n };
   if (hash) frame.hash = hash;
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    _queueMenuFrame(frame);
+    return true;
+  }
   try { ws.send(JSON.stringify(frame)); return true; }
-  catch { return false; }
+  catch { _queueMenuFrame(frame); return true; }
 }
 
 // Multi-select submit — finalises the dialog with whatever boxes are
 // currently checked. Writes just \r to the PTY.
 function sendMenuSubmit(hash) {
-  const ws = state.ws;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   const frame = { t: 'menu-submit' };
   if (hash) frame.hash = hash;
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    _queueMenuFrame(frame);
+    return true;
+  }
   try { ws.send(JSON.stringify(frame)); return true; }
-  catch { return false; }
+  catch { _queueMenuFrame(frame); return true; }
 }
 
 // Outbound chat queue. If the WebSocket isn't OPEN at submit time (mobile

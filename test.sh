@@ -2569,6 +2569,17 @@ test_chat_window() {
   grep -Pzoq "_applyMenuStateUpdate[\s\S]{0,2500}_rescanPendingMenuQueue\(\)[\s\S]{0,80}_renderPermModal\(\)" web/public/app.js \
     && pass "app.js: menu state-update refreshes modal queue + popup" \
     || fail "app.js: menu state-update leaves modal queue stale"
+  # Modal picks/toggles/submits must queue on a closed WS and drain on
+  # the next open. A 2026-05-15 incident lost a user's pick during a
+  # WS reconnect window — sendMenuPick silent-dropped, the modal hid
+  # because the click handler returned early, and the server never
+  # received the frame.
+  grep -q "_flushOutboundMenuFrames" web/public/app.js \
+    && pass "app.js: outbound menu-frame queue is flushed on WS open" \
+    || fail "app.js: outbound menu-frame queue missing"
+  grep -q "outboundMenuFrames" web/public/app.js \
+    && pass "app.js: menu frames queue during WS reconnect" \
+    || fail "app.js: menu frames silent-drop during reconnect"
   grep -qF "sendMenuPick(n, hash)" web/public/app.js \
     && pass "app.js: sendMenuPick accepts hash arg" \
     || fail "app.js: sendMenuPick signature missing hash"
