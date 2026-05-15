@@ -1739,14 +1739,19 @@ function _renderPermModal() {
   const prevBtn = modal.querySelector('[data-perm-nav="prev"]');
   const nextBtn = modal.querySelector('[data-perm-nav="next"]');
 
-  // Title varies by kind. "permission" = tool wants to do something;
-  // "plan"/AskUserQuestion = claude wants the user to pick from a list.
+  // Title for AskUserQuestion modals is the actual question text
+  // (with any "[SINGLE-SELECT] " / "[MULTI-SELECT] " / "[TYPED-TEXT]"
+  // metadata prefix stripped). Permission modals title with the tool
+  // name. The generic "Claude is asking a question" / "Permission
+  // needed" headings were retired — the question itself carries the
+  // intent.
   if (m.kind === 'plan' || m.kind === 'ask') {
-    titleEl.textContent = 'Claude is asking a question';
+    const cleanQ = String(m.question || '').replace(/^\s*\[[^\]]*\]\s*/, '').replace(/[:?]+\s*$/, '').trim();
+    titleEl.textContent = cleanQ || 'Pick an option';
   } else {
     titleEl.textContent = m.target && m.target.tool
-      ? `Permission needed · ${m.target.tool}`
-      : 'Permission needed';
+      ? `Allow ${m.target.tool}?`
+      : 'Allow this action?';
   }
 
   // Pager + nav buttons — visible only with multiple pendings. The
@@ -1763,16 +1768,28 @@ function _renderPermModal() {
     nextBtn.hidden = true;
   }
 
-  // Meta line — session id (truncated) + tool target. Helps disambiguate
-  // when subagent + parent agent both have pendings open.
-  const sid = (state.activeId || '').slice(-8);
-  let metaHtml = `<code>session=${escHtml(sid)}</code> · hash=<code>${escHtml((m.hash || '').slice(-8))}</code>`;
+  // Meta line — show only the tool target (Bash command, file path,
+  // URL, …) when present. Session id + hash were retired; they were
+  // diagnostic chrome that distracted from the actual decision.
   if (m.target && m.target.input) {
-    metaHtml += ` · <code>${escHtml(String(m.target.input).slice(0, 80))}</code>`;
+    metaEl.innerHTML = `<code>${escHtml(String(m.target.input).slice(0, 200))}</code>`;
+    metaEl.hidden = false;
+  } else {
+    metaEl.innerHTML = '';
+    metaEl.hidden = true;
   }
-  metaEl.innerHTML = metaHtml;
 
-  questionEl.textContent = m.question || '(no question text)';
+  // Question body: for AskUserQuestion the title IS the question, so
+  // we suppress the redundant questionEl block. For permission asks
+  // (which use a generic title like "Allow Bash?"), the question
+  // text — if any — still surfaces below.
+  if (m.kind === 'plan' || m.kind === 'ask') {
+    questionEl.textContent = '';
+    questionEl.hidden = true;
+  } else {
+    questionEl.textContent = m.question || '';
+    questionEl.hidden = !m.question;
+  }
 
   // Render each option. For multi-select, show the current checked
   // state with a glyph; clicking toggles via sendMenuToggle. A Submit
