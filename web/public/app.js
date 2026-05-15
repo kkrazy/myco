@@ -211,13 +211,13 @@ function showTranscriptView()  { /* retired — chatpane is the only view */ }
 function showTranscriptWaiting() { /* retired — chatpane shows live state */ }
 
 function showTerminalView() {
+  // Phase 9 step 3: #terminal-wrap may be gone. Stay defensive so the
+  // function doesn't throw when called from a cached page.
   _hideMainPaneSiblings('terminal-wrap');
-  document.getElementById('terminal-wrap').hidden = false;
+  const wrap = document.getElementById('terminal-wrap');
+  if (wrap) wrap.hidden = false;
   updateChatButton();
-  // xterm canvas needs a refit after being unhidden since clientWidth was 0.
   if (state.fitAddon) requestAnimationFrame(() => state.fitAddon.fit());
-  // Same rationale as showConversationView — land on the latest output
-  // every time the terminal becomes visible.
   if (state.term) requestAnimationFrame(() => { try { state.term.scrollToBottom(); } catch {} });
 }
 
@@ -1043,7 +1043,8 @@ async function deleteSessionWithConfirm(s) {
       if (state.term) { try { state.term.dispose(); } catch {} state.term = null; }
       state.activeId = null;
       try { localStorage.removeItem('myco_active_id'); } catch {}
-      document.getElementById('terminal-wrap').hidden = true;
+      const tw = document.getElementById('terminal-wrap');
+      if (tw) tw.hidden = true;
       document.getElementById('no-session').hidden = false;
     }
     document.querySelectorAll('.session-item.show-delete')
@@ -1065,15 +1066,20 @@ function _teardownPreviousSession() {
   if (state.term) { state.term.dispose(); state.term = null; }
   state.viewerMode = false;
   state.transcriptMessages = [];
-  document.getElementById('terminal').innerHTML = '';
-  document.getElementById('terminal-wrap').hidden = true;
-  document.getElementById('conversation-wrap').hidden = true;
-  // Wipe only the transcript content; leave the sibling #terminal-tail
-  // (and its embedded mini xterm) for clearReadOnly to dispose properly.
+  // Phase 9 step 2 + 3 deleted #terminal, #terminal-wrap,
+  // #conversation-wrap, and #conv-content. Each lookup may return
+  // null for a fresh-cache page; guard each access so a missing
+  // node doesn't throw and abort openSession (the 2026-05-15
+  // 'clicked on a session, nothing show up' incident).
+  const termEl = document.getElementById('terminal');
+  if (termEl) termEl.innerHTML = '';
+  const termWrap = document.getElementById('terminal-wrap');
+  if (termWrap) termWrap.hidden = true;
+  const convWrap = document.getElementById('conversation-wrap');
+  if (convWrap) convWrap.hidden = true;
   const conv = document.getElementById('conv-content');
   if (conv) conv.innerHTML = '';
   clearReadOnly();                               // resets banner + tail term
-  // Reset file pane on session switch — paths and mtimes are session-scoped.
   hideFilesView();
   state.files.currentPath = '.';
   state.files.history = [];
