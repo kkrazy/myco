@@ -1517,20 +1517,10 @@ test_chat_window() {
   grep -q "names: \['fr'\]" server/src/slashcmds.js && pass "/fr command registered" || fail "/fr command missing"
   grep -q "names: \['td', 'todo'\]" server/src/slashcmds.js && pass "/td command registered (alias /todo)" || fail "/td command missing"
   grep -q "names: \['bug'\]" server/src/slashcmds.js && pass "/bug command registered" || fail "/bug command missing"
-  # /m: typing-friendly alias for @myco. The rewrite happens in
-  # pty.handleChatMessage BEFORE the slash dispatch, so the existing
-  # @myco pipeline (special keys, menu-pick shortcuts, prose
-  # handling, etc.) is the single source of truth. The slashcmds
-  # registration only fires when the user types bare "/m" with no
-  # body — handler emits a usage reply.
-  grep -q "names: \['m'\]" server/src/slashcmds.js && pass "/m alias registered" || fail "/m alias missing"
-  grep -q "function handleMAlias" server/src/slashcmds.js && pass "handleMAlias usage reply" || fail "handleMAlias usage reply"
-  grep -qE "text\.match\(/\^\\\\/m" server/src/pty.js \
-    && pass "pty.js: /m rewrites to @myco before slash dispatch" \
-    || fail "pty.js: /m rewrites to @myco before slash dispatch"
-  grep -qF '/^\/m\s+\S/i' web/public/app.js \
-    && pass "app.js: typing-dots arm recognizes /m" \
-    || fail "app.js: typing-dots arm recognizes /m"
+  # /m: removed 2026-05-15 in the chat-routing rewrite. Plain text now
+  # routes to the running Claude PTY by default, which makes /m redundant.
+  # The negative assertion below (slashcmds: /m removed) lives in the
+  # earlier chat-routing block — duplicating here would just whine twice.
   # /task /skip /cancel: chat-side commands that the server rewrites
   # into @myco-forwarded internal-task requests. Lets the user intervene
   # on the running Claude's TaskList from chat. The CLAUDE.md project
