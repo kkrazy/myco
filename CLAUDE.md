@@ -13,6 +13,46 @@
    - **Stale-task heads-up — proactively volunteer.** Every time you respond to a `@myco` message, scan the task list reminders for entries that have been `pending` for what looks like a long time (e.g., spans more than one user-message worth of work and isn't on your immediate critical path, or is explicitly user-owned like "user will handle"). If you see one, prepend a one-line `📌 Heads up: task #N still <pending|in_progress> — <subject>. Use \`/skip N\` to dismiss or \`/cancel N\` to drop.` to your reply. Keep it to one line — don't lecture, just remind. Skip the reminder when there's nothing stale or when you've already mentioned the same id in the immediate prior reply (no double-nag).
    - **When YOU mark a task completed**, you don't need the `📌 Heads up` line — that's only for the tasks the user can act on.
 
+## Session storage
+
+1. **Session folder = session id.** Every new session spawned via the
+   spawn modal lives at `WORKSPACE/<user>/<session-id>/` (e.g.
+   `/wks/kkrazy/myco-kkrazy-6bd8b83e/`). The spawn-modal text input is
+   an optional friendly *display label*, not a path. Predictable,
+   collision-proof. Existing sessions with arbitrary `rec.cwd` values
+   (e.g. `test006`, `myco`) keep working — only NEW spawns use the
+   id-as-folder rule.
+
+2. **All session-scoped state lives under `WORKSPACE/<user>/<session-id>/`.**
+   - `_myco_/` — extracted artifacts (`plan.json`, `arch.md`, `test.md`,
+     `README`). Checked into the project's git so the plan + arch +
+     test sheet move with the code.
+   - `.claude/memory/` — the SDK's auto-memory directory for this
+     session (set via `settings.autoMemoryDirectory` on every
+     `query()` call in `server/src/agent-session.js`). Replaces the
+     SDK default `$HOME/.claude/projects/<sanitized-cwd>/memory/`,
+     which would otherwise pool every session's memory into the
+     shared container `/root/.claude/`.
+   - `.claude/settings.json` + `.claude/settings.local.json` — per-
+     project SDK settings (permissions, allow-list rules persisted by
+     the SDK's "Allow always" picks, etc.). Loaded via
+     `settingSources: ['project', 'local']`; the shared `'user'` tier
+     (`$HOME/.claude/settings.json`) is deliberately excluded so
+     sessions don't bleed config across each other.
+   - `CLAUDE.md` — project-level instructions for the SDK conversation
+     (templated from the myco best-practices block on first spawn).
+   - Anything else claude writes (Bash output to relative paths,
+     Edit/Write tool destinations) lands here too because
+     `options.cwd` points at this folder.
+
+3. **What still lives at the container level (NOT per-session):**
+   - `/data/sessions.json` — the session registry (id, label, cwd,
+     mode, allow/deny lists, chat history). Cross-session shared.
+   - `/data/auth-sessions.json` + `/data/gh-tokens.json` — auth state,
+     shared across all sessions for a user.
+   - `/root/.claude/.credentials.json` — SDK auth, shared. (Per-user,
+     not per-session.)
+
 ## Pre-Commit
 
 1. **Always run `./test.sh` before committing.** Fix any failures before proceeding with the commit.
@@ -79,3 +119,82 @@
 2. **`/loop` cron consumer.** The diagnostic /loop tick (cadence chosen by the user, currently 10 min) calls `./collect-logs.sh` each fire, then reads the fresh `+L` / `+M` lines per source and scans for resume-bug + menu-sync + general-error markers. The loop posts a one-line `📡 [diag-loop]` summary to chat every tick — even when there's nothing notable — so a quiet system is visibly alive. Auto-fix authority is limited to trivial fixes (log noise, typos, one-line bugs); anything touching WS protocol / auth / deploy / framing waits for explicit user approval. See the loop prompt in the active `CronList` for the full filter spec.
 
 3. **Adding new log markers.** When you instrument something for the loop to catch, give it a stable bracketed prefix (e.g. `[ws-attach]`, `[diag-resume]`, `[menu-pick]`) so the filters in step 2 can pick it out cleanly without ambiguous substring matches. Mirror the addition into the loop prompt's filter buckets so the next tick actually reports it.
+<!-- myco-best-practices-start -->
+# Best Practices
+
+These guidelines are auto-injected at the top of the Architecture pane.
+Toggle them off via the **Best practices** checkbox in the Arch tab if
+they don't apply to this project.
+
+## 1. Refactor opportunistically — high cohesion, low coupling
+
+Every change is also a chance to simplify. Look for ways to:
+
+- Split functions doing more than one thing.
+- Pull duplicated logic into shared helpers; remove the duplicates.
+- Pass dependencies in (constructor / function args), not import them
+  globally — keeps modules independently testable.
+- Group related state + behaviour into one module; let unrelated
+  modules talk through a narrow, named interface.
+- Delete code that no longer has a caller — dead branches age into
+  bugs.
+
+If you're surprised by where a change ripples, that's a coupling
+signal. Don't ignore it; capture the smell in the commit message even
+if you're not refactoring this pass.
+
+## 2. Tests come with the change — runnable by a human, framework-standard
+
+Every feature, bug fix, or refactor lands with a test that would have
+caught the original problem.
+
+- **C / C++**: GoogleTest (`gtest`). One `TEST` per behaviour;
+  arrange/act/assert per block.
+- **Python**: pytest. One `test_*` function per behaviour;
+  fixtures for shared setup; parametrise rather than copy-paste.
+- **JavaScript / Node**: framework already chosen by the project (e.g.
+  the repo's existing `node test/*.test.js` pattern). Don't introduce a
+  new test runner if one is in use.
+- Tests must be **runnable from the command line** by a human —
+  `pytest tests/`, `ctest`, `node test/foo.test.js` — without needing
+  an LLM to interpret or set up.
+- A single test failure prints a clear assertion message naming WHAT
+  was expected vs WHAT was observed.
+
+## 3. Generated scripts must be runnable by a human
+
+Anything shipped as a script (build, deploy, fix-up migration, data
+backfill) MUST be reproducible by a human running it from a normal
+shell — no LLM in the loop at execution time.
+
+- Plain `bash` / `sh` / `python` / `node` invocation; no chat-driven
+  steps embedded.
+- All inputs are CLI flags or env vars, not interactive prompts
+  (unless the prompt has a non-interactive fallback).
+- Errors print enough context to debug without re-running with
+  extra logging.
+- Idempotent where possible — re-running shouldn't break previous
+  state.
+
+## 4. Reuse existing scripts for test / build / deploy
+
+Before writing a one-off command sequence in chat, check whether the
+project already has a script for it. If it almost-exists, **extend it
+in place** rather than copy-paste a chat-only variant.
+
+Common scripts to check for:
+
+- `./test.sh`, `./run-tests.sh`, `make test`, `pytest`, `cargo test`
+- `./build.sh`, `make`, `npm run build`, `cargo build`
+- `./deploy.sh`, `./release.sh`, `make deploy`
+
+If you find yourself composing a multi-step shell sequence, that's a
+strong signal it should become a script (or be added to an existing
+one).
+
+---
+
+*Toggle this section off via the **Best practices** checkbox if your
+project follows different conventions.*
+<!-- myco-best-practices-end -->
+
