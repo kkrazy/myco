@@ -1290,6 +1290,13 @@ function attachWebSocket(session, ws, opts = {}) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'pong' }));
       return;
     }
+    // Diagnostic — log every menu-related frame at the WS boundary so we
+    // can see whether clicks reach the server even if downstream
+    // handlers drop them. Removable once the modal flow is stable.
+    if (msg.t === 'menu-pick' || msg.t === 'menu-toggle' || msg.t === 'menu-submit') {
+      const hashTag = typeof msg.hash === 'string' ? msg.hash.slice(-12) : 'no-hash';
+      console.log(`[ws-frame] ${sessionId} t=${msg.t} n=${msg.n != null ? msg.n : '-'} hash=${hashTag} user=${user || '(anon)'}`);
+    }
     if (msg.t === 'chat' && typeof msg.text === 'string') {
       // Read-only / unauthenticated viewers can read chat but not post.
       if (readOnly || !user) return;
@@ -1407,6 +1414,31 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     if (msg.t === 'chat' && typeof msg.text === 'string' && user) {
       const text = msg.text.trim();
       if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT));
+      return;
+    }
+    // Modal popup → server. Without these three branches, every
+    // {t:'menu-pick'|'menu-toggle'|'menu-submit'} frame from an
+    // agent-mode session was silently dropped at the WS boundary —
+    // the PTY-mode ws handler (attachWebSocket) had them but this
+    // agent handler didn't. Symptom (2026-05-15 test006): modal
+    // popped, user clicked Allow, nothing happened; server logs
+    // showed no menu-pick whatsoever, only the menu broadcast.
+    if (msg.t === 'menu-pick' && Number.isFinite(msg.n)) {
+      const hashTag = typeof msg.hash === 'string' ? msg.hash.slice(-12) : 'no-hash';
+      console.log(`[ws-frame] ${sessionId} t=menu-pick n=${msg.n} hash=${hashTag} mode=agent user=${user || '(anon)'}`);
+      if (user) handleMenuPick(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
+      return;
+    }
+    if (msg.t === 'menu-toggle' && Number.isFinite(msg.n)) {
+      const hashTag = typeof msg.hash === 'string' ? msg.hash.slice(-12) : 'no-hash';
+      console.log(`[ws-frame] ${sessionId} t=menu-toggle n=${msg.n} hash=${hashTag} mode=agent`);
+      if (user) handleMenuToggle(sessionId, session, msg.n | 0, typeof msg.hash === 'string' ? msg.hash : null);
+      return;
+    }
+    if (msg.t === 'menu-submit') {
+      const hashTag = typeof msg.hash === 'string' ? msg.hash.slice(-12) : 'no-hash';
+      console.log(`[ws-frame] ${sessionId} t=menu-submit hash=${hashTag} mode=agent`);
+      if (user) handleMenuSubmit(sessionId, session, typeof msg.hash === 'string' ? msg.hash : null);
       return;
     }
     if (msg.t === 'resize' && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {

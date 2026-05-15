@@ -2580,6 +2580,19 @@ test_chat_window() {
   grep -q "outboundMenuFrames" web/public/app.js \
     && pass "app.js: menu frames queue during WS reconnect" \
     || fail "app.js: menu frames silent-drop during reconnect"
+  # The agent-mode WS handler (_attachAgentWebSocket) must handle the
+  # menu-pick / menu-toggle / menu-submit frames. Without these branches
+  # every modal click on an agent-mode session is silently dropped at
+  # the WS boundary — verified live on mycobeta test006 2026-05-15.
+  grep -Pzoq "_attachAgentWebSocket[\s\S]{0,4000}msg\.t === 'menu-pick'" server/src/pty.js \
+    && pass "pty.js: agent WS handles menu-pick frame" \
+    || fail "pty.js: agent WS missing menu-pick handler"
+  grep -Pzoq "_attachAgentWebSocket[\s\S]{0,4000}msg\.t === 'menu-toggle'" server/src/pty.js \
+    && pass "pty.js: agent WS handles menu-toggle frame" \
+    || fail "pty.js: agent WS missing menu-toggle handler"
+  grep -Pzoq "_attachAgentWebSocket[\s\S]{0,4000}msg\.t === 'menu-submit'" server/src/pty.js \
+    && pass "pty.js: agent WS handles menu-submit frame" \
+    || fail "pty.js: agent WS missing menu-submit handler"
   grep -qF "sendMenuPick(n, hash)" web/public/app.js \
     && pass "app.js: sendMenuPick accepts hash arg" \
     || fail "app.js: sendMenuPick signature missing hash"
