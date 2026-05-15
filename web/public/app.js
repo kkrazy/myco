@@ -2428,26 +2428,17 @@ const AGENT_CHROME_TYPES = new Set([
   'tool_result',
 ]);
 
-// tool_use events for these specific tools are meta — they don't
-// progress the work surface (Exit/EnterPlanMode is a mode flip;
-// AskUserQuestion's content lives in the modal popup), so they fold
-// into chrome too. Other tool_use events (Read, Edit, Write, Bash,
-// Glob, Grep, WebFetch, WebSearch, Task, TodoWrite) stay as their
-// own rows.
-const AGENT_CHROME_TOOL_USES = new Set([
-  'ExitPlanMode',
-  'EnterPlanMode',
-  'AskUserQuestion',
-  // Write is bulk-create — claude tends to fire several Writes in a
-  // row when scaffolding new files. Fold them; the per-file diff is
-  // available when the batch row is expanded.
-  'Write',
-]);
-
+// All tool_use events fold into the chrome batch. The per-call
+// details (file path, command, query, etc.) are surfaced inside the
+// expanded batch via _chromeEventLine, but they don't each get their
+// own top-level row in the timeline. The expanded body still shows
+// every event with its own kind chip + summary, so anyone scanning
+// can drill into "what did claude touch" without losing the
+// chronological order.
 function _isChromeEvent(ev) {
   if (!ev || !ev.type) return false;
   if (AGENT_CHROME_TYPES.has(ev.type)) return true;
-  if (ev.type === 'tool_use' && AGENT_CHROME_TOOL_USES.has(ev.name)) return true;
+  if (ev.type === 'tool_use') return true;
   return false;
 }
 
@@ -2630,17 +2621,18 @@ function _chromeEventLine(ev, ts) {
     const bytes = (ev.content || '').length;
     kind = ev.isError ? '⚠ result' : '✓ result';
     summary = bytes + ' bytes · for=' + (ev.tool_use_id || '').slice(-8);
-  } else if (ev.type === 'tool_use' && AGENT_CHROME_TOOL_USES.has(ev.name)) {
+  } else if (ev.type === 'tool_use') {
     if (ev.name === 'AskUserQuestion') {
       kind = '? ask';
       const q = (ev.input && ev.input.questions && ev.input.questions[0] && ev.input.questions[0].question) || '';
       summary = String(q).slice(0, 120);
-    } else if (ev.name === 'Write') {
-      kind = '✎ write';
-      summary = String((ev.input && ev.input.file_path) || '').slice(0, 120);
-    } else {
-      kind = ev.name.replace(/PlanMode$/, ' plan mode'); // ExitPlanMode → "exit plan mode"
+    } else if (ev.name === 'ExitPlanMode' || ev.name === 'EnterPlanMode') {
+      kind = ev.name.replace(/PlanMode$/, ' plan mode');
       summary = '';
+    } else {
+      // Any tool_use: icon + name as kind, one-line summary as body.
+      kind = _agentToolIcon(ev.name) + ' ' + ev.name;
+      summary = _agentToolSummary(ev.name, ev.input).slice(0, 120);
     }
   } else {
     summary = JSON.stringify(ev).slice(0, 120);
@@ -2711,15 +2703,20 @@ function _chromeShortLabel(ev) {
     const bytes = (ev.content || '').length;
     return (ev.isError ? '⚠ result · ' : '✓ result · ') + bytes + ' bytes';
   }
-  if (ev.type === 'tool_use' && AGENT_CHROME_TOOL_USES.has(ev.name)) {
+  if (ev.type === 'tool_use') {
     if (ev.name === 'AskUserQuestion') {
       const q = (ev.input && ev.input.questions && ev.input.questions[0] && ev.input.questions[0].question) || '';
       return 'ask · ' + String(q).slice(0, 60);
     }
-    if (ev.name === 'Write') {
-      return '✎ write · ' + String((ev.input && ev.input.file_path) || '').slice(0, 60);
+    if (ev.name === 'ExitPlanMode' || ev.name === 'EnterPlanMode') {
+      return ev.name.replace(/PlanMode$/, ' plan mode');
     }
-    return ev.name.replace(/PlanMode$/, ' plan mode');   // ExitPlanMode → "exit plan mode"
+    // Any other tool — Read, Edit, Write, Bash, Glob, Grep, WebFetch,
+    // WebSearch, Task, TodoWrite, etc. — gets icon + name + one-line
+    // summary so the batch head still names the most recent action.
+    const icon = _agentToolIcon(ev.name);
+    const summary = _agentToolSummary(ev.name, ev.input).slice(0, 60);
+    return `${icon} ${ev.name}${summary ? ' · ' + summary : ''}`;
   }
   return ev.type || 'event';
 }
