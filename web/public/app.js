@@ -2039,13 +2039,14 @@ function renderChatMessage(m, isActiveMenu) {
   let body = m.text || '';
   if (menuOpts) {
     cls += ' chat-msg-menu';
-    // Compact one-liner: "<question>: <opt1>, <opt2>, …". The
-    // "🤔 Claude is waiting on a decision" lead + "[SINGLE-SELECT] "
-    // / "[MULTI-SELECT] " prefix that claude prepends to AskUserQuestion
-    // titles are both stripped — the chat row reads as plain text.
-    // Permission requests show the tool target instead of the question
-    // (since there's no human-friendly question for those).
     const tgt = m.meta.target;
+    // Tool permission menus (target.tool set) get a chrome-row tag so
+    // CSS can collapse them — the perm_request agent-event already
+    // breadcrumbs them in the chrome batch and the modal popup is
+    // the answer surface. Keeps the chat list focused on
+    // AskUserQuestion-style menus where the question + options carry
+    // human-readable content.
+    if (tgt && tgt.tool) cls += ' chat-msg-menu-perm';
     const rawQ = (m.meta.menu && m.meta.menu.question) || '';
     const cleanQ = String(rawQ).replace(/^\s*\[(?:SINGLE-SELECT|MULTI-SELECT|TYPED-TEXT)\]\s*/i, '').replace(/[:?]+\s*$/, '').trim();
     const labels = menuOpts.map((o) => String(o.label || '').trim()).filter(Boolean).join(', ');

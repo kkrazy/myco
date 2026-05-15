@@ -3314,6 +3314,17 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: transparent;
   border: none;
 }
+/* Active tool permission menus ("Allow ExitPlanMode?", "Allow Bash?",
+   …) hide from the chat list entirely — the perm_request agent-event
+   already breadcrumbs them inside the chrome batch (one row "perm
+   asked · Bash"), and the modal popup is the answer surface. Once
+   resolved, .chat-msg-menu-collapsed wins this rule's not() filter
+   and the row reappears as "✓ Picked [N] label" history. AskUser-
+   Question menus (no target.tool) stay visible because the question
+   text is human-readable content worth keeping in the chat. */
+.chat-msg.chat-msg-menu.chat-msg-menu-perm:not(.chat-msg-menu-collapsed) {
+  display: none;
+}
 /* Active menu row is click-to-reopen-modal — the cursor + subtle
    hover background tell the user this row is interactive. The old
    '↗ Awaiting answer — open in popup' hint line was retired in
@@ -3480,15 +3491,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-left: 2px solid rgba(255, 255, 255, .06);
   margin-top: 2px;
 }
-/* Assistant text (claude's prose) gets a brighter left bar + deeper
-   indent + more vertical breathing room so the markdown reads
-   comfortably — matches the affordance of user-msg replies but in
-   the assistant-green accent. Targets ONLY .agent-card-md (the
-   markdown-rendered body), so tool input JSON / tool result blobs
-   keep the muted default border above. */
+/* Assistant text (claude's prose) is wrapped in the same chat-bubble
+   look the user-msg + from-claude chat rows use: light green wash,
+   2px accent left bar, rounded corners, comfortable padding. This
+   makes claude's reply visually parallel to a user message instead
+   of looking like a debug-log card. Targets ONLY .agent-card-md
+   (the markdown body) — tool input JSON / tool result blobs keep
+   the muted default frame from the rule above. */
 .agent-card.agent-card-expanded .agent-card-md {
-  padding: 6px 0 6px 18px;
-  border-left: 3px solid rgba(120, 200, 140, .55);
+  background: rgba(76, 175, 130, .08);
+  border: none;
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  padding: 8px 12px;
   margin-top: 4px;
   font-size: 0.92rem;
   line-height: 1.55;
