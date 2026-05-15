@@ -3354,18 +3354,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding-top: 0;
   border-top: none;
 }
-/* Resolved-menu question body — kept visible above the ✓ Picked line so
-   the user can see what was asked without hovering. Muted vs. the active
-   menu's body so the focus stays on the resolved-line answer. */
+/* Resolved-menu question body — kept visible above the ✓ Picked line
+   so the user can see what was asked. Inherits the base chat-text
+   font/size/color so the resolved menu reads as a normal chat
+   message; the blockquote loses its left-border bar to match. The
+   single visual cue that this is a "resolved menu" is the green
+   ✓ Picked line below, not the question's framing. */
 .chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-text-resolved {
-  font-size: 0.88rem;
-  color: #8b949e;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-text-resolved blockquote {
   margin: 0;
-  padding-left: 8px;
-  border-left: 2px solid #30363d;
+  padding: 0;
+  border: none;
   color: inherit;
 }
 
