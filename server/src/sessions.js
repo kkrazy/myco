@@ -99,6 +99,55 @@ function getSessionRecord(id) { return loadStore().sessions[id] || null; }
 function projectsDir() { return path.join(os.homedir(), '.claude', 'projects'); }
 function encodeCwdForClaude(cwd) { return cwd.replace(/\//g, '-'); }
 
+// One-shot copy of legacy SDK auto-memory into the per-session
+// .claude/memory/ folder. Pre-2026-05-15 the SDK pooled memory under
+// $HOME/.claude/projects/<encoded-cwd>/memory/, shared across every
+// session that happened to use the same cwd. With the id-as-folder
+// rule + autoMemoryDirectory override, each session has its own
+// .claude/memory/ — but existing sessions need their prior memory
+// migrated in. Called from ensureLiveSession (agent branch) before
+// spawnAgent so the SDK's first read finds the files.
+//
+// Idempotent. Returns the number of files copied (0 if there was
+// nothing to migrate OR the destination already exists). Safe to
+// call on every spawn — costs one fs.existsSync per session.
+function _migrateLegacyMemory(absCwd) {
+  if (!absCwd) return 0;
+  const destDir = path.join(absCwd, '.claude', 'memory');
+  if (fs.existsSync(destDir)) return 0;   // already migrated (or per-session from spawn)
+  const srcDir = path.join(projectsDir(), encodeCwdForClaude(absCwd), 'memory');
+  if (!fs.existsSync(srcDir)) return 0;   // no legacy memory for this cwd
+  let entries;
+  try { entries = fs.readdirSync(srcDir, { withFileTypes: true }); }
+  catch { return 0; }
+  if (!entries.length) return 0;
+  fs.mkdirSync(destDir, { recursive: true });
+  let count = 0;
+  for (const ent of entries) {
+    const sp = path.join(srcDir, ent.name);
+    const dp = path.join(destDir, ent.name);
+    try {
+      if (ent.isFile()) {
+        fs.copyFileSync(sp, dp);
+        count++;
+      } else if (ent.isDirectory()) {
+        // Recurse one level for subfolders (the SDK doesn't nest
+        // memory deeper than a directory or two — MEMORY.md plus
+        // typed subdirs).
+        fs.mkdirSync(dp, { recursive: true });
+        for (const sub of fs.readdirSync(sp, { withFileTypes: true })) {
+          if (!sub.isFile()) continue;
+          fs.copyFileSync(path.join(sp, sub.name), path.join(dp, sub.name));
+          count++;
+        }
+      }
+    } catch (err) {
+      console.error(`[migrate-memory] copy ${sp} → ${dp} failed: ${err.message}`);
+    }
+  }
+  return count;
+}
+
 // Claude code keeps a per-process tracker in ~/.claude/sessions/<pid>.json:
 //
 //   { "pid": 27, "sessionId": "355313f5-…", "cwd": "/wks/kkrazy/myco",
@@ -500,6 +549,19 @@ async function ensureLiveSession(sessionId) {
   // continues from where it left off. No JSONL-watcher dance needed —
   // the SDK owns its own session-id semantics.
   if (rec.mode === 'agent') {
+    // One-shot lazy migration of the SDK's auto-memory dir from the
+    // pre-2026-05-15 default ($HOME/.claude/projects/<encoded-cwd>/
+    // memory/) into the per-session folder (<absCwd>/.claude/memory/).
+    // Runs before spawnAgent so the SDK's first read finds the
+    // migrated files. Idempotent — once the destination exists we
+    // skip. No-op for sessions that never had legacy memory or for
+    // brand-new sessions whose memory was always per-session.
+    try {
+      const migrated = _migrateLegacyMemory(rec.absCwd);
+      if (migrated) console.log(`[ensureLive] migrated ${migrated} memory file(s) into ${rec.absCwd}/.claude/memory/ for ${sessionId}`);
+    } catch (err) {
+      console.error(`[ensureLive] memory migration failed for ${sessionId}: ${err.message}`);
+    }
     const { spawnAgent } = require('./agent-session');
     const session = spawnAgent(sessionId, {
       cwd: rec.absCwd,
@@ -769,4 +831,6 @@ Object.assign(module.exports, {
   // best-practices injection — exposed for tests + manual back-fill
   // tools. Idempotent via the sentinel block in the target CLAUDE.md.
   injectBestPracticesIntoClaudeMd,
+  // Exposed for the memory-migration regression test.
+  _migrateLegacyMemory,
 });

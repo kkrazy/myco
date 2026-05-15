@@ -1340,6 +1340,50 @@ test_new_session_readonly() {
   grep -Pzoq "settingSources:\s*\['project',\s*'local'\]" server/src/agent-session.js \
     && pass "agent-session: settingSources scoped to project+local" \
     || fail "agent-session: settingSources still loading shared 'user' tier"
+  # Memory migration: existing sessions whose legacy auto-memory lived
+  # at ~/.claude/projects/<encoded-cwd>/memory/ get a one-shot copy
+  # into <absCwd>/.claude/memory/ on the next ensureLiveSession spawn.
+  # Idempotent (skips when destination exists).
+  grep -q "function _migrateLegacyMemory" server/src/sessions.js \
+    && pass "sessions.js: _migrateLegacyMemory helper defined" \
+    || fail "sessions.js: _migrateLegacyMemory helper missing"
+  grep -Pzoq "respawned agent[\s\S]{0,1400}_migrateLegacyMemory" server/src/sessions.js \
+    && pass "sessions.js: ensureLiveSession invokes _migrateLegacyMemory before spawnAgent" \
+    || fail "sessions.js: ensureLiveSession does not run the memory migration"
+  # Smoke test the helper itself: copy a tmp fixture from a fake
+  # projects/<enc>/memory dir into the target session folder.
+  if have_node; then
+    node -e "
+      const fs = require('fs'), path = require('path'), os = require('os');
+      const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-mem-mig-'));
+      const sessionCwd = path.join(tmpRoot, 'session');
+      fs.mkdirSync(sessionCwd, { recursive: true });
+      // Fake the legacy SDK projects dir layout
+      const fakeHome = path.join(tmpRoot, 'home');
+      fs.mkdirSync(fakeHome, { recursive: true });
+      process.env.HOME = fakeHome;
+      const sessions = require('./server/src/sessions');
+      const legacyMemDir = path.join(fakeHome, '.claude', 'projects', sessions.encodeCwdForClaude(sessionCwd), 'memory');
+      fs.mkdirSync(legacyMemDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyMemDir, 'MEMORY.md'), 'top-level\n');
+      fs.writeFileSync(path.join(legacyMemDir, 'user_role.md'), '---\nname: user role\n---\n\ntest\n');
+      fs.mkdirSync(path.join(legacyMemDir, 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(legacyMemDir, 'sub', 'nested.md'), 'sub\n');
+      const n = sessions._migrateLegacyMemory(sessionCwd);
+      const destDir = path.join(sessionCwd, '.claude', 'memory');
+      if (n !== 3) throw new Error('expected 3 files migrated, got ' + n);
+      if (!fs.existsSync(path.join(destDir, 'MEMORY.md'))) throw new Error('MEMORY.md missing');
+      if (!fs.existsSync(path.join(destDir, 'sub', 'nested.md'))) throw new Error('sub/nested.md missing');
+      // Idempotency: second call must return 0 (destination exists).
+      const n2 = sessions._migrateLegacyMemory(sessionCwd);
+      if (n2 !== 0) throw new Error('expected 0 on second call, got ' + n2);
+      console.log('OK');
+    " >/dev/null 2>&1 \
+      && pass "_migrateLegacyMemory copies legacy memory + is idempotent" \
+      || fail "_migrateLegacyMemory smoke test failed"
+  else
+    skip "_migrateLegacyMemory smoke test (no host node)"
+  fi
   # Safety net: if a brand-new session lands on the readonly view and
   # neither a menu callout nor any transcript content arrives within
   # READONLY_FALLBACK_MS, auto-flip back to the live xterm so the user
