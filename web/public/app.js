@@ -2080,52 +2080,57 @@ function renderChatMessage(m, isActiveMenu) {
   const isSuperseded = !!(m.meta && m.meta.superseded);
   const isResolvedMenu = !!(menuOpts && (wasSubmitted || pickedN != null || isSuperseded || !isActiveMenu));
   if (isResolvedMenu) cls += ' chat-msg-menu-collapsed';
+  // Resolved menu question (stripped of any "[...]" metadata prefix +
+  // trailing punctuation) — folded inline with the picked/submitted
+  // line so the whole answered row reads as ONE sentence:
+  //   "Daemon model: ✓ Picked [2] Built-in --daemon flag"
+  const resolvedQuestion = isResolvedMenu && m.meta && m.meta.menu && m.meta.menu.question
+    ? String(m.meta.menu.question).replace(/^\s*\[[^\]]*\]\s*/, '').replace(/[:?]+\s*$/, '').trim()
+    : '';
   let optsHtml = '';
   if (menuOpts && wasSubmitted) {
-    // Multi-select submitted: summarize the checked set.
     const picked = menuOpts.filter((o) => o.checkbox && o.checked);
     const summary = picked.length
       ? picked.map((o) => `[${o.n}] ${escHtml(o.label)}`).join(', ')
       : '(nothing selected)';
-    optsHtml = `<div class="chat-menu-resolved">✓ Submitted with ${summary}</div>`;
+    optsHtml = '';
+    // (resolved + submitted) rolls into textHtml below via resolvedQuestion + summary.
   } else if (menuOpts && pickedN != null) {
-    const matched = menuOpts.find((o) => o.n === pickedN);
-    const label = matched ? matched.label : '';
-    optsHtml = `<div class="chat-menu-resolved">✓ Picked [${pickedN}]${label ? ' ' + escHtml(label) : ''}</div>`;
+    optsHtml = '';   // ditto — rendered inline in textHtml below.
   } else if (menuOpts && isSuperseded) {
-    // Claude advanced the dialog before this menu was answered. Show a
-    // muted note instead of leaving stale buttons live (which would
-    // silently no-op against the hash-guard on the server side).
-    optsHtml = '<div class="chat-menu-resolved">↪ Superseded by a newer dialog</div>';
+    optsHtml = '<span class="chat-menu-resolved chat-menu-resolved-inline">↪ Superseded by a newer dialog</span>';
   } else if (menuOpts && isActiveMenu) {
-    // Phase 2.5: the inline button row is retired. The modal popup
-    // (perm-modal) is the single answer surface; multi-agent / parallel
-    // pendings are queued there with prev/next nav, and every click
-    // sends the hash that uniquely identifies the menu. Active rows
-    // are click-to-reopen via the data-perm-reopen attribute set on
-    // the chat-msg div below — no visible hint line.
+    // Active row: data-perm-reopen on the chat-msg div below makes
+    // the whole row click-to-reopen-modal. No visible affordance line.
     optsHtml = '';
     cls += ' chat-msg-menu-active';
   } else if (menuOpts) {
-    optsHtml = '<div class="chat-menu-resolved">(no longer active)</div>';
+    optsHtml = '<span class="chat-menu-resolved chat-menu-resolved-inline">(no longer active)</span>';
   }
-  // Resolved menu cards still show the FULL question text above the
-  // resolved-line. (Before 2026-05-15 the question was hidden behind a
-  // hover tooltip, but that left "✓ Picked [2] Discard local changes"
-  // dangling without context — and when claude later texted a recap
-  // that quoted the same wording, users read the recap as a fresh
-  // unanswered question.) For active menus the original lead+question
-  // body still renders, since the picker buttons are right below.
-  // Resolved-menu question shown above the ✓ Picked line. Same prefix
-  // strip ("[SINGLE-SELECT] " / "[MULTI-SELECT] ") + trailing-colon
-  // trim as the active row, so the question text looks identical
-  // before and after the answer lands. No blockquote (the flat-row
-  // styling makes the blockquote bar visually distracting).
-  const resolvedQuestion = isResolvedMenu && m.meta && m.meta.menu && m.meta.menu.question
-    ? String(m.meta.menu.question).replace(/^\s*\[[^\]]*\]\s*/, '').trim()
-    : '';
+  // Build the resolved-menu inline string: "<question>: <answer>". For
+  // submitted multi-select, list the checked options; for single pick,
+  // show "✓ Picked [N] label".
+  let resolvedInline = '';
+  if (isResolvedMenu && menuOpts) {
+    let answer = '';
+    if (wasSubmitted) {
+      const picked = menuOpts.filter((o) => o.checkbox && o.checked);
+      const summary = picked.length
+        ? picked.map((o) => `[${o.n}] ${o.label}`).join(', ')
+        : '(nothing selected)';
+      answer = `✓ Submitted with ${summary}`;
+    } else if (pickedN != null) {
+      const matched = menuOpts.find((o) => o.n === pickedN);
+      const label = matched ? matched.label : '';
+      answer = `✓ Picked [${pickedN}]${label ? ' ' + label : ''}`;
+    }
+    if (answer) {
+      const q = resolvedQuestion ? resolvedQuestion + ': ' : '';
+      resolvedInline = `<span class="chat-menu-resolved-q">${escHtml(q)}</span><span class="chat-menu-resolved-a">${escHtml(answer)}</span>`;
+    }
+  }
   const textHtml = isResolvedMenu
-    ? (resolvedQuestion ? `<div class="chat-text chat-text-resolved">${renderMd(resolvedQuestion)}</div>` : '')
+    ? (resolvedInline ? `<div class="chat-text chat-text-resolved">${resolvedInline}</div>` : '')
     : `<div class="chat-text">${renderMd(body)}</div>`;
   // Active menu rows are click-to-reopen-modal — the data-perm-reopen
   // attribute is hooked by _bindChatMenuClicks. No visible affordance
