@@ -1508,15 +1508,30 @@ test_chat_window() {
   grep -q 'id="chat-input"' web/public/index.html && pass "#chat-input element" || fail "#chat-input element"
   grep -q 'id="chat-send"' web/public/index.html && pass "#chat-send element" || fail "#chat-send element"
   grep -q 'id="chat-form"' web/public/index.html && pass "#chat-form element" || fail "#chat-form element"
-  # Regression: the chat input must be a <textarea> so plain Enter inserts a
-  # newline (instead of submitting). Ctrl/⌘+Enter is the send shortcut, wired
-  # in bindChatUi(). Reverting either half breaks the multi-line UX.
+  # Regression: chat-input UX is "Enter sends, Shift+Enter inserts newline"
+  # — the dominant chat-app pattern. The textarea stays multi-line so
+  # Shift+Enter composition works; submission goes through bindChatUi.
+  # Three guards must remain wired: IME composition (isComposing /
+  # keyCode 229), autocomplete-open deferral (chat-autocomplete dropdown
+  # consumes Enter for "pick"), and Shift bail-out (newline). A 2026-05-15
+  # incident proved the old Ctrl/Cmd-Enter-only contract was a UX trap —
+  # users typed `1` + Enter to answer a permission menu and got silently
+  # stuck because the keystroke never reached the server.
   grep -Pq '<textarea[^>]*id="chat-input"' web/public/index.html \
     && pass "chat-input is a multi-line textarea" \
     || fail "chat-input is a multi-line textarea"
-  grep -Pzoq "key === 'Enter'[^}]*ctrlKey[^}]*metaKey" web/public/app.js \
-    && pass "Ctrl/Cmd+Enter sends chat message" \
-    || fail "Ctrl/Cmd+Enter sends chat message"
+  grep -q "Enter to send · Shift+Enter for newline" web/public/index.html \
+    && pass "chat-input placeholder advertises Enter-to-send" \
+    || fail "chat-input placeholder advertises Enter-to-send"
+  grep -Pzoq "key !== 'Enter'[\s\S]{0,400}shiftKey[\s\S]{0,200}submitChat\(\)" web/public/app.js \
+    && pass "Enter sends; Shift+Enter inserts newline" \
+    || fail "Enter sends; Shift+Enter inserts newline"
+  grep -Pzoq "key !== 'Enter'[\s\S]{0,200}isComposing" web/public/app.js \
+    && pass "chat send guards IME composition (isComposing)" \
+    || fail "chat send guards IME composition (isComposing)"
+  grep -Pzoq "key !== 'Enter'[\s\S]{0,400}chat-autocomplete" web/public/app.js \
+    && pass "chat send defers to open autocomplete dropdown" \
+    || fail "chat send defers to open autocomplete dropdown"
   grep -q 'function sendChatMessage' web/public/app.js && pass "sendChatMessage() defined" || fail "sendChatMessage() defined"
   # Regression: chat sends issued while the WS is reconnecting must NOT be
   # silently dropped — they should land in an outbound queue and drain on

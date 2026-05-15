@@ -3208,16 +3208,27 @@ function bindChatUi() {
     }
   }
 
-  // Plain Enter inserts a newline (textarea default). Ctrl/⌘+Enter sends.
-  // stopImmediatePropagation prevents the autocomplete keydown listener
-  // (registered after us in bindChatAutocomplete) from also running and
-  // picking an item against an already-cleared input.
+  // Enter sends, Shift+Enter inserts a newline — the dominant chat-app
+  // pattern (Slack/Discord/iMessage/Claude.ai/ChatGPT/etc). Ctrl/⌘+Enter
+  // still sends for back-compat with the prior shortcut. Three guards
+  // before we claim Enter:
+  //   1. IME composition: CJK / dead-key input — let the IME commit its
+  //      candidate first; never treat the commit-Enter as send.
+  //   2. Autocomplete open: the dropdown's own keydown listener
+  //      (registered later in bindChatAutocomplete) needs Enter to pick
+  //      the highlighted suggestion. Bail so its listener fires.
+  //   3. Shift+Enter: textarea-default newline for multi-line composing.
+  // stopImmediatePropagation on the actual send blocks the autocomplete
+  // listener from re-handling Enter against the already-cleared input.
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      submitChat();
-    }
+    if (e.key !== 'Enter') return;
+    if (e.isComposing || e.keyCode === 229) return;
+    const ac = document.getElementById('chat-autocomplete');
+    if (ac && !ac.hidden) return;
+    if (e.shiftKey) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    submitChat();
   });
 
   form.addEventListener('submit', (e) => {
