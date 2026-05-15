@@ -1524,10 +1524,24 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 3px;
   font-size: 0.72rem;
   flex-shrink: 0;
-  align-self: flex-start;
-  margin-top: 1px;
+  align-self: center;
   cursor: help;
   white-space: nowrap;
+}
+
+/* Actions row sits BELOW the [checkbox + id-chip + text] row in each
+   plan/test item, so a long body text doesn't compete with the
+   vote/comment/merged-badge/delete cluster for horizontal width. */
+.artifact-item-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+  margin-left: 28px;   /* indent under the checkbox so it visually attaches to the item */
+  flex-wrap: wrap;
+}
+.artifact-item-actions .artifact-item-delete {
+  margin-left: auto;  /* push delete to the right edge */
 }
 
 .artifact-item-delete {

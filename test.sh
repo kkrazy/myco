@@ -520,6 +520,15 @@ test_best_practices_template() {
   else
     pass "app.js: Apply handler no longer rebuilds the callout (no flicker)"
   fi
+  # Plan-item layout: actions (vote/comment/merged-badge/delete) live
+  # on their own row below the text so longer items don't get
+  # squeezed by the action cluster on the right.
+  grep -q "artifact-item-actions" web/public/app.js \
+    && pass "app.js: plan-item actions row class wired" \
+    || fail "app.js: plan-item actions row class wired"
+  grep -q "artifact-item-actions" web/public/styles.css \
+    && pass "styles.css: artifact-item-actions style present" \
+    || fail "styles.css: artifact-item-actions style present"
   # dedupePlanItems prompt enrichment: project CLAUDE.md + auto-memory
   # are inlined ahead of the item list so the LLM has project-specific
   # context when judging "same underlying concern".

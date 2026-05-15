@@ -3456,15 +3456,23 @@ function renderArtifact(type, artifact) {
     const mergedBadge = mergedFrom.length
       ? `<span class="artifact-item-merged" title="merged from: ${escHtml(mergedFrom.join(', '))}">⤴ merged from ${mergedFrom.length}</span>`
       : '';
+    // Top row carries the checkbox + id chip + body text (text takes
+    // all remaining width — no horizontal contention with the action
+    // icons). Actions row below carries vote / comment / merged-badge
+    // / delete so longer items aren't squeezed by a row of buttons on
+    // the right.
+    const actionsRow = `<div class="artifact-item-actions">
+        ${mergedBadge}
+        ${voteBlock}
+        <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
+      </div>`;
     return `<li class="${cls}" data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
         <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
         ${idChip}
         <span class="artifact-item-text">${escHtml(it.text || '')}</span>
-        ${mergedBadge}
-        ${voteBlock}
-        <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
       </div>
+      ${actionsRow}
       ${commentsBlock}
     </li>`;
   };
