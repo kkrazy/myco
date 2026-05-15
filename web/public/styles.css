@@ -3751,14 +3751,39 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   gap: 2px;
   padding: 4px 0 2px;
 }
+/* Chrome-row: a single event inside the expanded chrome batch.
+   .agent-chrome-row is the outer wrap (head + optional details);
+   .agent-chrome-row-head is the always-visible single line.
+   .agent-chrome-row-details holds the click-to-expand payload. */
 .agent-chrome-row {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--muted, #8b949e);
+}
+.agent-chrome-row-head {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 0.76rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  line-height: 1.45;
-  color: var(--muted, #8b949e);
+}
+.agent-chrome-row-expandable .agent-chrome-row-head {
+  cursor: pointer;
+  user-select: none;
+}
+.agent-chrome-row-expandable .agent-chrome-row-head:hover {
+  color: var(--fg, #c9d1d9);
+}
+/* Chevron only when this row has expandable details. */
+.agent-chrome-row-expandable .agent-chrome-row-head::after {
+  content: '▸';
+  margin-left: auto;
+  opacity: 0.55;
+  font-size: 0.66rem;
+  transition: opacity .12s ease;
+}
+.agent-chrome-row-expanded .agent-chrome-row-head::after {
+  content: '▾';
+  opacity: 0.85;
 }
 .agent-chrome-row .agent-card-ts {
   flex: 0 0 auto;
@@ -3773,6 +3798,51 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Details block — full payload, hidden when collapsed. Indents
+   under the head's timestamp + kind columns so the visual
+   hierarchy is clear. */
+.agent-chrome-row-collapsed .agent-chrome-row-details {
+  display: none;
+}
+.agent-chrome-row-expanded .agent-chrome-row-details {
+  margin: 4px 0 8px 18px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, .06);
+}
+.agent-chrome-pre {
+  background: rgba(0, 0, 0, .25);
+  padding: 6px 8px;
+  border-radius: 3px;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 320px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg, #c9d1d9);
+  margin: 2px 0;
+}
+.agent-chrome-pre-error {
+  border-left: 2px solid rgba(255, 130, 130, .65);
+}
+.agent-chrome-kv {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--fg, #c9d1d9);
+  padding: 2px 0;
+}
+.agent-chrome-result {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 2px solid rgba(76, 175, 130, .45);
+  background: rgba(76, 175, 130, .04);
+  border-radius: 3px;
+  font-size: 0.86rem;
+  line-height: 1.5;
 }
 
 /* Phase 2 — agent cards live inside #chat-messages now (single timeline).

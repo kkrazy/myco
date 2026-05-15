@@ -2694,12 +2694,16 @@ function _appendAgentEvent(ev) {
   pane.scrollTop = pane.scrollHeight;
 }
 
-// Render a one-line summary for a chrome event — what shows up inside
-// the chrome batch's expanded body. Each event gets its own row with
-// timestamp, kind chip, and a brief description.
+// Render a one-line summary for a chrome event inside the expanded
+// batch — and a click-to-expand details block for the full payload
+// (tool input JSON, tool result content, permission target, usage,
+// etc.). The outer .agent-chrome-row holds both the click target +
+// the details; toggling .expanded shows the details block.
 function _chromeEventLine(ev, ts) {
+  const wrap = document.createElement('div');
+  wrap.className = 'agent-chrome-row agent-chrome-row-collapsed';
   const row = document.createElement('div');
-  row.className = 'agent-chrome-row';
+  row.className = 'agent-chrome-row-head';
   let kind = ev.type || 'event';
   let summary = '';
   if (ev.type === 'session_ready') {
@@ -2763,7 +2767,94 @@ function _chromeEventLine(ev, ts) {
   row.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>` +
     `<span class="agent-chrome-kind agent-mute">${escHtml(kind)}</span>` +
     (summary ? `<span class="agent-chrome-summary agent-mute">${escHtml(summary)}</span>` : '');
-  return row;
+  wrap.appendChild(row);
+  // Detail block — rendered only if this event has structured payload
+  // worth surfacing on click. Hidden by default; toggled via the
+  // .expanded class on the wrap.
+  const detailsHtml = _chromeEventDetails(ev);
+  if (detailsHtml) {
+    const details = document.createElement('div');
+    details.className = 'agent-chrome-row-details';
+    details.innerHTML = detailsHtml;
+    wrap.appendChild(details);
+    wrap.classList.add('agent-chrome-row-expandable');
+    row.addEventListener('click', (e) => {
+      // Don't toggle if user clicks a link inside (rare, e.g.
+      // mermaid-rendered).
+      if (e.target.closest('a')) return;
+      // Don't toggle the OUTER chrome-batch card — stop propagation.
+      e.stopPropagation();
+      wrap.classList.toggle('agent-chrome-row-collapsed');
+      wrap.classList.toggle('agent-chrome-row-expanded');
+    });
+  }
+  return wrap;
+}
+
+// Render the full payload for a chrome event as HTML. Returns ''
+// when nothing structured to show (the head row carries everything).
+function _chromeEventDetails(ev) {
+  if (!ev || !ev.type) return '';
+  if (ev.type === 'tool_use') {
+    const input = ev.input == null ? {} : ev.input;
+    return `<pre class="agent-chrome-pre">${escHtml(JSON.stringify(input, null, 2))}</pre>`;
+  }
+  if (ev.type === 'tool_result') {
+    const content = String(ev.content || '');
+    if (!content) return '<span class="agent-mute">(empty result)</span>';
+    // Long results are scrollable inside the details pane via CSS
+    // max-height; truncating in JS would lose information.
+    return `<pre class="agent-chrome-pre${ev.isError ? ' agent-chrome-pre-error' : ''}">${escHtml(content)}</pre>`;
+  }
+  if (ev.type === 'turn_result') {
+    const u = ev.usage || {};
+    const lines = [];
+    if (ev.totalCostUsd != null) lines.push(`cost: $${ev.totalCostUsd.toFixed(4)}`);
+    lines.push(`tokens: in=${u.input_tokens || 0} out=${u.output_tokens || 0} cache-read=${u.cache_read_input_tokens || 0} cache-create=${u.cache_creation_input_tokens || 0}`);
+    if (ev.durationMs != null) lines.push(`duration: ${ev.durationMs}ms`);
+    if (ev.numTurns != null) lines.push(`turns: ${ev.numTurns}`);
+    const head = `<div class="agent-chrome-kv">${lines.map((l) => escHtml(l)).join('<br>')}</div>`;
+    const result = ev.result ? `<div class="agent-chrome-result">${renderMd(String(ev.result))}</div>` : '';
+    return head + result;
+  }
+  if (ev.type === 'permission_request' || ev.type === 'permission_resolved') {
+    const lines = [];
+    if (ev.toolName) lines.push(`tool: ${ev.toolName}`);
+    if (ev.hash) lines.push(`hash: ${String(ev.hash).slice(-12)}`);
+    if (ev.decision) lines.push(`decision: ${ev.decision}`);
+    if (ev.summary) lines.push(`target: ${ev.summary}`);
+    if (ev.question) lines.push(`question: ${ev.question}`);
+    if (ev.optionCount != null) lines.push(`options: ${ev.optionCount}`);
+    return `<div class="agent-chrome-kv">${lines.map((l) => escHtml(l)).join('<br>')}</div>`;
+  }
+  if (ev.type === 'hook_allow' || ev.type === 'hook_deny') {
+    const lines = [];
+    if (ev.toolName) lines.push(`tool: ${ev.toolName}`);
+    if (ev.pattern) lines.push(`matched pattern: ${ev.pattern}`);
+    if (ev.input != null) lines.push(`input: ${JSON.stringify(ev.input).slice(0, 200)}`);
+    return `<div class="agent-chrome-kv">${lines.map((l) => escHtml(l)).join('<br>')}</div>`;
+  }
+  if (ev.type === 'system_init' || ev.type === 'agent_init_snapshot') {
+    const lines = [];
+    if (ev.sdkSessionId) lines.push(`sdk-session: ${ev.sdkSessionId}`);
+    if (ev.model) lines.push(`model: ${ev.model}`);
+    if (Array.isArray(ev.tools)) lines.push(`tools: ${ev.tools.length} available`);
+    return `<div class="agent-chrome-kv">${lines.map((l) => escHtml(l)).join('<br>')}</div>`;
+  }
+  if (ev.type === 'turn_start') {
+    return `<pre class="agent-chrome-pre">${escHtml(String(ev.prompt || ''))}</pre>`;
+  }
+  if (ev.type === 'rate_limit') {
+    return `<pre class="agent-chrome-pre">${escHtml(JSON.stringify(ev, null, 2))}</pre>`;
+  }
+  // Unknown / catch-all — dump the JSON so power users can see what
+  // came through. Skips the timestamp + type which are already in
+  // the head row.
+  const rest = Object.fromEntries(
+    Object.entries(ev).filter(([k]) => k !== 'ts' && k !== 'type')
+  );
+  if (!Object.keys(rest).length) return '';
+  return `<pre class="agent-chrome-pre">${escHtml(JSON.stringify(rest, null, 2))}</pre>`;
 }
 
 // Create a brand-new chrome batch card for an incoming chrome event.
@@ -3907,7 +3998,14 @@ function bindChatAutocomplete() {
   }
 
   input.addEventListener('input', refresh);
-  input.addEventListener('focus', refresh);
+  input.addEventListener('focus', () => {
+    // Prewarm the /users + /commands cache so the first `@` or `/`
+    // typed renders instantly. refresh() will close the dropdown
+    // since the input has no active token yet — that's fine, the
+    // cache is now hot for the next keystroke.
+    _loadAcData();
+    refresh();
+  });
   input.addEventListener('blur', () => setTimeout(close, 120));   // allow click-pick
 
   input.addEventListener('keydown', (e) => {
