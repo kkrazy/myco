@@ -2546,7 +2546,7 @@ test_chat_window() {
   # the next permission broadcast piled on top of a zombie. Route
   # through handleMenuPick (which calls _markMenuChatAnswered first,
   # THEN resolves the SDK promise) so both sides converge.
-  grep -Pzoq "bare-digit menu pick[\s\S]{0,1500}handleMenuPick\(sessionId" server/src/pty.js \
+  grep -Pzoq "(?i)bare-digit menu pick[\s\S]{0,2000}handleMenuPick\(sessionId" server/src/pty.js \
     && pass "pty.js: bare-digit chat shortcut routes through handleMenuPick" \
     || fail "pty.js: bare-digit chat shortcut bypasses handleMenuPick"
   # Companion regression: when claude broadcasts a NEW canUseTool
