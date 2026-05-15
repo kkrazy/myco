@@ -123,6 +123,22 @@ function collectEvents(session, { until, timeoutMs = 60000 }) {
     session.kill();
   });
 
+  await t('constructor emits session_ready on the next tick so the pane isn\'t empty', async () => {
+    const s = new AgentSession('test-ready-1', { cwd: process.cwd() });
+    const events = await new Promise((resolve) => {
+      const got = [];
+      s.on('agent-event', (e) => { got.push(e); if (got.length >= 1) resolve(got); });
+      setTimeout(() => resolve(got), 200);
+    });
+    assert.ok(events.length >= 1, 'expected at least one event before any write');
+    assert.strictEqual(events[0].type, 'session_ready');
+    assert.strictEqual(events[0].cwd, process.cwd());
+    // Ring-buffer replay should also carry it (so reconnects see it too).
+    assert.ok(s.buffer.some((e) => e.type === 'session_ready'),
+      'session_ready should land in the per-session ring buffer for replay');
+    s.kill();
+  });
+
   await t('class shape — exposes the same surface PtySession does', () => {
     const s = new AgentSession('test-sess-3', { cwd: process.cwd() });
     // No initialPrompt → idle until first write().
