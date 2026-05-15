@@ -3299,32 +3299,27 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    card header, the option buttons are flat rows inside the same
    bordered container, and a hint footer sits below. The
    `chat-msg-menu` class is added by renderChatMessage in app.js. */
+/* Menu chat row — no border, no background fill. The perm-modal
+   popup is the action surface; the chat row is just history + a
+   "↗ open in popup" deferred hint (yellow, set by .chat-menu-deferred
+   below). Inline content keeps the chat-msg defaults so menu rows
+   sit visually flat next to regular chat bubbles. */
 .chat-msg.chat-msg-menu {
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-left: 3px solid #d29922;
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
-/* Active (unanswered) menu chat row — quiet attention cue (left
-   accent + subtle tint). The pulsing border, sticky-bottom pin, and
-   inline option buttons were retired in Phase 2.5 in favour of the
-   perm-modal popup, which now owns the entire picker UX. The chat
-   row is history + a re-entry hint ("↗ open in popup"). */
 .chat-msg.chat-msg-menu:not(.chat-msg-menu-collapsed) {
-  background: linear-gradient(180deg, rgba(210, 153, 34, .08) 0%, rgba(210, 153, 34, .03) 100%);
-  border-color: rgba(210, 153, 34, .30);
-  border-left-width: 4px;
-  border-left-color: #f0b440;
+  background: transparent;
+  border: none;
 }
 .chat-msg.chat-msg-menu .chat-text {
   background: transparent;
-  border-left: none;
-  border-right: none;
+  border: none;
   border-radius: 0;
-  margin: 0 0 6px 0;
-  padding: 0 0 6px 0;
-  border-bottom: 1px solid #21262d;
+  margin: 0 0 4px 0;
+  padding: 0;
 }
 /* Compact resolved-line that REPLACES the option-buttons block once
    the menu is answered. Same selector also handles the "↗ open in
@@ -3350,8 +3345,9 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    This keeps the chat history from being dominated by tall picker cards
    long after the decision was made. */
 .chat-msg.chat-msg-menu.chat-msg-menu-collapsed {
-  border-left-color: #30363d;   /* drop the yellow attention accent */
-  padding: 6px 10px;
+  /* Resolved menus are already flat — no extra border tweaks needed
+     since the base .chat-msg-menu rule above zeroed everything. */
+  padding: 0;
 }
 .chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-menu-resolved {
   margin-top: 0;
