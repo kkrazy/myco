@@ -3430,10 +3430,22 @@ function renderArtifact(type, artifact) {
           <button type="submit" class="artifact-comment-send">Post</button>
         </form>
       </div>` : '';
+    // Surface the id (fr-N / td-N / bug-N or legacy hex) and the
+    // merged-from badge so users can see at-a-glance which items got
+    // absorbed by /merge or the plan-refresh dedupe Apply flow.
+    // mergedFrom is set by slashcmds.mergePlanItems; absent on
+    // never-merged items.
+    const idChip = it.id ? `<code class="artifact-item-id">${escHtml(it.id)}</code>` : '';
+    const mergedFrom = Array.isArray(it.mergedFrom) ? it.mergedFrom : [];
+    const mergedBadge = mergedFrom.length
+      ? `<span class="artifact-item-merged" title="merged from: ${escHtml(mergedFrom.join(', '))}">⤴ merged from ${mergedFrom.length}</span>`
+      : '';
     return `<li class="${cls}" data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
         <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
+        ${idChip}
         <span class="artifact-item-text">${escHtml(it.text || '')}</span>
+        ${mergedBadge}
         ${voteBlock}
         <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
       </div>

@@ -1502,6 +1502,34 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .artifact-item-text { flex: 1; white-space: pre-wrap; word-break: break-word; }
 
+/* id chip + merged-from badge. The chip sits between the checkbox and
+   the body text; the badge sits AFTER the text and shows count + the
+   list of absorbed ids on hover. */
+.artifact-item-id {
+  background: rgba(140, 140, 160, .15);
+  color: var(--muted);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.artifact-item-merged {
+  background: rgba(220, 180, 90, .15);
+  color: rgba(220, 180, 90, .95);
+  border: 1px solid rgba(220, 180, 90, .35);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 1px;
+  cursor: help;
+  white-space: nowrap;
+}
+
 .artifact-item-delete {
   background: transparent;
   color: var(--muted);

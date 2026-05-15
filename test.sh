@@ -495,6 +495,17 @@ test_best_practices_template() {
   grep -q "plan-merge-callout" web/public/styles.css \
     && pass "styles.css: plan-merge-callout style present" \
     || fail "styles.css: plan-merge-callout style present"
+  # Plan-item row now surfaces the id chip + merged-from badge so users
+  # can see at-a-glance which items got merged.
+  grep -q "artifact-item-id" web/public/app.js \
+    && pass "app.js: plan-item id chip rendered" \
+    || fail "app.js: plan-item id chip rendered"
+  grep -q "artifact-item-merged" web/public/app.js \
+    && pass "app.js: plan-item merged-from badge rendered" \
+    || fail "app.js: plan-item merged-from badge rendered"
+  grep -q "artifact-item-merged" web/public/styles.css \
+    && pass "styles.css: artifact-item-merged style present" \
+    || fail "styles.css: artifact-item-merged style present"
   # One-shot migration: rewrites pre-ca9bcf1 hex-id plan items to
   # fr-N/td-N/bug-N (addedAt order). Idempotent.
   [ -x migrate-plan-ids.js ] \
