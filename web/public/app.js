@@ -201,16 +201,14 @@ function _hideMainPaneSiblings(keep) {
   if (window.innerWidth <= 900 && state.chatPaneVisible) setChatPane(false);
 }
 
-function showConversationView() {
-  _hideMainPaneSiblings('conversation-wrap');
-  document.getElementById('conversation-wrap').hidden = false;
-  updateChatButton();
-  // Always land on the latest content when the conv pane opens. While
-  // the pane was hidden it had 0 height, so any earlier scrollConvToBottom
-  // call was effectively a no-op; without this re-pin the user sees the
-  // top of the transcript on each show.
-  scrollConvToBottom();
-}
+// Phase 9 step 3: the JSONL transcript pane (#conversation-wrap) is
+// gone. These three helpers stay as no-ops so legacy call sites
+// don't bomb on missing DOM nodes. The chatpane is the only view
+// left, and openSession / the 'viewer-mode' WS handler call
+// setChatPane(true) directly.
+function showConversationView() { /* retired with #conversation-wrap */ }
+function showTranscriptView()  { /* retired — chatpane is the only view */ }
+function showTranscriptWaiting() { /* retired — chatpane shows live state */ }
 
 function showTerminalView() {
   _hideMainPaneSiblings('terminal-wrap');
@@ -227,30 +225,10 @@ function showTerminalView() {
 // transcript viewer." For owners this also flips state.previewAsViewer
 // so the artifact-toggle/main-view machinery treats us as being in
 // readonly mode (matches what 👁 preview does when toggling INTO
-// readonly). Mutually-exclusive with the artifact / files panes via
-// _hideMainPaneSiblings inside showConversationView.
-function showTranscriptView() {
-  showConversationView();
-  state.previewAsViewer = true;
-  document.getElementById('btn-preview-readonly')?.classList.add('active');
-  document.getElementById('btn-transcript')?.classList.add('active');
-  // Clear active class from sibling chrome buttons so the active-state
-  // indicator stays at most on one icon. Files/artifact panes get
-  // hidden by showConversationView → _hideMainPaneSiblings.
-  for (const id of ['btn-files', 'btn-plan', 'btn-arch', 'btn-test']) {
-    document.getElementById(id)?.classList.remove('active');
-  }
-}
-
-function showTranscriptWaiting() {
-  showConversationView();
-  const content = document.getElementById('conv-content');
-  if (content) content.innerHTML = '<div class="conv-waiting">Waiting for session to start...</div>';
-  // Re-attach a pending-menu callout (if any) — innerHTML wipe just
-  // dropped it. Keeps trust-folder / plan / permission dialogs visible
-  // while the JSONL transcript is still empty.
-  _renderPendingMenuCallout();
-}
+// Phase 9 step 3 retired showTranscriptView + showTranscriptWaiting
+// — both rendered into the now-deleted #conversation-wrap. They live
+// as no-ops above next to showConversationView so any remaining
+// click handlers / WS-frame branches don't crash.
 
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
