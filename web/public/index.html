@@ -187,8 +187,8 @@
     <div id="spawn-dialog">
       <h2>New session</h2>
       <div id="spawn-workspace">Workspace: <code id="spawn-ws-path">…</code></div>
-      <label>Subdirectory (relative to workspace, blank = root)
-        <input id="spawn-cwd" type="text" placeholder="ASCII only (a-z, 0-9, -, _, /)" autocomplete="off" pattern="[\x20-\x7E]*" title="ASCII characters only — no CJK, emoji, or other non-ASCII" />
+      <label>Display name (optional)
+        <input id="spawn-cwd" type="text" placeholder="e.g. 'rust experiment' (the actual folder is auto-named after the session id)" autocomplete="off" maxlength="80" title="Friendly label shown in the sessions list. The session always runs in /wks/<you>/<session-id>/." />
       </label>
       <div id="spawn-suggestions"></div>
       <!-- Driver toggle. Default (unchecked) = Claude Agent SDK

@@ -1309,20 +1309,37 @@ test_new_session_readonly() {
   # plus a submit-time NON_ASCII_RE.test() gate that returns an inline
   # error rather than silently mangling the cwd. The pattern attribute
   # on the input element backs both with HTML5-level form validation.
+  # Phase 2.6: the spawn-cwd input is now a FREE-FORM display label
+  # (the actual folder is auto-named after the session id, so the
+  # pre-2026-05-15 ASCII-path validation no longer applies). The
+  # NON_ASCII_RE helpers stay defined because doSpawn still strips
+  # path-illegal characters defensively, but the input pattern + the
+  # hard-reject at submit have been retired in favour of a friendly
+  # label that can be anything.
   grep -qF 'NON_ASCII_RE' web/public/app.js \
-    && pass "app.js: NON_ASCII_RE defined for spawn-modal validation" \
-    || fail "app.js: NON_ASCII_RE missing — non-ASCII cwd would reach the server"
-  grep -qF '_stripNonAsciiOnInput' web/public/app.js \
-    && pass "app.js: live input filter wired on spawn-cwd" \
-    || fail "app.js: _stripNonAsciiOnInput missing — non-ASCII chars stay in the field"
-  if awk '/^async function doSpawn\(/,/^}$/' web/public/app.js | grep -q 'NON_ASCII_RE.test(rawCwd)'; then
-    pass "app.js: doSpawn rejects non-ASCII cwd at submit time"
-  else
-    fail "app.js: doSpawn does not validate cwd as ASCII before POST /sessions"
-  fi
-  grep -qF 'pattern="[\x20-\x7E]*"' web/public/index.html \
-    && pass "index.html: spawn-cwd input has ASCII pattern attribute" \
-    || fail "index.html: spawn-cwd pattern attribute missing — browser won't visually flag invalid input"
+    && pass "app.js: NON_ASCII_RE still defined (defensive stripping)" \
+    || fail "app.js: NON_ASCII_RE removed — should stay for defensive stripping"
+  # Session id is the folder name. spawnSession must compute id BEFORE
+  # building absCwd and use it as the folder. Verified end-to-end by
+  # the persistence smoke test below.
+  grep -Pzoq "absCwd = path\.join\(userRootDir, id\)" server/src/sessions.js \
+    && pass "sessions.js: spawnSession uses session id as folder name" \
+    || fail "sessions.js: spawnSession does not use session id as folder"
+  grep -q 'placeholder="e.g.' web/public/index.html \
+    && pass "index.html: spawn-cwd input relabelled as Display name (optional)" \
+    || fail "index.html: spawn-cwd input still labelled as Subdirectory"
+  # Per-session memory: redirect the SDK auto-memory directory into the
+  # session's own .claude/memory/ instead of the shared
+  # $HOME/.claude/projects/<sanitized-cwd>/memory/. settingSources
+  # excludes 'user' so the global settings.json doesn't bleed across
+  # sessions; project + local stay so per-session .claude/settings*.json
+  # still drives per-project config.
+  grep -q "autoMemoryDirectory" server/src/agent-session.js \
+    && pass "agent-session: per-session autoMemoryDirectory" \
+    || fail "agent-session: autoMemoryDirectory not set"
+  grep -Pzoq "settingSources:\s*\['project',\s*'local'\]" server/src/agent-session.js \
+    && pass "agent-session: settingSources scoped to project+local" \
+    || fail "agent-session: settingSources still loading shared 'user' tier"
   # Safety net: if a brand-new session lands on the readonly view and
   # neither a menu callout nor any transcript content arrives within
   # READONLY_FALLBACK_MS, auto-flip back to the live xterm so the user

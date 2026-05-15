@@ -355,9 +355,15 @@ async function listSessions(forUser) {
   const filtered = forUser ? all.filter((r) => r.user === forUser) : all;
   return Promise.all(filtered.map(async (r) => {
     const info = await readDescriptionForCwd(r.absCwd, r);
+    // Display label preference: explicit rec.label (set on spawn) →
+    // r.cwd for legacy sessions whose cwd was the user-typed name →
+    // id-shortid as a last resort. The client renders s.name as the
+    // session-list title.
+    const displayName = r.label || r.cwd || r.id;
     return {
       id: r.id,
-      name: r.id,
+      name: displayName,
+      label: r.label || null,            // raw friendly label (null if unset)
       cwd: r.cwd,
       abs_cwd: r.absCwd,
       description: info?.description || null,
@@ -370,12 +376,23 @@ async function listSessions(forUser) {
 }
 
 async function spawnSession(rawCwd, user = 'default', opts = {}) {
-  const absCwd = resolveCwd(rawCwd, user);
-  const dup = Object.values(loadStore().sessions).find((r) => r.user === user && r.absCwd === absCwd);
-  if (dup) throw new Error(`A session already exists for "${toRel(absCwd, user)}"`);
-
   const safeUser = (user || 'default').replace(/[^a-zA-Z0-9_-]/g, '');
   const id = `myco-${safeUser}-${shortId()}`;
+  // Session id IS the folder name (per the 2026-05-15 product decision).
+  // Predictable, collision-proof, and gives every session a clean slate
+  // at /wks/<user>/<session-id>/. The rawCwd field from the spawn modal
+  // is now an OPTIONAL friendly label stored on rec.label — it has no
+  // path semantics. Existing sessions with arbitrary rec.cwd values
+  // (e.g. "test006", "myco") keep working; only NEW spawns route
+  // through the id-as-folder rule.
+  const userRootDir = userRoot(user);
+  if (!fs.existsSync(userRootDir)) fs.mkdirSync(userRootDir, { recursive: true });
+  const absCwd = path.join(userRootDir, id);
+  fs.mkdirSync(absCwd, { recursive: true });
+  // Free-form display label. Empty string / whitespace → no label.
+  const labelRaw = (typeof rawCwd === 'string' ? rawCwd.trim() : '');
+  const label = labelRaw ? labelRaw.slice(0, 80) : null;
+
   const cols = clamp(opts.cols, 20, 300, 120);
   const rows = clamp(opts.rows, 10, 200, 30);
   const createdAt = new Date().toISOString();
@@ -396,7 +413,7 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   const envDefault = process.env.MYCO_DEFAULT_MODE === 'pty' ? 'pty' : 'agent';
   const mode = explicit || envDefault;
 
-  const record = { id, user, cwd: toRel(absCwd, user), absCwd, claudeSessionId: null, createdAt, mode };
+  const record = { id, user, cwd: toRel(absCwd, user), absCwd, label, claudeSessionId: null, createdAt, mode };
   putSession(record);
 
   // Inject the myco best-practices template into the project's CLAUDE.md

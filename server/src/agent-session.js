@@ -19,6 +19,7 @@
 
 const { EventEmitter } = require('events');
 const crypto = require('crypto');
+const path = require('path');
 const { query } = require('@anthropic-ai/claude-agent-sdk');
 
 const MAX_EVENTS = 500;
@@ -201,6 +202,18 @@ class AgentSession extends EventEmitter {
           hooks: [(input, toolUseID, ctx) => this._preToolUseHook(input, toolUseID, ctx)],
         }],
       },
+      // Per-session memory + project settings: redirect the SDK's
+      // auto-memory directory from the default $HOME/.claude/projects/
+      // <sanitized-cwd>/memory/ into the session's own .claude/memory/.
+      // settingSources excludes 'user' so the shared $HOME/.claude/
+      // settings.json doesn't leak across sessions; project + local
+      // remain so .claude/settings.json + .claude/settings.local.json
+      // inside the session folder still drive per-project config.
+      settings: {
+        autoMemoryEnabled: true,
+        autoMemoryDirectory: path.join(this.cwd, '.claude', 'memory'),
+      },
+      settingSources: ['project', 'local'],
     };
     if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
 

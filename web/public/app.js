@@ -876,18 +876,14 @@ async function refreshWorkspace() {
 }
 
 function renderSpawnSuggestions() {
+  // Per the 2026-05-15 id-as-folder rule, the spawn-cwd input is a
+  // free-form display label, not a path. Pre-filling it with an
+  // existing folder name would be misleading (clicking a chip used
+  // to point the session at that folder; now it just sets the
+  // display label). Hide the chip strip — keep the wrap element in
+  // the DOM so the spawn modal CSS doesn't reflow.
   const wrap = document.getElementById('spawn-suggestions');
-  wrap.innerHTML = '';
-  if (!state.workspace?.entries?.length) return;
-  for (const name of state.workspace.entries) {
-    const chip = document.createElement('button');
-    chip.className = 'dir-chip';
-    chip.textContent = name;
-    chip.addEventListener('click', () => {
-      document.getElementById('spawn-cwd').value = name;
-    });
-    wrap.appendChild(chip);
-  }
+  if (wrap) wrap.innerHTML = '';
 }
 
 // ── sessions list ─────────────────────────────────────────────────────────────
@@ -941,7 +937,12 @@ function renderSessionList() {
     if (readOnly) li.classList.add('shared');
     if (s.status) li.dataset.status = s.status;
     li.dataset.id = s.id;
-    const dirName = (s.cwd || '').split('/').filter(Boolean).pop() || s.cwd || '~';
+    // Display label: prefer the friendly s.name (server returns
+    // rec.label or falls back to rec.cwd). Old sessions whose cwd
+    // was the user-typed folder name continue to display unchanged;
+    // new sessions whose folder = session-id show rec.label here
+    // (or the short id as a final fallback).
+    const dirName = s.name || (s.cwd || '').split('/').filter(Boolean).pop() || s.cwd || '~';
     const idShort = s.id.replace(/^myco-/, '').slice(0, 8);
     const summary = s.summary
       ? `<span class="session-summary">${escHtml(s.summary)}</span>`
