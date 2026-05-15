@@ -737,14 +737,21 @@ function _isWizardActive(session) { return _detectWizard(session).kind !== 'none
 function handleMenuToggle(sessionId, session, n, hash) {
   if (!Number.isFinite(n) || n < 1 || n > 9) return;
   if (!session || !session.alive) return;
-  // Agent-mode (SDK-driven) toggle: no PTY navigation, just flip the
-  // option's .checked state on the AgentSession's pending entry so
-  // Submit can gather the final set. The chat-row's persisted state
-  // is also updated for reconnect visibility.
-  if (session.mode === 'agent' && typeof session.resolveMenuToggle === 'function' && hash) {
-    const handled = session.resolveMenuToggle(hash, n);
-    if (handled) _toggleMenuChatCheckbox(sessionId, n, hash);
-    console.log(`[menu-toggle] ${sessionId} mode=agent hash=${hash.slice(-12)} n=${n} handled=${handled}`);
+  // Agent-mode (SDK-driven) toggle: no PTY navigation. Just delegate
+  // to _toggleMenuChatCheckbox which mutates
+  // rec.chat[i].meta.menu.options[k].checked AND emits a state-update.
+  // Critical: the AgentSession's pending.options array is the SAME
+  // object reference as the chat row's menu.options, so the single
+  // in-place mutation propagates to BOTH the persisted record and the
+  // live pending entry that resolveMenuSubmit reads from later. An
+  // earlier draft called session.resolveMenuToggle here too, double-
+  // flipping the .checked bit — the user saw the checkbox tick on,
+  // then immediately un-tick when the state-update echo arrived
+  // (mycobeta test006 2026-05-15: "checkbox is unchecked immediately
+  // after click").
+  if (session.mode === 'agent' && hash) {
+    _toggleMenuChatCheckbox(sessionId, n, hash);
+    console.log(`[menu-toggle] ${sessionId} mode=agent hash=${hash.slice(-12)} n=${n}`);
     return;
   }
   const pending = session.pendingMenu;

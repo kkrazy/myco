@@ -2606,9 +2606,14 @@ test_chat_window() {
   grep -Pzoq "isMulti[^}]{0,300}checkbox: true" server/src/agent-session.js \
     && pass "agent-session: multi-select options flagged checkbox=true" \
     || fail "agent-session: multi-select options missing checkbox flag"
-  grep -Pzoq "session\.mode === 'agent'[\s\S]{0,400}resolveMenuToggle" server/src/pty.js \
-    && pass "pty.js: handleMenuToggle has agent-mode branch" \
-    || fail "pty.js: handleMenuToggle missing agent-mode branch"
+  # Agent-mode toggle must NOT also call session.resolveMenuToggle —
+  # that would double-flip the option (the chat row's options array
+  # is the same object reference as the AgentSession's pending entry).
+  # Verified live on test006 2026-05-15: "checkbox is unchecked
+  # immediately after click on".
+  grep -Pzoq "session\.mode === 'agent'[\s\S]{0,400}_toggleMenuChatCheckbox" server/src/pty.js \
+    && pass "pty.js: handleMenuToggle has agent-mode branch (single flip via chat-checkbox)" \
+    || fail "pty.js: handleMenuToggle missing agent-mode single-flip branch"
   grep -Pzoq "session\.mode === 'agent'[\s\S]{0,400}resolveMenuSubmit" server/src/pty.js \
     && pass "pty.js: handleMenuSubmit has agent-mode branch" \
     || fail "pty.js: handleMenuSubmit missing agent-mode branch"
