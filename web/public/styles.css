@@ -1218,70 +1218,49 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    especially on mobile where chatpane width is 100% and z-index:30). */
 #chatpane[hidden] { display: none !important; }
 
+/* Phase 3 — single centered column. The chatpane fills the entire
+   main pane (no longer a right-anchored sidebar) and its contents are
+   centered with a comfortable max-width. The empty margins still
+   belong to the chatpane (same background), so the pane reads as one
+   cohesive surface. Artifact panes (plan/arch/test/files) overlay the
+   same area via .artifact-main-view {inset: 0}, so opening an
+   artifact tab covers the conversation without geometry math. */
 #chatpane.chat-main-view {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 0;
-  width: var(--chatpane-w);
+  inset: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface);
   padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
-  border-left: 1px solid var(--border);
-  /* Above the underlying main-pane views (terminal/conv/plan/arch/test)
-     but below the floating chrome cluster (z:50) so files/plan/arch/test
-     toggles remain clickable while chat is open. */
   z-index: 30;
-  /* Clip any descendant that spills horizontally — only #chat-messages
-     should ever produce a (vertical) scrollbar, and only when the chat
-     history actually exceeds the viewport. */
   overflow: hidden;
 }
-@media (max-width: 900px) {
-  /* On mobile screens the sidebar fills the pane — desktop's "see the
-     terminal alongside chat" doesn't fit. */
-  #chatpane.chat-main-view {
-    width: 100%;
-    border-left: none;
-  }
-}
-
-/* Drag handle on the chatpane's LEFT edge — desktop only. Drag left to
-   grow, right to shrink. Width persisted to localStorage as the
-   --chatpane-w CSS variable. Hidden on mobile (chatpane fills pane). */
-#chatpane-resize {
-  position: absolute;
-  left: -3px;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  background: transparent;
-  z-index: 35;
-  transition: background-color .12s;
-  touch-action: none;
-}
-#chatpane-resize:hover,
-#chatpane-resize.dragging { background: rgba(120, 160, 230, .35); }
-@media (max-width: 900px) { #chatpane-resize { display: none; } }
-
-/* Desktop only: when chat is open, the underlying view (terminal /
-   conversation / files / plan / arch / test) gets pushed LEFT (its
-   right edge moved in) by the chatpane sidebar's width so its content
-   stays fully visible to the left of the sidebar instead of being
-   covered. Mobile is unaffected because the sidebar takes the whole
-   pane there. */
+/* Center the conversation column on wide screens; max-width keeps long
+   lines readable and the chevron-collapse cards from sprawling. */
 @media (min-width: 901px) {
-  #terminal-pane.chat-open #terminal-wrap,
-  #terminal-pane.chat-open #conversation-wrap,
-  #terminal-pane.chat-open #files-wrap {
-    margin-right: var(--chatpane-w);
-  }
-  #terminal-pane.chat-open .artifact-main-view {
-    right: var(--chatpane-w);
+  #chatpane.chat-main-view #chat-messages,
+  #chatpane.chat-main-view #chat-form,
+  #chatpane.chat-main-view #claude-typing,
+  #chatpane.chat-main-view #chat-autocomplete,
+  #chatpane.chat-main-view #chat-empty {
+    width: 100%;
+    max-width: 880px;
+    margin-left: auto;
+    margin-right: auto;
   }
 }
+
+/* Phase 3 retired the chatpane-resize handle. The chatpane fills the
+   full main-pane width; resizing has no meaning in a centered-column
+   layout. The element stays in the DOM for back-compat but is hidden
+   from layout and pointer events. */
+#chatpane-resize { display: none; }
+
+/* Phase 3 also retired the "push the underlying view left when chat
+   is open" rule. The chatpane fills the main pane completely now, so
+   the artifact / terminal views don't need a margin-right reserved
+   for it. .artifact-main-view sits at inset: 0 and overlays the chat
+   cleanly via z-index ordering (artifacts above when active). */
 
 /* Tab bar inside the chatpane header. Holds Discussion / Plan / Arch / Test. */
 #chatpane-tabs {
@@ -2133,6 +2112,21 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding: 16px;
   font-size: 1rem;
   line-height: 1.5;
+}
+/* Phase 3 — center the artifact column the same way the chatpane is
+   centered, so opening Plan / Arch / Test feels visually continuous
+   with the conversation underneath. The whole artifact-main-view
+   surface (background) still fills the main pane edge-to-edge; only
+   the header + body content are constrained to the same 880px lane. */
+@media (min-width: 901px) {
+  .artifact-main-view .artifact-header,
+  .artifact-main-view .artifact-body {
+    width: 100%;
+    max-width: 880px;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+  }
 }
 
 /* ── per-session file explorer (code-review polish) ──────────────────────── */
