@@ -3601,35 +3601,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    The whole card body is now toggled via the head's click handler and
    the .agent-card-expanded / .agent-card-collapsed classes above. */
 
-.agent-status-strip {
-  padding: 6px 14px;
-  font-size: 0.75rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--muted, #8b949e);
-  border-top: 1px solid #21262d;
-  background: rgba(255, 255, 255, .02);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.agent-status-strip[hidden] { display: none; }
-.agent-status-strip .ass-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #d29922;
-  margin-right: 6px;
-  vertical-align: 1px;
-  animation: ass-pulse 1.4s ease-in-out infinite;
-}
-@keyframes ass-pulse {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .agent-status-strip .ass-dot { animation: none; opacity: 0.8; }
-}
+/* (Retired — #agent-status-strip was merged into #claude-typing.
+   The unified indicator's existing dots animation + label slot
+   carry both 'agent is busy' (chrome) and 'claude is writing'
+   (assistant_text) signals now.) */
 
 /* Phase 9 step 3 — read-only banner sits at the top of the chatpane
    for guest / share-token viewers. Compact single row; sticky to the

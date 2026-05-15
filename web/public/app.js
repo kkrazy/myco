@@ -2455,49 +2455,65 @@ const AGENT_CHROME_TYPES = new Set([
   'turn_result',
 ]);
 
-// Single-line live status strip above the chat input. Updated by
-// every agent event so the user always knows what the agent is doing
-// right now without scrolling the timeline. Clears on turn_result
-// (claude finished) or after 20s of no chrome activity (idle).
-let _agentStatusIdleTimer = null;
+// Unified live indicator: every agent activity (tool_use, tool_result,
+// permission, assistant_text streaming, etc.) updates the
+// #claude-typing slot above the chat input. The "..." dots keep
+// pulsing as long as something is active; the label updates to the
+// most recent chrome event ("$ npm test", "perm asked · Bash",
+// "claude is writing", …). turn_result success retires after a 3s
+// grace; fatal stays red until the next event. assistant_text fixes
+// the label to "claude is writing" so the dots aren't fighting with
+// stale chrome text while the reply streams.
+let _agentStatusGraceTimer = null;
 function _updateAgentStatusStrip(ev) {
-  const strip = document.getElementById('agent-status-strip');
-  if (!strip || !ev || !ev.type) return;
-  if (_agentStatusIdleTimer) { clearTimeout(_agentStatusIdleTimer); _agentStatusIdleTimer = null; }
-  let label = '';
+  if (!ev || !ev.type) return;
+  if (_agentStatusGraceTimer) { clearTimeout(_agentStatusGraceTimer); _agentStatusGraceTimer = null; }
   if (ev.type === 'turn_result') {
-    // Claude finished — show a brief "done" then auto-clear.
-    if (ev.subtype === 'success') label = '✓ done';
-    else if (ev.subtype) label = '■ ' + ev.subtype;
-    if (label) {
-      strip.innerHTML = `<span class="ass-dot" style="background:#3fb950"></span>${escHtml(label)}`;
-      strip.hidden = false;
-      _agentStatusIdleTimer = setTimeout(() => { strip.hidden = true; strip.innerHTML = ''; }, 3000);
+    if (ev.subtype === 'success') {
+      state.claudeStatusLine = '✓ done';
+    } else if (ev.subtype) {
+      state.claudeStatusLine = '■ ' + ev.subtype;
     } else {
-      strip.hidden = true; strip.innerHTML = '';
+      state.claudeStatusLine = '';
     }
-    return;
-  }
-  if (ev.type === 'assistant_text') {
-    // claude is writing the reply — the chat-typing dots cover this
-    // explicit state, hide the strip so we don't double-up.
-    strip.hidden = true; strip.innerHTML = '';
+    state.claudeStatus = null;
+    state.awaitingClaude = !!state.claudeStatusLine;
+    _renderClaudeTyping();
+    // Brief grace period showing "✓ done" / "■ subtype" before the
+    // dots retire — gives the user a clear "claude finished" cue.
+    _agentStatusGraceTimer = setTimeout(() => {
+      state.claudeStatusLine = '';
+      _retireClaudeTyping();
+    }, 3000);
     return;
   }
   if (ev.type === 'fatal') {
-    strip.innerHTML = `<span class="ass-dot" style="background:#ff8282"></span>⚠ fatal · ${escHtml(String(ev.error || '').split('\n')[0].slice(0, 80))}`;
-    strip.hidden = false;
+    state.claudeStatusLine = '⚠ fatal · ' + String(ev.error || '').split('\n')[0].slice(0, 80);
+    state.claudeStatus = null;
+    state.awaitingClaude = true;
+    _renderClaudeTyping();
+    return;
+  }
+  if (ev.type === 'assistant_text') {
+    // Claude is generating its reply — pin the label so it doesn't
+    // flap with stale chrome text while the markdown streams.
+    state.claudeStatusLine = 'claude is writing';
+    state.awaitingClaude = true;
+    _renderClaudeTyping();
     return;
   }
   if (_isChromeEvent(ev)) {
-    label = _chromeShortLabel(ev);
+    const label = _chromeShortLabel(ev);
+    if (!label) return;
+    state.claudeStatusLine = label;
+    state.claudeStatus = null;
+    state.awaitingClaude = true;
+    _renderClaudeTyping();
+    // Refresh the 30s idle-check that _markAwaitingClaude usually
+    // schedules — without this, the indicator clears in 30s even if
+    // claude is still busy.
+    _scheduleClaudeIdleCheck();
   }
-  if (!label) return;
-  strip.innerHTML = `<span class="ass-dot"></span>${escHtml(label)}`;
-  strip.hidden = false;
-  // Auto-hide after 20s of no chrome activity — keeps the strip from
-  // dangling on a stale "$ git status" line after the run finished.
-  _agentStatusIdleTimer = setTimeout(() => { strip.hidden = true; strip.innerHTML = ''; }, 20000);
 }
 
 // All tool_use events fold into the chrome batch. The per-call
