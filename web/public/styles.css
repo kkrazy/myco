@@ -2072,6 +2072,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: var(--bg);
   padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
   box-sizing: border-box;
+  /* Sit above the chatpane (z-index:30) so opening Plan/Arch/Test
+     actually covers the conversation. Without this the chatpane
+     still painted on top and the chrome-icon click looked dead. */
+  z-index: 31;
 }
 .artifact-main-view .artifact-header {
   padding: 10px 16px;
@@ -2102,11 +2106,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 /* ── per-session file explorer (code-review polish) ──────────────────────── */
 
 #files-wrap {
-  flex: 1;
+  position: absolute;
+  inset: 0;
   display: flex;
   min-height: 0;
   overflow: hidden;
-  background: #0d1117;        /* aligned with conversation pane */
+  background: #0d1117;
+  /* Same overlay treatment as .artifact-main-view — sits above the
+     chatpane (z-index:30) so the file tree + viewer actually
+     replaces the conversation visually. */
+  z-index: 31;
 }
 
 /* ── tree pane ──────────────────────────────────────────────────────────── */
