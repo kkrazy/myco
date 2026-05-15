@@ -66,3 +66,16 @@
 ## Design Guidelines
 
 1. **Always use Mermaid diagrams** for any architecture, flow, sequence, or state diagrams. Never use ASCII art boxes or plain-text diagrams.
+
+## Diagnostics
+
+1. **Polling the local mycod with `./collect-logs.sh`.** The running myco server (mycod) is a Node process inside a Docker container (PID 1 in the `myco` container). Its stdout/stderr is captured into an in-memory rolling buffer by `server/src/logCapture.js` (CAPACITY = 5000, see `logCapture.init()` wiring in `server/src/index.js`). A bearer-gated `GET /logs?n=N` endpoint exposes that buffer over HTTP. `./collect-logs.sh` is the human/cron-runnable helper that:
+
+   - **Polls the LOCAL mycod** at `http://127.0.0.1:$MYCO_PORT/logs?n=500`. Auth bearer is picked automatically — latest unexpired session for `$MYCO_LOG_LOGIN` (default `kkrazy`) from `$MYCO_AUTH_FILE` (default `/data/auth-sessions.json`). No shared secret in the script.
+   - **Also polls mycobeta** via `ssh kkrazy@mycobeta.labxnow.ai 'docker logs myco --since=<marker> --timestamps'`. Mycobeta-specific because the `[ws-attach]` / `[diag-resume]` instrumentation only ships there. Marker tracks the last fetch so consecutive runs only pull the delta. Phase-2 failures are warnings, not fatal — local phase 1 still runs.
+   - **Dedups by `ts\tlevel\tmsg`** against the per-UTC-day files under `_myco_/logs/` (`.gitignore`d). Idempotent — re-running cost is just the dedup pass.
+   - Flags: `--skip-mycobeta` / `--skip-local`, `--mycobeta-since <duration>`, `--n <N>`, `--login <user>`.
+
+2. **`/loop` cron consumer.** The diagnostic /loop tick (cadence chosen by the user, currently 10 min) calls `./collect-logs.sh` each fire, then reads the fresh `+L` / `+M` lines per source and scans for resume-bug + menu-sync + general-error markers. The loop posts a one-line `📡 [diag-loop]` summary to chat every tick — even when there's nothing notable — so a quiet system is visibly alive. Auto-fix authority is limited to trivial fixes (log noise, typos, one-line bugs); anything touching WS protocol / auth / deploy / framing waits for explicit user approval. See the loop prompt in the active `CronList` for the full filter spec.
+
+3. **Adding new log markers.** When you instrument something for the loop to catch, give it a stable bracketed prefix (e.g. `[ws-attach]`, `[diag-resume]`, `[menu-pick]`) so the filters in step 2 can pick it out cleanly without ambiguous substring matches. Mirror the addition into the loop prompt's filter buckets so the next tick actually reports it.
