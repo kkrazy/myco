@@ -348,11 +348,69 @@ function handleMerge(ctx) {
   ctx.reply(`✓ merged ${result.absorbed.length + 1} **${result.layer}** items into \`${result.canonical.id}\` (absorbed: ${result.absorbed.map((id) => '`' + id + '`').join(', ')})`);
 }
 
+// Read project context that the dedupe LLM should consider alongside
+// the bare item text — CLAUDE.md and the auto-memory dir. Both are
+// truncated to MAX_CONTEXT_BYTES each so the overall prompt stays
+// manageable. Returns the formatted block (possibly empty).
+const MAX_CONTEXT_BYTES = 4096;
+function _loadProjectContext(cwd) {
+  if (!cwd || typeof cwd !== 'string') return '';
+  const path = require('path');
+  const fs = require('fs');
+  const os = require('os');
+  const sections = [];
+  // CLAUDE.md sits at the cwd root by convention.
+  try {
+    const claudeMdPath = path.join(cwd, 'CLAUDE.md');
+    const txt = fs.readFileSync(claudeMdPath, 'utf8');
+    const slice = txt.length > MAX_CONTEXT_BYTES
+      ? txt.slice(0, MAX_CONTEXT_BYTES) + '\n…(truncated)'
+      : txt;
+    sections.push('## Project CLAUDE.md (project-specific instructions)\n\n' + slice);
+  } catch {}
+  // Auto-memory lives at ~/.claude/projects/<encoded-cwd>/memory/. The
+  // index file MEMORY.md is the most useful single read — it lists
+  // each memory file with a one-line hook. Inline the index then a few
+  // of the linked entries up to the byte budget.
+  try {
+    const encoded = cwd.replace(/\//g, '-');
+    const memDir = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory');
+    const indexPath = path.join(memDir, 'MEMORY.md');
+    const indexTxt = fs.readFileSync(indexPath, 'utf8');
+    let memBlock = '## Project auto-memory index\n\n' + indexTxt;
+    // Append the bodies of each linked .md until the budget is hit.
+    let used = memBlock.length;
+    const linkRe = /\(([\w_-]+\.md)\)/g;
+    let m;
+    const seen = new Set();
+    while ((m = linkRe.exec(indexTxt))) {
+      const fname = m[1];
+      if (seen.has(fname)) continue;
+      seen.add(fname);
+      try {
+        const body = fs.readFileSync(path.join(memDir, fname), 'utf8');
+        const trimmed = body.length > 800 ? body.slice(0, 800) + '\n…(truncated)' : body;
+        const entry = `\n\n### memory/${fname}\n\n${trimmed}`;
+        if (used + entry.length > MAX_CONTEXT_BYTES) break;
+        memBlock += entry;
+        used += entry.length;
+      } catch {}
+    }
+    sections.push(memBlock);
+  } catch {}
+  return sections.length ? sections.join('\n\n---\n\n') : '';
+}
+
 // LLM-driven dedupe scan. Pure — does NOT mutate the rec/artifact, only
 // returns the proposal. Shape:
 //   { groups: [{ ids: [...], reason: '<one-line>' }], skipped?, error?, raw? }
 // `skipped` indicates the LLM wasn't called (e.g. <2 eligible items).
 // `error` indicates the LLM call/response failed.
+//
+// Prompt enrichment (2026-05-15): the project's CLAUDE.md and the
+// auto-memory directory are inlined before the item list so claude can
+// use project-specific synonyms, conventions, and past decisions when
+// deciding whether two items refer to the same underlying concern.
 async function dedupePlanItems(items, cwd) {
   const eligible = (items || []).filter((it) => it && it.id && PLAN_LAYER_PREFIX[it.layer]);
   if (eligible.length < 2) {
@@ -371,12 +429,18 @@ async function dedupePlanItems(items, cwd) {
     }
     sections.push('');
   }
+  const context = _loadProjectContext(cwd);
   const promptBody = [
     'You are looking at a plan-item list. Identify GROUPS of items that are similar or related enough that they should be merged into a single canonical item. Only group items within the same layer (Feature/Todo/Bug); never cross layers.',
     '',
+    'Use the project context below to resolve project-specific synonyms, conventions, and past decisions before deciding what counts as "similar enough" — two items framed differently may refer to the same underlying concern.',
+    '',
     'Return STRICT JSON only — no preamble, no markdown fences. Schema:',
-    '{ "groups": [ { "ids": ["td-3","td-7"], "reason": "<one-line reason>" } ] }',
+    '{ "groups": [ { "ids": ["td-3","td-7"], "reason": "<one-line reason citing the project context when applicable>" } ] }',
     'If no merges are warranted, return: { "groups": [] }',
+    '',
+    context ? '# Project context\n\n' + context + '\n\n' : '',
+    '# Plan items',
     '',
     sections.join('\n'),
   ].join('\n');
@@ -683,4 +747,6 @@ module.exports = {
   // Exposed for artifacts.js refresh hook + future callers.
   mergePlanItems,
   dedupePlanItems,
+  // Exposed for testing the project-context loader.
+  _loadProjectContext,
 };

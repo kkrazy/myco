@@ -506,6 +506,27 @@ test_best_practices_template() {
   grep -q "artifact-item-merged" web/public/styles.css \
     && pass "styles.css: artifact-item-merged style present" \
     || fail "styles.css: artifact-item-merged style present"
+  # dedupePlanItems prompt enrichment: project CLAUDE.md + auto-memory
+  # are inlined ahead of the item list so the LLM has project-specific
+  # context when judging "same underlying concern".
+  grep -q "_loadProjectContext" server/src/slashcmds.js \
+    && pass "slashcmds: _loadProjectContext helper present" \
+    || fail "slashcmds: _loadProjectContext helper present"
+  grep -q "Project CLAUDE.md" server/src/slashcmds.js \
+    && pass "slashcmds: dedupe prompt section for CLAUDE.md present" \
+    || fail "slashcmds: dedupe prompt section for CLAUDE.md present"
+  grep -q "Project auto-memory index" server/src/slashcmds.js \
+    && pass "slashcmds: dedupe prompt section for memory index present" \
+    || fail "slashcmds: dedupe prompt section for memory index present"
+  if have_node; then
+    if node test/dedupe-context.test.js >/dev/null 2>&1; then
+      pass "test/dedupe-context.test.js (5 cases)"
+    else
+      fail "test/dedupe-context.test.js — re-run with 'node test/dedupe-context.test.js' to see failures"
+    fi
+  else
+    skip "test/dedupe-context.test.js (no host node)"
+  fi
   # One-shot migration: rewrites pre-ca9bcf1 hex-id plan items to
   # fr-N/td-N/bug-N (addedAt order). Idempotent.
   [ -x migrate-plan-ids.js ] \
