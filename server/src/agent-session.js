@@ -205,13 +205,18 @@ class AgentSession extends EventEmitter {
       // Per-session memory + project settings: redirect the SDK's
       // auto-memory directory from the default $HOME/.claude/projects/
       // <sanitized-cwd>/memory/ into the session's own .claude/memory/.
-      // settingSources excludes 'user' so the shared $HOME/.claude/
-      // settings.json doesn't leak across sessions; project + local
-      // remain so .claude/settings.json + .claude/settings.local.json
-      // inside the session folder still drive per-project config.
+      // Same for plansDirectory: ExitPlanMode plans land in the
+      // session's .claude/plans/ instead of $HOME/.claude/plans/, so
+      // each session's plan artifacts stay co-located with the
+      // session's workspace. settingSources excludes 'user' so the
+      // shared $HOME/.claude/settings.json doesn't leak across
+      // sessions; project + local remain so .claude/settings.json +
+      // .claude/settings.local.json inside the session folder still
+      // drive per-project config.
       settings: {
         autoMemoryEnabled: true,
         autoMemoryDirectory: path.join(this.cwd, '.claude', 'memory'),
+        plansDirectory: path.join(this.cwd, '.claude', 'plans'),
       },
       settingSources: ['project', 'local'],
     };

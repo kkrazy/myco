@@ -3874,27 +3874,36 @@ async function onArtifactItemToggle(cb) {
 // with `@` we show known users. Up/Down navigates, Enter/Tab inserts.
 // Esc dismisses. Picks happen on click too. The popup is positioned by CSS
 // (anchored above the chat-form via #chat-autocomplete).
+// Cache + in-flight promise dedupe. Two refresh() calls that race on a
+// cold cache must share one fetch, not start two. _inFlight holds the
+// promise that resolves to the cache once filled.
 let _chatAcCache = { commands: null, users: null, fetchedAt: 0 };
+let _chatAcInFlight = null;
 
-async function _loadAcData() {
+function _loadAcData() {
   const stale = !_chatAcCache.commands || (Date.now() - _chatAcCache.fetchedAt) > 60000;
-  if (!stale) return _chatAcCache;
-  try {
-    const [cRes, uRes] = await Promise.all([
-      fetch('/commands').catch(() => null),
-      authedFetch('/users').catch(() => null),
-    ]);
-    const cBody = cRes && cRes.ok ? await cRes.json().catch(() => ({})) : {};
-    const uBody = uRes && uRes.ok ? await uRes.json().catch(() => ({})) : {};
-    _chatAcCache = {
-      commands: Array.isArray(cBody.commands) ? cBody.commands : [],
-      users: Array.isArray(uBody.users) ? uBody.users : [],
-      fetchedAt: Date.now(),
-    };
-  } catch {
-    _chatAcCache = { commands: [], users: [], fetchedAt: Date.now() };
-  }
-  return _chatAcCache;
+  if (!stale) return Promise.resolve(_chatAcCache);
+  if (_chatAcInFlight) return _chatAcInFlight;
+  _chatAcInFlight = (async () => {
+    try {
+      const [cRes, uRes] = await Promise.all([
+        fetch('/commands').catch(() => null),
+        authedFetch('/users').catch(() => null),
+      ]);
+      const cBody = cRes && cRes.ok ? await cRes.json().catch(() => ({})) : {};
+      const uBody = uRes && uRes.ok ? await uRes.json().catch(() => ({})) : {};
+      _chatAcCache = {
+        commands: Array.isArray(cBody.commands) ? cBody.commands : [],
+        users: Array.isArray(uBody.users) ? uBody.users : [],
+        fetchedAt: Date.now(),
+      };
+    } catch {
+      _chatAcCache = { commands: [], users: [], fetchedAt: Date.now() };
+    }
+    _chatAcInFlight = null;
+    return _chatAcCache;
+  })();
+  return _chatAcInFlight;
 }
 
 function bindChatAutocomplete() {
@@ -3942,7 +3951,44 @@ function bindChatAutocomplete() {
     input.focus();
   }
 
-  async function refresh() {
+  // Compute items synchronously from a cache snapshot. Pulled out of
+  // refresh() so both the cache-hit path and the post-await refresh
+  // share one implementation.
+  function _computeItems(tok, data) {
+    const q = tok.slice(1).toLowerCase();
+    if (tok[0] === '/') {
+      const matches = (data.commands || []).filter((c) =>
+        c.name.toLowerCase().startsWith(q) ||
+        (c.aliases || []).some((a) => a.toLowerCase().startsWith(q))
+      );
+      return matches.map((c) => ({
+        name: c.usage || ('/' + c.name),
+        desc: c.summary || '',
+        insert: '/' + c.name,
+      }));
+    }
+    // @<user> branch: empty q → ALL users; non-empty → prefix match
+    // then substring fallback. Self ranks first.
+    const all = (data.users || []);
+    const me = (state.chatUser || '').toLowerCase();
+    let matches = q ? all.filter((u) => u.toLowerCase().startsWith(q)) : all.slice();
+    if (q && !matches.length) {
+      matches = all.filter((u) => u.toLowerCase().includes(q));
+    }
+    matches.sort((a, b) => {
+      const am = a.toLowerCase() === me ? -1 : 0;
+      const bm = b.toLowerCase() === me ? -1 : 0;
+      if (am !== bm) return am - bm;
+      return a.localeCompare(b);
+    });
+    return matches.map((u) => ({
+      name: '@' + u,
+      desc: u.toLowerCase() === me ? '(you)' : 'discussion (no claude routing)',
+      insert: '@' + u + ' ',
+    }));
+  }
+
+  function refresh() {
     const v = input.value;
     const caret = input.selectionStart || 0;
     // Find the start of the active token (whitespace boundary or start of string).
@@ -3955,46 +4001,46 @@ function bindChatAutocomplete() {
     if (tok[0] === '/' && start !== 0) return close();
     tokenStart = start;
     tokenEnd = caret;
-    const data = await _loadAcData();
-    const q = tok.slice(1).toLowerCase();
-    if (tok[0] === '/') {
-      const matches = (data.commands || []).filter((c) =>
-        c.name.toLowerCase().startsWith(q) ||
-        (c.aliases || []).some((a) => a.toLowerCase().startsWith(q))
-      );
-      items = matches.map((c) => ({
-        name: c.usage || ('/' + c.name),
-        desc: c.summary || '',
-        insert: '/' + c.name,
-      }));
-    } else {
-      // @<user> autocomplete: match prefix; substring fallback when
-      // the strict prefix produces nothing. Each row carries a brief
-      // description so the user can tell who's who.
-      const all = (data.users || []);
-      const me = (state.chatUser || '').toLowerCase();
-      let matches = q ? all.filter((u) => u.toLowerCase().startsWith(q)) : all.slice();
-      if (q && !matches.length) {
-        matches = all.filter((u) => u.toLowerCase().includes(q));
-      }
-      // Self first, then alphabetical
-      matches.sort((a, b) => {
-        const am = a.toLowerCase() === me ? -1 : 0;
-        const bm = b.toLowerCase() === me ? -1 : 0;
-        if (am !== bm) return am - bm;
-        return a.localeCompare(b);
-      });
-      items = matches.map((u) => ({
-        name: '@' + u,
-        desc: u.toLowerCase() === me ? '(you)' : 'discussion (no claude routing)',
-        insert: '@' + u + ' ',
-      }));
+
+    // Cache hot? Render synchronously — no flicker, no race.
+    if (_chatAcCache.commands) {
+      items = _computeItems(tok, _chatAcCache);
+      if (!items.length) { close(); return; }
+      active = 0;
+      open = true;
+      dropdown.hidden = false;
+      render();
+      return;
     }
-    if (!items.length) { close(); return; }
-    active = 0;
+
+    // Cache cold — show a loading row immediately so the user sees the
+    // dropdown pop on bare `@` even before /users returns. Re-render
+    // after the fetch resolves; bail if the token has since changed
+    // (user already typed more / moved caret) to avoid clobbering a
+    // newer refresh().
+    items = [];
     open = true;
     dropdown.hidden = false;
-    render();
+    const label = tok[0] === '@' ? 'Loading users…' : 'Loading commands…';
+    dropdown.innerHTML = `<div class="ac-empty">${escHtml(label)}</div>`;
+    const tokenAtCallTime = tok;
+    _loadAcData().then((data) => {
+      // Token still the same? Re-run refresh to render the actual items.
+      const cur = (() => {
+        const vNow = input.value;
+        const c = input.selectionStart || 0;
+        let j = c - 1;
+        while (j >= 0 && !/\s/.test(vNow[j])) j--;
+        return vNow.slice(j + 1, c);
+      })();
+      if (cur !== tokenAtCallTime) return;     // user moved on
+      items = _computeItems(tok, data);
+      if (!items.length) { close(); return; }
+      active = 0;
+      open = true;
+      dropdown.hidden = false;
+      render();
+    });
   }
 
   input.addEventListener('input', refresh);
@@ -4010,10 +4056,15 @@ function bindChatAutocomplete() {
 
   input.addEventListener('keydown', (e) => {
     if (!open) return;
+    // Guard against navigation while the dropdown is in its loading
+    // state (items empty but dropdown visible). Arrows would NaN-out
+    // the modulo math; Enter would just no-op since pick(NaN) bails.
+    // Escape still works — let the user dismiss the spinner.
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (!items.length) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; render(); }
     else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(active); }
-    else if (e.key === 'Escape') { e.preventDefault(); close(); }
   });
 
   dropdown.addEventListener('mousedown', (e) => {

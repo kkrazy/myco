@@ -1502,14 +1502,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .artifact-item-text.artifact-md ul,
 .artifact-item-text.artifact-md ol { padding-left: 22px; }
 .artifact-item-text.artifact-md li { margin: 3px 0; }
-.artifact-item-text.artifact-md pre {
-  background: rgba(255, 255, 255, .03);
-  padding: 8px 10px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 0.82rem;
-  margin: 6px 0;
-}
+/* artifact-md pre / pre code: unified with chat/agent code-block
+   styles in the .chat-msg .chat-text pre rule earlier in this file.
+   Only the inline-code background stays per-surface here so artifact
+   bodies pop slightly more than a chat bubble's prose. */
 .artifact-item-text.artifact-md code {
   background: rgba(255, 255, 255, .06);
   padding: 1px 5px;
@@ -1517,7 +1513,6 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem;
 }
-.artifact-item-text.artifact-md pre code { background: transparent; padding: 0; }
 .artifact-item-text.artifact-md .conv-mermaid {
   margin: 8px 0;
   max-width: 100%;
@@ -1764,19 +1759,36 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .88em;
 }
-/* Code blocks read like a small terminal pane embedded in the chat:
-   square corners, monospace, slight background. Less rounded than
-   the prose bubble around them. */
-.chat-msg .chat-text pre {
-  background: rgba(0, 0, 0, .30);
+/* Code blocks: ONE flat layer — a single subtle dark slab embedded in
+   the chat bubble. The hljs override below kills github-dark's own
+   #0d1117 + 1em padding so we don't get a nested 2-layer effect. */
+.chat-msg .chat-text pre,
+.agent-card-md pre,
+.agent-card-body pre,
+.artifact-item-text.artifact-md pre {
+  background: rgba(0, 0, 0, .28);
   padding: 8px 12px;
   border-radius: 3px;
+  border: none;
   overflow-x: auto;
   margin: 8px 0;
-  font-size: .82em;
+  font-size: 0.82em;
   line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.chat-msg .chat-text pre code { background: transparent; padding: 0; }
+.chat-msg .chat-text pre code,
+.agent-card-md pre code,
+.agent-card-body pre code,
+.artifact-item-text.artifact-md pre code,
+.chat-msg .chat-text pre code.hljs,
+.agent-card-md pre code.hljs,
+.agent-card-body pre code.hljs,
+.artifact-item-text.artifact-md pre code.hljs {
+  background: transparent;
+  padding: 0;
+  display: block;
+  color: inherit;
+}
 /* Full markdown coverage inside chat bubbles — headings, blockquote,
    tables, links, hr, images, mermaid SVG. Keep proportions tight so a
    chat bubble doesn't visually compete with the transcript view. */
@@ -3658,16 +3670,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-left: 2px solid rgba(255, 255, 255, .12);
   color: var(--muted, #8b949e);
 }
-.agent-card-md pre,
-.agent-card-body pre {
-  background: rgba(255, 255, 255, .03);
-  padding: 8px 10px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 0.82rem;
-  margin: 8px 0;
-  line-height: 1.45;
-}
+/* Note: pre / pre code rules for .agent-card-md and .agent-card-body
+   live in the unified block earlier in this file (around the
+   .chat-msg .chat-text pre rule) — one flat layer across every
+   chat/agent surface. Keep this comment as a breadcrumb so future
+   edits don't reintroduce a per-surface fork. */
 .agent-card-md code,
 .agent-tool-summary,
 .agent-card-body code {
