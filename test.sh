@@ -514,21 +514,27 @@ test_best_practices_template() {
   grep -q "data-perm-reopen" web/public/app.js \
     && pass "app.js: clicking the chat row re-opens perm-modal" \
     || fail "app.js: clicking the chat row re-opens perm-modal"
-  # Phase 1.5: combine consecutive chrome events (turn_start, iteration_start,
-  # rate_limit, agent_init_snapshot, assistant_text) into one row. Multiple
-  # claude text blocks in the same turn fold into one card with merged
-  # markdown body; chrome events accumulate a × N count badge. Keeps the
-  # timeline focused on results (assistant_text / tool_use / tool_result /
-  # permission).
-  grep -q "AGENT_COMBINE_CONSECUTIVE" web/public/app.js \
-    && pass "app.js: combine-consecutive event set" \
-    || fail "app.js: combine-consecutive event set"
+  # Chrome batching: consecutive low-info events (turn_start,
+  # iteration_start, hook_*, permission_*, rate_limit, etc.) fold
+  # into one compact "▸ chrome × N" indicator row. Click to expand
+  # and see each event listed individually. Keeps the timeline
+  # focused on results (assistant_text / tool_use / tool_result /
+  # turn_result / fatal).
+  grep -q "AGENT_CHROME_TYPES" web/public/app.js \
+    && pass "app.js: chrome-event batching set defined" \
+    || fail "app.js: chrome-event batching set missing"
+  grep -q "_createChromeBatch\|_appendToChromeBatch" web/public/app.js \
+    && pass "app.js: chrome-batch helpers wired" \
+    || fail "app.js: chrome-batch helpers missing"
   grep -q "iteration_start" web/public/app.js \
-    && pass "app.js: iteration_start renderer case" \
-    || fail "app.js: iteration_start renderer case"
+    && pass "app.js: iteration_start handled in chrome batch" \
+    || fail "app.js: iteration_start handler missing"
   grep -q "agent-card-count" web/public/styles.css \
     && pass "styles.css: combined-card × N count badge" \
     || fail "styles.css: combined-card × N count badge"
+  grep -q "agent-chrome-row" web/public/styles.css \
+    && pass "styles.css: chrome-batch row styling" \
+    || fail "styles.css: chrome-batch row styling missing"
   # Phase 1.5: permission / AskUserQuestion popup. Modal lives in
   # index.html; the JS in app.js maintains state.pendingMenuQueue
   # (a derived view over state.chatMessages — finds every menu that
