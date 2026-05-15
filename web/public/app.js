@@ -3877,8 +3877,27 @@ function bindChatAutocomplete() {
         insert: '/' + c.name,
       }));
     } else {
-      const matches = (data.users || []).filter((u) => u.toLowerCase().startsWith(q));
-      items = matches.map((u) => ({ name: '@' + u, desc: '', insert: '@' + u }));
+      // @<user> autocomplete: match prefix; substring fallback when
+      // the strict prefix produces nothing. Each row carries a brief
+      // description so the user can tell who's who.
+      const all = (data.users || []);
+      const me = (state.chatUser || '').toLowerCase();
+      let matches = q ? all.filter((u) => u.toLowerCase().startsWith(q)) : all.slice();
+      if (q && !matches.length) {
+        matches = all.filter((u) => u.toLowerCase().includes(q));
+      }
+      // Self first, then alphabetical
+      matches.sort((a, b) => {
+        const am = a.toLowerCase() === me ? -1 : 0;
+        const bm = b.toLowerCase() === me ? -1 : 0;
+        if (am !== bm) return am - bm;
+        return a.localeCompare(b);
+      });
+      items = matches.map((u) => ({
+        name: '@' + u,
+        desc: u.toLowerCase() === me ? '(you)' : 'discussion (no claude routing)',
+        insert: '@' + u + ' ',
+      }));
     }
     if (!items.length) { close(); return; }
     active = 0;
