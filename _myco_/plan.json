@@ -203,7 +203,14 @@
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": []
+      "comments": [
+        {
+          "id": "42b9c0c2a916",
+          "user": "kkrazy",
+          "text": "another case the menu selection is not broadcasted to chat pane: ● The Refresh button today fires fast (~1s for re-extracting   from JSONL). Adding LLM-based dedupe adds 10–30s round-trip   to claude -p. Three integration shapes — UX trade-offs ───────────────────────────────────────────────────────────────  ☐ Integration   How should plan-refresh integrate the dedupe scan?  ❯ 1. Background, inline callout      Refresh returns immediately as today. The server kicks off       the LLM dedupe in the background; when it returns       (10–30s), a state-update frame delivers proposals and the      plan view renders a 'Possible merges' callout at the top      with `Apply` / `Dismiss` buttons per group. Best UX — no      blocking, user confirms inline.   2. Sequential, blocking refresh      Refresh waits for both the re-extraction AND the dedupe      LLM call before returning. Button reads 'Refreshing…      (asking claude for merges)'. User clicks `Apply`/`Dismiss`       in the plan view once",
+          "ts": "2026-05-15T03:05:41.880Z"
+        }
+      ]
     },
     {
       "id": "td-10",
@@ -492,7 +499,18 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "7415cb949d79",
+      "text": "allow spawn subagents for each feature request, todo, or bug fix, support viewing conversation/logs of individual feature request, todo and bug fix. all questions requires user confirmation will pop up in the main window.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-15T02:57:51.389Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-15T02:27:39.369Z"
+  "updatedAt": "2026-05-15T02:57:51.389Z"
 }
