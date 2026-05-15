@@ -2463,12 +2463,9 @@ function _appendAgentEvent(ev) {
         prev.dataset.assistantText = merged;
         body.innerHTML = renderMd(merged);
         renderMermaidInContainer(body).catch(() => {});
-        const summary = prev.querySelector('.agent-card-summary');
-        if (summary) {
-          const firstLine = merged.split('\n').find((l) => l.trim()) || '';
-          summary.textContent = firstLine.slice(0, 120);
-        }
       }
+      // (No head-summary refresh: assistant_text head is just "<ts>
+      // claude" now, the body underneath is the live preview.)
       pane.scrollTop = pane.scrollHeight;
       return;
     }
@@ -2495,9 +2492,11 @@ function _appendAgentEvent(ev) {
   // block of a new run — subsequent blocks merge above), tool_use,
   // tool_result, turn_result, fatal, and the catch-all "unknown" body.
   if (ev.type === 'assistant_text') {
-    const firstLine = String(ev.text || '').split('\n').find((l) => l.trim()) || '';
-    head.innerHTML += `<span class="agent-card-kind agent-card-claude">claude</span>
-      <span class="agent-card-summary">${escHtml(firstLine.slice(0, 120))}</span>`;
+    // Head is just "<ts> claude" — the body renders the full markdown
+    // immediately below (assistant_text is in AGENT_DEFAULT_EXPANDED,
+    // so the body is visible without a click). The 120-char first-line
+    // preview was redundant with the body underneath.
+    head.innerHTML += `<span class="agent-card-kind agent-card-claude">claude</span>`;
     body.className += ' agent-card-md';
     body.innerHTML = renderMd(ev.text || '');
     card.dataset.assistantText = ev.text || '';   // seed merge accumulator
