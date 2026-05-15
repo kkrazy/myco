@@ -1680,16 +1680,16 @@ test_chat_window() {
     && pass "app.js: btn-preview-readonly remains the only two-state toggle" \
     || fail "app.js: btn-preview-readonly no longer toggles between terminal/readonly"
   # 📜 transcript chrome icon — show-only activator for the readonly
-  # conversation viewer. Sits first in the right-side chrome cluster.
-  grep -qF 'id="btn-transcript"' web/public/index.html \
-    && pass "index.html: btn-transcript declared in chrome cluster" \
-    || fail "index.html: btn-transcript missing"
-  grep -qF "btn-transcript')?.addEventListener('click', showTranscriptView)" web/public/app.js \
-    && pass "app.js: btn-transcript click is show-only (showTranscriptView)" \
-    || fail "app.js: btn-transcript click handler not wired"
-  grep -qF 'function showTranscriptView' web/public/app.js \
-    && pass "app.js: showTranscriptView helper defined" \
-    || fail "app.js: showTranscriptView helper missing"
+  # Phase 9 step 3 retired #btn-transcript and the showTranscriptView
+  # function — the JSONL transcript pane is gone, and the chatpane is
+  # the only session view (owners + read-only viewers). The negative
+  # guards lock in that they don't sneak back via copy-paste.
+  ! grep -qF 'id="btn-transcript"' web/public/index.html \
+    && pass "index.html: btn-transcript retired (Phase 9 step 3)" \
+    || fail "index.html: btn-transcript still in chrome cluster"
+  ! grep -qF 'function showTranscriptView' web/public/app.js \
+    && pass "app.js: showTranscriptView retired (Phase 9 step 3)" \
+    || fail "app.js: showTranscriptView still defined"
   # Always-tail contract: chat/conv/xterm are tail-readers — they
   # should always pin to the latest content. New transcript messages
   # must unconditionally scroll; the previous isConvAtBottom() guard
@@ -2348,7 +2348,15 @@ test_layout() {
   grep -q '#chatpane' web/public/styles.css && pass "#chatpane styling" || fail "#chatpane styling"
   grep -q '@media' web/public/styles.css && pass "responsive @media rule" || fail "responsive @media rule"
   grep -q 'id="sidebar"' web/public/index.html && pass "sidebar in HTML" || fail "sidebar in HTML"
-  grep -q 'conversation-wrap' web/public/index.html && pass "conversation-wrap in HTML" || fail "conversation-wrap in HTML"
+  # Phase 9 step 3 deleted #conversation-wrap (the JSONL transcript
+  # pane). Read-only viewers now use the chatpane with a sticky
+  # readonly-banner; assert that wiring instead.
+  grep -q 'id="readonly-banner"' web/public/index.html \
+    && pass "index.html: readonly-banner in chatpane (Phase 9 step 3)" \
+    || fail "index.html: readonly-banner missing"
+  grep -q "chatpane-readonly-banner" web/public/styles.css \
+    && pass "styles.css: .chatpane-readonly-banner styling" \
+    || fail "styles.css: .chatpane-readonly-banner styling"
 }
 
 run_feature_checks() {
