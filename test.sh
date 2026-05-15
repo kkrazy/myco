@@ -588,6 +588,21 @@ test_best_practices_template() {
   grep -q "agent-card-md\|agent-card-collapse" web/public/app.js \
     && pass "app.js: rich event-card renderer present" \
     || fail "app.js: rich event-card renderer present"
+  # Phase 4: streaming-input + interrupt semantics. AgentSession holds a
+  # single long-lived query() with an AsyncMessageQueue prompt;
+  # interrupt() aborts via AbortController and the next write() resumes.
+  grep -q "AsyncMessageQueue" server/src/agent-session.js \
+    && pass "agent-session.js: AsyncMessageQueue helper present" \
+    || fail "agent-session.js: AsyncMessageQueue helper present"
+  grep -q "interrupt()\|_abortController.abort" server/src/agent-session.js \
+    && pass "agent-session.js: interrupt()/AbortController wired" \
+    || fail "agent-session.js: interrupt()/AbortController wired"
+  grep -q "session.mode === 'agent'" server/src/pty.js \
+    && pass "pty.js: handleChatPostfixes branches on session.mode='agent'" \
+    || fail "pty.js: handleChatPostfixes branches on session.mode='agent'"
+  grep -q "session.mode === 'agent'" server/src/slashcmds.js \
+    && pass "slashcmds.js: handleDecide routes to resolveMenuPick for agent" \
+    || fail "slashcmds.js: handleDecide routes to resolveMenuPick for agent"
   # dedupePlanItems prompt enrichment: project CLAUDE.md + auto-memory
   # are inlined ahead of the item list so the LLM has project-specific
   # context when judging "same underlying concern".

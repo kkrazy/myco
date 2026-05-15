@@ -1712,6 +1712,49 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
       // Special key tokens — let viewers respond to Claude's interactive
       // prompts (y/n confirmations, "press Enter to continue", etc.) without
       // a real terminal. The token is written verbatim, no trailing CR.
+      // For agent-mode sessions, only the interrupt-style keys map cleanly
+      // to SDK semantics (AbortSignal). Enter/space/tab don't exist as
+      // concepts in the SDK stream — they get logged + ignored.
+      if (session.mode === 'agent') {
+        const key = input.toLowerCase();
+        if (key === 'esc' || key === 'escape' || key === 'ctrl-c' || key === '^c') {
+          console.log(`[chat→agent] ${user}: <interrupt:${input}>`);
+          if (typeof session.interrupt === 'function') session.interrupt();
+          session.emit('chat', {
+            user: ASSISTANT_USER,
+            text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
+            ts: new Date().toISOString(),
+          });
+          return;
+        }
+        const noopKeys = new Set(['enter', 'return', 'space', 'tab', 'shift-tab', 'shift+tab']);
+        if (noopKeys.has(key)) {
+          console.log(`[chat→agent] ${user}: <key-noop:${input}> (SDK has no terminal-key equivalent)`);
+          session.emit('chat', {
+            user: ASSISTANT_USER,
+            text: `(\`${input}\` has no meaning in an agent-mode session — claude consumes messages, not keystrokes. Type a question / instruction instead, or \`esc\` to interrupt.)`,
+            ts: new Date().toISOString(),
+          });
+          return;
+        }
+        // Bare-digit menu pick for the most recently broadcast menu.
+        // session.pendingMenu is set by canUseTool (phase 2), cleared by
+        // resolveMenuPick.
+        const asDigit = /^[1-9]$/.test(input) ? parseInt(input, 10) : NaN;
+        if (Number.isFinite(asDigit) && session.pendingMenu) {
+          const hash = session.pendingMenu.hash;
+          if (typeof session.resolveMenuPick === 'function' && hash) {
+            console.log(`[chat→agent] ${user}: menu pick ${asDigit} (chat shorthand, hash=${hash.slice(-12)})`);
+            session.resolveMenuPick(hash, asDigit);
+            return;
+          }
+        }
+        // Fall through to the normal write() — pushes into the SDK
+        // streaming-input queue.
+        console.log(`[chat→agent] ${user}: ${input.substring(0, 80)}`);
+        session.write(input);
+        return;
+      }
       const SPECIAL_KEYS = {
         enter: '\r',
         return: '\r',

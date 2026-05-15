@@ -23,6 +23,54 @@ const { query } = require('@anthropic-ai/claude-agent-sdk');
 
 const MAX_EVENTS = 500;
 
+// Async iterable backed by a manual push() API. Used as the SDK's
+// streaming-input prompt — every user message landed via .write()
+// pushes a `{type:'user', message:{role:'user', content}}` envelope
+// here, the SDK consumes them in order. close() signals end-of-input.
+//
+// Why we need this: the SDK's query({prompt: asyncIterable}) keeps a
+// single long-lived conversation open and only requires a fresh
+// query() across abort boundaries. That keeps cache warm + cuts the
+// per-turn round-trip cost that the Phase 1 per-turn-resume approach
+// paid.
+class AsyncMessageQueue {
+  constructor() {
+    this._queue = [];
+    this._waiter = null;
+    this._closed = false;
+  }
+  push(message) {
+    if (this._closed) return;
+    if (this._waiter) {
+      const w = this._waiter;
+      this._waiter = null;
+      w({ done: false, value: message });
+    } else {
+      this._queue.push(message);
+    }
+  }
+  close() {
+    this._closed = true;
+    if (this._waiter) {
+      const w = this._waiter;
+      this._waiter = null;
+      w({ done: true, value: undefined });
+    }
+  }
+  async *[Symbol.asyncIterator]() {
+    for (;;) {
+      if (this._queue.length) {
+        yield this._queue.shift();
+        continue;
+      }
+      if (this._closed) return;
+      const next = await new Promise((resolve) => { this._waiter = resolve; });
+      if (next.done) return;
+      yield next.value;
+    }
+  }
+}
+
 // Truncate Claude's tool inputs to a chat-card-sized blurb.
 function _summariseToolInput(name, input) {
   try {
@@ -72,11 +120,16 @@ class AgentSession extends EventEmitter {
     // expands this with capped size + resume semantics).
     this.buffer = [];
 
-    // Turn-queue + in-flight tracker so .write() during a running
-    // iteration enqueues instead of overlapping queries.
-    this._queue = [];
-    this._inFlight = null;
+    // Phase 4: streaming-input. Each .write() pushes a user message
+    // into _msgQueue; the SDK reads from it as long as the iteration
+    // is alive. _iterating tracks whether we're inside a query()'s
+    // event loop. If aborted (.interrupt(), .kill()), the loop exits
+    // and the next .write() spawns a fresh query() with resume=
+    // sdkSessionId to continue the conversation.
+    this._msgQueue = null;
+    this._iterating = false;
     this._abortController = null;
+    this._iterationDone = null;   // promise resolved when the current iteration ends
 
     // Phase 2: chat-pane menu integration. Each canUseTool fire stores
     // its resolve fn + the structured request here keyed by a hash; the
@@ -90,20 +143,27 @@ class AgentSession extends EventEmitter {
       // Defer one tick so listeners attached after construction still
       // see the first events. PtySession has the same pattern via the
       // PTY's own onData scheduling.
-      setImmediate(() => this._runTurn(opts.initialPrompt));
+      setImmediate(() => this.write(opts.initialPrompt));
     }
   }
 
-  // Single source of truth for sending a user message to the SDK.
-  // Each call to .write() ends up here (directly if idle, or via the
-  // queue drain when the prior turn finishes).
-  async _runTurn(promptText) {
-    if (!this.alive) return;
-    if (this._inFlight) {
-      this._queue.push(promptText);
-      return;
-    }
+  // Start (or restart, after an abort) the SDK iteration. One iteration
+  // lives until either the user .kill()s us, .interrupt() is called, or
+  // the SDK closes the stream. Multiple user messages (via .write())
+  // share the same iteration via the streaming-input prompt.
+  async _ensureIteration() {
+    if (!this.alive || this._iterating) return;
+    this._iterating = true;
+    this._msgQueue = new AsyncMessageQueue();
     this._abortController = new AbortController();
+
+    // Drain any pre-iteration writes into the fresh queue. Used by
+    // .write() when no iteration was running yet, OR by interrupt's
+    // restart path that needs to redeliver the in-flight user message.
+    if (this._pendingPrePush && this._pendingPrePush.length) {
+      for (const m of this._pendingPrePush) this._msgQueue.push(m);
+      this._pendingPrePush = null;
+    }
 
     const sdkOpts = {
       cwd: this.cwd,
@@ -115,14 +175,14 @@ class AgentSession extends EventEmitter {
 
     let stream;
     try {
-      stream = query({ prompt: promptText, options: sdkOpts });
+      stream = query({ prompt: this._msgQueue, options: sdkOpts });
     } catch (err) {
       this._emit({ type: 'fatal', error: String((err && err.message) || err) });
-      this._afterTurn();
+      this._iterating = false;
+      this._msgQueue = null;
       return;
     }
-    this._inFlight = stream;
-    this._emit({ type: 'turn_start', prompt: String(promptText).slice(0, 200) });
+    this._emit({ type: 'iteration_start', resume: !!sdkOpts.resume });
 
     try {
       for await (const m of stream) {
@@ -130,21 +190,32 @@ class AgentSession extends EventEmitter {
         this._handleEvent(m);
       }
     } catch (err) {
-      this._emit({ type: 'fatal', error: String((err && err.message) || err) });
+      const isAbort = (err && (err.name === 'AbortError' || /aborted|abort/i.test(String(err.message || ''))));
+      if (isAbort) {
+        this._emit({ type: 'iteration_aborted' });
+      } else {
+        this._emit({ type: 'fatal', error: String((err && err.message) || err) });
+      }
     }
-    this._afterTurn();
+    this._iterating = false;
+    this._msgQueue = null;
+    this._abortController = null;
+    if (this.alive) this.emit('idle');
   }
 
-  _afterTurn() {
-    this._inFlight = null;
-    this._abortController = null;
+  // Abort the in-flight SDK iteration. Next .write() will start a fresh
+  // query() with resume=sdkSessionId so the conversation continues from
+  // where we left off (modulo any tool that was mid-execution when the
+  // abort fired — claude code's hook/permission system handles partial
+  // results gracefully).
+  interrupt() {
     if (!this.alive) return;
-    if (this._queue.length) {
-      const next = this._queue.shift();
-      this._runTurn(next);
-      return;
+    if (this._abortController) {
+      try { this._abortController.abort(); } catch {}
     }
-    this.emit('idle');
+    if (this._msgQueue) {
+      try { this._msgQueue.close(); } catch {}
+    }
   }
 
   // Normalise SDK events into the flatter shape the WS frame ships.
@@ -290,6 +361,7 @@ class AgentSession extends EventEmitter {
         question: menu.question,
         optionCount: menu.options.length,
       });
+      this.pendingMenu = menu;             // mirror PtySession's surface so bare-digit chat picks work
       this.emit('menu', menu);             // → menuMod.handleSessionMenu wired in agent registration path
     });
   }
@@ -420,15 +492,27 @@ class AgentSession extends EventEmitter {
 
   // --- session-interface methods (mirror PtySession) -------------------
 
-  // Semantically the next user turn. The string is the prompt body —
-  // whatever routing logic (chat → PTY before, chat → SDK now) chose
-  // to send. For phase 1 we kick a fresh query() with resume=sdkSessionId;
-  // phase 4 will switch to true streaming input via async iterable.
+  // Semantically the next user turn. The string is the prompt body.
+  // Phase 4: pushes into the streaming-input queue so the SDK can read
+  // it without needing a fresh query() per turn. If no iteration is
+  // currently running (first .write(), or after an interrupt), kicks
+  // one off — with resume=sdkSessionId so the conversation continues.
   write(text) {
     if (!this.alive) return;
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
-    this._runTurn(trimmed);
+    const envelope = { type: 'user', message: { role: 'user', content: trimmed } };
+    this._emit({ type: 'turn_start', prompt: trimmed.slice(0, 200) });
+    if (this._iterating && this._msgQueue) {
+      // Hot path: SDK is already iterating, just push.
+      this._msgQueue.push(envelope);
+      return;
+    }
+    // Cold start (first write, or post-abort restart): stash the
+    // envelope so _ensureIteration can deliver it to the fresh queue.
+    if (!this._pendingPrePush) this._pendingPrePush = [];
+    this._pendingPrePush.push(envelope);
+    this._ensureIteration();
   }
 
   // No-op for agent sessions — the SDK doesn't care about terminal size.
@@ -444,6 +528,9 @@ class AgentSession extends EventEmitter {
     this.alive = false;
     if (this._abortController) {
       try { this._abortController.abort(); } catch {}
+    }
+    if (this._msgQueue) {
+      try { this._msgQueue.close(); } catch {}
     }
     this.emit('exit', 0);
   }

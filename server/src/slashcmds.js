@@ -624,13 +624,19 @@ async function handleDecide(ctx) {
     }
   } catch {}
 
-  // PTY write only when the live session is actually waiting on this menu.
+  // Agent-mode session: route the pick through resolveMenuPick (which
+  // resolves the pending canUseTool promise), not through PTY bytes.
+  // PTY-mode keeps the legacy digit + CR write.
   const session = ctx.session;
   const pending = session && session.alive ? session.pendingMenu : null;
   if (pending && Array.isArray(pending.options) && pending.options.some((o) => o.n === n)) {
-    // Claude Code's menus accept digit + Enter to commit.
-    session.write(String(n) + '\r');
-    session.pendingMenu = null;
+    if (session.mode === 'agent' && typeof session.resolveMenuPick === 'function' && pending.hash) {
+      session.resolveMenuPick(pending.hash, n);
+    } else {
+      // Claude Code's menus accept digit + Enter to commit.
+      session.write(String(n) + '\r');
+      session.pendingMenu = null;
+    }
   } else if (!stampedLabel) {
     // Nothing to do — no live menu AND no persisted menu carried option n.
     ctx.reply(`(option ${n} isn't a valid choice on any recent dialog.)`);
