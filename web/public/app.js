@@ -3519,6 +3519,8 @@ function renderArtifact(type, artifact) {
       ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>`
       : '';
     body.innerHTML = bpHtml + userMd + updated;
+    // Render any ```mermaid fences inside the arch markdown.
+    renderMermaidInContainer(body).catch(() => {});
     return;
   }
   // plan / test → checkbox list. Plan items also get vote button + comment thread.
@@ -3587,11 +3589,15 @@ function renderArtifact(type, artifact) {
         ${voteBlock}
         <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
       </div>`;
+    // Plan/test items render their body as markdown so multi-line
+    // text, code fences, lists, and mermaid diagrams all show up
+    // properly. Was escHtml inside a span — that wrapper element
+    // also constrained block-level markdown to inline rendering.
     return `<li class="${cls}" data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
         <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
         ${idChip}
-        <span class="artifact-item-text">${escHtml(it.text || '')}</span>
+        <div class="artifact-item-text artifact-md">${renderMd(it.text || '')}</div>
       </div>
       ${actionsRow}
       ${commentsBlock}
@@ -3622,6 +3628,11 @@ function renderArtifact(type, artifact) {
   }
   body.innerHTML = bodyHtml +
     (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
+  // After the items' markdown is in place, sweep for mermaid fences
+  // so any ```mermaid blocks inside an item's text become SVG.
+  // marked emits them as <pre><code class="language-mermaid">; this
+  // pass converts them to .conv-mermaid divs.
+  renderMermaidInContainer(body).catch(() => {});
   body.querySelectorAll('.artifact-item-checkbox').forEach((cb) => {
     cb.addEventListener('change', () => onArtifactItemToggle(cb));
   });

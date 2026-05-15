@@ -1491,7 +1491,39 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   cursor: pointer;
   flex-shrink: 0;
 }
-.artifact-item-text { flex: 1; white-space: pre-wrap; word-break: break-word; }
+.artifact-item-text { flex: 1; word-break: break-word; min-width: 0; }
+/* Markdown rendered inside a plan/test item — paragraphs, lists,
+   headings, code, blockquotes, mermaid all need block-level layout. */
+.artifact-item-text.artifact-md > :first-child { margin-top: 0; }
+.artifact-item-text.artifact-md > :last-child  { margin-bottom: 0; }
+.artifact-item-text.artifact-md p,
+.artifact-item-text.artifact-md ul,
+.artifact-item-text.artifact-md ol { margin: 6px 0; }
+.artifact-item-text.artifact-md ul,
+.artifact-item-text.artifact-md ol { padding-left: 22px; }
+.artifact-item-text.artifact-md li { margin: 3px 0; }
+.artifact-item-text.artifact-md pre {
+  background: rgba(255, 255, 255, .03);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  margin: 6px 0;
+}
+.artifact-item-text.artifact-md code {
+  background: rgba(255, 255, 255, .06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+.artifact-item-text.artifact-md pre code { background: transparent; padding: 0; }
+.artifact-item-text.artifact-md .conv-mermaid {
+  margin: 8px 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.artifact-item-text.artifact-md .conv-mermaid svg { max-width: 100%; height: auto; }
 
 /* id chip + merged-from badge. The chip sits between the checkbox and
    the body text; the badge sits AFTER the text and shows count + the
