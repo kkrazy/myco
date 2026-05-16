@@ -1576,9 +1576,21 @@ test_chat_window() {
   grep -qF 'list.children[i].replaceWith(newEl)' web/public/app.js \
     && pass "app.js: appendChatMessage re-renders DOM on uuid-dedup upgrade" \
     || fail "app.js: uuid-dedup upgrade no longer re-renders — stale chat rows will persist until refresh"
-  grep -qF "[persist-chat-emit]" server/src/attach.js \
-    && pass "attach.js: persistAssistantTextToChat logs WS listener count" \
-    || fail "attach.js: [persist-chat-emit] diagnostic missing — can't diagnose silent-broadcast"
+  # Phase 9+: persistAssistantTextToChat no longer emits 'chat' frames
+  # (the agent-event stream owns assistant_text now), so the per-emit
+  # [persist-chat-emit] diagnostic was retired. The remaining
+  # [persist-chat] batch summary still fires on every non-empty
+  # mirror — pin THAT marker so the watcher can't silently no-op.
+  # And pin the "live emit suppressed" guard string in the same log
+  # line: if a future refactor re-introduces the dual emit, this
+  # grep will red-flip and the diagnostic comment in attach.js will
+  # explain why.
+  grep -qF "[persist-chat]" server/src/attach.js \
+    && pass "attach.js: persistAssistantTextToChat logs batch summary" \
+    || fail "attach.js: [persist-chat] batch summary missing — can't tell whether the transcript mirror is firing"
+  grep -qF 'live emit suppressed' server/src/attach.js \
+    && pass "attach.js: persistAssistantTextToChat does not re-emit 'chat' (no duplicate render)" \
+    || fail "attach.js: 'live emit suppressed' marker missing — the dual emit may have crept back, double-rendering claude replies"
   grep -qF '_resetChatUnread' web/public/app.js \
     && pass "app.js: chat-unread badge resets on setChatPane(true)" \
     || fail "app.js: chat-unread reset missing"
