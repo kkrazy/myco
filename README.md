@@ -8,7 +8,7 @@ A mobile-first web UI to monitor, control, and discuss Claude Code sessions runn
 - **Session lifecycle** — list, spawn, attach, delete. Spawning checks for an existing session in that cwd; deleting kills the pty but keeps Claude's transcript on disk so you can resume in the same directory later.
 - **Resume across restarts** — server restart? On reconnect, mycod scans `~/.claude/projects/<cwd>/` and resumes the *newest* transcript, so `/clear` and `/resume` survive a restart.
 - **Multi-device** — attach the same session from phone, laptop, and the VS Code terminal at the same time. Browser tabs auto-reattach on visibility change with a ping/pong liveness probe; the page reloads back into your last-active session.
-- **Discussion pane** — collaborator chat per session, persisted to disk. Two ways to engage Claude from chat: prefix a message with `@myco …` to inject it into the running Claude session in the terminal (works for owner and read-only viewers), or prefix with `/btw …` to spawn a fresh `claude -p` in the session's cwd and post the reply back to the chat.
+- **Discussion pane** — collaborator chat per session, persisted to disk. Two ways to engage Claude from chat: type any message and it's forwarded to the running Claude session as a normal user turn (works for owner and read-only viewers — `@user` mentions stay in-chat, no forward), or prefix with `/btw …` to spawn a fresh `claude -p` in the session's cwd and post the reply back to the chat.
 - **Share links** — read-only, time-limited URLs to show a session to someone without giving them the auth token.
 - **VS Code integration** — a one-tap "open in VS Code" action drops a `.vscode/tasks.json` into the session's cwd that auto-runs `myco attach <id>` in a Remote-SSH terminal on folder open.
 - **Auth + TLS** — optional bearer-token auth (single-user or per-user), HTTPS with auto-redirect from `:80`, and a Let's Encrypt installer script.
@@ -90,16 +90,18 @@ The bundled `myco` script is a thin client over the same WebSocket the web UI us
 
 It reuses `server/node_modules` for its `ws` dependency — no separate `npm install`.
 
-## Discussion pane / `@myco` / `/btw`
+## Discussion pane / chat routing / `/btw`
 
 The discussion pane is per-session and persists in the on-disk store. Other people viewing the same session see the same chat history.
 
-Two prefixes engage Claude from chat:
+How chat routes:
 
-- **`@myco <text>`** — injects `<text>` (plus a trailing `\r`) into the running Claude session in the terminal. The Claude TUI receives it as if you'd typed it. Works from owner and read-only viewer chat alike — chat is the collaborative steering channel for the session. Slash commands (`@myco /…`) are rejected, since Claude's interactive `/` commands don't survive being piped through chat.
+- **Any message** — forwarded to the running Claude session as a normal user turn (the AgentSession's streaming-input queue). Works from owner and read-only viewer chat alike — chat is the collaborative steering channel for the session.
+- **`@user …`** at the head — recognized as a discussion mention to a known collaborator. Stamped + persisted as chat-only; NOT forwarded to Claude.
 - **`/btw <text>`** — spawns a fresh `claude -p` in the session's cwd, with the last ~20 chat messages and last ~40 lines of ANSI-stripped scrollback as context, and posts the reply into the chat. Doesn't touch the running session. Inherits `process.env` and the user's `~/.claude/` config, so whatever auth (API key or `claude.ai` subscription) the main session uses works here too.
+- **`/task`, `/skip N`, `/cancel N`** — task-list intervention. Forwarded to Claude as a natural-language directive (see `CLAUDE.md` task-list etiquette). The agent replies with the list / dismissal confirmation.
 
-Plain messages (no prefix) are just collaborator-to-collaborator chat — Claude doesn't react.
+Plain text (no `@user` prefix) reaches Claude — there's no separate "talk to claude" prefix any more. Use `@user` if you want a note to stay in chat.
 
 ## Architecture
 

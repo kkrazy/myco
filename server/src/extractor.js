@@ -14,7 +14,7 @@ const { projectsDir, encodeCwdForClaude, getChatHistory } = require('./sessions'
 const { readSimpleTurnsTail } = require('./transcript');
 
 const MAX_TRANSCRIPT_CHARS = 16000;   // ~ recent 40-80 assistant/user turns
-const MAX_CHAT_CHARS = 8000;          // discussion-panel messages (incl. non-@myco)
+const MAX_CHAT_CHARS = 8000;          // discussion-panel messages
 const MAX_INPUT_LINES = 400;
 // Extraction calls `claude -p` in the session's cwd, and the prompts now ask
 // the model to spot-check the codebase via Read/Glob/Grep before answering.
@@ -22,16 +22,12 @@ const MAX_INPUT_LINES = 400;
 // to 4 minutes. Most extractions still complete in well under a minute.
 const EXTRACTOR_TIMEOUT_MS = 240000;
 
-// The input we hand to the model is the union of two sources, clearly labelled:
-//   (a) the Claude Code session transcript (what the model itself saw and did),
-//   (b) the Mycelium discussion-panel chat (what humans typed at each other,
-//       INCLUDING messages without an @myco prefix — those never reach the
-//       running Claude session and are otherwise invisible to extraction).
-// The prompts below tell the model to pull signal from both.
-
-// All three prompts pull from THREE sources now:
+// All three prompts pull from three sources:
 //   (a) the Claude Code transcript (what the model saw and did)
-//   (b) the Mycelium discussion-panel chat (incl. non-@myco messages)
+//   (b) the Mycelium discussion-panel chat (user-to-user notes that may
+//       or may not have been forwarded to Claude as a user turn — chat
+//       messages reach Claude automatically now, but pure human-to-
+//       human discussion still lives only in rec.chat)
 //   (c) the current codebase — the extractor runs `claude -p` in the
 //       session's cwd, so Read/Glob/Grep are available to verify whether a
 //       proposed TODO is already done, whether an architectural decision
@@ -43,7 +39,7 @@ const EXTRACTOR_TIMEOUT_MS = 240000;
 const PROMPTS = {
   plan: {
     system:
-      'You are running in the project\'s working directory with file-system tools (Read, Glob, Grep) available. You will be given two sources from a software-engineering session: the running Claude Code transcript AND the Mycelium discussion-panel chat (which contains human-to-human messages, including ones that were NOT sent to Claude via @myco). ' +
+      'You are running in the project\'s working directory with file-system tools (Read, Glob, Grep) available. You will be given two sources from a software-engineering session: the running Claude Code transcript AND the Mycelium discussion-panel chat (which carries human-to-human messages alongside chat turns Claude already saw). ' +
       'Extract concrete TODO items that are still PENDING and group them into named buckets. ' +
       'CHOOSE THE GROUPING THAT FITS THIS CODEBASE: ' +
       '(a) If the project has a clear tiered architecture (web app, API service, etc.), group by ARCHITECTURAL LAYER — e.g. "Frontend / Backend / Database", "API / Service / Persistence", "Client / Server / PTY". Order layers top-down (presentation first, infra last). ' +
@@ -51,7 +47,7 @@ const PROMPTS = {
       'Either way: spot-check the codebase to pick names that mirror what\'s actually there, and keep names short (≤2 words) and consistent across items. ' +
       'A "pending" TODO is one the user, a chat participant, or Claude proposed but has not yet been completed. ' +
       'BEFORE answering, spot-check that proposed changes aren\'t already in the code. Drop ones that are. Don\'t over-explore — a few targeted Read/Grep calls is enough. ' +
-      'Pure-discussion intent (without @myco) still counts as a real plan item if it isn\'t reflected in the code yet. ' +
+      'Pure-discussion intent still counts as a real plan item if it isn\'t reflected in the code yet. ' +
       'OUTPUT FORMAT: a JSON array of objects, each `{ "layer": "<group name>", "text": "<short actionable todo>" }`. The field is called "layer" for historical reasons — its value is the group name you chose (layer OR component). Example for a web app: ' +
       '[{"layer":"Frontend","text":"wire the Plan tab to the new endpoint"},{"layer":"Backend","text":"add /artifact/vote route"}]. Example for a CLI app: ' +
       '[{"layer":"Parser","text":"accept bracketed [N] markers"},{"layer":"Renderer","text":"trim mermaid error divs"}]. ' +
@@ -102,9 +98,10 @@ async function readTranscriptTail(rec) {
   return out.length ? out.reverse().join('\n') : null;
 }
 
-// Read the discussion-panel chat from sessions.json. This is the source the
-// transcript can't see: messages without an @myco prefix never reach the
-// running Claude session, so they only exist in rec.chat.
+// Read the discussion-panel chat from sessions.json. Complements the
+// transcript: discussion notes that didn't reach the running Claude
+// session as a user turn (e.g. @user mentions, plan-vote chatter,
+// quick coordination between collaborators) live only in rec.chat.
 function readChatTail(rec) {
   if (!rec || !rec.id) return null;
   const msgs = getChatHistory(rec.id) || [];
@@ -204,7 +201,7 @@ async function extractArtifact(rec, type) {
   // matches reality).
   const parts = [];
   if (chatTail) {
-    parts.push('=== Discussion-panel chat (human messages, including ones NOT sent to Claude via @myco) ===\n' + chatTail);
+    parts.push('=== Discussion-panel chat (human-to-human messages alongside chat turns Claude saw) ===\n' + chatTail);
   }
   if (transcriptTail) {
     parts.push('=== Claude Code session transcript (assistant + user turns the model saw) ===\n' + transcriptTail);

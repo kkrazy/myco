@@ -105,7 +105,7 @@
           <span class="ro-owner"></span>
           <span class="ro-hint">· /td /fr /bug to add plan items · @user to discuss</span>
         </div>
-        <div id="chat-empty" class="chat-empty"><code>@myco</code> <span class="ce-arrow">→</span> claude · <code>@user</code> <span class="ce-arrow">→</span> discuss · <code>/help</code> <span class="ce-arrow">→</span> commands</div>
+        <div id="chat-empty" class="chat-empty">Type to chat with claude · <code>@user</code> <span class="ce-arrow">→</span> discuss · <code>/help</code> <span class="ce-arrow">→</span> commands</div>
         <div id="chat-messages"></div>
         <!-- Slim status row: spinner+label on the left, token meter
              on the right. Stop lives in the composer's actions row
@@ -134,7 +134,7 @@
                removes that @user from the input value. Hidden when
                the textarea has no detected mentions. -->
           <div id="composer-chips" class="composer-chips" hidden></div>
-          <textarea id="chat-input" rows="1" placeholder="@myco to prompt claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
+          <textarea id="chat-input" rows="1" placeholder="Message claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
           <div class="composer-actions">
             <button type="button" id="claude-stop" class="composer-btn composer-btn-stop" title="Interrupt the in-flight claude turn (Esc)" aria-label="Stop (Esc)">
               <svg class="composer-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
@@ -163,7 +163,7 @@
           <button class="artifact-refresh" data-type="plan" title="Re-extract from the latest session activity">↻ Refresh</button>
         </div>
         <div class="artifact-body" id="artifact-body-plan">
-          <div class="artifact-empty">No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo's box to send it back to Claude as <code>@myco</code>.</div>
+          <div class="artifact-empty">No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo's box (or hit ▶ Run) to dispatch it to Claude — findings land as a comment on the item.</div>
         </div>
       </div>
       <div id="arch-wrap" class="artifact-main-view" hidden>

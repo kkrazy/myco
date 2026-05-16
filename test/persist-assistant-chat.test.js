@@ -215,7 +215,7 @@ t('attach.js persistAssistantTextToChat does not emit live chat frames', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
   // Slice out the function body so the assertion is scoped — there
   // are other places in attach.js that legitimately emit('chat'),
-  // e.g. runAssistant for @myco replies and the deny-message path.
+  // e.g. runAssistant for /btw replies and the deny-message path.
   const m = src.match(/function persistAssistantTextToChat[\s\S]*?\n\}\n/);
   assert.ok(m, 'persistAssistantTextToChat definition not found');
   const body = m[0];

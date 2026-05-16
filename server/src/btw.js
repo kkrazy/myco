@@ -1,8 +1,8 @@
 // Chat-assistant helper. Claude is a participant in the discussion pane:
 // messages starting with `/btw` are forwarded to a fresh `claude -p` run
-// in the session's cwd. (Messages starting with `@myco …` go a different
-// route — they're injected into the running Claude PTY by handleChatMessage
-// in pty.js, not into a fresh subprocess.) The subprocess inherits
+// in the session's cwd. (Plain chat messages go a different route —
+// they're forwarded to the running AgentSession by handleChatMessage in
+// attach.js, not into a fresh subprocess.) The subprocess inherits
 // `process.env`, plus the user's ~/.claude/ config — so whatever auth
 // (API key or claude.ai subscription) is set up for the main interactive
 // session works here too.
@@ -24,11 +24,13 @@ const ASSISTANT_INSTRUCTIONS = [
   '- Plain text only, no markdown formatting.',
 ].join('\n');
 
-// Only fire the assistant when the user *explicitly* asks for it. Plain chat
-// stays as plain chat — no PTY write (that's the @myco path in pty.js) and
-// no auto-reply. Previous behaviour treated any message ending in '?' as an
-// assistant trigger, which made every casual question look like claude was
-// answering even though the user never typed /btw.
+// Only fire the side-channel assistant when the user *explicitly* asks
+// for it via `/btw`. Everything else — plain chat, mentions, plan-item
+// dispatches — is routed by attach.handleChatMessage (which forwards
+// to the running AgentSession). Previous behaviour treated any message
+// ending in '?' as an assistant trigger, which made every casual
+// question look like claude was answering even though the user never
+// typed /btw.
 function shouldAskAssistant(text) {
   if (typeof text !== 'string') return false;
   return /^\/btw\b/i.test(text);

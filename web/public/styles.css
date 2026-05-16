@@ -486,7 +486,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   font-size: .9rem;
 }
 
-/* ── @myco "waiting" indicator — minimalist three-dot typing animation.
+/* ── claude "waiting" indicator — minimalist three-dot typing animation.
    No text, no pill background — just three small dots fading in/out at the
    bottom of the session pane. As unobtrusive as possible while still
    signaling activity. */
@@ -1664,10 +1664,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 4px;
 }
 
-/* Plan/Test todo list with checkboxes. Checking a Plan item injects it back
-   into the running Claude session as `@myco <text>`. Plan items also have
-   per-item voting + a flat comment thread; once votes hit the threshold
-   (2 by default) the server auto-dispatches the item. */
+/* Plan/Test todo list with checkboxes. Checking a Plan item dispatches it
+   back to the running Claude session via the chat pipeline (a `[run:plan#id]`
+   marker on the dispatched text binds the next turn_result back to the item).
+   Plan items also have per-item voting + a flat comment thread; once votes
+   hit the threshold (2 by default) the server auto-dispatches the item. */
 .artifact-items { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .artifact-items li {
   display: flex;

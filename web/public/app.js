@@ -357,7 +357,7 @@ function escHtml(s) {
 // Wrapped in try/catch so a single bad message (unclosed fence, exotic
 // unicode, hljs hiccup) can't crash the render pipeline. Falls back to
 // escHtml on failure and logs the first time it does so per page — that
-// fingerprint is how we'd diagnose "raw text after @myco" style
+// fingerprint is how we'd diagnose "raw text in chat" style
 // regressions: if you suddenly see `[renderMd] marked unavailable` or
 // `[renderMd] marked.parse threw` in the console after an event, that
 // pinpoints the cause.
@@ -2984,17 +2984,18 @@ function formatChatTs(iso) {
   } catch { return ''; }
 }
 
-// Chat-only flow for @myco messages.
+// Chat-only flow for messages forwarded to claude.
 //
-// When the user @myco's, all of claude's response stream lands in chat:
-//   * Each assistant TEXT block arrives via transcript-delta and is
-//     immediately appended as a separate `claude` chat message — so
-//     pre-tool planning, post-tool summaries, and the final answer
-//     each get their own bubble (close to ChatGPT-style streaming).
+// When the user sends a chat message, all of claude's response stream
+// lands in chat:
+//   * Each assistant TEXT block arrives via the agent-event stream and
+//     is rendered as a separate `assistant_text` agent card — so pre-
+//     tool planning, post-tool summaries, and the final answer each
+//     get their own bubble (close to ChatGPT-style streaming).
 //   * tool_use entries don't post to chat — they're invisible work.
 //     We keep a counter so a tool-only turn (claude ran tools and
 //     didn't produce text) can be summarised at the end.
-//   * The typing-dots indicator stays visible from the @myco send
+//   * The typing-dots indicator stays visible from the chat send
 //     until CLAUDE_IDLE_MS of complete transcript silence (longer
 //     than a single 2s debounce because real claude turns can have
 //     10–30s gaps between text and tool_result frames).
@@ -4442,12 +4443,12 @@ function clearReadOnly() {
 function bindReadOnlyBanner() {
   // No-op — the live-terminal panel that hosted the .vk-key buttons was
   // removed. The read-only banner is now display-only; viewers steer the
-  // session via @myco messages typed into the chat input.
+  // session via chat messages typed into the chat input.
 }
 
-// Floating "waiting for Claude" pill — shown after sending @myco, auto-hides
-// on the next transcript-delta (or after a safety timeout). Pure UI; the
-// server does not send an explicit ack.
+// Floating "waiting for Claude" pill — shown after the user sends a
+// chat message, auto-hides on the next transcript-delta (or after a
+// safety timeout). Pure UI; the server does not send an explicit ack.
 let _mycoWaitingTimer = null;
 function showMycoWaiting() {
   const el = document.getElementById('myco-waiting');
@@ -4853,7 +4854,7 @@ function toggleArtifactView(type) {
 // without scraping the original DOM. Keep these strings in sync with the
 // initial markup in index.html.
 const ARTIFACT_EMPTY_HTML = {
-  plan: 'No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo\'s box to send it back to Claude as <code>@myco</code>.',
+  plan: 'No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo\'s box (or hit ▶ Run) to dispatch it to Claude — findings land as a comment on the item.',
   arch: 'No architecture notes yet. Click <strong>Refresh</strong> to extract them from the latest session activity.',
   test: 'No test plans yet. Click <strong>Refresh</strong> to extract them from the latest session activity.',
 };
@@ -5279,8 +5280,9 @@ function onArtifactItemRun(type, itemId, itemText) {
   const preview = text.length > 160 ? text.slice(0, 157) + '…' : text;
   const tag = `[run:${type}#${itemId}]`;
   // Compose a clear message claude will recognize. The leading
-  // @myco keeps it claude-bound (vs a discussion @user mention).
-  const msg = `@myco ${tag} Please work on this plan item:\n\n${preview || '(no description)'}`;
+  // [run:<type>#<id>] marker is what binds the next turn_result to
+  // this item server-side (see attach.js handleChatMessage).
+  const msg = `${tag} Please work on this plan item:\n\n${preview || '(no description)'}`;
   // Open the chatpane so the user sees activity; bring focus to the
   // input to make follow-up typing easy.
   try { setChatPane(true); } catch {}
@@ -5330,9 +5332,9 @@ async function onArtifactVote(type, itemId) {
       // Surface a brief note in the chat so participants see why the task
       // jumped to Claude on its own.
       const note = data.item ? `🗳️ Plan item "${data.item.text}" hit the auto-execute threshold (${data.threshold} votes) — dispatched to Claude.` : '';
-      // Server already broadcasts the @myco via handleChatMessage, so we
-      // don't need to emit anything client-side; just a console log for
-      // debugging.
+      // Server already broadcasts the dispatch chat frame via
+      // handleChatMessage, so we don't need to emit anything client-
+      // side; just a console log for debugging.
       console.log('[artifact-vote]', note);
     }
   } catch (err) {
@@ -5361,8 +5363,10 @@ async function onArtifactItemToggle(cb) {
   const sid = state.activeId;
   if (!type || !id || !sid) return;
   const li = cb.closest('li');
-  // For 'plan' items, checking the box also dispatches the todo back to the
-  // running Claude session as `@myco <text>`. The server is the source of
+  // For 'plan' items, checking the box also dispatches the todo back to
+  // the running Claude session via the canonical chat pipeline (the
+  // dispatched text carries a `[run:<type>#<id>]` marker that binds the
+  // next turn_result back to this item). The server is the source of
   // truth — we POST and let the response confirm.
   const action = (type === 'plan' && cb.checked) ? 'run' : 'mark';
   try {

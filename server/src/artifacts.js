@@ -4,8 +4,11 @@
 // plans from the running session's JSONL transcript via the Anthropic API
 // (extractor.callClaudeCli). Stored under rec.artifacts[type] on the
 // session record. Checking a Plan item or hitting the per-item quorum
-// dispatches it back to the running Claude session as `@myco <text>` via
-// the canonical chat-message path in pty.js.
+// dispatches it back to the running Claude session via the canonical
+// chat-message path in attach.handleChatMessage — the dispatched text
+// carries a `[run:<type>#<id>]` marker which attach.js uses to bind the
+// next turn_result's outcome (status + cost + summary + final text) to
+// the originating item's runs[] + comments[].
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -21,20 +24,21 @@ const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
 // the chat row visually matches the artifact pane the item came from.
 const ARTIFACT_TYPE_GLYPH = { plan: '📋', test: '🧪', arch: '🏗️' };
 
-// Build the text that lands in BOTH the chat-history (for viewer
-// awareness) and the running Claude PTY (`@myco <body>` prefix is
-// stripped server-side, the rest becomes Claude's input). Format:
+// Build the text that lands in BOTH the chat history (for viewer
+// awareness) AND the running Claude session as a user message. The
+// dispatched text is what claude will execute on, so we want it short
+// and direct — comments come last so they augment, not bury, the
+// instruction. A `[run:<type>#<id>]` marker (added by the client when
+// it composes the dispatch, see web/public/app.js onArtifactItemRun)
+// is what binds the eventual turn_result back to this item; the text
+// the server emits is the human-readable body.
 //
-//   @myco [📋 Plan item · submitted by @kkrazy]
+//   [📋 Plan item · submitted by @kkrazy]
 //   {item.text}
 //
 //   Comments:
 //   - @alice: …
 //   - @bob: …
-//
-// The title line keeps the type + submitter visible at a glance in
-// chat; the body is what Claude executes on; comments come last so
-// they augment but don't bury the primary instruction.
 function _artifactLabel(type) {
   return type === 'plan' ? 'Plan item' : type === 'test' ? 'Test item' : 'Item';
 }
@@ -53,13 +57,13 @@ function _artifactCommentsBlock(item) {
 function buildArtifactRunText(type, item, user) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
   const header = `[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
-  return [`@myco ${header}`, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
+  return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 function buildArtifactQuorumText(type, item) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
   const voters = (item.voters || []).map((v) => `@${v}`).join(', ');
   const header = `[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
-  return [`@myco ${header}`, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
+  return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 
 // All three artifacts (plan / test / arch) are mirrored into
@@ -256,8 +260,8 @@ function readLegacyArchFromFile(rec) {
   return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
 }
 
-// Plan items only — see autoFireIfQuorum below. Two distinct voters dispatch
-// the @myco run automatically; arch is unactionable, test items don't run.
+// Plan items only — see autoFireIfQuorum below. Two distinct voters
+// auto-dispatch the run; arch is unactionable, test items don't run.
 const AUTO_EXECUTE_VOTE_THRESHOLD = 2;
 const COMMENT_TEXT_MAX = 1000;
 const COMMENTS_PER_ITEM_MAX = 50;
@@ -453,9 +457,12 @@ function register(app, deps) {
     res.json({ artifact, mergeProposals, mergeError });
   });
 
-  // Dispatch a Plan or Test item to the running Claude session as
-  // `@myco <text>` via the canonical chat pipeline (so it shows up in the
-  // discussion history and broadcasts to read-only viewers).
+  // Dispatch a Plan or Test item to the running Claude session as a
+  // chat message via the canonical chat pipeline (so it shows up in
+  // the discussion history and broadcasts to read-only viewers). The
+  // dispatched text carries the `[run:<type>#<id>]` marker so
+  // attach.handleChatMessage can bind the next turn_result back to
+  // this item.
   app.post('/sessions/:id/artifact/run', (req, res) => {
     const ctx = fileApiPreamble(req, res, 'viewer');
     if (!ctx) return;
@@ -505,9 +512,9 @@ function register(app, deps) {
     res.json({ ok: true, item });
   });
 
-  // Toggle a vote on a Plan item; auto-fire @myco if the per-item voter set
-  // hits AUTO_EXECUTE_VOTE_THRESHOLD distinct users. Test items only carry
-  // votes (no auto-fire); arch items can't be voted on.
+  // Toggle a vote on a Plan item; auto-dispatch the run if the per-item
+  // voter set hits AUTO_EXECUTE_VOTE_THRESHOLD distinct users. Test items
+  // only carry votes (no auto-fire); arch items can't be voted on.
   function autoFireIfQuorum(ctx, type, item) {
     if (item.done) return null;
     if (type !== 'plan') return null;

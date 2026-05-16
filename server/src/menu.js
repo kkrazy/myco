@@ -59,7 +59,7 @@ function autoRespondToMenu(sessionId, session, menu, optionN, verb, target) {
   const tgt = target ? `${target.tool}(${target.input || ''})`.slice(0, 120) : 'permission';
   const text = verb === 'allow'
     ? `✓ auto-allowed \`${tgt}\` (matched allow list — option ${optionN}).`
-    : `🚫 auto-denied \`${tgt}\` (not in allow list — option ${optionN}). Run \`/allow <pattern>\` then \`@myco try again\` to retry.`;
+    : `🚫 auto-denied \`${tgt}\` (not in allow list — option ${optionN}). Run \`/allow <pattern>\`, then send \`try again\` in chat.`;
   const msg = {
     user: ASSISTANT_USER,
     text,

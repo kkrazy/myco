@@ -22,6 +22,8 @@
 //   _detectMentionTarget — chat-routing test hook.
 //   _supersedeStaleMenus — menu.js + sessions.js zombie cleanup.
 
+const crypto = require('crypto');
+
 // Late-bound: sessions.js requires this module, so destructuring at load
 // time would capture undefined values from the partial export.
 const sessionsMod = require('./sessions');
@@ -43,12 +45,6 @@ function getArtifactsMod() {
   if (!_artifactsMod) _artifactsMod = require('./artifacts');
   return _artifactsMod;
 }
-
-// "@<word> <body>" chat messages — legacy alias for "talk to claude".
-// Originally PTY-routed via "@myco"/"@claude"; with PTY gone the prefix
-// is still stripped so chat habits keep working but the body is just
-// forwarded to AgentSession.write().
-const CHAT_ALIAS_PREFIX_RE = /^@([A-Za-z][\w-]{0,30})\s+([\s\S]+)/;
 
 const CHAT_TEXT_LIMIT = 4000;
 const ASSISTANT_SCROLLBACK_LINES = 40;
@@ -84,8 +80,10 @@ function _isKnownChatUser(word) {
 // being forwarded to claude.
 //
 // Matches `@kkrazy`, `@kkrazy hi there`, `@kkrazy, …` (trailing punct OK).
-// Does NOT match `@myco` / `@claude` / any other non-username @<word> —
-// those keep routing to claude for backwards-compat power-user habits.
+// Returns null for `@<unknown-word>` — those fall through to the
+// normal chat-to-claude path. (The legacy `@myco` / `@claude`
+// "talk-to-claude" prefix is gone — every chat message reaches claude
+// by default; only the head-of-message mention syntax is special.)
 function _detectMentionTarget(text) {
   const m = String(text || '').match(/^@([A-Za-z][\w-]{0,30})\b/);
   if (!m) return null;
@@ -163,6 +161,12 @@ function _stampPlanItemStatus(sessionId, itemId, status, summary) {
 // turn_result event lands. status = success / error / etc. (matches
 // the agent's turn subtype). summary captures cost + duration so
 // the UI chip can show e.g. "✓ done · 6.4s".
+//
+// ALSO appends an auto-generated "run summary" comment to item.comments
+// (user='claude', meta.kind='run-summary') so the findings of a
+// dispatched run live on the item itself — clicking the comment thread
+// shows the per-run log inline with any human discussion. One summary
+// comment per run.
 function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   const rec = sessionsMod.getSessionRecord(sessionId);
   if (!rec) return;
@@ -179,6 +183,9 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   const outTok = u.output_tokens || 0;
   const durS = turnResultEv.durationMs != null
     ? (turnResultEv.durationMs / 1000).toFixed(1) + 's'
+    : null;
+  const costStr = (typeof turnResultEv.totalCostUsd === 'number')
+    ? '$' + turnResultEv.totalCostUsd.toFixed(4)
     : null;
   const summary = [
     durS,
@@ -198,6 +205,30 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
     item.runs.push(outcome);
   }
   if (item.runs.length > 10) item.runs = item.runs.slice(-10);
+
+  // Auto-summary comment — surfaces the run's findings ON THE ITEM so a
+  // teammate scanning the plan sees "what did claude actually do for
+  // this todo" without leaving the Plan tab. Tagged user='claude' +
+  // meta.kind='run-summary' so the UI can render it distinctively.
+  if (!Array.isArray(item.comments)) item.comments = [];
+  const glyph = status === 'success' ? '✓' : '⚠';
+  const headerBits = [`${glyph} ${status}`, durS, costStr,
+    `${inTok}↓/${outTok}↑`].filter(Boolean).join(' · ');
+  const resultBody = outcome.result
+    ? (outcome.result.length > 800 ? outcome.result.slice(0, 797) + '…' : outcome.result)
+    : '_(no final assistant text — see the chat timeline for the per-tool detail)_';
+  const summaryText = `${headerBits}\n\n${resultBody}`;
+  item.comments.push({
+    id: crypto.randomBytes(6).toString('hex'),
+    user: 'claude',
+    text: summaryText,
+    ts: outcome.ts,
+    meta: { kind: 'run-summary', runStartedAt: outcome.startedAt || null },
+  });
+  // Keep the same 50-comment cap as the manual comment-add path so a
+  // chatty item doesn't bloat plan.json. Oldest dropped first.
+  if (item.comments.length > 50) item.comments = item.comments.slice(-50);
+
   sessionsMod.saveStore();
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
@@ -842,8 +873,8 @@ function attachViewerWebSocket(session, ws, opts = {}) {
 //     bounce back with an explanatory chat note instead of being
 //     forwarded as a literal claude message (the agent would just
 //     reply "Unknown command: /foo").
-//   * `/btw <text>` / "@myco do…" with shouldAskAssistant → runs the
-//     side-channel claude-cli via btw.askAssistant (no agent forward).
+//   * `/btw <text>` with shouldAskAssistant → runs the side-channel
+//     claude-cli via btw.askAssistant (no agent forward).
 //   * Special key tokens (esc, ctrl-c) → AgentSession.interrupt(). Other
 //     keys (enter, tab, …) have no SDK equivalent; we bounce them.
 //   * Bare digit `1`-`9` while a pendingMenu is open → handleMenuPick
@@ -907,13 +938,6 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   if (user === ASSISTANT_USER) return;
   if (mentionTarget) return;
 
-  // /task, /skip, /cancel — internal task-list controls. Rewrite to the
-  // "@myco /task" form that the agent's CLAUDE.md teaches it to parse.
-  const taskList = text.match(/^\/tasks?\s*$/i);
-  if (taskList) text = '@myco /task';
-  const taskAction = text.match(/^\/(skip|cancel)\s+(\d+)\s*$/i);
-  if (taskAction) text = `@myco /${taskAction[1].toLowerCase()} ${taskAction[2]}`;
-
   if (text.startsWith('/')) {
     const rec = sessionsMod.loadStore().sessions[sessionId];
     const absCwd = rec && rec.absCwd;
@@ -952,11 +976,11 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
     });
     return;
   }
-  // Strip a leading @<non-user-word> alias prefix so "@myco hi" / "@claude
-  // hi" keeps working — _detectMentionTarget already ruled out real users
-  // before we got here.
-  const aliasPrefix = text.match(CHAT_ALIAS_PREFIX_RE);
-  const body = aliasPrefix ? aliasPrefix[2] : text;
+  // No more @<word> alias-prefix strip — the legacy "@myco hi" /
+  // "@claude hi" syntax is gone. _detectMentionTarget already short-
+  // circuited @<known-user> mentions above, so what's left here is
+  // body text the user wants claude to act on. Forward as-is.
+  const body = text;
   if (!session.alive) {
     session.emit('chat', {
       user: ASSISTANT_USER,

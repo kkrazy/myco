@@ -778,26 +778,26 @@ test_conv_view_js() {
 }
 
 test_at_myco_chat_handler() {
-  # Phase 9 step 2: @myco / @<word> routing now lives in attach.js's
-  # handleChatPostfixes. session.write() pushes to the AgentSession's
-  # streaming-input queue (no PTY \r).
-  grep -q '@myco' server/src/attach.js && pass "@myco handler" || fail "@myco handler"
-  grep -q 'session.write' server/src/attach.js && pass "session.write for @myco" || fail "session.write present"
-  # Generalised @<word> prefix: any @<unknown-word> routes to the agent.
-  # @<known-user> is the only chat-only path (mention with highlight).
-  grep -q 'CHAT_ALIAS_PREFIX_RE' server/src/attach.js \
-    && pass "attach.js: generalised @<word> alias prefix" \
-    || fail "attach.js: generalised @<word> alias prefix"
+  # Phase 9+ (post-@myco-removal): there is no "@<word>" alias prefix
+  # any more. Every non-mention chat message reaches claude via
+  # session.write(); @<known-user> is the only chat-only path
+  # (mention with highlight). The legacy CHAT_ALIAS_PREFIX_RE strip
+  # is gone — re-adding it would suppress real text claude needs to see.
+  grep -q 'session.write' server/src/attach.js && pass "session.write present in chat path" || fail "session.write missing"
+  if grep -q 'CHAT_ALIAS_PREFIX_RE' server/src/attach.js; then
+    fail "attach.js still references CHAT_ALIAS_PREFIX_RE — the @myco/@claude alias strip should be gone"
+  else
+    pass "attach.js: legacy CHAT_ALIAS_PREFIX_RE removed"
+  fi
+  if grep -qE "text\s*=\s*['\"]@myco" server/src/attach.js; then
+    fail "attach.js still rewrites slash commands to '@myco …' — should forward bare text instead"
+  else
+    pass "attach.js: no '@myco /…' slash-rewrite path"
+  fi
   grep -q '_isKnownChatUser' server/src/attach.js \
     && pass "attach.js: known-user check guards mention routing" \
     || fail "attach.js: known-user check guards mention routing"
-  # Multi-line capture: the alias prefix regex must use [\s\S] (not .)
-  # so a multi-line @<word> message reachable via the discussion
-  # textarea captures all lines, not just the first.
-  grep -qF '[\s\S]+' server/src/attach.js \
-    && pass "chat-alias regex captures multi-line input" \
-    || fail "chat-alias regex captures multi-line input"
-  # Plain chat (no @myco prefix, no /btw) must NOT trigger the assistant.
+  # Plain chat (no /btw) must NOT trigger the side-channel assistant.
   # Regression guard: the old shouldAskAssistant treated any '?'-ending
   # message as an assistant trigger, making every question look like claude
   # was replying even without a /btw prefix.
@@ -807,7 +807,7 @@ test_at_myco_chat_handler() {
     const cases = [
       ['hello', false],
       ['is this on?', false],
-      ['@myco what time is it', false],
+      ['please look at this', false],
       ['/btw whats up', true],
     ];
     for (const [text, want] of cases) {
@@ -1088,13 +1088,14 @@ test_new_session_readonly() {
   grep -q '_setClaudeStatusLine' web/public/app.js \
     && pass "app.js: typing indicator label uses live status text" \
     || fail "app.js: typing indicator label uses live status text"
-  # Chat-only flow: when @myco sent, a typing indicator appears in chat;
-  # assistant transcript text is buffered and posted as a chat message
-  # after a quiet window so the user gets the FINAL result without
-  # intermediate noise. The main pane is NOT auto-switched on send.
+  # Chat-only flow: when a chat message is sent, a typing indicator
+  # appears in chat; assistant transcript text is buffered and posted
+  # as a chat message after a quiet window so the user gets the FINAL
+  # result without intermediate noise. The main pane is NOT auto-
+  # switched on send.
   grep -q '_markAwaitingClaude' web/public/app.js \
-    && pass "app.js: @myco marks awaiting-claude" \
-    || fail "app.js: @myco marks awaiting-claude"
+    && pass "app.js: chat send marks awaiting-claude" \
+    || fail "app.js: chat send marks awaiting-claude"
   grep -q 'CLAUDE_IDLE_MS' web/public/app.js \
     && pass "app.js: idle-timeout constant defined" \
     || fail "app.js: idle-timeout constant defined"
@@ -1107,8 +1108,8 @@ test_new_session_readonly() {
     && pass "attach.js: assistant text persisted into rec.chat" \
     || fail "attach.js: assistant-text watcher missing"
   grep -q '_scheduleClaudeIdleCheck' web/public/app.js \
-    && pass "app.js: schedules idle check after @myco send" \
-    || fail "app.js: schedules idle check after @myco send"
+    && pass "app.js: schedules idle check after chat send" \
+    || fail "app.js: schedules idle check after chat send"
   grep -q 'claude-typing-dots' web/public/styles.css \
     && pass "styles.css: typing-dots animation" \
     || fail "styles.css: typing-dots animation"
@@ -1693,12 +1694,17 @@ test_chat_window() {
     && pass "artifacts.js: _myco_ directory constant defined" \
     || fail "artifacts.js: MYCO_DIR constant missing — sharing layout unsettled"
   # When an artifact item is dispatched (manual /run or auto-quorum) the
-  # text that lands in BOTH the chat history and Claude's PTY input must
-  # carry: the @myco prefix (so the PTY pipeline forwards it), a title
-  # line naming the artifact type + the submitter, the item body, and
-  # any per-item comments. Chat viewers see who triggered what at a
-  # glance; Claude executes against the full instruction (body +
-  # comments). Tests run via node since the helper is exported.
+  # text that lands in BOTH the chat history and the running Claude
+  # session must carry: a title line naming the artifact type + the
+  # submitter, the item body, and any per-item comments. Chat viewers
+  # see who triggered what at a glance; Claude executes against the
+  # full instruction (body + comments).
+  #
+  # Post-@myco-removal (2026-05-16): the dispatched text must NOT carry
+  # an `@myco ` prefix any more — every chat message reaches claude
+  # by default, and the `[run:<type>#<id>]` marker (added client-side
+  # in onArtifactItemRun) is what binds the next turn_result back to
+  # the item, not the @myco prefix.
   if have_node; then
     node -e "
       const a = require('./server/src/artifacts');
@@ -1710,14 +1716,14 @@ test_chat_window() {
           { user: 'bob',   text: 'tenant scoping at query time, please' },
         ],
       }, 'kkrazy');
-      if (!t1.startsWith('@myco ')) throw new Error('manual-run text must start with @myco prefix');
-      if (!/\[📋 Plan item · submitted by @kkrazy\]/.test(t1)) throw new Error('manual-run title missing type+submitter — got: ' + JSON.stringify(t1));
+      if (t1.startsWith('@myco ')) throw new Error('manual-run text must NOT start with @myco prefix (removed) — got: ' + JSON.stringify(t1));
+      if (!/^\[📋 Plan item · submitted by @kkrazy\]/.test(t1)) throw new Error('manual-run title missing type+submitter on first line — got: ' + JSON.stringify(t1));
       if (!t1.includes('Wire up the /v2/orders cursor pager')) throw new Error('manual-run text missing body');
       if (!t1.includes('- @alice: don\\'t forget the limit clamp')) throw new Error('manual-run text missing alice comment');
       if (!t1.includes('- @bob: tenant scoping at query time, please')) throw new Error('manual-run text missing bob comment');
       // Test artifact uses the 🧪 glyph.
       const t2 = a.buildArtifactRunText('test', { text: 'k6 load run at 100 RPS', comments: [] }, 'kkrazy');
-      if (!/\[🧪 Test item · submitted by @kkrazy\]/.test(t2)) throw new Error('test title wrong glyph/label: ' + JSON.stringify(t2));
+      if (!/^\[🧪 Test item · submitted by @kkrazy\]/.test(t2)) throw new Error('test title wrong glyph/label: ' + JSON.stringify(t2));
       if (t2.includes('Comments:')) throw new Error('empty comments must NOT render a Comments: block');
       // Quorum dispatch.
       const t3 = a.buildArtifactQuorumText('plan', {
@@ -1725,10 +1731,10 @@ test_chat_window() {
         voters: ['alice', 'bob', 'charlie'],
         comments: [{ user: 'alice', text: 'rolling out behind a flag' }],
       });
-      if (!t3.startsWith('@myco ')) throw new Error('quorum text must start with @myco prefix');
+      if (t3.startsWith('@myco ')) throw new Error('quorum text must NOT start with @myco prefix (removed) — got: ' + JSON.stringify(t3));
       if (!/quorum reached \\(3 voters: @alice, @bob, @charlie\\)/.test(t3)) throw new Error('quorum title missing voter list: ' + JSON.stringify(t3));
       if (!t3.includes('- @alice: rolling out behind a flag')) throw new Error('quorum text missing comment');
-    " && pass "artifact run/quorum dispatch text carries type+submitter+comments" \
+    " && pass "artifact run/quorum dispatch text carries type+submitter+comments (no @myco prefix)" \
       || fail "artifact buildArtifactRunText / buildArtifactQuorumText shape wrong"
   fi
   grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"
@@ -1761,7 +1767,8 @@ test_chat_window() {
   grep -q "callClaudeCli" server/src/extractor.js && pass "extractor uses claude-cli" || fail "extractor uses claude-cli"
   grep -q "callAnthropic" server/src/extractor.js && fail "extractor still imports callAnthropic (regression)" || pass "extractor no longer imports callAnthropic"
   # Regression: extractor pulls from BOTH the JSONL transcript AND the
-  # discussion-panel chat (rec.chat) so non-@myco messages still feed Plan.
+  # discussion-panel chat (rec.chat) so human-to-human notes still feed
+  # Plan even when they didn't reach Claude as a user turn.
   grep -q "getChatHistory" server/src/extractor.js && pass "extractor reads chat history" || fail "extractor reads chat history"
   grep -q "readChatTail"   server/src/extractor.js && pass "extractor has readChatTail helper" || fail "extractor has readChatTail helper"
   # Regression: extractor prompts must tell Claude to spot-check the
@@ -1792,32 +1799,40 @@ test_chat_window() {
   # routes to the running Claude PTY by default, which makes /m redundant.
   # The negative assertion below (slashcmds: /m removed) lives in the
   # earlier chat-routing block — duplicating here would just whine twice.
-  # /task /skip /cancel: chat-side commands that the server rewrites
-  # into @myco-forwarded internal-task requests. Lets the user intervene
-  # on the running Claude's TaskList from chat. The CLAUDE.md project
-  # rule (Working in this repo §3) tells Claude how to handle them and
-  # to volunteer stale-task heads-up lines.
+  # /task /skip /cancel: chat-side commands that forward a natural-
+  # language directive to the running Claude session via
+  # ctx.session.write() in handleTaskList / handleTaskSkip (no @myco
+  # rewrite — that was removed 2026-05-16). The CLAUDE.md project
+  # rule (Working in this repo §3) tells Claude how to handle the
+  # forwarded directives and to volunteer stale-task heads-up lines.
   grep -q "names: \['task', 'tasks'\]" server/src/slashcmds.js && pass "/task command registered" || fail "/task command missing"
   grep -q "names: \['skip'\]" server/src/slashcmds.js && pass "/skip command registered" || fail "/skip command missing"
   grep -q "names: \['cancel'\]" server/src/slashcmds.js && pass "/cancel command registered" || fail "/cancel command missing"
-  grep -q 'function handleTaskList' server/src/slashcmds.js && pass "handleTaskList usage reply" || fail "handleTaskList usage reply missing"
-  grep -q 'function handleTaskSkip' server/src/slashcmds.js && pass "handleTaskSkip usage reply" || fail "handleTaskSkip usage reply missing"
-  grep -qF "text.match(/^\/tasks?\s*$/i)" server/src/attach.js \
-    && pass "attach.js: /task rewrites to @myco /task" \
-    || fail "attach.js: /task rewrite missing"
-  grep -qF "text.match(/^\/(skip|cancel)\s+(\d+)\s*$/i)" server/src/attach.js \
-    && pass "attach.js: /skip + /cancel rewrite to @myco" \
-    || fail "attach.js: /skip + /cancel rewrite missing"
+  grep -q 'function handleTaskList' server/src/slashcmds.js && pass "handleTaskList handler" || fail "handleTaskList handler missing"
+  grep -q 'function handleTaskSkip' server/src/slashcmds.js && pass "handleTaskSkip handler" || fail "handleTaskSkip handler missing"
+  grep -qF 'ctx.session.write' server/src/slashcmds.js \
+    && pass "slashcmds.js: task handlers forward to claude via session.write" \
+    || fail "slashcmds.js: task handlers don't forward to claude — they'd be no-ops"
+  if grep -qE "text\s*=\s*['\"]@myco /(task|skip|cancel)" server/src/attach.js; then
+    fail "attach.js: legacy @myco /… rewrite is back — task forwarding should be in slashcmds.handleTaskList/Skip"
+  else
+    pass "attach.js: no legacy @myco /task rewrite"
+  fi
   grep -qF '/^\/tasks?\s*$/i' web/public/app.js \
     && pass "app.js: typing-dots arm recognizes /task" \
     || fail "app.js: typing-dots arm /task missing"
   grep -qF '/^\/(skip|cancel)\s+\d+\s*$/i' web/public/app.js \
     && pass "app.js: typing-dots arm recognizes /skip + /cancel" \
     || fail "app.js: typing-dots arm /skip+/cancel missing"
-  # CLAUDE.md must document the @myco-forwarded task-control protocol so
-  # future Claude instances handle the forwarded commands consistently.
-  grep -qF '@myco /task' CLAUDE.md \
-    && pass "CLAUDE.md: documents /task protocol" \
+  # CLAUDE.md must document the bare-slash task-control protocol so
+  # future Claude instances handle the forwarded directives consistently.
+  if grep -qF '@myco /task' CLAUDE.md; then
+    fail "CLAUDE.md still documents '@myco /task' — should reference bare /task"
+  else
+    pass "CLAUDE.md: @myco /task references removed"
+  fi
+  grep -qF 'task-list etiquette' CLAUDE.md \
+    && pass "CLAUDE.md: documents /task protocol (bare-slash form)" \
     || fail "CLAUDE.md: missing /task protocol section"
   grep -qF 'Stale-task heads-up' CLAUDE.md \
     && pass "CLAUDE.md: documents stale-task heads-up rule" \
@@ -2095,6 +2110,19 @@ test_chat_window() {
   else
     skip "test/persist-assistant-chat.test.js (no host node)"
   fi
+  # Regression: when a [run:plan#<id>]-tagged dispatch finishes, the
+  # turn_result outcome must append a run-summary comment to the item
+  # (user='claude', meta.kind='run-summary') so findings live ON the
+  # item. Added with the @myco-prefix removal 2026-05-16.
+  if have_node; then
+    if node test/plan-run-comment.test.js >/dev/null 2>&1; then
+      pass "test/plan-run-comment.test.js (4 cases)"
+    else
+      fail "test/plan-run-comment.test.js — re-run with 'node test/plan-run-comment.test.js' to see failures"
+    fi
+  else
+    skip "test/plan-run-comment.test.js (no host node)"
+  fi
   grep -qF 'function persistAssistantTextToChat' server/src/attach.js \
     && pass "attach.js: persistAssistantTextToChat defined" \
     || fail "attach.js: persistAssistantTextToChat missing"
@@ -2250,7 +2278,7 @@ test_chat_window() {
   # Bare-digit menu pick: while an AgentSession.pendingMenu is open, a
   # plain "1" / "2" answers it via handleMenuPick (resolves SDK promise
   # AND stamps the chat row). Verified in attach.js's handleChatPostfixes.
-  grep -q "menu pick" server/src/attach.js && pass "@myco digit shortcuts to menu pick" || fail "@myco digit shortcut missing"
+  grep -q "menu pick" server/src/attach.js && pass "bare-digit chat shortcuts to menu pick" || fail "menu-pick digit shortcut missing"
   # Regression: parseStringArray must tolerate code fences + non-JSON.
   if have_node; then
     node -e "

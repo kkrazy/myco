@@ -47,10 +47,10 @@ const COMMANDS = [
     usage: '/bug <description>',
     handler: (ctx) => addPlanItem(ctx, 'Bug'),
   },
-  // Task-list intervention. The actual rewrites happen in
-  // pty.handleChatMessage (right next to /m); these registrations are
-  // here so /help lists them and the alias works as a regular command
-  // when no rewrite path applies (unknown args, etc.).
+  // Task-list intervention. The handler forwards a natural-language
+  // directive to the running Claude session (see handleTaskList /
+  // handleTaskSkip); the agent's CLAUDE.md task-list etiquette teaches
+  // it to respond with the list / dismissal.
   {
     names: ['task', 'tasks'],
     summary: 'Ask the running Claude to list its pending + in-progress internal tasks',
@@ -606,26 +606,37 @@ function handleAdd2Plan(ctx) {
   }
 }
 
-// /task /tasks — the rewrite in pty.handleChatMessage only fires when the
-// command appears with no extra args ("^/tasks?\s*$"). If anything else
-// followed, fall through here with a usage hint so the user discovers
-// the right shape.
+// /task /tasks — forward a "show your TaskList" prompt to the running
+// Claude session. The agent's CLAUDE.md task-list etiquette teaches
+// claude what to do with these phrasings (no @myco prefix any more —
+// every chat message reaches claude as a normal user turn, so we just
+// send the natural-language directive).
 function handleTaskList(ctx) {
-  ctx.reply(
-    'Usage: `/task` — asks the running Claude to list its current pending and in-progress internal tasks, ' +
-    'so you can see what work is queued and intervene with `/skip <id>` or `/cancel <id>`.',
-  );
+  if (!ctx.session || !ctx.session.alive) {
+    ctx.reply('(/task: session not running)');
+    return;
+  }
+  ctx.session.write('Please list your current pending and in-progress internal tasks (TaskList). Format as a short numbered list with id + subject.');
 }
 
-// /skip /cancel — same fallthrough. Real action happens via the @myco
-// forwarding rewrite in pty.handleChatMessage; this handler only fires
-// when the args don't parse as a numeric id.
+// /skip <N> / /cancel <N> — forward a "dismiss task N" prompt. If the
+// arg isn't a numeric id, bounce with a usage hint instead of forwarding
+// garbage.
 function handleTaskSkip(ctx) {
   const name = (ctx && ctx.command) || 'skip';
-  ctx.reply(
-    `Usage: \`/${name} <task-id>\` — tells the running Claude to dismiss the given internal task ` +
-    `(it will run TaskUpdate → status=deleted). Use \`/task\` first to see ids.`,
-  );
+  const arg = String((ctx && ctx.args) || '').trim();
+  if (!/^\d+$/.test(arg)) {
+    ctx.reply(
+      `Usage: \`/${name} <task-id>\` — tells the running Claude to dismiss the given internal task ` +
+      `(TaskUpdate → status=deleted). Use \`/task\` first to see ids.`,
+    );
+    return;
+  }
+  if (!ctx.session || !ctx.session.alive) {
+    ctx.reply(`(/${name}: session not running)`);
+    return;
+  }
+  ctx.session.write(`Please dismiss internal task #${arg} via TaskUpdate({ taskId, status: 'deleted' }) and reply with one line confirming.`);
 }
 
 async function handleIssue(ctx, { kind, labels }) {
@@ -741,7 +752,7 @@ async function handleAllow(ctx) {
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
   if (!rec) { ctx.reply('(no session record found)'); return; }
   permissions.addAllow(rec, pattern);
-  ctx.reply(`✓ added \`${pattern}\` to the allow list. Run \`@myco try again\` to retry the previously-denied tool.`);
+  ctx.reply(`✓ added \`${pattern}\` to the allow list. Send \`try again\` in chat to retry the previously-denied tool.`);
 }
 
 async function handleDeny(ctx) {
