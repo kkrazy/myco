@@ -982,6 +982,16 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   .token-meter {
     font-size: 0.66rem;
   }
+  /* Hide the Esc kbd hint on mobile — touch keyboards don't show
+     Esc anyway, so the chip is dead chrome that just crowds the
+     status row. Stop icon + label still tells the story. */
+  .claude-typing-stop kbd { display: none; }
+  .claude-typing-stop {
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    min-height: 30px;
+  }
+  .claude-stop-icon { width: 12px; height: 12px; }
   /* Composer buttons bump to 40px on mobile for finger-friendly
      tap targets. The SVG inside scales proportionally via the
      ".composer-icon" override below. */
@@ -2203,22 +2213,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   color: #08120d;
 }
 
-/* Stop: red disc that replaces Send while claude is running. */
-.composer-btn-stop {
-  background: rgba(255, 130, 130, .18);
-  color: #ff8a8a;
-  border: 1px solid rgba(255, 130, 130, .35);
-  display: none;     /* hidden by default; .composer-running flips */
-}
-.composer-btn-stop:hover {
-  background: rgba(255, 130, 130, .28);
-  color: #ffb0b0;
-  border-color: rgba(255, 130, 130, .55);
-}
-
-/* When the composer is in "running" state, swap Send for Stop. */
-#chat-form.composer.composer-running .composer-btn-send { display: none; }
-#chat-form.composer.composer-running .composer-btn-stop { display: inline-flex; }
+/* (Retired) .composer-btn-stop + .composer-running swap rules —
+   Stop now lives in #claude-typing (the status strip above the
+   composer). Send stays always-visible in the composer so users
+   can queue messages while claude is running. */
 
 /* Floating toggle on the terminal pane (always available when a session
    is open). Position it top-right so it doesn't collide with btn-expand.
@@ -3569,9 +3567,66 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    strip already hides itself when idle (visibility:hidden), so we
    don't need a separate hide rule — when the strip is invisible, so
    is the button. The kbd hint mirrors the Esc-to-interrupt binding. */
-/* (2026-05-16) #claude-stop moved out of the status strip into the
-   composer (#chat-form). Its visuals are styled via .composer-btn-
-   stop now. The old .claude-typing-stop rules are retired. */
+/* Stop button — lives in the status row (#claude-typing) on the
+   right side, just before the token meter. Send stays in the
+   composer below and is NEVER replaced, so the user can keep
+   sending messages while claude is running. Visible whenever the
+   status row is visible; hidden only in done / error states
+   (interrupt no longer applies — the turn already ended). */
+.claude-typing-stop {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.74rem;
+  color: #ff8a8a;
+  background: rgba(255, 130, 130, .12);
+  border: 1px solid rgba(255, 130, 130, .35);
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1.4;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.claude-typing-stop:hover {
+  background: rgba(255, 130, 130, .22);
+  border-color: rgba(255, 130, 130, .55);
+  color: #ffb0b0;
+}
+.claude-typing-stop:active { transform: scale(.96); }
+.claude-stop-icon {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+.claude-stop-label { flex: 0 0 auto; }
+.claude-typing-stop kbd {
+  font: inherit;
+  font-size: 0.66rem;
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, .28);
+  color: rgba(255, 255, 255, .65);
+  opacity: .85;
+  margin-left: 2px;
+}
+/* When the strip is in done/error states the Stop button is
+   pointless — the turn already ended, there's nothing to interrupt.
+   Token meter stays visible (it shows the just-finished turn's
+   stats). */
+.claude-typing-done .claude-typing-stop,
+.claude-typing-error .claude-typing-stop { display: none; }
+/* When the strip carries token meter but NOT stop, push the meter
+   right via auto margin on it. Otherwise stop's own margin-left:
+   auto handles the right-alignment. */
+.claude-typing-done .token-meter,
+.claude-typing-error .token-meter,
+.claude-typing:not(.claude-typing-done):not(.claude-typing-error) .claude-typing-stop ~ .token-meter {
+  margin-left: 8px;
+}
 .claude-typing[hidden] {
   /* The global !important display:none rule on the `hidden` attribute
      at the top of this file would otherwise collapse the slot on
