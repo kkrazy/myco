@@ -22,7 +22,14 @@ const crypto = require('crypto');
 const path = require('path');
 const { query } = require('@anthropic-ai/claude-agent-sdk');
 
-const MAX_EVENTS = 500;
+// Per-session in-memory replay buffer. Sized to cover long tool-
+// heavy sessions: at ~5 events per turn (tool_use + result + maybe
+// permission + claude text + turn_result), 5000 events ≈ 1000 turns
+// of history. Bigger than this and we should be persisting events
+// to disk; for now this generous in-memory cap survives any single
+// uninterrupted session. Reset when the session is killed (5min
+// keepalive grace expiry — see attach.js).
+const MAX_EVENTS = 5000;
 
 // Async iterable backed by a manual push() API. Used as the SDK's
 // streaming-input prompt — every user message landed via .write()

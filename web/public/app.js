@@ -2281,14 +2281,14 @@ function _insertChronological(list, el, ts) {
 // path that mutates #chat-messages: _appendAgentEvent,
 // _appendChatMessageDom, renderChatPane.
 const CHAT_VISIBLE_LIMIT = 50;
-const CHAT_LOAD_OLDER_BATCH = 25;
-// Hard DOM cap: anything older than the last CHAT_HARD_CAP cards is
-// PHYSICALLY removed from the DOM (not just hidden). This is the
-// memory-savings backstop — the visible-limit cap above only hides;
-// hidden DOM still holds rendered mermaid SVGs (often 50-200KB each)
-// + hljs token spans + retained closures. Past 250 cards, the
-// browser starts feeling sluggish on weaker devices.
-const CHAT_HARD_CAP = 250;
+const CHAT_LOAD_OLDER_BATCH = 50;
+// Hard DOM cap: cards older than the last CHAT_HARD_CAP rows are
+// PHYSICALLY removed from the DOM (not just hidden). Memory-savings
+// backstop — _stripArchivedCard already collapses mermaid SVGs +
+// hljs token trees on cards entering the archive band, so we can
+// safely hold a much wider window than before. Bumped from 250
+// to 1000 so a tool-heavy session has plenty of scroll-up history.
+const CHAT_HARD_CAP = 1000;
 function _enforceChatHistoryCap() {
   const list = document.getElementById('chat-messages');
   if (!list) return;
@@ -2659,12 +2659,37 @@ function _ensureLoadOlderButton(list, hiddenCount) {
     btn.className = 'chat-load-older';
     btn.addEventListener('click', _revealOlderChat);
     list.insertBefore(btn, list.firstChild);
+    // Auto-load when the button scrolls into view: IntersectionObserver
+    // fires once the user reaches the top of #chat-messages, so a
+    // natural scroll-up gesture reveals more history without making
+    // them tap the button. The button is still clickable as a manual
+    // fallback (e.g. when the observer hasn't fired yet).
+    if (typeof IntersectionObserver !== 'undefined' && !list.dataset.olderObserver) {
+      list.dataset.olderObserver = '1';
+      const io = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.target.id === 'chat-load-older') {
+            _revealOlderChat();
+          }
+        }
+      }, { root: list, rootMargin: '64px 0px 0px 0px', threshold: 0.01 });
+      io.observe(btn);
+      // Stash so subsequent _ensureLoadOlderButton calls re-observe a
+      // freshly-inserted button (rare — the button is reused across
+      // renders, but renderChatPane's full wipe can drop it).
+      list._loadOlderObserver = io;
+    }
   } else if (btn !== list.firstChild) {
     // Keep it pinned at the top even after a fresh append shifted it.
     list.insertBefore(btn, list.firstChild);
   }
-  btn.textContent = `Load older (${hiddenCount} hidden)`;
+  btn.textContent = `Load older (${hiddenCount} hidden) — or scroll up`;
   btn.dataset.hiddenCount = String(hiddenCount);
+  // Re-observe in case the observer lost track (e.g. button was
+  // detached + re-inserted by renderChatPane).
+  if (list._loadOlderObserver) {
+    try { list._loadOlderObserver.observe(btn); } catch {}
+  }
 }
 
 function _revealOlderChat() {
