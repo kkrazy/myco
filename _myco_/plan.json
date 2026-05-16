@@ -550,14 +550,25 @@
       "id": "bug-9",
       "text": "**Problem:** Chat pane is sluggish because it loads the entire chat history (all Claude and user messages) on open.\n**Expected:** Load only the last N messages, paginating/virtualizing older history on demand.\n**Actual:** Full history is loaded up front, inflating memory use and chat pane load time.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T14:36:38.676Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "bug9done",
+          "user": "claude",
+          "text": "✓ done — shipped in commit `75b5858`, live on mycobeta (build stamp `2026-05-16T15:03:02Z`). Production myco still on `3b5d632` (one round behind); promoting it is a one-step deploy of the current HEAD whenever you're ready.\n\n**Chat-pane initial paint dropped from up to 500 markdown rows to 100.** Older history is one click (or scroll-up auto-trigger) away.\n\n**Server-side (`server/src/sessions.js` + `attach.js` + `index.js`):**\n\n- `getChatHistory(sessionId, opts)` — now accepts `{limit, before}`. `opts.before` filters to messages with `ts` strictly less than the cursor; `opts.limit` returns the LAST N. Backward compat: no opts → full filtered list (extractor.readChatTail uses this).\n- `getChatHistoryLength(sessionId)` — total filtered (non-`fromTranscript`) count. Lets the client know whether to surface a \"load older\" button without round-tripping just to find out.\n- `DEFAULT_CHAT_HISTORY_LIMIT = 100` — single source of truth, exported.\n- `attach._attachAgentWebSocket` + `attachViewerWebSocket` — chat-history WS frame now ships `{messages: last 100, total}` instead of the full ~500.\n- `GET /sessions/:id/chat/history?before=<isoTs>&limit=<n>` (new route in `index.js`) — returns `{messages, total, hasMore}`. limit clamped to 1..500; default `DEFAULT_CHAT_HISTORY_LIMIT`. `hasMore` lets the client retire the load-older button once it's pulled everything.\n\n**Client-side (`web/public/app.js`):**\n\n- `applyChatHistory(messages, total)` — stashes `state.chatTotal` so `_revealOlderChat` knows when the server still has more.\n- `_enforceChatHistoryCap` — load-older button count now reflects locally-archived rows + server-pending gap (`chatTotal - chatMessages.length`).\n- `_revealOlderChat` — when there are no more locally-archived cards but `state.chatTotal > state.chatMessages.length`, kicks off `_fetchOlderChatFromServer` instead of just retiring the button.\n- `_fetchOlderChatFromServer` (new) — single-flight gate, asks for the `CHAT_LOAD_OLDER_BATCH` (50) window strictly older than the oldest currently-known message's `ts`, prepends to `state.chatMessages`, re-renders, restores scroll anchor on the previously-top row via `querySelector` + `scrollIntoView`.\n\n**Tests (`test/chat-history-window.test.js`, 10 cases — all green):**\n\n- `DEFAULT_CHAT_HISTORY_LIMIT` exported and equals 100.\n- No opts → returns ALL filtered messages (backward compat).\n- `opts.limit` returns the LAST N, chronologically ordered.\n- `opts.before` excludes messages with `ts >=` cursor.\n- `opts.before + opts.limit` pages backwards N at a time.\n- `getChatHistoryLength` returns total filtered count regardless of limit/before.\n- `fromTranscript` rows excluded from BOTH length and window reads.\n- `limit=0` falls through (treated as no-limit, no-op — the route clamps separately).\n- Source-grep guards: `attach.js` references `DEFAULT_CHAT_HISTORY_LIMIT` + `total` field in chat-history WS frame; `index.js` registers `GET /sessions/:id/chat/history` + returns `hasMore`.\n\n**Live verification (mycobeta image `36da09ff123f`):** `_fetchOlderChatFromServer`, `applyChatHistory(messages, total)`, and `DEFAULT_CHAT_HISTORY_LIMIT` all present in the running container's `app.js` and `sessions.js`. The route was exercised live via a `GET /sessions/.../chat/history?before=…&limit=50` round-trip — returns the expected 50-message window + `hasMore: true` when more exists.\n\n**Out of scope (intentional):** full virtualization (windowed DOM rendering) was the third option in the scoping question; not selected. Server cap + paginated fetch was the chosen scope.",
+          "ts": "2026-05-16T16:30:00.000Z",
+          "meta": {
+            "kind": "run-summary",
+            "manual": true
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the chat pane is sluggish since it's loadding all of the chat history including msg from claude and user, it should only load the last N msg to 1. avoid overuse of memory 2. reduce load time for chat pane.",
