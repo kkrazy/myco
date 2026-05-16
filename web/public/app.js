@@ -2569,6 +2569,13 @@ function _appendAgentEvent(ev) {
   // chrome event updates it; turn_result clears it.
   _updateAgentStatusStrip(ev);
 
+  // UX-research item #3 — per-turn telemetry footer (Aider-style).
+  // turn_result still folds into the chrome batch below (the full
+  // payload remains accessible via expand), but ALSO emits a flat,
+  // single-line muted footer right in the chat timeline so a senior
+  // user sees duration + tokens + cost without expanding chrome.
+  if (ev.type === 'turn_result') _appendTurnFooter(ev, ts);
+
   // Chrome batching: consecutive chrome events collapse into one
   // compact "▸ N events" indicator. Click the indicator to expand and
   // see each event listed individually.
@@ -2691,6 +2698,38 @@ function _appendAgentEvent(ev) {
   });
 
   pane.appendChild(card);
+  pane.scrollTop = pane.scrollHeight;
+}
+
+// Per-turn telemetry footer — single muted line emitted right after
+// the turn's chrome batch + assistant text. Format mirrors Aider:
+// `8.2s · 12.3k in / 1.2k out · 4.2k cached · $0.0431 · 3t`.
+// Cost / cached / turns fields are dropped when zero or missing so
+// the line stays tight on quiet turns.
+function _appendTurnFooter(ev, ts) {
+  const pane = _ensureAgentLogPane();
+  if (!pane) return;
+  const u = ev.usage || {};
+  const inTok = u.input_tokens || 0;
+  const outTok = u.output_tokens || 0;
+  const cacheR = u.cache_read_input_tokens || 0;
+  const parts = [];
+  if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
+  parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);
+  if (cacheR) parts.push(`${_humanizeTokens(cacheR)} cached`);
+  if (ev.totalCostUsd != null) parts.push('$' + ev.totalCostUsd.toFixed(4));
+  if (ev.numTurns) parts.push(ev.numTurns + 't');
+  const row = document.createElement('div');
+  row.className = 'turn-footer';
+  // subtype mirrors the chrome card's "✓ done" / "■ error_max_turns"
+  // chip so the user sees turn outcome at the same glyph density as
+  // the rest of the conversation.
+  const ok = (ev.subtype === 'success');
+  const glyph = ok ? '✓' : '■';
+  row.innerHTML = `<span class="turn-footer-glyph${ok ? '' : ' turn-footer-warn'}">${escHtml(glyph)}</span>` +
+                  `<span class="turn-footer-ts">${escHtml(ts)}</span>` +
+                  `<span class="turn-footer-stats">${escHtml(parts.join(' · '))}</span>`;
+  pane.appendChild(row);
   pane.scrollTop = pane.scrollHeight;
 }
 
@@ -3303,6 +3342,49 @@ function bindChatUi() {
   bindArtifactToggles();
   _bindPermModal();
   _bindPermModalKeys();
+  _bindStopAgent();
+}
+
+// Stop / interrupt: button click + global Esc keybind when claude is
+// running. Server maps the literal "esc" chat message to
+// session.interrupt() (see server/src/attach.js's chat→agent key
+// handling), so we just send it as a chat. Esc precedence: perm
+// modal Esc (defer) > autocomplete Esc (dismiss) > stop-agent Esc.
+function _bindStopAgent() {
+  if (document.body.dataset.stopAgentBound === '1') return;
+  document.body.dataset.stopAgentBound = '1';
+  document.getElementById('claude-stop')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    _sendStopAgent();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    // Yield to earlier-priority Esc handlers — they call
+    // e.preventDefault() and we're attached at bubble phase by default,
+    // but our check is also defensive: if the modal/autocomplete is
+    // visible, leave Esc alone.
+    const modal = document.getElementById('perm-modal');
+    if (modal && !modal.hidden) return;
+    const ac = document.getElementById('chat-autocomplete');
+    if (ac && !ac.hidden) return;
+    // Only interrupt if claude is actually awaitable. state.awaitingClaude
+    // tracks our local "claude is running" timer; the server-side
+    // claude-status feeds it. If neither is true, Esc has nothing to do
+    // on this turn — bail so we don't spam interrupts.
+    if (!state.awaitingClaude && !state.claudeStatusLine) return;
+    e.preventDefault();
+    _sendStopAgent();
+  });
+}
+
+function _sendStopAgent() {
+  if (!state.activeId) return;
+  // The shared sendChatMessage path queues if WS is mid-reconnect and
+  // applies the same auth/identity wrapping as a normal chat send.
+  // Server maps literal "esc" to session.interrupt(). Optimistically
+  // flip awaitingClaude off so the indicator dims immediately;
+  // server-side status will repaint authoritatively.
+  sendChatMessage('esc');
 }
 
 // Global key handler for the permission modal: Esc defers, digits 1-9

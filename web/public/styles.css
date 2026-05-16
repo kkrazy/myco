@@ -3382,6 +3382,39 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Stop button: visible only while claude is running. The wrapping
+   strip already hides itself when idle (visibility:hidden), so we
+   don't need a separate hide rule — when the strip is invisible, so
+   is the button. The kbd hint mirrors the Esc-to-interrupt binding. */
+.claude-typing-stop {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--fg, #c9d1d9);
+  background: rgba(255, 130, 130, .12);
+  border: 1px solid rgba(255, 130, 130, .35);
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.4;
+}
+.claude-typing-stop:hover {
+  background: rgba(255, 130, 130, .22);
+  border-color: rgba(255, 130, 130, .55);
+}
+.claude-typing-stop kbd {
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, .25);
+  opacity: .75;
+}
 .claude-typing[hidden] {
   /* The global !important display:none rule on the `hidden` attribute
      at the top of this file would otherwise collapse the slot on
@@ -3793,6 +3826,37 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   gap: 2px;
   padding: 4px 0 2px;
 }
+/* Per-turn telemetry footer — Aider-style one-line summary right
+   after each turn (duration · tokens · cost · turns). Sits flat in
+   #chat-messages between cards, muted enough to be skimmable noise
+   for the user who doesn't care, scannable for the user who does. */
+.turn-footer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--muted, #8b949e);
+  padding: 2px 4px 6px;
+  opacity: 0.78;
+  user-select: text;
+}
+.turn-footer-glyph {
+  flex: 0 0 auto;
+  color: var(--accent, #4caf82);
+  font-weight: 600;
+}
+.turn-footer-glyph.turn-footer-warn { color: #ffb86b; }
+.turn-footer-ts { flex: 0 0 auto; opacity: 0.7; }
+.turn-footer-stats {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Chrome-row: a single event inside the expanded chrome batch.
    .agent-chrome-row is the outer wrap (head + optional details);
    .agent-chrome-row-head is the always-visible single line.

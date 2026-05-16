@@ -353,6 +353,8 @@ class AgentSession extends EventEmitter {
         result: m.result,
         usage: m.usage,
         totalCostUsd: m.total_cost_usd,
+        durationMs: m.duration_ms,
+        numTurns: m.num_turns,
       });
       return;
     }
