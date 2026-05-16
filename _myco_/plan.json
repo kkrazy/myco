@@ -21,17 +21,6 @@
       ]
     },
     {
-      "id": "bug-2",
-      "text": "the file explorer doesnt occupy the entire screen when enabled on mobile.",
-      "layer": "Bug",
-      "done": false,
-      "addedAt": "2026-05-14T00:32:47.150Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
       "id": "td-1",
       "text": "refresh the architecture md with the latest information and implementation",
       "layer": "Todo",
@@ -55,17 +44,6 @@
       "layer": "Todo",
       "done": false,
       "addedAt": "2026-05-14T00:40:21.328Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "bug-3",
-      "text": "make the scroll bar the same color as the surrounding components",
-      "layer": "Bug",
-      "done": false,
-      "addedAt": "2026-05-14T01:04:31.517Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
@@ -102,7 +80,7 @@
     },
     {
       "id": "td-3",
-      "text": "make responses requires user input a pop up blocking pane any questions will be responded in the right order as they came in",
+      "text": "make responses requires user input a pop up blocking pane any questions will be responded in the right order as they came in\n\n— merged from `td-13` (added by @ryan-blues): The window in discussion panel ask for use decision is embeded in chat window, user may not see it and continue input more message. Should  switch to use a model dialog to force use make the decision",
       "layer": "Todo",
       "done": false,
       "addedAt": "2026-05-14T03:40:34.511Z",
@@ -116,6 +94,9 @@
           "text": "the response is referring to the clause session output which requires user interaction.  the pop pane disappears once all required responses are submitted.",
           "ts": "2026-05-14T04:08:23.015Z"
         }
+      ],
+      "mergedFrom": [
+        "td-13"
       ]
     },
     {
@@ -131,36 +112,31 @@
     },
     {
       "id": "td-5",
-      "text": "when generate a plan, it display twice, one in the main window and on in discussion window, should only display in one place, maybe fold the one in main window",
+      "text": "when generate a plan, it display twice, one in the main window and on in discussion window, should only display in one place, maybe fold the one in main window\n\n— merged from `td-7` (added by @ryan-blues): when generate a plan, it display twice, one in the main window and on in discussion window, should only display in one place, maybe fold the one in main window",
       "layer": "Todo",
       "done": false,
       "addedAt": "2026-05-14T14:35:23.301Z",
       "addedBy": "ryan-blues",
       "source": "user",
       "voters": [],
-      "comments": []
+      "comments": [],
+      "mergedFrom": [
+        "td-7"
+      ]
     },
     {
       "id": "td-6",
-      "text": "for selection question, there are options such as \"chat about it\", \"type something\", it will require typing a message and hit submit.",
+      "text": "for selection question, there are options such as \"chat about it\", \"type something\", it will require typing a message and hit submit.\n\n— merged from `td-16` (added by @kkrazy): support \"type something\" or \"chat about it\" in menus like the following: \"🤔 Claude is waiting on a decision\n\nScope the auto-merge piece — when should the LLM run?\n\n[1] Background, fire-and-forget\n[2] On-demand /dedupe\n[3] Synchronous on add\n[4] Type something.\n[5] Chat about this\nPick here — goes straight to the session, no chat post.\"",
       "layer": "Todo",
       "done": false,
       "addedAt": "2026-05-14T14:42:45.137Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": []
-    },
-    {
-      "id": "td-7",
-      "text": "when generate a plan, it display twice, one in the main window and on in discussion window, should only display in one place, maybe fold the one in main window",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-14T14:45:31.143Z",
-      "addedBy": "ryan-blues",
-      "source": "user",
-      "voters": [],
-      "comments": []
+      "comments": [],
+      "mergedFrom": [
+        "td-16"
+      ]
     },
     {
       "id": "bug-5",
@@ -259,17 +235,6 @@
       "comments": []
     },
     {
-      "id": "td-13",
-      "text": "The window in discussion panel ask for use decision is embeded in chat window, user may not see it and continue input more message. Should  switch to use a model dialog to force use make the decision",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-15T01:48:14.890Z",
-      "addedBy": "ryan-blues",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
       "id": "td-14",
       "text": "add priority and importance score (h/m/l) to todos in the plan, and sorted by score(p)+score(i)",
       "layer": "Todo",
@@ -293,33 +258,11 @@
       "ranAt": "2026-05-15T01:59:20.283Z"
     },
     {
-      "id": "td-16",
-      "text": "support \"type something\" or \"chat about it\" in menus like the following: \"🤔 Claude is waiting on a decision\n\nScope the auto-merge piece — when should the LLM run?\n\n[1] Background, fire-and-forget\n[2] On-demand /dedupe\n[3] Synchronous on add\n[4] Type something.\n[5] Chat about this\nPick here — goes straight to the session, no chat post.\"",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-15T02:02:29.376Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
       "id": "7415cb949d79",
       "text": "allow spawn subagents for each feature request, todo, or bug fix, support viewing conversation/logs of individual feature request, todo and bug fix. all questions requires user confirmation will pop up in the main window.",
       "layer": "Feature",
       "done": false,
       "addedAt": "2026-05-15T02:57:51.389Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "e98b41c27c83",
-      "text": "new sample todo",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-15T07:57:46.716Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
@@ -346,7 +289,55 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "fr-2",
+      "text": "add support to delete bug/fr/todo",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-16T07:37:20.143Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "td-17",
+      "text": "enhance the plan td/fr/bug to see the execution log related to the item",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-16T08:06:56.255Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": []
+    },
+    {
+      "id": "td-18",
+      "text": "allow myco chat pane notification to propagate up to the phone level so that user will see tbe",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-16T08:20:59.287Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "bug-7",
+      "text": "fix duolicate entries in the chat pane like the following: 16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-16T08:35:18.181Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-15T23:29:44.181Z"
+  "updatedAt": "2026-05-16T08:35:18.182Z"
 }
