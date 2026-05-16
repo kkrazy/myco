@@ -3070,13 +3070,16 @@ function _renderClaudeTyping() {
   for (const k of ['thinking', 'running', 'awaiting', 'done', 'error']) {
     host.classList.toggle('claude-typing-' + k, kind === k);
   }
-  // Stop lives in the status row itself (#claude-typing). It's
-  // visible whenever the strip is — only hidden in 'done' / 'error'
-  // states where interrupt no longer makes sense (handled below in
-  // CSS via :is(.claude-typing-done, .claude-typing-error)
-  // .claude-typing-stop { display: none }). Send stays always-
-  // visible in the composer; we never swap it for Stop, so the
-  // user can queue messages while claude is running.
+  // Stop lives in the composer's actions row (alongside Send).
+  // Toggled via .composer-running on #chat-form so CSS can show
+  // Stop only while claude is mid-turn — visible for thinking /
+  // running / awaiting; hidden in done / error / idle. Send stays
+  // ALWAYS visible so users can queue messages while claude works.
+  const form = document.getElementById('chat-form');
+  if (form) {
+    const showStop = visible && (kind === 'thinking' || kind === 'running' || kind === 'awaiting');
+    form.classList.toggle('composer-running', showStop);
+  }
   // No scrollIntoView on updates — status ticks every ~750ms via the
   // periodic safety scan, and the indicator's slot is decoupled from
   // chat-messages's flex slot by construction.

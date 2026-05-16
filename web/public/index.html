@@ -21,7 +21,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=240" />
+  <link rel="stylesheet" href="styles.css?v=241" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -107,27 +107,25 @@
         </div>
         <div id="chat-empty" class="chat-empty"><code>@myco</code> <span class="ce-arrow">→</span> claude · <code>@user</code> <span class="ce-arrow">→</span> discuss · <code>/help</code> <span class="ce-arrow">→</span> commands</div>
         <div id="chat-messages"></div>
-        <!-- Slim status row: spinner+label on the left, Stop button +
-             token meter on the right. Stop lives HERE (not in the
-             composer) so the Send button stays always-visible — the
-             user can queue a follow-up message or run /td /fr while
-             claude is mid-turn without losing the affordance. -->
+        <!-- Slim status row: spinner+label on the left, token meter
+             on the right. Stop lives in the composer's actions row
+             below (alongside Send) so users see both at once —
+             always-visible Send + Stop only when claude is running.
+             Hidden when claude is idle. -->
         <div id="claude-typing" class="claude-typing" hidden>
           <span class="claude-typing-dots"><span></span><span></span><span></span></span>
           <span class="claude-typing-label"></span>
-          <button type="button" id="claude-stop" class="claude-typing-stop" title="Interrupt the in-flight claude turn (Esc)" aria-label="Stop (Esc)">
-            <svg class="claude-stop-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-            <span class="claude-stop-label">Stop</span>
-            <kbd>Esc</kbd>
-          </button>
           <span id="token-meter" class="token-meter" hidden></span>
         </div>
-        <!-- Composer card. Textarea + Send icon button only — Send is
-             ALWAYS visible (never replaced) so users can queue
-             messages / slash commands while claude is running on the
-             previous turn. Stop lives in the status row above.
-             #chat-autocomplete nests INSIDE so its CSS `bottom:
-             calc(100% + 4px)` anchors above the composer card. -->
+        <!-- Composer card — TWO-row layout: textarea on top, actions
+             row below. Both Send and Stop live in the actions row;
+             Send is always visible, Stop is visible only while
+             claude is running (.composer-running). The taller
+             multi-row form gives each button room to breathe;
+             swapping Send→Stop in a single slot looked cramped and
+             stole the always-visible Send affordance. #chat-
+             autocomplete nests INSIDE so its `bottom: calc(100% +
+             4px)` anchors above the composer card. -->
         <form id="chat-form" class="composer" autocomplete="off">
           <div id="chat-autocomplete" hidden></div>
           <!-- Context chips: deletable pills for @-mentions currently
@@ -138,8 +136,14 @@
           <div id="composer-chips" class="composer-chips" hidden></div>
           <textarea id="chat-input" rows="1" placeholder="@myco to prompt claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
           <div class="composer-actions">
+            <button type="button" id="claude-stop" class="composer-btn composer-btn-stop" title="Interrupt the in-flight claude turn (Esc)" aria-label="Stop (Esc)">
+              <svg class="composer-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+              <span class="composer-btn-label">Stop</span>
+              <kbd class="composer-btn-kbd">Esc</kbd>
+            </button>
             <button type="submit" id="chat-send" class="composer-btn composer-btn-send" title="Send (Enter)" aria-label="Send">
               <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+              <span class="composer-btn-label">Send</span>
             </button>
           </div>
         </form>
