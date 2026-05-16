@@ -4312,10 +4312,100 @@ function _applyMenuStateUpdate(msg) {
 // artifacts-init to refresh whatever's open.
 function _onArtifactsCacheUpdated(type) {
   const active = state.artifactView && state.artifactView.active;
+  // fr-6: a deep-link in the URL (e.g. `…/#fr-7`) needs the artifact
+  // cache populated to figure out which tab the item lives in. The
+  // first cache update is our trigger — try to resolve the hash now
+  // (a no-op if there's nothing to focus or the cache doesn't yet
+  // contain the requested id).
+  _focusArtifactItemFromHash();
   if (!active) return;
   if (type && type !== active) return;
   // Re-run the existing loadArtifact path; it'll prefer the cache.
   loadArtifact(active).catch(() => {});
+}
+
+// fr-6 deep-link plumbing — scroll-into-view + highlight a specific
+// plan/test item when the URL hash points at it. Handles three entry
+// points: (1) initial page load with `#<id>` already in the URL,
+// (2) the `hashchange` event when the user navigates / pastes a new
+// link, (3) the post-render hook in renderArtifact that consumes
+// state.pendingDeepLinkId when the hash arrived before the items had
+// DOM ids.
+function _findArtifactTypeForItem(itemId) {
+  if (!state.artifacts || !itemId) return null;
+  for (const t of ['plan', 'test']) {   // arch has no items, not addressable
+    const a = state.artifacts[t];
+    if (a && Array.isArray(a.items) && a.items.some((it) => it && it.id === itemId)) return t;
+  }
+  return null;
+}
+
+function _focusArtifactItemFromHash() {
+  if (typeof location === 'undefined' || !location.hash) return false;
+  let id;
+  try { id = decodeURIComponent(location.hash.replace(/^#/, '')); } catch { id = location.hash.replace(/^#/, ''); }
+  if (!id) return false;
+  // Only intercept hashes that look like a plan/test item id —
+  // otherwise leave them alone (the chat sidebar / other routes may
+  // use the fragment for their own purposes in the future).
+  if (!/^(?:fr|td|bug|test)-\d+$/i.test(id) && !/^[a-f0-9]{8,}$/i.test(id)) return false;
+  const t = _findArtifactTypeForItem(id);
+  if (!t) {
+    // Cache may not be populated yet — stash and retry from the next
+    // artifacts-init / state-update via _onArtifactsCacheUpdated.
+    state.pendingDeepLinkId = id;
+    return false;
+  }
+  const alreadyOpen = state.artifactView && state.artifactView.active === t;
+  if (!alreadyOpen) {
+    try { showArtifactView(t); } catch {}
+  }
+  // showArtifactView → loadArtifact runs the renderArtifact pass; the
+  // post-render hook there will pick state.pendingDeepLinkId up and
+  // call _scrollToArtifactItem once the <li> ids exist. If the tab
+  // was ALREADY open (no re-render fires), scroll now.
+  if (alreadyOpen) {
+    _scrollToArtifactItem(id);
+  } else {
+    state.pendingDeepLinkId = id;
+  }
+  return true;
+}
+
+function _scrollToArtifactItem(itemId) {
+  if (!itemId) return;
+  const el = document.getElementById('artifact-item-' + itemId);
+  if (!el) return;
+  try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { el.scrollIntoView(); }
+  el.classList.add('artifact-item-deep-link-focused');
+  // Auto-remove the highlight so a second deep-link to the same id
+  // (e.g. user refreshes) re-triggers the pulse instead of seeing a
+  // permanent outline.
+  setTimeout(() => { try { el.classList.remove('artifact-item-deep-link-focused'); } catch {} }, 2400);
+}
+
+function _copyArtifactItemDeepLink(e, chip) {
+  if (e) { try { e.preventDefault(); } catch {} }
+  const id = chip && chip.dataset && chip.dataset.deepLinkId;
+  if (!id) return;
+  const encoded = encodeURIComponent(id);
+  const url = (location.origin || '') + (location.pathname || '/') + '#' + encoded;
+  // Update the bar without nuking history — the user's back button
+  // still returns them to wherever they came from.
+  try { history.replaceState(null, '', '#' + encoded); } catch {}
+  // Visual confirmation regardless of clipboard success.
+  chip.classList.add('artifact-item-id-copied');
+  setTimeout(() => { try { chip.classList.remove('artifact-item-id-copied'); } catch {} }, 1200);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).catch(() => {});
+  }
+}
+
+// Wire the hash listener once at module load — every subsequent
+// hashchange (paste a permalink in the address bar, click a `#fr-7`
+// anchor inside the chat pane, etc.) re-runs the focus logic.
+if (typeof window !== 'undefined') {
+  window.addEventListener('hashchange', () => _focusArtifactItemFromHash());
 }
 
 // Send an inline menu pick via the dedicated WS frame. Bypasses chat
@@ -5156,7 +5246,16 @@ function renderArtifact(type, artifact) {
     // absorbed by /merge or the plan-refresh dedupe Apply flow.
     // mergedFrom is set by slashcmds.mergePlanItems; absent on
     // never-merged items.
-    const idChip = it.id ? `<code class="artifact-item-id">${escHtml(it.id)}</code>` : '';
+    //
+    // fr-6: the id chip is also a deep-link affordance. Clicking it
+    // copies a permalink (`<origin>/#<id>`) to the clipboard AND
+    // updates the URL bar in place, so the user can share/bookmark
+    // a specific item. The matching <li> below carries a stable DOM
+    // id (`artifact-item-<id>`) so the hashchange handler can
+    // scrollIntoView + briefly highlight it on arrival.
+    const idChip = it.id
+      ? `<code class="artifact-item-id" data-deep-link-id="${escHtml(it.id)}" role="button" tabindex="0" title="Click to copy a deep link to this item">${escHtml(it.id)}</code>`
+      : '';
     const mergedFrom = Array.isArray(it.mergedFrom) ? it.mergedFrom : [];
     const mergedBadge = mergedFrom.length
       ? `<span class="artifact-item-merged" title="merged from: ${escHtml(mergedFrom.join(', '))}">⤴ merged from ${mergedFrom.length}</span>`
@@ -5220,7 +5319,13 @@ function renderArtifact(type, artifact) {
     // text, code fences, lists, and mermaid diagrams all show up
     // properly. Was escHtml inside a span — that wrapper element
     // also constrained block-level markdown to inline rendering.
-    return `<li class="${cls}" data-id="${escHtml(it.id)}">
+    // fr-6: stable DOM id so `<origin>/#fr-7` deep-links scroll the
+    // matching row into view (handled by _focusPlanItemFromHash on
+    // page load + hashchange). The id chip above triggers the
+    // copy-link affordance; this attr is what the scroll/highlight
+    // logic looks for.
+    const liId = it.id ? `id="artifact-item-${escHtml(it.id)}"` : '';
+    return `<li class="${cls}" ${liId} data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
         <input class="artifact-item-checkbox" type="checkbox" ${it.done ? 'checked' : ''} data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" />
         ${idChip}
@@ -5269,6 +5374,28 @@ function renderArtifact(type, artifact) {
   body.querySelectorAll('.artifact-item-run').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactItemRun(type, btn.dataset.id, btn.dataset.text || ''));
   });
+  // fr-6: id-chip click copies the deep link (`<origin><pathname>#<id>`)
+  // to the clipboard AND updates location.hash in place, so the URL bar
+  // reflects "you're at this item" and a follow-up paste hands the
+  // teammate a permalink. Keyboard activation (Enter / Space) works
+  // too because the chip has role="button" + tabindex="0".
+  body.querySelectorAll('.artifact-item-id[data-deep-link-id]').forEach((chip) => {
+    chip.addEventListener('click', (e) => _copyArtifactItemDeepLink(e, chip));
+    chip.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        _copyArtifactItemDeepLink(e, chip);
+      }
+    });
+  });
+  // If a deep-link arrived before this tab finished rendering (e.g.
+  // first load with `#fr-7` in the URL), the hash handler stashed the
+  // target id on state — consume it now that the <li> ids exist.
+  if (state.pendingDeepLinkId) {
+    const id = state.pendingDeepLinkId;
+    state.pendingDeepLinkId = null;
+    _scrollToArtifactItem(id);
+  }
   if (supportsVoting) {
     body.querySelectorAll('.artifact-vote').forEach((btn) => {
       btn.addEventListener('click', () => onArtifactVote(type, btn.dataset.id));

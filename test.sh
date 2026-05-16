@@ -1799,6 +1799,32 @@ test_chat_window() {
   grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"
   grep -q "onArtifactComment"     web/public/app.js && pass "onArtifactComment handler"     || fail "onArtifactComment handler"
   grep -q "onArtifactItemDelete"  web/public/app.js && pass "onArtifactItemDelete handler"  || fail "onArtifactItemDelete handler"
+  # fr-6 (2026-05-16): plan items are deep-linkable via `<origin>/#<id>`.
+  # Each <li> carries a stable DOM id ("artifact-item-<id>"); the id chip
+  # is a copy-to-clipboard affordance that ALSO updates location.hash;
+  # hashchange + the artifacts-init cache hook scroll the matching item
+  # into view with a brief highlight pulse.
+  grep -qF 'id="artifact-item-${escHtml(it.id)}"' web/public/app.js \
+    && pass "app.js: plan-item li carries stable DOM id for deep-link" \
+    || fail "app.js: plan-item li missing the artifact-item-<id> attribute — deep links can't anchor"
+  grep -qF 'data-deep-link-id=' web/public/app.js \
+    && pass "app.js: id chip exposes data-deep-link-id" \
+    || fail "app.js: id chip missing data-deep-link-id — copy-link affordance won't bind"
+  grep -qF '_copyArtifactItemDeepLink' web/public/app.js \
+    && pass "app.js: _copyArtifactItemDeepLink copy-to-clipboard helper present" \
+    || fail "app.js: _copyArtifactItemDeepLink missing — id-chip click won't copy permalink"
+  grep -qF '_focusArtifactItemFromHash' web/public/app.js \
+    && pass "app.js: _focusArtifactItemFromHash hash → scroll-into-view helper present" \
+    || fail "app.js: _focusArtifactItemFromHash missing — deep-link URLs won't auto-scroll"
+  grep -qF "addEventListener('hashchange'" web/public/app.js \
+    && pass "app.js: hashchange listener wired so paste-permalink re-focuses item" \
+    || fail "app.js: no hashchange listener — pasting a deep link in the address bar won't scroll"
+  grep -qF 'artifact-item-deep-link-focused' web/public/styles.css \
+    && pass "styles.css: deep-link focus pulse styling present" \
+    || fail "styles.css: deep-link focus pulse missing — landed item won't be visually distinguishable"
+  grep -qF 'artifact-item-id-copied' web/public/styles.css \
+    && pass "styles.css: id-chip copied flash styling present" \
+    || fail "styles.css: id-chip copied flash missing — no copy confirmation feedback"
   # Regression: plan items are grouped by `layer` (3-tier-style buckets) and
   # the extractor's plan prompt asks for {layer, text} objects.
   grep -q "parsePlanItems"      server/src/extractor.js && pass "parsePlanItems parser exists" || fail "parsePlanItems parser exists"

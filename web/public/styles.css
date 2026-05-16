@@ -1735,6 +1735,40 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+/* fr-6: id chip is also a deep-link copy affordance (role="button"
+   tabindex="0" data-deep-link-id). Make it feel interactive on hover
+   + show a brief flash on copy. The .artifact-item-id-copied class
+   is toggled by _copyArtifactItemDeepLink for ~1.2s, then removed. */
+.artifact-item-id[data-deep-link-id] {
+  cursor: copy;
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.artifact-item-id[data-deep-link-id]:hover {
+  background: rgba(140, 140, 160, .28);
+  color: var(--fg);
+}
+.artifact-item-id[data-deep-link-id]:focus-visible {
+  outline: 2px solid rgba(100, 170, 255, .7);
+  outline-offset: 1px;
+}
+.artifact-item-id-copied {
+  background: rgba(100, 200, 130, .35) !important;
+  color: rgba(220, 255, 230, .95) !important;
+  box-shadow: 0 0 0 1px rgba(100, 200, 130, .55), 0 0 10px rgba(100, 200, 130, .35);
+}
+
+/* fr-6: deep-link highlight pulse when the user arrives at a plan
+   item via `#<id>` in the URL. Brief outline + soft glow so the
+   target item is immediately findable in a long list. Auto-removed
+   after ~2.4s — see _scrollToArtifactItem. */
+.artifact-items > li.artifact-item-deep-link-focused {
+  position: relative;
+  animation: artifact-item-deep-link-pulse 1.6s ease-out 2;
+}
+@keyframes artifact-item-deep-link-pulse {
+  0%   { box-shadow: 0 0 0 2px rgba(100, 170, 255, .8), 0 0 24px rgba(100, 170, 255, .55); }
+  100% { box-shadow: 0 0 0 1px rgba(100, 170, 255, .25), 0 0 12px rgba(100, 170, 255, .15); }
+}
 .artifact-item-merged {
   background: rgba(220, 180, 90, .15);
   color: rgba(220, 180, 90, .95);
