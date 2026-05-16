@@ -2471,6 +2471,12 @@ function _enforceChatHistoryCap() {
     const btn = list.querySelector('#chat-load-older');
     if (btn) btn.remove();
   }
+  // bug-10: collapse multiple chrome batches that all show the same
+  // final-event label (e.g. five consecutive `× N perm asked · Bash`
+  // batches over a few minutes) into ONE row with the counts summed.
+  // Runs BEFORE the turn-grouping / date-sep passes so they see the
+  // merged batches and don't try to group around now-removed nodes.
+  _mergeIdenticalChromeBatches(list);
   // Cluster consecutive resolved AskUserQuestion rows into one visual
   // bundle (shared left bar, tighter spacing). Wizard-style flows
   // produce 3-8 questions in a row, each one resolving to a single-
@@ -4389,6 +4395,77 @@ function _createChromeBatch(ev, ts) {
     card.classList.toggle('agent-card-expanded');
   });
   return card;
+}
+
+// bug-10: collapse multiple chrome batches that all show the same
+// final-event label (`.agent-chrome-last` text) into ONE row with
+// counts summed + bodies concatenated. Triggered by
+// _enforceChatHistoryCap so it runs after every chat mutation.
+//
+// The user pain: long-running tool sessions ask permission to run
+// the same Bash command 30+ times in a row. The chrome-batch
+// adjacency rule (in _appendAgentEvent) breaks the run on every
+// non-chrome event (assistant_text, chat-msg from a viewer, etc.),
+// so the user sees five `× 7 perm asked · Bash` / `× 5 perm asked …`
+// rows stacked over six minutes. Merge them into one
+// `× 39 perm asked · Bash` so the timeline stays readable; the
+// expanded body still lists every individual event with its
+// original ts for forensics.
+//
+// Algorithm: walk top-level children once, keep a Map keyed by
+// signature (`.agent-chrome-last` text). The FIRST batch with a
+// given signature stays; subsequent ones get absorbed into it
+// (count += other.count; body rows appended; lastTs updated) and
+// removed from the DOM. First-wins is the right anchor because the
+// user is usually looking at the chronologically-earliest entry in
+// a run (the moment claude first started the activity); the absorbed
+// later batches just become "× N more of the same" in the count.
+function _mergeIdenticalChromeBatches(list) {
+  if (!list) return;
+  const firstBySig = new Map();
+  // Snapshot children — we mutate during the walk.
+  for (const el of [...list.children]) {
+    if (!el || !el.dataset || el.dataset.evType !== '_chrome_batch') continue;
+    const sig = _chromeBatchHeadSig(el);
+    if (!sig) continue;
+    const anchor = firstBySig.get(sig);
+    if (!anchor) {
+      firstBySig.set(sig, el);
+      continue;
+    }
+    // Absorb `el` into `anchor`: bump count, append body rows,
+    // update lastTs, remove the duplicate. Outcome chip + glyph
+    // stay on the anchor — those describe the last event of the
+    // anchor's own tail, which (since signatures match) is the
+    // same shape as `el`'s tail.
+    const anchorCount = parseInt(anchor.dataset.chromeCount || '1', 10);
+    const elCount = parseInt(el.dataset.chromeCount || '1', 10);
+    const newCount = anchorCount + elCount;
+    anchor.dataset.chromeCount = String(newCount);
+    if (el.dataset.lastTs) anchor.dataset.lastTs = el.dataset.lastTs;
+    const countEl = anchor.querySelector('.agent-card-count');
+    if (countEl) countEl.textContent = '× ' + newCount;
+    const anchorBody = anchor.querySelector('.agent-chrome-body');
+    const elBody = el.querySelector('.agent-chrome-body');
+    if (anchorBody && elBody) {
+      while (elBody.firstChild) anchorBody.appendChild(elBody.firstChild);
+    }
+    // Tag so a regression test (and the user inspecting via devtools)
+    // can see the merge actually happened.
+    anchor.dataset.bug10Merged = String(parseInt(anchor.dataset.bug10Merged || '0', 10) + 1);
+    el.remove();
+  }
+}
+
+// Stable signature for a chrome batch — the visible label of its
+// most-recent chrome event (e.g. "perm asked · Bash"). Two batches
+// with the same signature are eligible to merge per bug-10.
+function _chromeBatchHeadSig(batchEl) {
+  if (!batchEl) return null;
+  const last = batchEl.querySelector('.agent-chrome-last');
+  if (!last) return null;
+  const t = (last.textContent || '').trim();
+  return t || null;
 }
 
 // Append a new chrome event into an existing chrome batch card.

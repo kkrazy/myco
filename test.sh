@@ -2295,6 +2295,21 @@ test_chat_window() {
   else
     skip "test/agent-replay-dedup.test.js (no host node)"
   fi
+  # bug-10 regression: multiple chrome batches with the same head
+  # signature (e.g. five consecutive `× N perm asked · Bash` rows)
+  # collapse into ONE row via _mergeIdenticalChromeBatches, invoked
+  # from _enforceChatHistoryCap on every chat mutation. The test
+  # exercises the merge math against a minimal DOM-like fake +
+  # static-grep guards on the prod implementation in app.js.
+  if have_node; then
+    if node test/chrome-batch-merge.test.js >/dev/null 2>&1; then
+      pass "test/chrome-batch-merge.test.js (7 cases)"
+    else
+      fail "test/chrome-batch-merge.test.js — re-run with 'node test/chrome-batch-merge.test.js' to see failures"
+    fi
+  else
+    skip "test/chrome-batch-merge.test.js (no host node)"
+  fi
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
