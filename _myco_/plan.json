@@ -503,7 +503,25 @@
         "originalText": "when a td/fr/bug is done, the run button should be disabled. Also the run button should be named according the type, for bug, it can be fix, for fr, it can be implement, for todo, can be sth u suggest",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-8",
+      "text": "**Problem:** OS notifications shipped in `fr-7` only fire while the page's JS is alive. On mobile Android, the browser aggressively suspends backgrounded tabs to save battery, so users miss permission menus / turn-complete pings once the tab is frozen, the browser is closed, or the phone screen is off — the exact moments the OS-level signal would matter most.\n\n**Expected:** Notifications surface in the device notification shade reliably regardless of tab/browser/screen state — driven by a Web Push subscription delivered via FCM on Android (and APNs on iOS Safari, where supported).\n\n**Actual:** No service worker is registered, `PushManager.subscribe()` is never called, no VAPID keys exist server-side. `manifest.json` is in place (so PWA install via Add to Home Screen works), but that alone doesn't grant push.\n\n**Context — implementation shape:**\n\n- **Client:** add `web/public/service-worker.js` (registered from `app.js` bootstrap); inside the SW, handle the `push` event and call `self.registration.showNotification(title, options)` with the same title/body shape `_maybeNotifyMenuPending` + `_maybeNotifyTurnComplete` use now.\n- **Client subscribe flow:** on first chat-send (same lazy-gesture pattern as the existing `_maybeRequestNotificationPermission`) call `registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: VAPID_PUBLIC })`, then POST the returned endpoint to a new `/push/subscribe` route on the server.\n- **Server:** new `server/src/push.js` using the `web-push` npm dep (~30 KB), VAPID keypair stored in `$STATE_DIR/.env` as `MYCO_VAPID_PUBLIC` + `MYCO_VAPID_PRIVATE`. Add a `--set-vapid <pub>:<priv>` flag to `deploy.sh` mirroring `--set-oauth`. Persist subscriptions to `$STATE_DIR/push-subscriptions.json` keyed by session id + user.\n- **Server fan-out:** when a permission menu broadcasts (`menu.broadcastMenuToChat`) or a long turn finishes (`attach._stampPlanItemRunOutcome`'s `turnResultEv` arrives), POST to each subscribed endpoint via `webpush.sendNotification`. Drop subscriptions that 410-Gone (FCM/APNs ejected them).\n- **Tests:** new `test/push.test.js` covering subscription persistence + 410 drop + payload shape; static guards in `test.sh` for the service-worker registration + the new route + VAPID env-var read; new `--set-vapid` parsing in `deploy.sh`.\n- **PWA bit:** keep the existing manifest; add an `apple-touch-icon` reference + `display_override: ['window-controls-overlay', 'standalone']` so the installed PWA gets its own task on Android (slightly longer-lived SW lifecycle).\n\n**Out of scope (intentional):** in-app desktop-only Notification surfaces stay as-is — Web Push lands ALONGSIDE them, so the desktop foreground/backgrounded-alive path keeps working without dragging the SW round-trip into it.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-16T14:00:00.000Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "force",
+        "originalText": "follow up to fr-7: add web push (service worker + PushManager + VAPID + server-side web-push) so the os notifications work on mobile android even when the tab is suspended/closed or the phone screen is off",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-16T13:49:02.961Z"
+  "updatedAt": "2026-05-16T14:00:00.000Z"
 }
