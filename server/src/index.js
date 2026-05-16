@@ -665,6 +665,23 @@ app.put('/sessions/:id/file', async (req, res) => {
   } catch (e) { fileApiError(res, e); }
 });
 
+// Owner-only full-file edit (the in-page editor in the files
+// viewer). Separate from PUT /file (which the comment-insert flow
+// uses with viewer access) so guests can still annotate without
+// being able to rewrite the whole file. Same filesApi.writeFile
+// underneath — only the auth role differs.
+app.post('/sessions/:id/file/edit', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { path: relPath, content, expectedMtimeMs } = req.body || {};
+  if (!relPath) return res.status(400).json({ error: 'path required' });
+  if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
+  try {
+    const out = await filesApi.writeFile(ctx.root, relPath, { content, expectedMtimeMs });
+    res.json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
 // ─── per-file Claude thread (file-viewer) ───────────────────────────────────
 //
 // Owner-only, same containment + auth model as the file API. Threads are

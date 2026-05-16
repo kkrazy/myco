@@ -3792,10 +3792,6 @@ function _attachTurnOutcomeChip(batch, ev) {
   const outTok = u.output_tokens || 0;
   const cacheR = u.cache_read_input_tokens || 0;
   const ok = (ev.subtype === 'success');
-  const parts = [];
-  if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
-  parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);
-  if (cacheR) parts.push(`${_humanizeTokens(cacheR)} cached`);
   let outcomeEl = batch.querySelector('.agent-chrome-outcome');
   if (!outcomeEl) {
     const head = batch.querySelector('.agent-card-head');
@@ -3806,7 +3802,23 @@ function _attachTurnOutcomeChip(batch, ev) {
   }
   outcomeEl.classList.toggle('agent-chrome-outcome-ok', ok);
   outcomeEl.classList.toggle('agent-chrome-outcome-warn', !ok);
-  outcomeEl.textContent = (ok ? '✓ ' : '■ ') + parts.join(' · ');
+  // Render parts as discrete spans so CSS can drop the heavier
+  // "cached" segment on mobile (max-width screens). Glyph + duration
+  // + tokens are always shown; cached gets a .agent-chrome-outcome-
+  // optional class so the @media @900px rule hides it.
+  const glyph = ok ? '✓' : '■';
+  const durStr = ev.durationMs != null ? (ev.durationMs / 1000).toFixed(1) + 's' : '';
+  const tokensStr = `${_humanizeTokens(inTok)}↓/${_humanizeTokens(outTok)}↑`;
+  const cacheStr = cacheR ? `${_humanizeTokens(cacheR)} cache` : '';
+  // Full tooltip carries the long form even when parts are hidden.
+  const fullText = [glyph, durStr, `${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`, cacheStr ? `${_humanizeTokens(cacheR)} cached` : '']
+    .filter(Boolean).join(' · ');
+  outcomeEl.title = fullText;
+  outcomeEl.innerHTML =
+    `<span class="agent-chrome-outcome-glyph">${escHtml(glyph)}</span>` +
+    (durStr ? ` <span class="agent-chrome-outcome-dur">${escHtml(durStr)}</span>` : '') +
+    ` <span class="agent-chrome-outcome-tok">${escHtml(tokensStr)}</span>` +
+    (cacheStr ? ` <span class="agent-chrome-outcome-cache agent-chrome-outcome-optional">${escHtml(cacheStr)}</span>` : '');
 }
 
 // Render a one-line summary for a chrome event inside the expanded
@@ -4105,6 +4117,7 @@ function _createChromeBatch(ev, ts) {
   head.className = 'agent-card-head';
   head.innerHTML =
     `<span class="agent-card-ts">${escHtml(ts)}</span>` +
+    `<span class="agent-chrome-glyph agent-mute" aria-hidden="true">▸</span>` +
     `<span class="agent-card-count agent-mute">× 1</span>` +
     `<span class="agent-card-summary agent-mute agent-chrome-last">${escHtml(_chromeShortLabel(ev))}</span>`;
   card.appendChild(head);
@@ -5666,6 +5679,10 @@ function bindFilesUi() {
   document.getElementById('files-view-back')?.addEventListener('click', closeFileViewer);
   document.getElementById('files-copy')?.addEventListener('click', copyFileContents);
   document.getElementById('files-wrap-toggle')?.addEventListener('click', toggleWrap);
+  document.getElementById('files-tree-collapse')?.addEventListener('click', _toggleFilesTreeCollapsed);
+  document.getElementById('files-edit')?.addEventListener('click', _enterFileEditMode);
+  document.getElementById('files-edit-save')?.addEventListener('click', _saveFileEdit);
+  document.getElementById('files-edit-cancel')?.addEventListener('click', _exitFileEditMode);
 
   // Selection-driven action bar wiring
   document.querySelectorAll('#files-action-bar .files-action-btn').forEach((b) => {
@@ -5952,6 +5969,136 @@ function renderViewerHeader(relPath) {
   const v = state.files.viewing;
   document.getElementById('files-copy').hidden = !(v && v.content);
   document.getElementById('files-wrap-toggle').hidden = !(v && v.content);
+  // Edit button — owner-only, only when we have content + we're
+  // not already in edit mode. Save / Cancel hidden by default;
+  // _enterFileEditMode reveals them.
+  const editable = !state.viewerMode && v && v.content && !v.binary;
+  const inEdit = !!(v && v.editing);
+  document.getElementById('files-edit').hidden = !editable || inEdit;
+  document.getElementById('files-edit-save').hidden = !inEdit;
+  document.getElementById('files-edit-cancel').hidden = !inEdit;
+}
+
+// Collapse / expand the files-tree-pane on desktop so the viewer
+// gets the full width. Mobile already hides the tree when a file
+// opens; this is the desktop equivalent. State persists in
+// localStorage so the user's preference survives reloads.
+function _toggleFilesTreeCollapsed() {
+  const pane = document.getElementById('files-tree-pane');
+  const wrap = document.getElementById('files-wrap');
+  if (!pane || !wrap) return;
+  const willCollapse = !wrap.classList.contains('files-tree-collapsed');
+  wrap.classList.toggle('files-tree-collapsed', willCollapse);
+  try { localStorage.setItem('myco_files_tree_collapsed', willCollapse ? '1' : '0'); } catch {}
+  const btn = document.getElementById('files-tree-collapse');
+  if (btn) {
+    btn.textContent = willCollapse ? '▶' : '◀';
+    btn.title = willCollapse
+      ? 'Expand the tree pane'
+      : 'Collapse the tree to give the file viewer more room';
+  }
+}
+
+// Owner-only inline file edit. Swaps the rendered body for a
+// <textarea> containing the raw file content. Save POSTs to
+// /sessions/:id/file/edit (owner-gated server-side); Cancel
+// restores the rendered view.
+function _enterFileEditMode() {
+  const v = state.files.viewing;
+  if (!v || !v.content || v.binary) return;
+  if (state.viewerMode) return;     // belt-and-braces: server enforces too
+  const body = document.getElementById('files-view-body');
+  if (!body) return;
+  v.editing = true;
+  v.editOriginal = v.content;
+  const ta = document.createElement('textarea');
+  ta.id = 'files-edit-textarea';
+  ta.className = 'files-edit-textarea';
+  ta.value = v.content;
+  ta.spellcheck = false;
+  ta.autocomplete = 'off';
+  ta.autocapitalize = 'off';
+  ta.setAttribute('autocorrect', 'off');
+  body.innerHTML = '';
+  body.appendChild(ta);
+  // Refresh header buttons (show Save/Cancel, hide Edit).
+  renderViewerHeader(v.path);
+  // Tab inserts a real tab in the textarea instead of moving focus.
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.slice(0, start) + '  ' + ta.value.slice(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+    }
+    // Cmd/Ctrl-S → save.
+    if ((e.key === 's' || e.key === 'S') && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      _saveFileEdit();
+    }
+    // Esc → cancel.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      _exitFileEditMode();
+    }
+  });
+  ta.focus();
+}
+
+function _exitFileEditMode() {
+  const v = state.files.viewing;
+  if (!v || !v.editing) return;
+  v.editing = false;
+  delete v.editOriginal;
+  // Re-render the body from v.content (might have been updated by save).
+  renderFileViewerWithCards(v.content, v.path, v.cards || []);
+  renderViewerHeader(v.path);
+}
+
+async function _saveFileEdit() {
+  const v = state.files.viewing;
+  if (!v || !v.editing) return;
+  const ta = document.getElementById('files-edit-textarea');
+  if (!ta) return;
+  const newContent = ta.value;
+  if (newContent === v.editOriginal) {
+    // No-op save — just exit edit mode.
+    _exitFileEditMode();
+    return;
+  }
+  const id = state.activeId;
+  if (!id) return;
+  const saveBtn = document.getElementById('files-edit-save');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '… saving';
+  }
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(id)}/file/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: v.path, content: newContent, expectedMtimeMs: v.mtimeMs }),
+    });
+    if (!res.ok) {
+      let body = {};
+      try { body = await res.json(); } catch {}
+      alert(`Save failed: ${body.error || res.status}`);
+      return;
+    }
+    const body = await res.json();
+    v.content = body.content != null ? body.content : newContent;
+    v.mtimeMs = body.mtimeMs;
+    v.size = body.size;
+    _exitFileEditMode();
+  } catch (err) {
+    alert(`Save failed: ${err.message || err}`);
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '💾 Save';
+    }
+  }
 }
 
 function showFileViewerMessage(msg) {

@@ -21,7 +21,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=251" />
+  <link rel="stylesheet" href="styles.css?v=252" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -193,6 +193,7 @@
           <header id="files-header">
             <button id="files-tree-back" hidden title="Up">‹</button>
             <span id="files-crumb"></span>
+            <button id="files-tree-collapse" title="Collapse the tree to give the file viewer more room" aria-label="Collapse tree pane">◀</button>
           </header>
           <ul id="files-tree"></ul>
           <div id="files-tree-msg" hidden></div>
@@ -202,6 +203,13 @@
             <button id="files-view-back" title="Back to tree">‹</button>
             <span id="files-view-crumbs"></span>
             <span class="header-spacer"></span>
+            <!-- Owner-only edit affordances. JS hides these for viewers
+                 (state.viewerMode === true). Edit swaps the rendered
+                 body for a textarea; Save POSTs to /file/edit; Cancel
+                 reverts to the rendered view without writing. -->
+            <button id="files-edit" title="Edit this file (owner only)" hidden>✎ Edit</button>
+            <button id="files-edit-save" title="Save changes" hidden>💾 Save</button>
+            <button id="files-edit-cancel" title="Cancel edit" hidden>✕ Cancel</button>
             <button id="files-wrap-toggle" title="Toggle wrap" hidden>⏎</button>
             <button id="files-copy" title="Copy" hidden>📋</button>
           </header>

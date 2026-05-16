@@ -2609,13 +2609,18 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 
 /* ── tree pane ──────────────────────────────────────────────────────────── */
 #files-tree-pane {
-  width: 280px;
-  min-width: 220px;
+  /* Tightened 280 → 220 so the file viewer gets more horizontal
+     space by default. The collapse button on the tree header
+     (◀) drops the pane to a thin strip when the user wants the
+     viewer to take everything. */
+  width: 220px;
+  min-width: 180px;
   border-right: 1px solid rgba(255, 255, 255, .06);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   background: #0a0e14;
+  transition: width .15s ease;
   /* Match the thin scrollbar used by #chat-messages, #conv-messages,
      and the xterm viewport so the file explorer doesn't stand out
      with the browser's default OS-styled scrollbar. */
@@ -2623,6 +2628,82 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
 #files-tree-pane::-webkit-scrollbar { width: 8px; }
+/* Collapsed-tree state: tree pane drops to a thin strip, just wide
+   enough to show the ▶ expand button. The viewer pane fills the
+   rest of the wrap. Triggered by the ◀ button in files-header
+   (handled by _toggleFilesTreeCollapsed). */
+#files-wrap.files-tree-collapsed #files-tree-pane {
+  width: 36px;
+  min-width: 36px;
+  overflow: hidden;
+}
+#files-wrap.files-tree-collapsed #files-tree-pane #files-tree,
+#files-wrap.files-tree-collapsed #files-tree-pane #files-tree-msg,
+#files-wrap.files-tree-collapsed #files-tree-pane #files-tree-back,
+#files-wrap.files-tree-collapsed #files-tree-pane #files-crumb {
+  display: none;
+}
+#files-wrap.files-tree-collapsed #files-tree-pane #files-header {
+  padding: 8px 4px;
+  justify-content: center;
+}
+#files-tree-collapse {
+  background: transparent;
+  border: 0;
+  color: var(--muted, #8b949e);
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  border-radius: 3px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+#files-tree-collapse:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+
+/* Inline file editor — fills the files-view-body with a monospace
+   textarea. The Save / Cancel buttons live in the files-view-header
+   (toggled visible in renderViewerHeader when v.editing). */
+.files-edit-textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  background: #0d1117;
+  color: var(--text);
+  border: 0;
+  outline: none;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  box-sizing: border-box;
+  white-space: pre;
+  tab-size: 2;
+}
+#files-edit,
+#files-edit-save,
+#files-edit-cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .12);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  margin-left: 6px;
+}
+#files-edit:hover, #files-edit-save:hover, #files-edit-cancel:hover {
+  background: rgba(255, 255, 255, .06);
+}
+#files-edit-save {
+  background: rgba(76, 175, 130, .14);
+  border-color: rgba(76, 175, 130, .35);
+  color: #6fdc97;
+}
+#files-edit-save:hover {
+  background: rgba(76, 175, 130, .24);
+}
+#files-edit-save:disabled { opacity: .5; cursor: wait; }
 #files-tree-pane::-webkit-scrollbar-track { background: transparent; }
 #files-tree-pane::-webkit-scrollbar-thumb {
   background: rgba(120, 130, 145, .35);
@@ -4249,6 +4330,21 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .agent-chrome-kind-head {
   letter-spacing: 0.04em;
 }
+/* Leading ▸ glyph on chrome batch heads — visual indicator that
+   this row aggregates N child events. ::after on .agent-card-head
+   adds the expand/collapse chevron at the END; this one anchors
+   the START so the row reads "▸ × N <latest event>". */
+.agent-chrome-glyph {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  opacity: 0.8;
+}
+.agent-card-expanded .agent-chrome-glyph {
+  /* Rotated glyph on expand looks redundant with the trailing
+     chevron — keep the leading one static so it remains the "this
+     is a chrome batch" identifier regardless of expansion. */
+}
 /* Outcome chip on the chrome batch head — replaces the standalone
    turn-footer row. Shows "✓ done · 6.4s · 6 in / 150 out · 54.7k
    cached" once the turn's result event lands. Tinted by outcome. */
@@ -4271,6 +4367,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .agent-chrome-outcome-warn {
   color: #ffb86b;
   background: rgba(255, 184, 107, .10);
+}
+.agent-chrome-outcome-glyph { font-weight: 600; }
+.agent-chrome-outcome-tok,
+.agent-chrome-outcome-dur,
+.agent-chrome-outcome-cache {
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 900px) {
+  /* Drop the cache portion on narrow screens — the rest of the
+     chip (✓ + duration + in↓/out↑) carries the actionable info.
+     Full breakdown still in the title= tooltip on long-press. */
+  .agent-chrome-outcome-optional { display: none; }
+  .agent-chrome-outcome { max-width: 180px; font-size: 0.66rem; padding: 1px 4px; }
 }
 /* The legacy .turn-footer rule still exists for any old DOM the
    user has cached, but new turns won't emit one. Hide if present. */
