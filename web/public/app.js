@@ -53,6 +53,11 @@ const state = {
   // indicator when this has entries so long-running tools (Agent,
   // Monitor, etc.) don't look like the session has hung.
   openToolCalls: [],
+  // Running totals across this session's lifetime (since the page
+  // opened). Updated on each turn_result. Surfaced as the token-meter
+  // chip near the chat input — context-window fill + cumulative cost.
+  // Resets on session switch (openSession clears it).
+  turnTotals: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, lastTurnInputTokens: 0 },
 };
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -960,6 +965,12 @@ function _resetUiForNewSession(id) {
     if (wrap) wrap.hidden = true;
     document.getElementById('btn-' + t)?.classList.remove('active');
   }
+  // Reset per-session telemetry. The token-meter chip near the input
+  // shows the running total from when this session was opened, not
+  // since-page-load — context-window fill is the key signal and that
+  // resets on every new session.
+  state.turnTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, lastTurnInputTokens: 0 };
+  _renderTokenMeter();
   try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
   clearChat();
@@ -1756,16 +1767,46 @@ function _renderPermModal() {
 
   // Pager + nav buttons — visible only with multiple pendings. The
   // pager reads "1 of 3" so the user knows there's more queued up.
+  // Plus a chip row (research item #1 — VS Code 1.116 carousel
+  // pattern) showing one clickable chip per pending request so the
+  // user can jump directly without arrow-clicking through.
+  const chipsEl = document.getElementById('perm-modal-chips');
   if (q.length > 1) {
     pagerEl.textContent = `${idx + 1} of ${q.length}`;
     prevBtn.hidden = false;
     nextBtn.hidden = false;
     prevBtn.disabled = (idx === 0);
     nextBtn.disabled = (idx === q.length - 1);
+    if (chipsEl) {
+      chipsEl.innerHTML = '';
+      q.forEach((mm, i) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'perm-chip' + (i === idx ? ' perm-chip-active' : '');
+        chip.dataset.permChipIdx = String(i);
+        // Short label: tool name for permission asks, first 20 chars
+        // of the cleaned question for AskUserQuestion. Number prefix
+        // mirrors the digit-key shortcut behaviour for picks (modulo:
+        // the digit picks options inside ONE request, the chip jumps
+        // BETWEEN requests).
+        let lbl;
+        if (mm.kind === 'plan' || mm.kind === 'ask') {
+          const cq = String(mm.question || '').replace(/^\s*\[[^\]]*\]\s*/, '').trim();
+          lbl = cq.split(/[?:]/)[0].slice(0, 22);
+        } else {
+          lbl = (mm.target && mm.target.tool) || 'permission';
+        }
+        chip.textContent = `${i + 1}. ${lbl}`;
+        chip.title = `Jump to pending #${i + 1}`;
+        chipsEl.appendChild(chip);
+      });
+      chipsEl.hidden = false;
+    }
   } else {
     pagerEl.textContent = '';
     prevBtn.hidden = true;
     nextBtn.hidden = true;
+    if (chipsEl) { chipsEl.hidden = true; chipsEl.innerHTML = ''; }
   }
 
   // Meta line — show only the tool target (Bash command, file path,
@@ -1837,6 +1878,17 @@ function _bindPermModal() {
   if (!modal || modal.dataset.bound === '1') return;
   modal.dataset.bound = '1';
   modal.addEventListener('click', (e) => {
+    // Carousel chips (research item #1) — direct-jump to any pending.
+    const chip = e.target.closest('.perm-chip');
+    if (chip) {
+      const i = parseInt(chip.dataset.permChipIdx || '0', 10);
+      const q = state.pendingMenuQueue || [];
+      if (Number.isFinite(i) && i >= 0 && i < q.length) {
+        state.pendingMenuIdx = i;
+        _renderPermModal();
+      }
+      return;
+    }
     const navBtn = e.target.closest('[data-perm-nav]');
     if (navBtn) {
       const dir = navBtn.dataset.permNav;
@@ -2285,6 +2337,16 @@ function _renderClaudeTyping() {
   host.hidden = !visible;
   const label = host.querySelector('.claude-typing-label');
   if (label) _renderClaudeTypingLabel(label, status, state.claudeStatus);
+  // Distinct visual states (research item #7): thinking / running /
+  // awaiting / done / error. Toggle each class explicitly so the
+  // strip's color, dot color, and Stop-button presence reflect the
+  // current state. CSS rules: .claude-typing-running (blue),
+  // .claude-typing-awaiting (amber), .claude-typing-done (green
+  // checkmark, no dots), .claude-typing-error (red).
+  const kind = state.claudeStatusKind || 'thinking';
+  for (const k of ['thinking', 'running', 'awaiting', 'done', 'error']) {
+    host.classList.toggle('claude-typing-' + k, kind === k);
+  }
   // No scrollIntoView on updates — status ticks every ~750ms via the
   // periodic safety scan, and the indicator's slot is decoupled from
   // chat-messages's flex slot by construction.
@@ -2496,10 +2558,13 @@ function _updateAgentStatusStrip(ev) {
   if (ev.type === 'turn_result') {
     if (ev.subtype === 'success') {
       state.claudeStatusLine = '✓ done';
+      state.claudeStatusKind = 'done';
     } else if (ev.subtype) {
       state.claudeStatusLine = '■ ' + ev.subtype;
+      state.claudeStatusKind = 'error';
     } else {
       state.claudeStatusLine = '';
+      state.claudeStatusKind = null;
     }
     state.claudeStatus = null;
     state.awaitingClaude = !!state.claudeStatusLine;
@@ -2508,6 +2573,7 @@ function _updateAgentStatusStrip(ev) {
     // dots retire — gives the user a clear "claude finished" cue.
     _agentStatusGraceTimer = setTimeout(() => {
       state.claudeStatusLine = '';
+      state.claudeStatusKind = null;
       _retireClaudeTyping();
     }, 3000);
     return;
@@ -2515,6 +2581,7 @@ function _updateAgentStatusStrip(ev) {
   if (ev.type === 'fatal') {
     state.claudeStatusLine = '⚠ fatal · ' + String(ev.error || '').split('\n')[0].slice(0, 80);
     state.claudeStatus = null;
+    state.claudeStatusKind = 'error';
     state.awaitingClaude = true;
     _renderClaudeTyping();
     return;
@@ -2523,8 +2590,31 @@ function _updateAgentStatusStrip(ev) {
     // Claude is generating its reply — pin the label so it doesn't
     // flap with stale chrome text while the markdown streams.
     state.claudeStatusLine = 'claude is writing';
+    state.claudeStatusKind = 'thinking';
     state.awaitingClaude = true;
     _renderClaudeTyping();
+    return;
+  }
+  // Distinct visual states (research item #7): permission_request →
+  // awaiting (amber), tool_use → running (blue), other chrome →
+  // thinking (default green pulse). The CSS rules on
+  // .claude-typing-<kind> pick this up.
+  if (ev.type === 'permission_request') {
+    state.claudeStatusLine = _chromeShortLabel(ev) || 'awaiting permission';
+    state.claudeStatusKind = 'awaiting';
+    state.claudeStatus = null;
+    state.awaitingClaude = true;
+    _renderClaudeTyping();
+    _scheduleClaudeIdleCheck();
+    return;
+  }
+  if (ev.type === 'tool_use') {
+    state.claudeStatusLine = _chromeShortLabel(ev) || 'running tool';
+    state.claudeStatusKind = 'running';
+    state.claudeStatus = null;
+    state.awaitingClaude = true;
+    _renderClaudeTyping();
+    _scheduleClaudeIdleCheck();
     return;
   }
   if (_isChromeEvent(ev)) {
@@ -2532,6 +2622,7 @@ function _updateAgentStatusStrip(ev) {
     if (!label) return;
     state.claudeStatusLine = label;
     state.claudeStatus = null;
+    state.claudeStatusKind = 'thinking';
     state.awaitingClaude = true;
     _renderClaudeTyping();
     // Refresh the 30s idle-check that _markAwaitingClaude usually
@@ -2563,6 +2654,13 @@ function _isChromeEvent(ev) {
 function _appendAgentEvent(ev) {
   const pane = _ensureAgentLogPane();
   const ts = (ev.ts || '').slice(11, 19) || new Date().toISOString().slice(11, 19);
+
+  // Capture the SDK's announced model name so the token meter knows
+  // whether to use the 200k or 1M context window. system_init fires
+  // once at session start, agent_init_snapshot on every reattach.
+  if ((ev.type === 'system_init' || ev.type === 'agent_init_snapshot') && ev.model) {
+    state.sdkModel = ev.model;
+  }
 
   // Live status strip — single-line indicator sitting above the chat
   // input so the user always knows what the agent is doing. Every
@@ -2701,6 +2799,46 @@ function _appendAgentEvent(ev) {
   pane.scrollTop = pane.scrollHeight;
 }
 
+// Token meter — small muted chip near the chat input showing
+// context-window fill (last turn's input_tokens / model limit) +
+// cumulative session cost. Anchored top-right of #claude-typing's
+// strip so it sits in the user's peripheral vision without competing
+// with the Stop button.  The 1M-context flag mirrors the model badge
+// (claude-opus-4-7 = 1M); other models fall back to the 200k limit.
+//
+// Visual policy (Zed-style):
+//   < 60% — muted gray, no emphasis
+//   60-80% — slight warning tint
+//   > 80% — amber, with "/new" hint
+const TOKEN_LIMIT_DEFAULT = 200_000;
+const TOKEN_LIMIT_1M_MODELS_RE = /(opus-4-7|sonnet-4-6)/i;
+function _modelTokenLimit() {
+  const m = (state.sdkModel || '').toLowerCase();
+  return TOKEN_LIMIT_1M_MODELS_RE.test(m) ? 1_000_000 : TOKEN_LIMIT_DEFAULT;
+}
+function _renderTokenMeter() {
+  const el = document.getElementById('token-meter');
+  if (!el) return;
+  const t = state.turnTotals;
+  if (!t || !state.activeId) { el.hidden = true; return; }
+  const limit = _modelTokenLimit();
+  const fill = t.lastTurnInputTokens || 0;
+  const pct = limit > 0 ? Math.min(100, Math.round((fill / limit) * 100)) : 0;
+  const cost = t.costUsd || 0;
+  if (!fill && !cost) { el.hidden = true; return; }
+  el.hidden = false;
+  el.classList.toggle('token-meter-warn', pct >= 60 && pct < 80);
+  el.classList.toggle('token-meter-alarm', pct >= 80);
+  const fillStr = _humanizeTokens(fill);
+  const limitStr = limit >= 1_000_000 ? '1M' : (limit / 1000) + 'k';
+  // Cumulative cost shown only if non-zero; rounds to 3 decimals so a
+  // long session shows $1.234 instead of $1.2342341.
+  const costStr = cost > 0 ? ' · $' + (cost < 1 ? cost.toFixed(3) : cost.toFixed(2)) : '';
+  el.textContent = `${fillStr} / ${limitStr} ctx (${pct}%)${costStr}`;
+  el.title = `Context: ${fill.toLocaleString()} tokens of ${limit.toLocaleString()} (${pct}%)` +
+             (cost > 0 ? `\nCumulative cost: $${cost.toFixed(4)}` : '');
+}
+
 // Per-turn telemetry footer — single muted line emitted right after
 // the turn's chrome batch + assistant text. Format mirrors Aider:
 // `8.2s · 12.3k in / 1.2k out · 4.2k cached · $0.0431 · 3t`.
@@ -2713,6 +2851,19 @@ function _appendTurnFooter(ev, ts) {
   const inTok = u.input_tokens || 0;
   const outTok = u.output_tokens || 0;
   const cacheR = u.cache_read_input_tokens || 0;
+  // Roll the per-turn telemetry into the session-wide totals that
+  // drive the token-meter chip near the input. input_tokens grows
+  // ~linearly with conversation length (each turn re-sends the
+  // whole history), so the LAST turn's input_tokens is the best
+  // signal for current context-window fill.
+  if (state.turnTotals) {
+    state.turnTotals.inputTokens += inTok;
+    state.turnTotals.outputTokens += outTok;
+    state.turnTotals.cacheReadTokens += cacheR;
+    state.turnTotals.costUsd += (ev.totalCostUsd || 0);
+    state.turnTotals.lastTurnInputTokens = inTok;
+    _renderTokenMeter();
+  }
   const parts = [];
   if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
   parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);

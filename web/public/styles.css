@@ -3424,6 +3424,32 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   display: flex !important;
   visibility: hidden;
 }
+/* Distinct visual states (research item #7):
+   - thinking: default muted gray + accent dots (claude is just chewing)
+   - running: blue tint, brighter dots (a tool is in-flight)
+   - awaiting: amber, attention-getting (claude is blocked on the user)
+   - done: muted accent, no dots animation (grace before retiring)
+   - error: red tint, persistent until cleared
+   Each class targets the strip and the dots inside, so the
+   indicator is readable from peripheral vision. */
+.claude-typing-running { color: #8ab4f8; }
+.claude-typing-running .claude-typing-dots span { background: #8ab4f8; }
+.claude-typing-awaiting {
+  color: #ffb86b;
+  /* Slight pulse on the strip background to draw the eye — user must
+     act, this isn't just claude chugging. */
+  background: rgba(255, 184, 107, .06);
+}
+.claude-typing-awaiting .claude-typing-dots span { background: #ffb86b; }
+.claude-typing-done { color: var(--accent, #4caf82); }
+.claude-typing-done .claude-typing-dots { visibility: hidden; }
+.claude-typing-error { color: #ff8c69; }
+.claude-typing-error .claude-typing-dots span { background: #ff8c69; }
+/* Stop button is meaningless when claude is done or in an error
+   state (the turn already ended) — hide it then. Visible by default
+   for thinking / running / awaiting. */
+.claude-typing-done .claude-typing-stop,
+.claude-typing-error .claude-typing-stop { display: none; }
 .claude-typing-dots {
   display: inline-flex;
   align-items: center;
@@ -3826,6 +3852,31 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   gap: 2px;
   padding: 4px 0 2px;
 }
+/* Token meter — Zed-style context-window fill + cumulative cost
+   chip living just above the chat form (between #claude-typing and
+   #chat-autocomplete). Color tint shifts at 60% (warn) and 80%
+   (alarm) so the user can spot a swelling context without reading
+   the number. Hidden until the first turn_result arrives. */
+.token-meter {
+  flex: 0 0 auto;
+  padding: 2px 8px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--muted, #8b949e);
+  opacity: 0.72;
+  text-align: right;
+  user-select: text;
+  cursor: help;
+}
+.token-meter.token-meter-warn { color: #d4b16a; opacity: 0.9; }
+.token-meter.token-meter-alarm {
+  color: #ff8c69;
+  opacity: 1;
+  font-weight: 500;
+}
+.token-meter[hidden] { display: none !important; }
+
 /* Per-turn telemetry footer — Aider-style one-line summary right
    after each turn (duration · tokens · cost · turns). Sits flat in
    #chat-messages between cards, muted enough to be skimmable noise
@@ -4009,6 +4060,45 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 @media (prefers-reduced-motion: reduce) {
   .perm-modal-box { animation: none; }
 }
+/* Carousel chip row — sits ABOVE the head, one chip per pending
+   permission/question in the parallel-canUseTool queue. Active chip
+   is highlighted; clicking jumps the modal to that pending. Hidden
+   when there's only one pending (the queue carousel is overhead the
+   user doesn't need to see in that case). */
+.perm-modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, .08);
+}
+.perm-modal-chips[hidden] { display: none; }
+.perm-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  background: rgba(255, 255, 255, .04);
+  color: var(--muted, #8b949e);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background .12s ease, border-color .12s ease;
+}
+.perm-chip:hover {
+  background: rgba(255, 255, 255, .07);
+  border-color: rgba(255, 255, 255, .14);
+}
+.perm-chip-active {
+  background: rgba(240, 180, 64, .18);
+  border-color: rgba(240, 180, 64, .55);
+  color: #f0b440;
+}
+
 .perm-modal-head {
   display: flex;
   align-items: center;

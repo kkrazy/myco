@@ -13,7 +13,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=226" />
+  <link rel="stylesheet" href="styles.css?v=227" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -83,6 +83,10 @@
           <span class="claude-typing-label"></span>
           <button type="button" id="claude-stop" class="claude-typing-stop" title="Interrupt the in-flight claude turn (Esc)">Stop <kbd>Esc</kbd></button>
         </div>
+        <!-- Token meter: Zed-style context-window fill chip sitting
+             above the chat form. Hidden until the first turn_result
+             arrives so an empty session doesn't show 0% / $0. -->
+        <div id="token-meter" class="token-meter" hidden></div>
         <div id="chat-autocomplete" hidden></div>
         <form id="chat-form" autocomplete="off">
           <textarea id="chat-input" rows="3" placeholder="@myco to prompt claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
@@ -218,6 +222,11 @@
   <div id="perm-modal" class="perm-modal" hidden>
     <div class="perm-modal-backdrop" data-perm-defer="1"></div>
     <div class="perm-modal-box" role="dialog" aria-modal="true" aria-labelledby="perm-modal-title">
+      <!-- Carousel chips row — one chip per pending request. Only
+           renders for parallel canUseTool batches (>= 2 pending).
+           Click a chip to jump to that request. Currently-shown
+           request is marked .perm-chip-active. -->
+      <div class="perm-modal-chips" id="perm-modal-chips" hidden></div>
       <div class="perm-modal-head">
         <button class="perm-modal-nav" data-perm-nav="prev" title="Previous pending" hidden>◀</button>
         <span class="perm-modal-pager" id="perm-modal-pager"></span>
