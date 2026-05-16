@@ -2054,14 +2054,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   color: #2a1f00;
 }
 
-/* Composer card — TWO-row layout: textarea on top, actions row
-   below. Send always visible; Stop visible only while claude is
-   running (.composer-running). The taller multi-row form gives
-   each button room to breathe with a proper label + kbd hint. */
+/* Composer card — single-row: taller textarea on the left, action
+   buttons (Stop on top, Send on bottom) stacked vertically on the
+   right. The textarea grows in height naturally to ~3 lines so the
+   action column has the room it needs. Send always visible; Stop
+   only while claude is running (.composer-running). */
 #chat-form.composer {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 8px;
   padding: 8px 10px calc(8px + var(--safe-bottom));
   border-top: 1px solid transparent;
   position: relative;
@@ -2184,9 +2186,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 
 /* Textarea inside the composer card — borderless + transparent so
-   the card's own border/glow is the sole visual edge. */
+   the card's own border/glow is the sole visual edge. Taller min-
+   height (3 lines) so the vertically-stacked Send + Stop column
+   on the right has room without forcing a tiny single-line input. */
 #chat-input {
-  flex: 1;
+  flex: 1 1 auto;
   background: transparent;
   color: var(--text);
   border: 0;
@@ -2197,8 +2201,8 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   min-width: 0;
   resize: none;
   overflow-y: auto;
-  min-height: 1.8em;
-  max-height: 160px;
+  min-height: 4.4em;     /* ~3 lines at line-height 1.45 + padding */
+  max-height: 220px;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
@@ -2209,17 +2213,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #chat-input:disabled { opacity: .5; cursor: not-allowed; }
 #chat-input::placeholder { color: rgba(255, 255, 255, .28); }
 
-/* Composer actions row — sits BELOW the textarea, right-aligned.
-   Holds Stop (left of Send when visible) and Send. Both buttons
-   have a label + (Stop) a kbd Esc hint so the affordances read
-   immediately without hover. */
+/* Composer actions column — vertical stack on the right of the
+   textarea. Stop on top (when visible), Send on bottom. The column
+   matches the textarea's height via align-self: stretch on the
+   form's row, so both buttons share the vertical space. */
 .composer-actions {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   justify-content: flex-end;
   gap: 6px;
   flex: 0 0 auto;
   padding: 0;
+  min-width: 90px;
 }
 .composer-btn {
   height: 34px;
