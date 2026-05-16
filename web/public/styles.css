@@ -3955,6 +3955,36 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   gap: 2px;
   padding: 4px 0 2px;
 }
+/* Lazy-load older history (2026-05-16): keeps the chat pane crisp on
+   long sessions. Cards beyond CHAT_VISIBLE_LIMIT (50) get .chat-msg-
+   archived; the load-older button sits at the top of #chat-messages
+   so the user can reveal CHAT_LOAD_OLDER_BATCH (25) more at a time.
+   Full DOM is preserved — nothing is destroyed, just hidden. */
+.chat-msg-archived { display: none !important; }
+.chat-load-older {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, .03);
+  color: var(--muted, #8b949e);
+  border: 1px dashed rgba(255, 255, 255, .14);
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  text-align: center;
+  user-select: none;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.chat-load-older:hover {
+  background: rgba(255, 255, 255, .07);
+  color: var(--fg, #c9d1d9);
+  border-color: rgba(255, 255, 255, .25);
+}
+.chat-load-older:active { transform: scale(.99); }
+
 /* Token meter — Zed-style context-window fill + cumulative cost
    chip living just above the chat form (between #claude-typing and
    #chat-autocomplete). Color tint shifts at 60% (warn) and 80%

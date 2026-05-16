@@ -1586,6 +1586,7 @@ function _appendChatMessageDom(message) {
   // Mermaid runs only on the newly-appended node — existing SVGs (and
   // any user interaction state inside them) stay intact.
   renderMermaidInContainer(node).catch(() => {});
+  _enforceChatHistoryCap();
 }
 
 function _htmlToNode(html) {
@@ -2036,6 +2037,116 @@ function scrollChatToLatest() {
   requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
 }
 
+// Lazy-load older history. Long sessions accumulate hundreds of chat
+// rows + agent cards; keeping them all in-flow inflates layout cost
+// and forces the user to scroll past ancient context. Cap visible
+// to CHAT_VISIBLE_LIMIT; older cards get .chat-msg-archived (CSS
+// hides them) and a "Load older (N hidden)" button is inserted at
+// the top of #chat-messages. Click reveals CHAT_LOAD_OLDER_BATCH
+// more upward. Full history stays in the DOM — nothing is destroyed,
+// so picking up a session mid-conversation still has every event
+// addressable. _enforceChatHistoryCap is called from every code
+// path that mutates #chat-messages: _appendAgentEvent,
+// _appendChatMessageDom, renderChatPane.
+const CHAT_VISIBLE_LIMIT = 50;
+const CHAT_LOAD_OLDER_BATCH = 25;
+function _enforceChatHistoryCap() {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  // Real message cards only — exclude our own load-older button.
+  const cards = [];
+  for (const el of list.children) {
+    if (el.id === 'chat-load-older') continue;
+    cards.push(el);
+  }
+  if (cards.length <= CHAT_VISIBLE_LIMIT) {
+    const btn = list.querySelector('#chat-load-older');
+    if (btn) btn.remove();
+    return;
+  }
+  // Auto-archive cards beyond the visible window — but NEVER archive
+  // a card the user has already explicitly revealed (data-revealed).
+  // Without this guard, a fresh appendAgentEvent re-hides the rows
+  // the user just clicked "Load older" to see.
+  const overflow = cards.length - CHAT_VISIBLE_LIMIT;
+  let archived = 0;
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    if (i < overflow && !c.dataset.revealed) {
+      c.classList.add('chat-msg-archived');
+      archived++;
+    } else {
+      c.classList.remove('chat-msg-archived');
+    }
+  }
+  if (archived > 0) {
+    _ensureLoadOlderButton(list, archived);
+  } else {
+    const btn = list.querySelector('#chat-load-older');
+    if (btn) btn.remove();
+  }
+}
+
+function _ensureLoadOlderButton(list, hiddenCount) {
+  let btn = list.querySelector('#chat-load-older');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'chat-load-older';
+    btn.type = 'button';
+    btn.className = 'chat-load-older';
+    btn.addEventListener('click', _revealOlderChat);
+    list.insertBefore(btn, list.firstChild);
+  } else if (btn !== list.firstChild) {
+    // Keep it pinned at the top even after a fresh append shifted it.
+    list.insertBefore(btn, list.firstChild);
+  }
+  btn.textContent = `Load older (${hiddenCount} hidden)`;
+  btn.dataset.hiddenCount = String(hiddenCount);
+}
+
+function _revealOlderChat() {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  const archived = Array.from(list.querySelectorAll('.chat-msg-archived'));
+  if (!archived.length) {
+    const btn = list.querySelector('#chat-load-older');
+    if (btn) btn.remove();
+    return;
+  }
+  // Reveal the NEWEST archived first — the user wants the run-up to
+  // the currently-visible content. Mark them data-revealed so the
+  // auto-cap doesn't re-hide them on the next append.
+  const reveal = archived.slice(-CHAT_LOAD_OLDER_BATCH);
+  // Capture scroll anchor: the first currently-visible card after
+  // the archived block. We'll restore scroll position to keep that
+  // anchor on screen post-reveal.
+  const anchor = reveal[reveal.length - 1].nextElementSibling;
+  const anchorTopBefore = anchor ? anchor.getBoundingClientRect().top : 0;
+  for (const el of reveal) {
+    el.classList.remove('chat-msg-archived');
+    el.dataset.revealed = '1';
+  }
+  // Recompute remaining archive count.
+  const stillArchived = list.querySelectorAll('.chat-msg-archived').length;
+  if (stillArchived > 0) {
+    const btn = list.querySelector('#chat-load-older');
+    if (btn) {
+      btn.textContent = `Load older (${stillArchived} hidden)`;
+      btn.dataset.hiddenCount = String(stillArchived);
+    }
+  } else {
+    const btn = list.querySelector('#chat-load-older');
+    if (btn) btn.remove();
+  }
+  // Restore scroll position: anchor's screen position would have
+  // shifted DOWN by the newly-revealed cards' total height. Adjust
+  // scrollTop so the anchor stays on the same screen row.
+  if (anchor) {
+    const anchorTopAfter = anchor.getBoundingClientRect().top;
+    list.scrollTop += (anchorTopAfter - anchorTopBefore);
+  }
+}
+
 function renderChatPane(scrollToBottom = false) {
   const list = document.getElementById('chat-messages');
   const empty = document.getElementById('chat-empty');
@@ -2060,6 +2171,11 @@ function renderChatPane(scrollToBottom = false) {
   // Without this pass they render as raw source. Same async, fire-and-forget
   // pattern the transcript view uses; failures stay as raw code blocks.
   renderMermaidInContainer(list).catch(() => {});
+  // Apply the visible-window cap so a long-history reload doesn't dump
+  // 500 rows on the user. Fresh renders reset every card's
+  // .chat-msg-archived state (no data-revealed marker yet), so the
+  // cap re-archives the oldest cards back to default.
+  _enforceChatHistoryCap();
 }
 
 function _findLastMenuMessageIdx(messages) {
@@ -2687,6 +2803,7 @@ function _appendAgentEvent(ev) {
     const batch = _createChromeBatch(ev, ts);
     pane.appendChild(batch);
     pane.scrollTop = pane.scrollHeight;
+    _enforceChatHistoryCap();
     return;
   }
 
@@ -2797,6 +2914,7 @@ function _appendAgentEvent(ev) {
 
   pane.appendChild(card);
   pane.scrollTop = pane.scrollHeight;
+  _enforceChatHistoryCap();
 }
 
 // Token meter — small muted chip near the chat input showing
@@ -2882,6 +3000,7 @@ function _appendTurnFooter(ev, ts) {
                   `<span class="turn-footer-stats">${escHtml(parts.join(' · '))}</span>`;
   pane.appendChild(row);
   pane.scrollTop = pane.scrollHeight;
+  _enforceChatHistoryCap();
 }
 
 // Render a one-line summary for a chrome event inside the expanded
