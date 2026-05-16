@@ -986,12 +986,28 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
      Esc anyway, so the chip is dead chrome that just crowds the
      status row. Stop icon + label still tells the story. */
   .claude-typing-stop kbd { display: none; }
-  .claude-typing-stop {
-    padding: 4px 10px;
-    font-size: 0.78rem;
-    min-height: 30px;
+  /* Stop bumps to a real finger-target on mobile: 40px square min
+     (Apple HIG threshold), thicker padding, larger icon + label
+     font. The status row itself grows to fit. Status row also needs
+     to be tall enough — bump its min-height from 22px to 44px on
+     mobile so the bigger Stop pill doesn't overflow. */
+  .claude-typing {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 4px 12px;
+    align-items: center;
+    font-size: 0.86rem;
   }
-  .claude-stop-icon { width: 12px; height: 12px; }
+  .claude-typing-stop {
+    padding: 8px 14px;
+    font-size: 0.9rem;
+    min-height: 40px;
+    min-width: 88px;
+    border-radius: 6px;
+    font-weight: 500;
+    gap: 6px;
+  }
+  .claude-stop-icon { width: 14px; height: 14px; }
   /* Composer buttons bump to 40px on mobile for finger-friendly
      tap targets. The SVG inside scales proportionally via the
      ".composer-icon" override below. */
