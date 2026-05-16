@@ -3909,6 +3909,24 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding-top: 0;
   border-top: none;
 }
+/* Resolved menu rows (permission asks + AskUserQuestion answers
+   alike): the "Allow Bash: ... : ✓ Picked [N] label" line is
+   procedural chrome, not user content. Italic + smaller +
+   muted so it recedes visually while staying readable. */
+.chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-text,
+.chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-menu-resolved-inline,
+.chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-menu-resolved-q,
+.chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-menu-resolved-a {
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--muted, #8b949e);
+}
+/* Keep the ✓ Picked answer slightly brighter than the question so
+   the eye still locks onto the decision. Italic + muted base, but
+   answer ticks back up to readable. */
+.chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-menu-resolved-a {
+  color: rgba(201, 209, 217, .82);
+}
 /* Resolved-menu question body — kept visible above the ✓ Picked line
    so the user can see what was asked. Inherits the base chat-text
    font/size/color so the resolved menu reads as a normal chat
