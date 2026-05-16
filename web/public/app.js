@@ -2270,9 +2270,32 @@ function renderChatPane(scrollToBottom = false) {
   const list = document.getElementById('chat-messages');
   const empty = document.getElementById('chat-empty');
   if (!list) return;
+  // Preserve non-chat-message children. The chat-pane DOM is shared
+  // between two streams:
+  //   1. state.chatMessages → chat bubbles + menu rows (.chat-msg)
+  //   2. agent-event stream → agent cards, turn footers, chrome
+  //      batches, load-older button (NOT in state.chatMessages)
+  // The old `list.innerHTML = …` wipe destroyed stream-2 content
+  // every time chat-history arrived from the server — manifesting as
+  // "history disappears after refresh." Detach the preserved
+  // children, rebuild the .chat-msg list, then re-append them after
+  // so both streams coexist. Order: chat bubbles, then agent cards
+  // (chronological interleaving is a future enhancement).
+  const preserve = [];
+  for (const el of list.children) {
+    if (el.classList && el.classList.contains('chat-msg')) continue;   // chat bubble/menu → rebuilt
+    preserve.push(el);
+  }
+  for (const el of preserve) el.remove();
+
   if (!state.chatMessages.length) {
     list.innerHTML = '';
-    if (empty) empty.hidden = false;
+    // Hide the empty-state hint if we have preserved agent cards —
+    // the pane isn't actually empty in that case.
+    if (empty) empty.hidden = preserve.length > 0;
+    for (const el of preserve) list.appendChild(el);
+    if (scrollToBottom) scrollChatToLatest();
+    _enforceChatHistoryCap();
     return;
   }
   if (empty) empty.hidden = true;
@@ -2284,6 +2307,7 @@ function renderChatPane(scrollToBottom = false) {
   list.innerHTML = state.chatMessages
     .map((m, i) => renderChatMessage(m, i === lastMenuIdx))
     .join('');
+  for (const el of preserve) list.appendChild(el);
   if (scrollToBottom) scrollChatToLatest();
   _bindChatMenuClicks();
   // marked emits ```mermaid``` blocks as <pre><code class="language-mermaid">.
