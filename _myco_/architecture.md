@@ -1,5 +1,39 @@
 # Mycelium — Architecture
 
+## Project Purpose
+
+**Mycelium exists so a user — solo or in a small team — can stay on top of a software project at a glance.** Specifically:
+
+1. **Know what's already implemented.** Plan items marked `done` with auto-generated run-summary comments cite the commit + file:line that landed each feature, so "did we ship X?" is answerable from the Plan tab without grepping git or pinging anyone.
+2. **See what's in progress right now.** Running Claude sessions surface their live activity (tool calls, assistant text, permission menus) in the chat pane; plan items dispatched via `▶ Run` carry a `running` status chip until the agent's `turn_result` closes them out. The Plan tab + status badges are the single source of truth for "what's happening this minute."
+3. **See what's coming next.** Pending plan items (`/td`, `/fr`, `/bug`, plus extractor-suggested items from the running session transcript) live in the same tab, grouped by layer (Frontend / Backend / etc.) and ranked by votes. The Plan tab is the de-facto product backlog.
+4. **Continue to surface problems + suggestions.** Claude is a participant in the discussion pane, not just a tool to dispatch to: the side-channel assistant (`/btw`), the `/fr!` `/td!` `/bug!` LLM rewriter (issue-format clarification), the run-summary comments (post-execution findings), and the architecture-tab extractor all act as a running review — flagging risks, suggesting better approaches, and rewording vague items into actionable issues.
+
+The combination — live agent + persistent plan + chat-as-team-channel — means the project's state is always one tab away, and every dispatched run lands its findings back on the originating item so the trail is auditable. The same loop pulls double duty for solo developers (a co-pilot that remembers what you said yesterday) and small teams (a shared steering surface where `@all` broadcast pings and per-item votes coordinate the next move).
+
+```mermaid
+flowchart LR
+    subgraph User["User (solo or team)"]
+        Browse["Browser / Phone / VS Code"]
+    end
+    subgraph Myco["Mycelium server"]
+        Plan["Plan / Arch / Test artifacts<br/>(_myco_/*.json)"]
+        Chat["Discussion pane<br/>(rec.chat)"]
+        Agent["Claude Agent SDK<br/>(events.jsonl)"]
+    end
+    subgraph Cloud["Anthropic"]
+        Claude["claude — drives work,<br/>reviews, rewrites, suggests"]
+    end
+
+    Browse -->|"/fr /td /bug, ▶ Run, vote, comment"| Plan
+    Browse -->|"chat, @user, @all"| Chat
+    Plan -->|"[run:plan#fr-N] dispatch"| Agent
+    Agent <-->|"streaming-input + agent-event"| Claude
+    Agent -->|"turn_result → run-summary comment"| Plan
+    Agent -->|"assistant_text, tool_use, menus"| Chat
+    Chat -->|"shouldAskAssistant(/btw)"| Claude
+```
+
 ## Overview
 
 myco (codename: Mycelium) is a web UI to monitor, control, and discuss Claude Code sessions running locally on the same host as the server. Mobile-first, with a custom keyboard tuned for Claude Code's interaction patterns.
