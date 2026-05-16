@@ -1,17 +1,27 @@
-// Regression: claude's assistant text in the transcript jsonl must be
-// mirrored into rec.chat so the chat pane survives a refresh / new tab /
-// readonly attach.
+// Regression: claude's assistant text used to mirror into rec.chat as
+// fromTranscript:true rows AND get re-emitted as 'chat' frames, which
+// the chat pane rendered as a second .chat-msg bubble next to the
+// agent-event assistant_text card it had already drawn. Result: every
+// reply showed twice — one normal chat bubble, one agent card.
 //
-// Pre-fix: _postClaudeStreamToChat on the client added _localOnly:true
-// rows that were never sent to the server. rec.chat held only user
-// messages and menu callouts; chat-history on reload returned the same
-// stripped set, so claude's prose appeared to vanish from the chat pane
-// after every reload.
+// Phase 9+ contract: the AgentSession buffer (persisted to
+// <cwd>/_myco_/events.jsonl) is now the canonical record of
+// assistant_text; agent-replay reconstitutes it on reload, the live
+// 'agent-event' stream covers new replies. So:
 //
-// Post-fix: persistAssistantTextToChat (in pty.js) walks each
-// transcript-delta batch, appends assistant text into rec.chat with
-// meta.transcriptUuid for stable dedup, and emits a 'chat' event so
-// already-connected clients also see the live push.
+//   1. persistAssistantTextToChat STILL writes fromTranscript:true
+//      rows into rec.chat (historical sessions keep their shape, no
+//      data migration needed) but DOES NOT emit 'chat' over the live
+//      socket. Suppressing the live emit fixes the duplicate-on-
+//      stream case.
+//
+//   2. sessions.getChatHistory FILTERS OUT fromTranscript:true rows
+//      before returning, so the chat-history WS frame sent to clients
+//      on attach doesn't re-render those rows as bubbles either. Fixes
+//      the duplicate-on-reload case + keeps the extractor's
+//      readChatTail focused on human discussion only.
+//
+// This test locks in both pieces against accidental revert.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -195,6 +205,49 @@ t('attach.js source has the persistAssistantTextToChat helper', () => {
     'helper not invoked from the transcript watcher callback');
   assert.ok(/meta:\s*\{\s*transcriptUuid:\s*m\.uuid/.test(src),
     'helper does not stamp meta.transcriptUuid');
+});
+
+// Duplicate-render fix #1: persistAssistantTextToChat must NOT emit
+// 'chat' on the live socket. The agent-event stream (assistant_text)
+// is the sole live channel for claude's reply text; emitting 'chat'
+// too produces a second chat-bubble next to the agent card.
+t('attach.js persistAssistantTextToChat does not emit live chat frames', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
+  // Slice out the function body so the assertion is scoped — there
+  // are other places in attach.js that legitimately emit('chat'),
+  // e.g. runAssistant for @myco replies and the deny-message path.
+  const m = src.match(/function persistAssistantTextToChat[\s\S]*?\n\}\n/);
+  assert.ok(m, 'persistAssistantTextToChat definition not found');
+  const body = m[0];
+  assert.ok(!/session\.emit\(\s*['"]chat['"]/.test(body),
+    "persistAssistantTextToChat still calls session.emit('chat', …) — that produces the duplicate render against the agent-event assistant_text card");
+});
+
+// Duplicate-render fix #2: getChatHistory must filter out
+// fromTranscript rows so a reload doesn't re-introduce the bubble
+// from rec.chat after agent-replay has already drawn the card.
+t('sessions.getChatHistory filters out meta.fromTranscript rows', () => {
+  const sid = 'sess-history-filter';
+  seed(sid);
+  // One normal user message (kept) + two fromTranscript:true rows
+  // (filtered out, because agent-replay re-renders them as cards).
+  sessionsMod.appendChatMessage(sid, { user: 'alice', text: 'hi' });
+  sessionsMod.appendChatMessage(sid, {
+    user: 'claude', text: 'reply one',
+    meta: { transcriptUuid: 'u-r1', fromTranscript: true },
+  });
+  sessionsMod.appendChatMessage(sid, {
+    user: 'claude', text: 'reply two',
+    meta: { transcriptUuid: 'u-r2', fromTranscript: true },
+  });
+  // rec.chat retains all three (no data loss).
+  const raw = sessionsMod.loadStore().sessions[sid].chat;
+  assert.strictEqual(raw.length, 3, 'rec.chat should still hold all 3 rows on disk');
+  // getChatHistory returns only the non-transcript row.
+  const wire = sessionsMod.getChatHistory(sid);
+  assert.strictEqual(wire.length, 1, 'getChatHistory should drop the fromTranscript rows');
+  assert.strictEqual(wire[0].user, 'alice');
+  assert.strictEqual(wire[0].text, 'hi');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

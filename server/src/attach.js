@@ -260,11 +260,32 @@ function handleMenuSubmit(sessionId, session, hash) {
   console.log(`[menu-submit] ${sessionId} silent-drop: no resolveMenuSubmit (hash=${hash || 'none'})`);
 }
 
-// Mirror assistant text from the transcript stream into rec.chat so
-// the chat pane survives a refresh / new tab / readonly attach.
-// Idempotent via meta.transcriptUuid: each jsonl entry has a stable
-// `uuid`, so multiple WS connections persisting the same stream
-// (owner + viewer + reconnects) only land each row once.
+// Mirror assistant text from the transcript stream into rec.chat.
+//
+// PTY-era purpose: rec.chat was the only refresh-survivable record of
+// claude's reply prose, so this helper mirrored every transcript line
+// into it. Each WS attach forwarded the mirrored row as a 'chat'
+// frame to live clients so they saw the reply alongside user messages.
+//
+// SDK-era: the AgentSession buffer (persisted to <cwd>/_myco_/events.jsonl
+// and hydrated on construction) is now the canonical record of
+// assistant_text; the agent-replay frame on attach reconstitutes it
+// for reloads, and the live 'agent-event' frame renders new replies
+// as they stream. Mirroring into rec.chat AND emitting 'chat' on top
+// of that produced a second chat-bubble next to every agent_text
+// card — the bug this comment now documents.
+//
+// Current behavior:
+//   - Still persists into rec.chat with meta.fromTranscript:true, so
+//     historical sessions keep their old shape on disk (no data
+//     migration needed).
+//   - Does NOT emit 'chat' over the live socket; the agent-event path
+//     is the sole live channel for assistant text.
+//   - sessions.getChatHistory filters fromTranscript rows out of the
+//     chat-history frame sent on attach, so reloads don't dup either.
+//
+// Idempotent via meta.transcriptUuid (each jsonl entry has a stable
+// uuid, multiple WS connections only land each row once).
 function persistAssistantTextToChat(sessionId, newMsgs) {
   if (!Array.isArray(newMsgs) || !newMsgs.length) return;
   const store = sessionsMod.loadStore();
@@ -275,7 +296,6 @@ function persistAssistantTextToChat(sessionId, newMsgs) {
   for (const c of rec.chat) {
     if (c && c.meta && c.meta.transcriptUuid) seen.add(c.meta.transcriptUuid);
   }
-  const session = sessions.get(sessionId);
   let mirrored = 0, skipped = 0;
   for (const m of newMsgs) {
     if (!m || m.role !== 'assistant') continue;
@@ -290,16 +310,13 @@ function persistAssistantTextToChat(sessionId, newMsgs) {
       meta: { transcriptUuid: m.uuid, fromTranscript: true },
     };
     sessionsMod.appendChatMessage(sessionId, reply);
-    let listenerCount = 0;
-    if (session) {
-      listenerCount = session.listenerCount('chat');
-      session.emit('chat', reply);
-    }
-    console.log(`[persist-chat-emit] ${sessionId} uuid=${String(m.uuid).slice(0, 8)} listeners=${listenerCount} textLen=${reply.text.length}`);
+    // NOTE: deliberately NOT emitting 'chat' here. The agent-event
+    // stream (assistant_text) is the live channel; emitting 'chat'
+    // too produces a duplicate render in #chat-messages.
     mirrored++;
   }
   if (mirrored > 0) {
-    console.log(`[persist-chat] ${sessionId} mirrored=${mirrored} skipped=${skipped} (rec.chat now ${rec.chat.length})`);
+    console.log(`[persist-chat] ${sessionId} mirrored=${mirrored} skipped=${skipped} (rec.chat now ${rec.chat.length}; live emit suppressed — agent-event carries assistant_text)`);
   }
 }
 

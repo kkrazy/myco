@@ -659,7 +659,16 @@ const MAX_CHAT_MESSAGES = 500;
 function getChatHistory(sessionId) {
   const rec = loadStore().sessions[sessionId];
   if (!rec || !Array.isArray(rec.chat)) return [];
-  return rec.chat;
+  // Drop assistant-text rows mirrored from the JSONL transcript
+  // (meta.fromTranscript === true). The AgentSession event buffer
+  // hydrated from <cwd>/_myco_/events.jsonl already replays those as
+  // structured 'agent-event' (assistant_text) cards via the
+  // agent-replay frame sent on attach; sending them again here as
+  // generic chat-msg bubbles produces the visible duplicate observed
+  // in #chat-messages (chat bubble + agent card, same text). Storage
+  // is preserved in rec.chat for historical inspection / forensic
+  // tooling — only the wire frame to clients is filtered.
+  return rec.chat.filter((m) => !(m && m.meta && m.meta.fromTranscript === true));
 }
 
 function appendChatMessage(sessionId, msg) {

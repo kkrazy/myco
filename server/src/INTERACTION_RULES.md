@@ -238,26 +238,37 @@ real transitions emit a `mode-change` event.
 - **Test:** `test/pty-mode-change.test.js` — 6 cases including the
   baseline-silence guarantee.
 
-## R-12 — Important assistant text mirrors into rec.chat by uuid
+## R-12 — Assistant text comes via agent-event, NOT rec.chat (SDK era)
 
-Claude's assistant TEXT (the user-visible reply body) is mirrored
-from the transcript JSONL into `rec.chat` with
-`meta.transcriptUuid` + `meta.fromTranscript: true`. Dedup is by
-uuid so multiple attached connections (owner + viewer +
-reconnects) only persist the row once.
+PTY-era behavior (since superseded): Claude's assistant TEXT mirrored
+from the transcript JSONL into `rec.chat` with `meta.transcriptUuid` +
+`meta.fromTranscript: true`, then re-emitted as a `'chat'` WS frame so
+attached clients saw it. That was the only refresh-survivable record
+of claude's prose back when PTY was the byte-pump and there was no
+structured event stream.
 
-- **Why:** without the mirror, refreshing the page loses everything
-  except menu callouts and user messages — `_postClaudeStreamToChat`
-  posts `_localOnly: true` rows that never reach disk.
-- **Code:** `server/src/pty.js persistAssistantTextToChat`,
-  called from both `attachWebSocket` and `attachViewerWebSocket`
-  via `streamTranscriptToWs`.
-- **Diagnostic:** `[persist-chat] <sid> mirrored=N skipped=M
-  (rec.chat now K)` logs every non-empty persist.
-- **Test (server-side persistence):** `test/persist-assistant-chat.test.js`
-- **TODO:** add a roundtrip test that also asserts the client's chat
-  pane DOM contains the row after the WS frame arrives. Currently
-  the only proof is the `[persist-chat]` log + the user's eyeball.
+SDK era (Phase 9+): assistant text rides the `agent-event`
+stream (`{type:'assistant_text', text}`) and is persisted to
+`<cwd>/_myco_/events.jsonl` via `AgentSession._persistEventToDisk`.
+On reattach, the events file hydrates `session.buffer` and the
+`agent-replay` WS frame redraws every assistant_text card. So we no
+longer need (or want) a parallel chat-bubble path for the same text.
+
+- **Live emit:** `persistAssistantTextToChat` in `attach.js`
+  deliberately does NOT call `session.emit('chat', reply)` for
+  assistant text any more. If a future refactor re-adds that emit,
+  every reply will render twice (chat-msg bubble + agent_text card).
+  Regression: `test/persist-assistant-chat.test.js` ("persistAssistant
+  TextToChat does not emit live chat frames").
+- **History frame:** `sessions.getChatHistory` filters out
+  `meta.fromTranscript === true` rows so the `chat-history` WS frame
+  doesn't re-introduce duplicates on attach. Storage in `rec.chat` is
+  preserved untouched (no data migration needed).
+- **Diagnostic:** `[persist-chat] <sid> mirrored=N skipped=M …
+  (live emit suppressed — agent-event carries assistant_text)` logs
+  every non-empty persist.
+- **Test:** `test/persist-assistant-chat.test.js` covers both halves
+  (no live emit + history filter).
 
 ---
 
