@@ -3408,21 +3408,29 @@ function _appendAgentEvent(ev) {
   // compact "▸ N events" indicator. Click the indicator to expand and
   // see each event listed individually.
   if (_isChromeEvent(ev)) {
-    // Find an existing chrome batch in the SAME turn boundary
-    // (search backward, stop at the most recent chat-msg-user).
-    // This collapses what used to be N consecutive chrome batches
-    // per turn (one before assistant_text, one after, one for
-    // turn_result, …) into ONE batch per turn — far less noisy.
-    const batch = _findOpenChromeBatch(pane);
-    if (batch) {
-      _appendToChromeBatch(batch, ev, ts);
-      pane.scrollTop = pane.scrollHeight;
-      _enforceChatHistoryCap();
-      return;
+    // Strict adjacency rule: a chrome event folds into the previous
+    // batch ONLY if it's the IMMEDIATE previous sibling. Anything
+    // non-chrome (assistant_text, an inline chat message) between
+    // breaks the batch — a new one starts. Keeps the timeline
+    // chronologically honest: tool calls that fire AFTER claude
+    // writes some text get their own block, not retroactively
+    // merged into the pre-text batch.
+    const prev = pane.lastElementChild;
+    let batch;
+    if (prev && prev.dataset && prev.dataset.evType === '_chrome_batch') {
+      _appendToChromeBatch(prev, ev, ts);
+      batch = prev;
+    } else {
+      batch = _createChromeBatch(ev, ts);
+      if (ev.ts) batch.dataset.ts = ev.ts;
+      pane.appendChild(batch);
     }
-    const fresh = _createChromeBatch(ev, ts);
-    if (ev.ts) fresh.dataset.ts = ev.ts;
-    pane.appendChild(fresh);
+    // turn_result IS a chrome event, so it lands in this same batch.
+    // Render the outcome chip on the batch head AFTER routing so
+    // it attaches to the batch the turn_result actually went into
+    // (which may be a fresh batch if a non-chrome event broke the
+    // previous one).
+    if (ev.type === 'turn_result') _attachTurnOutcomeChip(batch, ev);
     pane.scrollTop = pane.scrollHeight;
     _enforceChatHistoryCap();
     return;
@@ -3583,18 +3591,19 @@ function _renderTokenMeter() {
 // `8.2s · 12.3k in / 1.2k out · 4.2k cached · $0.0431 · 3t`.
 // Cost / cached / turns fields are dropped when zero or missing so
 // the line stays tight on quiet turns.
+// _appendTurnFooter is now a name-preserved entry point that just
+// rolls per-turn stats into the session-wide totals (driving the
+// token-meter chip). It NO LONGER emits a standalone DOM row — the
+// outcome chip attaches to the chrome batch via _attachTurnOutcomeChip
+// from inside the chrome-event routing in _appendAgentEvent, which
+// guarantees the chip lands on the SAME batch that the turn_result
+// event was just appended to (important when a non-chrome event
+// broke the prior batch and turn_result started a fresh one).
 function _appendTurnFooter(ev, ts) {
-  const pane = _ensureAgentLogPane();
-  if (!pane) return;
   const u = ev.usage || {};
   const inTok = u.input_tokens || 0;
   const outTok = u.output_tokens || 0;
   const cacheR = u.cache_read_input_tokens || 0;
-  // Roll the per-turn telemetry into the session-wide totals that
-  // drive the token-meter chip near the input. input_tokens grows
-  // ~linearly with conversation length (each turn re-sends the
-  // whole history), so the LAST turn's input_tokens is the best
-  // signal for current context-window fill.
   if (state.turnTotals) {
     state.turnTotals.inputTokens += inTok;
     state.turnTotals.outputTokens += outTok;
@@ -3603,36 +3612,35 @@ function _appendTurnFooter(ev, ts) {
     state.turnTotals.lastTurnInputTokens = inTok;
     _renderTokenMeter();
   }
-  // Stats also surface in the chrome batch's head as a summary chip
-  // so the user sees outcome + duration + tokens at the END of the
-  // turn without expanding chrome. The standalone footer ROW that
-  // used to live here is retired — it was redundant with the chrome
-  // group sitting right above it.
-  const batch = _findOpenChromeBatch(pane);
-  if (batch) {
-    const ok = (ev.subtype === 'success');
-    const parts = [];
-    if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
-    parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);
-    if (cacheR) parts.push(`${_humanizeTokens(cacheR)} cached`);
-    let outcomeEl = batch.querySelector('.agent-chrome-outcome');
-    if (!outcomeEl) {
-      const head = batch.querySelector('.agent-card-head');
-      if (head) {
-        outcomeEl = document.createElement('span');
-        outcomeEl.className = 'agent-chrome-outcome';
-        head.appendChild(outcomeEl);
-      }
-    }
-    if (outcomeEl) {
-      outcomeEl.classList.toggle('agent-chrome-outcome-ok', ok);
-      outcomeEl.classList.toggle('agent-chrome-outcome-warn', !ok);
-      outcomeEl.textContent = (ok ? '✓ ' : '■ ') + parts.join(' · ');
-    }
+}
+
+// Attach the "✓ 6.4s · 6 in / 150 out · 54.7k cached" chip to the
+// chrome batch's head. Color tints by outcome. Called from
+// _appendAgentEvent right after the turn_result event was appended
+// to (or created) its chrome batch.
+function _attachTurnOutcomeChip(batch, ev) {
+  if (!batch) return;
+  const u = ev.usage || {};
+  const inTok = u.input_tokens || 0;
+  const outTok = u.output_tokens || 0;
+  const cacheR = u.cache_read_input_tokens || 0;
+  const ok = (ev.subtype === 'success');
+  const parts = [];
+  if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
+  parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);
+  if (cacheR) parts.push(`${_humanizeTokens(cacheR)} cached`);
+  let outcomeEl = batch.querySelector('.agent-chrome-outcome');
+  if (!outcomeEl) {
+    const head = batch.querySelector('.agent-card-head');
+    if (!head) return;
+    outcomeEl = document.createElement('span');
+    outcomeEl.className = 'agent-chrome-outcome';
+    head.appendChild(outcomeEl);
   }
-  // Early-return prevents the legacy standalone .turn-footer DOM
-  // row from emitting. Block below would have appended it.
-  return;
+  outcomeEl.classList.toggle('agent-chrome-outcome-ok', ok);
+  outcomeEl.classList.toggle('agent-chrome-outcome-warn', !ok);
+  outcomeEl.textContent = (ok ? '✓ ' : '■ ') + parts.join(' · ');
+}
   const parts = [];
   if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
   parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);
@@ -3940,23 +3948,6 @@ function _chromeEventDetails(ev) {
 // Create a brand-new chrome batch card for an incoming chrome event.
 // The head shows "▸ chrome · 1 event"; click to expand and see the
 // per-event one-liners.
-// Look for the most recent chrome batch in the current turn — used
-// by _appendAgentEvent so chrome events fold into ONE batch per
-// turn even when a non-chrome card (assistant_text) lands between
-// them. Search backward from the pane's last child; stop at a
-// chat-msg-user (the next turn's anchor — we don't want to merge
-// across user prompts) or at the document start.
-function _findOpenChromeBatch(pane) {
-  if (!pane) return null;
-  for (let i = pane.children.length - 1; i >= 0; i--) {
-    const el = pane.children[i];
-    if (!el) continue;
-    if (el.classList && el.classList.contains('chat-msg-user')) return null;
-    if (el.dataset && el.dataset.evType === '_chrome_batch') return el;
-  }
-  return null;
-}
-
 function _createChromeBatch(ev, ts) {
   const card = document.createElement('div');
   card.className = 'agent-card chat-msg-agent agent-card-chrome agent-card-collapsed';
