@@ -20,16 +20,20 @@
 const { EventEmitter } = require('events');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const { query } = require('@anthropic-ai/claude-agent-sdk');
 
-// Per-session in-memory replay buffer. Sized to cover long tool-
-// heavy sessions: at ~5 events per turn (tool_use + result + maybe
-// permission + claude text + turn_result), 5000 events ≈ 1000 turns
-// of history. Bigger than this and we should be persisting events
-// to disk; for now this generous in-memory cap survives any single
-// uninterrupted session. Reset when the session is killed (5min
-// keepalive grace expiry — see attach.js).
+// Per-session in-memory replay buffer cap. The buffer is hydrated
+// from <cwd>/_myco_/events.jsonl on construction, so this cap is
+// also the LOAD cap (last N events from disk). At ~5 events per
+// turn ⇒ 5000 events ≈ 1000 turns of history.
 const MAX_EVENTS = 5000;
+
+// Disk file cap for events.jsonl. When the file grows past this
+// (checked every ~100 appends), the file is rewritten in-place
+// with only the last MAX_EVENTS lines. ~2 KB avg per event ⇒
+// 5000 events ≈ 10 MB; we trim at 12 MB to leave headroom.
+const MAX_EVENTS_FILE_BYTES = 12 * 1024 * 1024;
 
 // Async iterable backed by a manual push() API. Used as the SDK's
 // streaming-input prompt — every user message landed via .write()
@@ -140,8 +144,14 @@ class AgentSession extends EventEmitter {
     this.openToolCalls = new Map();
 
     // Per-session event ring buffer for reattach replay (phase 5
-    // expands this with capped size + resume semantics).
+    // expands this with capped size + resume semantics). On spawn,
+    // hydrated from <cwd>/_myco_/events.jsonl so chrome batches /
+    // tool calls / claude assistant_text from a prior session
+    // process survive container restart + the 5min keepalive reap.
     this.buffer = [];
+    this._eventsFile = path.join(this.cwd, '_myco_', 'events.jsonl');
+    this._eventAppendsSinceTrim = 0;
+    this._hydrateBufferFromDisk();
 
     // Phase 4: streaming-input. Each .write() pushes a user message
     // into _msgQueue; the SDK reads from it as long as the iteration
@@ -746,7 +756,75 @@ class AgentSession extends EventEmitter {
     if (this.buffer.length > MAX_EVENTS) {
       this.buffer = this.buffer.slice(-MAX_EVENTS);
     }
+    // Fire-and-forget disk append so chrome batches + tool calls
+    // survive container restart / 5min keepalive reap. Failure is
+    // logged but doesn't block the in-memory emit — clients still
+    // get the live event via the agent-event listener.
+    this._persistEventToDisk(stamped);
     this.emit('agent-event', stamped);
+  }
+
+  // Read up to the last MAX_EVENTS events from <cwd>/_myco_/
+  // events.jsonl into this.buffer. Called once during construction.
+  // Missing file / corrupt lines are tolerated — failure means an
+  // empty buffer, same as the legacy in-memory-only behavior.
+  _hydrateBufferFromDisk() {
+    try {
+      if (!fs.existsSync(this._eventsFile)) return;
+      const raw = fs.readFileSync(this._eventsFile, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      const tail = lines.slice(-MAX_EVENTS);
+      const events = [];
+      for (const line of tail) {
+        try { events.push(JSON.parse(line)); }
+        catch { /* skip malformed line */ }
+      }
+      if (events.length) {
+        this.buffer = events;
+        console.log(`[events-persist] ${this.sessionId} hydrated ${events.length} event(s) from ${this._eventsFile}`);
+      }
+    } catch (err) {
+      console.warn(`[events-persist] ${this.sessionId} hydrate failed: ${err.message}`);
+    }
+  }
+
+  // Append one JSON-encoded event to events.jsonl (async). After
+  // every 100 appends, run _maybeTrimEventsFile to keep the file
+  // bounded.
+  _persistEventToDisk(event) {
+    try {
+      const dir = path.dirname(this._eventsFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const line = JSON.stringify(event) + '\n';
+      fs.appendFile(this._eventsFile, line, (err) => {
+        if (err) console.warn(`[events-persist] ${this.sessionId} append failed: ${err.message}`);
+      });
+      this._eventAppendsSinceTrim++;
+      if (this._eventAppendsSinceTrim >= 100) {
+        this._eventAppendsSinceTrim = 0;
+        this._maybeTrimEventsFile();
+      }
+    } catch (err) {
+      console.warn(`[events-persist] ${this.sessionId} write failed: ${err.message}`);
+    }
+  }
+
+  // If events.jsonl has grown beyond MAX_EVENTS_FILE_BYTES, rewrite
+  // it with only the last MAX_EVENTS lines. Synchronous rewrite is
+  // fine here — runs once every ~100 events, well-amortized.
+  _maybeTrimEventsFile() {
+    try {
+      const stat = fs.statSync(this._eventsFile);
+      if (stat.size < MAX_EVENTS_FILE_BYTES) return;
+      const raw = fs.readFileSync(this._eventsFile, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      if (lines.length <= MAX_EVENTS) return;
+      const keep = lines.slice(-MAX_EVENTS);
+      fs.writeFileSync(this._eventsFile, keep.join('\n') + '\n');
+      console.log(`[events-persist] ${this.sessionId} trimmed ${this._eventsFile}: ${lines.length} → ${keep.length} lines`);
+    } catch (err) {
+      console.warn(`[events-persist] ${this.sessionId} trim failed: ${err.message}`);
+    }
   }
 
   // --- session-interface methods (mirror PtySession) -------------------

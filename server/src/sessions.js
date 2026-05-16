@@ -649,7 +649,12 @@ async function importExistingTranscripts() {
 
 // ─── chat ─────────────────────────────────────────────────────────────────────
 
-const MAX_CHAT_MESSAGES = 200;
+// Chat history cap — older messages get trimmed (oldest first) when
+// the array exceeds this. Bumped from 200 → 500 so a multi-hour
+// working session keeps its full discussion + claude-reply trail
+// across restarts. At ~80 bytes per message that's ~40KB per
+// session — fine to keep in sessions.json.
+const MAX_CHAT_MESSAGES = 500;
 
 function getChatHistory(sessionId) {
   const rec = loadStore().sessions[sessionId];
