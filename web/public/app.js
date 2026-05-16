@@ -1584,12 +1584,59 @@ function _bumpChatUnreadIfHidden(message) {
   // user can tell "someone addressed me" apart from generic activity.
   // Cleared when the chat pane opens (resets state.chatUnread + the
   // mention flag).
-  if (message.meta && message.meta.kind === 'mention'
-      && state.chatUser
-      && String(message.meta.mentionUser || '').toLowerCase() === String(state.chatUser).toLowerCase()) {
+  const isMyMention = !!(message.meta && message.meta.kind === 'mention'
+    && state.chatUser
+    && String(message.meta.mentionUser || '').toLowerCase() === String(state.chatUser).toLowerCase());
+  if (isMyMention) {
     state.chatUnreadMention = true;
+    // Fire a desktop notification when the tab is backgrounded —
+    // surfaces the ping outside of the browser even when myco isn't
+    // the focused window. Skip when the tab is visible (the in-pane
+    // mention highlight + badge are sufficient signal).
+    _maybeNotifyMention(message);
   }
   _renderChatUnreadBadge();
+}
+
+// Fire a browser Notification for an @<me> mention. Permission is
+// requested lazily on the user's first chat send (so the prompt
+// isn't gated on a passive page-load gesture, which Chrome blocks).
+// Notifications are no-op'd when:
+//   - the API isn't available (older browsers / private mode)
+//   - permission was denied
+//   - the tab is currently visible (user is here, badge is enough)
+function _maybeNotifyMention(message) {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+  if (typeof document.visibilityState === 'string' && document.visibilityState === 'visible') return;
+  try {
+    const sender = message.user || 'someone';
+    const text = String(message.text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const sessionLabel = (state.sessions || []).find((s) => s.id === state.activeId);
+    const sessionTitle = (sessionLabel && (sessionLabel.cwd || sessionLabel.label || sessionLabel.id)) || '';
+    const n = new Notification(`${sender} @${state.chatUser || 'you'}`, {
+      body: text,
+      tag: 'myco-mention-' + (message.meta && message.meta.transcriptUuid || Date.now()),
+      icon: '/hetu.jpg',
+      silent: false,
+    });
+    n.onclick = () => {
+      try { window.focus(); } catch {}
+      try { n.close(); } catch {}
+    };
+    // Auto-close after 8s so a missed mention doesn't pile up forever.
+    setTimeout(() => { try { n.close(); } catch {} }, 8000);
+  } catch {}
+}
+
+// Lazily request notification permission. Called from the chat-send
+// path so the prompt fires on a user gesture (Chrome's anti-spam
+// rule blocks passive page-load requests). One-shot — once the
+// permission is granted or denied, subsequent calls are no-op.
+function _maybeRequestNotificationPermission() {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'default') return;
+  try { Notification.requestPermission().catch(() => {}); } catch {}
 }
 
 function _renderChatUnreadBadge() {
@@ -4163,6 +4210,11 @@ function bindChatUi() {
     if (sendChatMessage(input.value)) {
       input.value = '';
       autoResize();
+      // Lazily ask for desktop-notification permission on the user's
+      // first chat send — Chrome blocks passive page-load requests,
+      // so we piggyback on this gesture. One-shot: already-granted /
+      // already-denied calls return immediately.
+      _maybeRequestNotificationPermission();
     }
   }
 
