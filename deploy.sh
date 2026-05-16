@@ -25,6 +25,16 @@
 #   ./deploy.sh --set-anthropic-key sk-ant-…   # write ANTHROPIC_API_KEY into .env + restart (no build/ship)
 #   MYCO_DEPLOY_HOST=user@host \
 #   MYCO_STATE_DIR=/path/on/remote ./deploy.sh
+#
+# Local mode: when MYCO_DEPLOY_HOST points at loopback (e.g.
+# `user@localhost`, `localhost`, `*@127.0.0.1`), the script skips
+# the SSH multiplexer + the image-stream save/load and runs every
+# step locally (bash + cp + local docker daemon). Use this when
+# you're on the target host itself and don't have ssh-to-self
+# configured.
+#   MYCO_DEPLOY_HOST=kkrazy@localhost ./deploy.sh
+#   # optional override for the verify-step curl target:
+#   MYCO_VERIFY_DOMAIN=myco.labxnow.ai MYCO_DEPLOY_HOST=kkrazy@localhost ./deploy.sh
 set -euo pipefail
 
 # ─── config ──────────────────────────────────────────────────────────────────
@@ -41,6 +51,12 @@ SET_ANTHROPIC_KEY=""
 # Populated by open_ssh + build_image; consumed by later steps.
 SOCK=""
 LOCAL_ID=""
+# Set to 1 when REMOTE points at loopback — open_ssh detects this
+# and the remote/remote_scp helpers below short-circuit to bash/cp
+# instead of going through ssh/scp. Lets the script run from the
+# target host itself (the path mycobeta + prod both use when the
+# operator isn't on a machine with local Docker).
+IS_LOCAL=0
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 step()   { printf "\n── %s ──\n" "$*"; }
@@ -48,8 +64,28 @@ ok()     { printf "  ✓ %s\n" "$*"; }
 warn()   { printf "  ! %s\n" "$*" >&2; }
 die()    { printf "  ✗ %s\n" "$*" >&2; exit 1; }
 
-remote()     { ssh -o ControlPath="$SOCK" "$REMOTE" "$@"; }
-remote_scp() { scp -o ControlPath="$SOCK" "$@"; }
+# When IS_LOCAL=1: bypass ssh, run commands directly. Heredoc stdin
+# from callers (e.g. allow_github_user, set_oauth_in_env) is passed
+# through to bash -s exactly like ssh delivers it to the remote
+# bash -s, so handlers don't need to change.
+remote() {
+  if [ "$IS_LOCAL" = "1" ]; then
+    bash -c "$*"
+  else
+    ssh -o ControlPath="$SOCK" "$REMOTE" "$@"
+  fi
+}
+# scp(src, "user@host:dst") → cp(src, dst) in local mode. We strip
+# the "user@host:" prefix off the second arg.
+remote_scp() {
+  if [ "$IS_LOCAL" = "1" ]; then
+    local src="$1"
+    local dst="${2#*:}"
+    cp "$src" "$dst"
+  else
+    scp -o ControlPath="$SOCK" "$@"
+  fi
+}
 
 # ─── steps ───────────────────────────────────────────────────────────────────
 
@@ -94,6 +130,19 @@ build_image() {
 }
 
 open_ssh() {
+  # Local-mode short-circuit: when REMOTE is loopback, skip the
+  # SSH multiplexer entirely and just verify docker is reachable
+  # on this host. This is what running `./deploy.sh` FROM the
+  # target host wants — no need for ssh-to-self (which prod
+  # doesn't have configured anyway).
+  case "$REMOTE" in
+    localhost|127.0.0.1|*@localhost|*@127.0.0.1) IS_LOCAL=1 ;;
+  esac
+  if [ "$IS_LOCAL" = "1" ]; then
+    docker --version >/dev/null 2>&1 || die "docker not available locally"
+    ok "local mode — bypassing SSH (target: $REMOTE)"
+    return 0
+  fi
   SOCK="$HOME/.ssh/cm/deploy-$(echo "$REMOTE" | tr -c 'A-Za-z0-9' '_')"
   mkdir -p "$(dirname "$SOCK")"
   ssh -o ControlMaster=auto -o ControlPath="$SOCK" -o ControlPersist=10m \
@@ -298,6 +347,11 @@ print_dry_run_plan() {
 }
 
 stream_image() {
+  if [ "$IS_LOCAL" = "1" ]; then
+    step "Local mode — image already in the local docker daemon"
+    ok "skipped save/load (image=$IMAGE)"
+    return 0
+  fi
   step "Streaming $IMAGE to $REMOTE"
   docker save "$IMAGE" | gzip -1 | remote "gunzip | docker load" >/dev/null
   ok "image loaded"
@@ -320,7 +374,15 @@ swap_container() {
 verify_deploy() {
   step "Verifying"
   local domain expected served
-  domain=$(echo "$REMOTE" | sed 's/.*@//')
+  # Local-mode deploys can override the verification target via
+  # MYCO_VERIFY_DOMAIN — useful when running on a public host
+  # (e.g. on prod, REMOTE=kkrazy@localhost but the actual public
+  # name is myco.labxnow.ai). Falls back to "localhost" otherwise.
+  if [ "$IS_LOCAL" = "1" ]; then
+    domain="${MYCO_VERIFY_DOMAIN:-localhost}"
+  else
+    domain=$(echo "$REMOTE" | sed 's/.*@//')
+  fi
   expected=$(grep -oP 'app\.js\?v=\K\d+' web/public/index.html | head -1)
   served=""
   for i in 1 2 3 4 5 6 7 8; do
