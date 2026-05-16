@@ -371,15 +371,57 @@ swap_container() {
   ok "container started"
 }
 
+# Pull the public hostname for the verify step out of, in order:
+#   1. $STATE_DIR/.env's `MYCO_PUBLIC_ORIGIN=https://<host>[:port]`
+#   2. $STATE_DIR/Caddyfile's first non-`{` virtual-host header
+#      (a bare `<host> {` line).
+#   3. "localhost" (last-ditch — will fail visibly under Caddy's
+#      no-cert-for-localhost guard, but at least surfaces the actual
+#      remote error in `verify_deploy`'s die() message).
+#
+# Runs through `remote` so it works in both local mode (bash -c)
+# and remote-via-ssh mode. Echoes the bare hostname (no scheme,
+# no path, no port stripped — keeps it pragmatic).
+_derive_verify_domain() {
+  local d
+  d=$(remote "[ -r '$STATE_DIR/.env' ] && grep -E '^MYCO_PUBLIC_ORIGIN=' '$STATE_DIR/.env' | head -1 | sed -E 's|^MYCO_PUBLIC_ORIGIN=https?://||' | sed 's|/.*||'" 2>/dev/null | tr -d '\r\n')
+  if [ -n "$d" ]; then echo "$d"; return; fi
+  # Fallback: Caddyfile's first virtual host. Skip the global `{`
+  # block at line 1 (the `servers { protocols … }` block has no
+  # hostname on its opening line, just `{`).
+  d=$(remote "[ -r '$STATE_DIR/Caddyfile' ] && awk '/^[A-Za-z0-9._:-]+ *\{$/{ sub(\" *\\\\{\$\",\"\",\$0); print; exit }' '$STATE_DIR/Caddyfile'" 2>/dev/null | tr -d '\r\n')
+  if [ -n "$d" ]; then echo "$d"; return; fi
+  echo "localhost"
+}
+
 verify_deploy() {
   step "Verifying"
   local domain expected_raw expected served
-  # Local-mode deploys can override the verification target via
-  # MYCO_VERIFY_DOMAIN — useful when running on a public host
-  # (e.g. on prod, REMOTE=kkrazy@localhost but the actual public
-  # name is myco.labxnow.ai). Falls back to "localhost" otherwise.
+  # Pick the URL the verify step should hit:
+  #
+  # 1. Explicit MYCO_VERIFY_DOMAIN override always wins — useful for
+  #    one-off targets / overlay testing.
+  # 2. Remote-mode deploys (ssh user@host …): use the SSH host, since
+  #    that's the public name by construction.
+  # 3. Local-mode deploys (MYCO_DEPLOY_HOST=*@localhost — the mycobeta
+  #    + myco on-host recipe): auto-derive from the public origin
+  #    baked into the running container. Three lookup layers:
+  #      a. $STATE_DIR/.env's `MYCO_PUBLIC_ORIGIN=https://<host>` —
+  #         the established setting deploy.sh ships + warns about.
+  #      b. $STATE_DIR/Caddyfile's first virtual-host header (the
+  #         `<host> { … }` line) — survives the rare .env-but-no-
+  #         Caddyfile drift.
+  #      c. "localhost" — last-ditch. Caddy refuses requests for
+  #         localhost (no cert) but `curl -k` still surfaces the
+  #         actual error in the failure message.
+  #    The previous default of "localhost" red-flipped on every
+  #    on-host mycobeta deploy because Caddy 421s the request.
   if [ "$IS_LOCAL" = "1" ]; then
-    domain="${MYCO_VERIFY_DOMAIN:-localhost}"
+    if [ -n "${MYCO_VERIFY_DOMAIN:-}" ]; then
+      domain="$MYCO_VERIFY_DOMAIN"
+    else
+      domain=$(_derive_verify_domain)
+    fi
   else
     domain=$(echo "$REMOTE" | sed 's/.*@//')
   fi

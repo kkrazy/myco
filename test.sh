@@ -1441,6 +1441,21 @@ test_deploy_oauth_flags() {
   grep -qF '| head -1 || true)' deploy.sh \
     && pass "deploy.sh: verify retry survives transient empty curl results (|| true tail)" \
     || fail "deploy.sh: verify retry will abort under pipefail when grep doesn't match — need '|| true' tail on served= assignment"
+  # Regression (2026-05-16 follow-up): verify_deploy used to default to
+  # `https://localhost/` under IS_LOCAL=1, which Caddy refuses (no cert
+  # for localhost). The on-host mycobeta/myco recipe needed a manual
+  # MYCO_VERIFY_DOMAIN= retry on every deploy. Auto-derive the verify
+  # domain from MYCO_PUBLIC_ORIGIN (preferred) or Caddyfile's first
+  # virtual-host header (fallback) so the recipe is one-step again.
+  grep -q '^_derive_verify_domain()' deploy.sh \
+    && pass "deploy.sh: _derive_verify_domain helper present" \
+    || fail "deploy.sh: _derive_verify_domain helper missing — IS_LOCAL=1 verify will default to localhost and 421 under Caddy"
+  grep -qF 'MYCO_PUBLIC_ORIGIN=' deploy.sh \
+    && pass "deploy.sh: verify domain reads MYCO_PUBLIC_ORIGIN from .env" \
+    || fail "deploy.sh: verify domain lookup missing MYCO_PUBLIC_ORIGIN — primary source not consulted"
+  grep -qF 'STATE_DIR/Caddyfile' deploy.sh \
+    && pass "deploy.sh: verify domain fallback consults Caddyfile" \
+    || fail "deploy.sh: verify domain fallback missing Caddyfile lookup — recovery path gone"
 }
 
 test_oauth_static() {
