@@ -2050,14 +2050,28 @@ function scrollChatToLatest() {
 // _appendChatMessageDom, renderChatPane.
 const CHAT_VISIBLE_LIMIT = 50;
 const CHAT_LOAD_OLDER_BATCH = 25;
+// Hard DOM cap: anything older than the last CHAT_HARD_CAP cards is
+// PHYSICALLY removed from the DOM (not just hidden). This is the
+// memory-savings backstop — the visible-limit cap above only hides;
+// hidden DOM still holds rendered mermaid SVGs (often 50-200KB each)
+// + hljs token spans + retained closures. Past 250 cards, the
+// browser starts feeling sluggish on weaker devices.
+const CHAT_HARD_CAP = 250;
 function _enforceChatHistoryCap() {
   const list = document.getElementById('chat-messages');
   if (!list) return;
   // Real message cards only — exclude our own load-older button.
-  const cards = [];
+  let cards = [];
   for (const el of list.children) {
     if (el.id === 'chat-load-older') continue;
     cards.push(el);
+  }
+  // Hard cap pass: rip the oldest from DOM entirely. Done first so
+  // the subsequent archive counts reflect post-rip reality.
+  if (cards.length > CHAT_HARD_CAP) {
+    const drop = cards.length - CHAT_HARD_CAP;
+    for (let i = 0; i < drop; i++) cards[i].remove();
+    cards = cards.slice(drop);
   }
   if (cards.length <= CHAT_VISIBLE_LIMIT) {
     const btn = list.querySelector('#chat-load-older');
@@ -2074,6 +2088,11 @@ function _enforceChatHistoryCap() {
     const c = cards[i];
     if (i < overflow && !c.dataset.revealed) {
       c.classList.add('chat-msg-archived');
+      // Strip heavy DOM (mermaid SVGs, hljs token trees) from the
+      // card to drop its memory footprint while it's hidden. Done
+      // once per card via the dataset.stripped flag; safe because
+      // archived cards aren't rendered or interacted with.
+      _stripArchivedCard(c);
       archived++;
     } else {
       c.classList.remove('chat-msg-archived');
@@ -2085,6 +2104,58 @@ function _enforceChatHistoryCap() {
     const btn = list.querySelector('#chat-load-older');
     if (btn) btn.remove();
   }
+}
+
+// Strip the heavy bits from a card that's just been archived. Cuts
+// memory by orders of magnitude on long sessions:
+//   - mermaid SVGs (50-200 KB each) → replaced with a tiny text node
+//     "[mermaid diagram archived]"
+//   - hljs span trees → flattened to plain textContent; the code
+//     stays readable, just without syntax colors
+// Idempotent (dataset.stripped guard). Cards the user explicitly
+// reveals (data-revealed) get re-rendered cleanly by the reveal
+// path; mermaid diagrams in revealed cards are gone for good (the
+// stripped marker stays as a hint).
+function _stripArchivedCard(card) {
+  if (!card || card.dataset.stripped === '1') return;
+  try {
+    const mermaids = card.querySelectorAll('.conv-mermaid');
+    for (const m of mermaids) {
+      m.replaceWith(document.createTextNode('[mermaid diagram archived]'));
+    }
+    const hlBlocks = card.querySelectorAll('pre code.hljs, pre code[class*="language-"]');
+    for (const code of hlBlocks) {
+      // textContent assignment collapses the inner span tree to a
+      // single TextNode; the highlight color is lost, the text
+      // remains. dataset.hlStripped lets a future re-highlight pass
+      // know this code wants treatment if revealed.
+      const text = code.textContent;
+      code.textContent = text;
+      [...code.classList].forEach(c => {
+        if (c.startsWith('hljs') || c.startsWith('language-')) code.classList.remove(c);
+      });
+    }
+    // Chrome-batch expand details — tool input JSON, tool result
+    // content, etc. These can each be tens of KB per row and a long
+    // session piles up dozens of them. Anything beyond a small
+    // preview gets replaced with a "[N bytes archived]" placeholder.
+    const heavyPres = card.querySelectorAll('.agent-chrome-pre, .agent-tool-result-preview, .agent-card-tool-input');
+    for (const pre of heavyPres) {
+      const len = pre.textContent.length;
+      if (len > 600) {
+        const preview = pre.textContent.slice(0, 100).replace(/\s+/g, ' ');
+        pre.textContent = `${preview}…  [${len.toLocaleString()} bytes archived]`;
+      }
+    }
+    // assistant_text cards stash the full markdown source on the
+    // card's dataset for streaming-merge. Drop it on archive — the
+    // rendered body still has the markdown-converted HTML, and we
+    // never re-stream into an archived card.
+    if (card.dataset.assistantText && card.dataset.assistantText.length > 200) {
+      card.dataset.assistantText = '';
+    }
+  } catch {}
+  card.dataset.stripped = '1';
 }
 
 function _ensureLoadOlderButton(list, hiddenCount) {
