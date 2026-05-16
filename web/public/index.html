@@ -13,7 +13,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=227" />
+  <link rel="stylesheet" href="styles.css?v=228" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -36,11 +36,26 @@
     <button id="btn-expand" title="Show sessions" hidden>☰</button>
 
     <main id="terminal-pane">
-      <button id="btn-files" title="Files" hidden>📁</button>
-      <button id="btn-plan" class="artifact-toggle" data-type="plan" title="Plan — todos extracted from this session" hidden>📋</button>
-      <button id="btn-arch" class="artifact-toggle" data-type="arch" title="Arch — architecture &amp; conventions from this session" hidden>🏗️</button>
-      <button id="btn-test" class="artifact-toggle" data-type="test" title="Test — verification plan from this session" hidden>🧪</button>
-      <button id="btn-chat" title="Back to chat (main view)" hidden>🏠</button>
+      <!-- Chrome cluster: Lucide-style inline SVG icons (stroke 1.75,
+           24x24 viewBox, currentColor stroke). Monochrome, scalable,
+           consistent line-weight across the cluster. Each <svg> is
+           the button's only child + .chrome-icon-svg class drives
+           sizing (CSS rule sets 18×18). -->
+      <button id="btn-files" title="Files" hidden aria-label="Files">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      </button>
+      <button id="btn-plan" class="artifact-toggle" data-type="plan" title="Plan — todos extracted from this session" hidden aria-label="Plan">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+      </button>
+      <button id="btn-arch" class="artifact-toggle" data-type="arch" title="Arch — architecture &amp; conventions from this session" hidden aria-label="Architecture">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      </button>
+      <button id="btn-test" class="artifact-toggle" data-type="test" title="Test — verification plan from this session" hidden aria-label="Tests">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6.5L3.5 19A2 2 0 0 0 5.25 22h13.5A2 2 0 0 0 20.5 19L15 8.5V2"/><path d="M8 2h8"/><path d="M6.5 14h11"/></svg>
+      </button>
+      <button id="btn-chat" title="Back to chat (main view)" hidden aria-label="Home">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </button>
       <div id="no-session">Select a session</div>
       <div id="myco-waiting" hidden aria-label="myco is thinking">
         <span class="mw-dot"></span>

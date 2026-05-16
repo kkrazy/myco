@@ -154,6 +154,27 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #btn-spawn { background: var(--accent); color: #000; font-size: 1.2rem; font-weight: 600; }
 #btn-spawn:active, #btn-collapse:active { transform: scale(.92); }
 
+/* Lucide-style inline SVG icons in the chrome cluster (btn-files,
+   btn-plan, btn-arch, btn-test, btn-chat). Centered inside the 32px
+   button, drawn at 18px with currentColor stroke so the existing
+   button color/hover/active rules carry through. The buttons used to
+   be emoji-based — emoji ignored color/sharpness and varied across
+   OSes; SVG gives one consistent line-weight + crisp render. */
+.chrome-icon-svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  pointer-events: none;
+  display: block;
+}
+/* Active state: tint the icon to the same accent the button bg uses
+   for `.active`, so the cluster reads as a coherent state group. */
+#btn-files.active .chrome-icon-svg,
+#btn-chat.active .chrome-icon-svg,
+.artifact-toggle.active .chrome-icon-svg {
+  color: #aac8ff;
+}
+
 /* "Back to home / sessions" toggle. Matches the look-and-feel of #btn-files
    and #btn-chat (rounded square, blurred dark glass, subtle white border)
    so the three top-chrome buttons feel like one cluster. Sized to fit
