@@ -2421,7 +2421,11 @@ function _insertDateSeparators(list) {
     if (child.id === 'chat-load-older') continue;
     const ts = child.dataset && child.dataset.ts;
     if (!ts) continue;
-    const day = String(ts).slice(0, 10);
+    // Use the LOCAL day, not the UTC slice — otherwise a session
+    // active at 11pm local-Friday flips to "Saturday" because UTC
+    // is already there. _localDayKey returns YYYY-MM-DD in the
+    // client's wall clock.
+    const day = _localDayKey(ts);
     if (day && day !== lastDay) {
       const sep = document.createElement('div');
       sep.className = 'date-sep';
@@ -2434,18 +2438,20 @@ function _insertDateSeparators(list) {
 
 function _formatDateSeparator(yyyymmdd) {
   if (!yyyymmdd) return '';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = _localDayKey(null);
   if (yyyymmdd === today) return 'Today';
-  const y = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const y = _localDayKey(new Date(Date.now() - 86_400_000).toISOString());
   if (yyyymmdd === y) return 'Yesterday';
-  // "May 15" if same calendar year, "May 15, 2024" otherwise.
-  const d = new Date(yyyymmdd + 'T00:00:00Z');
+  // Parse the local YYYY-MM-DD as a local-midnight date so the
+  // month / day labels render in the same zone the key was built in.
+  const [yr, mo, da] = yyyymmdd.split('-').map((n) => parseInt(n, 10));
+  if (!yr || !mo || !da) return yyyymmdd;
+  const d = new Date(yr, mo - 1, da);
   if (Number.isNaN(d.getTime())) return yyyymmdd;
-  const nowYear = new Date().getUTCFullYear();
-  const month = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
-  const day = d.getUTCDate();
-  if (d.getUTCFullYear() === nowYear) return `${month} ${day}`;
-  return `${month} ${day}, ${d.getUTCFullYear()}`;
+  const nowYear = new Date().getFullYear();
+  const month = d.toLocaleString('en-US', { month: 'short' });
+  if (d.getFullYear() === nowYear) return `${month} ${da}`;
+  return `${month} ${da}, ${d.getFullYear()}`;
 }
 
 // Group #chat-messages children into per-turn collapsible bundles.
@@ -2527,7 +2533,7 @@ function _groupTurns(list) {
 function _renderTurnHead(userCard) {
   const text = (userCard.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100);
   const ts = userCard.dataset.ts || '';
-  const tsShort = ts ? ts.slice(11, 16) : '';
+  const tsShort = _localTsShort(ts);
   return `<span class="turn-chevron" aria-hidden="true"></span>` +
          `<span class="turn-head-text">${escHtml(text || '(empty turn)')}</span>` +
          (tsShort ? `<span class="turn-head-ts">${escHtml(tsShort)}</span>` : '') +
@@ -3384,9 +3390,50 @@ function _isChromeEvent(ev) {
 // with mermaid support — see the dedicated merge branch in
 // _appendAgentEvent.
 
+// Format an ISO timestamp as the local-time HH:MM:SS string used in
+// chrome batch heads, expanded chrome rows, and the turn-footer.
+// Server emits ISO 8601 UTC; the displayed time should be the
+// client's local zone (e.g. 04:20 UTC → 21:20 in PT). Falls back
+// to current time if ev.ts is missing.
+function _localTs(iso) {
+  let d;
+  if (iso) {
+    d = new Date(iso);
+    if (Number.isNaN(d.getTime())) d = new Date();
+  } else {
+    d = new Date();
+  }
+  return d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+// HH:MM variant for the turn-head label (no seconds).
+function _localTsShort(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
+}
+
+// YYYY-MM-DD in the client's LOCAL timezone — used by the date-
+// separator logic so the "Today" / "Yesterday" labels reflect the
+// user's wall clock, not UTC.
+function _localDayKey(iso) {
+  let d;
+  if (iso) {
+    d = new Date(iso);
+    if (Number.isNaN(d.getTime())) d = new Date();
+  } else {
+    d = new Date();
+  }
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function _appendAgentEvent(ev) {
   const pane = _ensureAgentLogPane();
-  const ts = (ev.ts || '').slice(11, 19) || new Date().toISOString().slice(11, 19);
+  const ts = _localTs(ev.ts);
 
   // Capture the SDK's announced model name so the token meter knows
   // whether to use the 200k or 1M context window. system_init fires
@@ -6384,7 +6431,7 @@ function renderLogEntries() {
   const el = document.getElementById('log-entries');
   const entries = state.logs.slice(-100);
   el.innerHTML = entries.map((e) => {
-    const ts = e.ts ? e.ts.slice(11, 19) : '';
+    const ts = e.ts ? _localTs(e.ts) : '';
     return `<div class="log-entry ${e.level}"><span class="log-ts">${escHtml(ts)}</span>${escHtml(e.msg)}</div>`;
   }).join('');
   el.scrollTop = el.scrollHeight;
