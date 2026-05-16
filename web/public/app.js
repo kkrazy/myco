@@ -3644,27 +3644,6 @@ function _attachTurnOutcomeChip(batch, ev) {
   outcomeEl.classList.toggle('agent-chrome-outcome-warn', !ok);
   outcomeEl.textContent = (ok ? '✓ ' : '■ ') + parts.join(' · ');
 }
-  const parts = [];
-  if (ev.durationMs != null) parts.push((ev.durationMs / 1000).toFixed(1) + 's');
-  parts.push(`${_humanizeTokens(inTok)} in / ${_humanizeTokens(outTok)} out`);
-  if (cacheR) parts.push(`${_humanizeTokens(cacheR)} cached`);
-  if (ev.totalCostUsd != null) parts.push('$' + ev.totalCostUsd.toFixed(4));
-  if (ev.numTurns) parts.push(ev.numTurns + 't');
-  const row = document.createElement('div');
-  row.className = 'turn-footer';
-  // subtype mirrors the chrome card's "✓ done" / "■ error_max_turns"
-  // chip so the user sees turn outcome at the same glyph density as
-  // the rest of the conversation.
-  const ok = (ev.subtype === 'success');
-  const glyph = ok ? '✓' : '■';
-  row.innerHTML = `<span class="turn-footer-glyph${ok ? '' : ' turn-footer-warn'}">${escHtml(glyph)}</span>` +
-                  `<span class="turn-footer-ts">${escHtml(ts)}</span>` +
-                  `<span class="turn-footer-stats">${escHtml(parts.join(' · '))}</span>`;
-  if (ev.ts) row.dataset.ts = ev.ts;
-  pane.appendChild(row);
-  pane.scrollTop = pane.scrollHeight;
-  _enforceChatHistoryCap();
-}
 
 // Render a one-line summary for a chrome event inside the expanded
 // batch — and a click-to-expand details block for the full payload
