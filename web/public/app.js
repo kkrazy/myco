@@ -3084,6 +3084,66 @@ function _renderClaudeTypingLabel(label, status, struct) {
   }
 }
 
+// Playful verbs cycled in the status line while claude is thinking,
+// à la Claude Code's TUI ("Photosynthesizing… (29s · ↓ 1.1k tokens)").
+// Cycle once every CLAUDE_VERB_PERIOD_S seconds so the user gets
+// motion without it feeling frantic.
+const CLAUDE_VERBS = [
+  'Photosynthesizing', 'Pondering', 'Computing', 'Cogitating',
+  'Whirring', 'Brewing', 'Ruminating', 'Calculating', 'Mulling',
+  'Deliberating', 'Crafting', 'Synthesizing', 'Reasoning',
+  'Marinating', 'Percolating', 'Spelunking', 'Untangling',
+];
+const CLAUDE_VERB_PERIOD_S = 4;
+
+let _claudeTurnTickTimer = null;
+
+// Start/refresh the 1Hz timer that drives the "(29s · ↓ 1.1k)"
+// chip during an active turn. Idempotent — calling while already
+// running is a no-op. Resets the start clock when no turn was
+// running (idle → active transition). state.turnTimer carries
+// { startedAt, outChars, verbSeed }.
+function _ensureClaudeTurnTick() {
+  if (!state.turnTimer) {
+    state.turnTimer = {
+      startedAt: Date.now(),
+      outChars: 0,
+      verbSeed: Math.floor(Math.random() * CLAUDE_VERBS.length),
+    };
+  }
+  if (_claudeTurnTickTimer) return;
+  _claudeTurnTickTimer = setInterval(_renderClaudeTyping, 1000);
+}
+
+function _stopClaudeTurnTick() {
+  if (_claudeTurnTickTimer) {
+    clearInterval(_claudeTurnTickTimer);
+    _claudeTurnTickTimer = null;
+  }
+  state.turnTimer = null;
+}
+
+// Build the playful suffix shown when claude is thinking/running/
+// awaiting. Returns "" if no active turn timer (idle / done).
+// Tokens are an APPROXIMATION — 1 token ≈ 4 chars of output text
+// accumulated from assistant_text events. The server's
+// turn_result has the real count which lands in turnTotals; this
+// is just a live cue while the turn is in flight.
+function _claudeTickSuffix() {
+  const t = state.turnTimer;
+  if (!t) return '';
+  const elapsedS = Math.max(0, Math.floor((Date.now() - t.startedAt) / 1000));
+  const verbIdx = (t.verbSeed + Math.floor(elapsedS / CLAUDE_VERB_PERIOD_S)) % CLAUDE_VERBS.length;
+  const verb = CLAUDE_VERBS[verbIdx];
+  const tokens = Math.max(0, Math.floor(t.outChars / 4));
+  const tokenStr = _humanizeTokens(tokens);
+  // Format mirrors the Claude Code TUI:  Photosynthesizing… (29s · ↓ 1.1k)
+  const tail = tokens > 0
+    ? `(${elapsedS}s · ↓ ${tokenStr} tokens)`
+    : `(${elapsedS}s)`;
+  return `${verb}… ${tail}`;
+}
+
 function _renderClaudeTyping() {
   // #claude-typing is declared statically in index.html as a direct
   // child of #chatpane (sibling of #chat-messages and #chat-form).
@@ -3095,9 +3155,16 @@ function _renderClaudeTyping() {
   // static check enforcing "no DOM creation here" stays valid.
   const host = document.getElementById('claude-typing');
   if (!host) return;
-  const status = state.claudeStatusLine || '';
-  const visible = state.awaitingClaude || !!status;
+  const baseStatus = state.claudeStatusLine || '';
+  const visible = state.awaitingClaude || !!baseStatus;
   host.hidden = !visible;
+  // Playful suffix while a turn is in flight: "· Photosynthesizing…
+  // (29s · ↓ 1.1k tokens)". _claudeTickSuffix returns "" when no
+  // turn timer is running (idle / done / error). Mid-stream this
+  // gives the strip a heartbeat + token count even when the verb
+  // label is the chrome-batch's short summary.
+  const tick = _claudeTickSuffix();
+  const status = tick ? (baseStatus ? `${baseStatus} · ${tick}` : tick) : baseStatus;
   const label = host.querySelector('.claude-typing-label');
   if (label) _renderClaudeTypingLabel(label, status, state.claudeStatus);
   // Distinct visual states (research item #7): thinking / running /
@@ -3119,6 +3186,14 @@ function _renderClaudeTyping() {
   if (form) {
     const showStop = visible && (kind === 'thinking' || kind === 'running' || kind === 'awaiting');
     form.classList.toggle('composer-running', showStop);
+  }
+  // Start / stop the 1Hz playful-status ticker. Active states keep
+  // the verb cycling + elapsed counter visible. done/error/idle
+  // tear it down so the suffix doesn't linger.
+  if (visible && (kind === 'thinking' || kind === 'running' || kind === 'awaiting')) {
+    _ensureClaudeTurnTick();
+  } else if (kind === 'done' || kind === 'error' || !visible) {
+    _stopClaudeTurnTick();
   }
   // No scrollIntoView on updates — status ticks every ~750ms via the
   // periodic safety scan, and the indicator's slot is decoupled from
@@ -3518,6 +3593,14 @@ function _appendAgentEvent(ev) {
     pane.scrollTop = pane.scrollHeight;
     _enforceChatHistoryCap();
     return;
+  }
+
+  // Roll output chars into the playful turn-ticker's token counter
+  // (approximation: 1 token ≈ 4 chars). Fires for every
+  // assistant_text fragment regardless of whether we merge into
+  // the previous card or start a new one.
+  if (ev.type === 'assistant_text' && state.turnTimer) {
+    state.turnTimer.outChars += (ev.text || '').length;
   }
 
   // assistant_text — concatenate consecutive blocks into one rendered
