@@ -2145,6 +2145,50 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font-style: italic;
 }
 
+/* Context chips above the textarea — one pill per detected @-mention
+   in the input value, with an × to remove. Sits inside the composer
+   card so the focus-within glow includes them. */
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 4px 0;
+  margin: 0;
+}
+.composer-chips[hidden] { display: none; }
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 6px;
+  background: rgba(120, 160, 230, .14);
+  border: 1px solid rgba(120, 160, 230, .35);
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  color: #aac8ff;
+  user-select: none;
+}
+.composer-chip-at { opacity: 0.7; }
+.composer-chip-name { color: #c9d1d9; }
+.composer-chip-x {
+  background: transparent;
+  border: 0;
+  color: rgba(255, 255, 255, .5);
+  cursor: pointer;
+  padding: 0 4px;
+  margin-left: 2px;
+  font-size: 0.95rem;
+  line-height: 1;
+  border-radius: 4px;
+  transition: background .12s ease, color .12s ease;
+}
+.composer-chip-x:hover {
+  background: rgba(255, 255, 255, .12);
+  color: var(--fg, #c9d1d9);
+}
+
 /* Textarea inside the composer card — borderless + transparent so
    the card's own border/glow is the sole visual edge. */
 #chat-input {

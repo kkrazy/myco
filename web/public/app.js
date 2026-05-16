@@ -92,6 +92,77 @@ async function authedFetch(path, opts = {}) {
   return res;
 }
 
+// Composer context chips: detectable @-mentions in the textarea are
+// surfaced as deletable pills above the input. Helps the user see
+// what's attached at a glance instead of squinting at inline text.
+// Click × on a chip to remove that @user from the input. Idempotent:
+// rebuilt on every input event from the current textarea value.
+function _renderComposerChips() {
+  const host = document.getElementById('composer-chips');
+  const input = document.getElementById('chat-input');
+  if (!host || !input) return;
+  const text = input.value || '';
+  // Token shape: @username — start-of-string or whitespace before,
+  // then '@' + alnum/hyphen/underscore. Same shape the autocomplete
+  // and server-side _detectMentionTarget recognise.
+  const re = /(^|\s)@([A-Za-z0-9_-]+)\b/g;
+  const tokens = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    tokens.push({ login: m[2], start: m.index + m[1].length, end: m.index + m[1].length + 1 + m[2].length });
+  }
+  if (!tokens.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+  // Dedupe by login (case-insensitive) — multiple mentions of the
+  // same user collapse to one chip so removing it strips all instances.
+  const seen = new Set();
+  const unique = [];
+  for (const t of tokens) {
+    const key = t.login.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(t);
+  }
+  host.innerHTML = unique.map((t) =>
+    `<span class="composer-chip" data-chip-login="${escHtml(t.login)}">` +
+    `<span class="composer-chip-at">@</span>` +
+    `<span class="composer-chip-name">${escHtml(t.login)}</span>` +
+    `<button type="button" class="composer-chip-x" title="Remove @${escHtml(t.login)}" aria-label="Remove @${escHtml(t.login)}">×</button>` +
+    `</span>`
+  ).join('');
+  if (!host.dataset.boundClicks) {
+    host.dataset.boundClicks = '1';
+    host.addEventListener('click', (e) => {
+      const x = e.target.closest('.composer-chip-x');
+      if (!x) return;
+      const chip = x.closest('.composer-chip');
+      const login = chip && chip.dataset.chipLogin;
+      if (!login) return;
+      _removeMentionFromInput(login);
+    });
+  }
+}
+
+function _removeMentionFromInput(login) {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  // Strip every `@<login>` occurrence (boundary-safe). Trims any
+  // resulting double-spaces. Re-runs the autocomplete + chip render.
+  const re = new RegExp(`(^|\\s)@${login.replace(/[-/\\^$*+?.()|[\\]{}]/g, '\\$&')}\\b`, 'gi');
+  input.value = input.value.replace(re, (m, lead) => lead || '').replace(/\s{2,}/g, ' ').trimStart();
+  _renderComposerChips();
+  // Keep focus + caret at the end for continued typing.
+  try {
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  } catch {}
+}
+
 // Presence: render avatar chips for everyone currently attached to
 // the active session. Hidden when only one user is attached (just
 // self — boring). The chip cluster lives at the top of the chat
@@ -5099,7 +5170,10 @@ function bindChatAutocomplete() {
     });
   }
 
-  input.addEventListener('input', refresh);
+  input.addEventListener('input', () => {
+    refresh();
+    _renderComposerChips();
+  });
   input.addEventListener('focus', () => {
     // Prewarm the /users + /commands cache so the first `@` or `/`
     // typed renders instantly. refresh() will close the dropdown

@@ -392,6 +392,43 @@ function streamTranscriptToWs(sessionId, ws) {
 // `agent-event` frames, replays the per-session event ring on attach so
 // reconnects see prior context, and routes chat / menu frames back into
 // handleChatMessage / handleMenuPick(Toggle|Submit).
+// Session keep-alive grace — when the last client disconnects, we
+// don't kill the session immediately. The user may be in the middle
+// of a transient drop (closed laptop, switched networks, refreshing
+// the tab) and expect to resume where they left off. SESSION_
+// KEEPALIVE_GRACE_MS gives them a 5-minute window to reconnect;
+// past that the SDK process is reaped to free memory + tokens.
+// Reattaching within the window cancels the pending kill.
+const SESSION_KEEPALIVE_GRACE_MS = 5 * 60 * 1000;
+const _sessionKillTimers = new Map();
+
+function _scheduleSessionKill(sessionId, reason) {
+  const existing = _sessionKillTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    _sessionKillTimers.delete(sessionId);
+    // Only kill if STILL idle — defensive in case the timer fires
+    // a hair after a reconnect cancelled it (race with setTimeout's
+    // clearing semantics is rare but possible).
+    const set = _sessionPresence.get(sessionId);
+    if (set && set.size > 0) {
+      console.log(`[keepalive] ${sessionId} grace expired but ${set.size} client(s) reattached — staying alive`);
+      return;
+    }
+    console.log(`[keepalive] ${sessionId} grace expired (${reason || 'no clients'}) — reaping`);
+    killSession(sessionId);
+  }, SESSION_KEEPALIVE_GRACE_MS);
+  _sessionKillTimers.set(sessionId, timer);
+}
+
+function _cancelSessionKill(sessionId) {
+  const existing = _sessionKillTimers.get(sessionId);
+  if (!existing) return;
+  clearTimeout(existing);
+  _sessionKillTimers.delete(sessionId);
+  console.log(`[keepalive] ${sessionId} reaper cancelled — client reattached during grace`);
+}
+
 // Presence tracking — module-level map of sessionId → Set of attached
 // client info. On every attach/detach we broadcast the current
 // roster to all attached clients of that session so the chat-pane
@@ -498,6 +535,10 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
   };
   _registerPresence(sessionId, presenceInfo);
   _broadcastPresence(sessionId);
+  // A client arrived — if a keep-alive reaper was pending for this
+  // session (last client had disconnected within the last 5min),
+  // cancel it. The session lives on.
+  _cancelSessionKill(sessionId);
 
   ws.on('message', (raw) => {
     let msg;
@@ -541,6 +582,12 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     session.off('exit', onExit);
     _unregisterPresence(sessionId, presenceInfo);
     _broadcastPresence(sessionId);
+    // If this was the last client, start the 5-minute grace timer.
+    // Reattaching within the window cancels it; otherwise the SDK
+    // process is reaped to free memory + tokens.
+    if (!_sessionPresence.has(sessionId)) {
+      _scheduleSessionKill(sessionId, 'owner ws closed');
+    }
   });
 }
 
@@ -640,6 +687,7 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   };
   _registerPresence(sessionId, presenceInfo);
   _broadcastPresence(sessionId);
+  _cancelSessionKill(sessionId);   // a viewer arrived too — abort pending reap
 
   const stopTranscript = streamTranscriptToWs(sessionId, ws);
 
@@ -675,6 +723,9 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     stopTranscript();
     _unregisterPresence(sessionId, presenceInfo);
     _broadcastPresence(sessionId);
+    if (!_sessionPresence.has(sessionId)) {
+      _scheduleSessionKill(sessionId, 'last viewer ws closed');
+    }
   });
 }
 

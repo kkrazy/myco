@@ -21,7 +21,7 @@
   <link rel="icon" type="image/jpeg" href="/hetu.jpg?v=1" />
   <link rel="apple-touch-icon" href="/hetu.jpg?v=1" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=237" />
+  <link rel="stylesheet" href="styles.css?v=238" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -130,6 +130,12 @@
              calc(100% + 4px)` anchors above the composer card. -->
         <form id="chat-form" class="composer" autocomplete="off">
           <div id="chat-autocomplete" hidden></div>
+          <!-- Context chips: deletable pills for @-mentions currently
+               present in the textarea. Built fresh on every `input`
+               event from the parsed user / slash tokens. Click ×
+               removes that @user from the input value. Hidden when
+               the textarea has no detected mentions. -->
+          <div id="composer-chips" class="composer-chips" hidden></div>
           <textarea id="chat-input" rows="1" placeholder="@myco to prompt claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
           <div class="composer-actions">
             <button type="submit" id="chat-send" class="composer-btn composer-btn-send" title="Send (Enter)" aria-label="Send">
