@@ -982,6 +982,54 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   .token-meter {
     font-size: 0.66rem;
   }
+  /* Horizontal-overflow safety: keep the chat-pane STRICTLY no wider
+     than the viewport on mobile. Long URLs, paths, and unbreakable
+     tokens in chat text used to push the page wider than the
+     screen, painting a horizontal scroll bar at the document level.
+     - chatpane / messages cap at 100% with min-width:0 so flex
+       children can't expand them.
+     - chat-text / agent-card-md / artifact-md wrap aggressively
+       on word boundaries OR mid-token if necessary.
+     - pre / code blocks scroll INTERNALLY (max-width:100%) so a
+       long code line stays inside the message bubble.
+     - mermaid SVGs + images cap at 100% of their container. */
+  #chatpane, #chat-messages {
+    max-width: 100vw;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+  #chat-messages > * { max-width: 100%; min-width: 0; }
+  .chat-msg .chat-text,
+  .agent-card-md,
+  .agent-card-body,
+  .artifact-item-text.artifact-md,
+  .agent-chrome-summary,
+  .agent-tool-summary,
+  .turn-head-text {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .chat-msg .chat-text pre,
+  .agent-card-md pre,
+  .agent-card-body pre,
+  .agent-chrome-pre,
+  .agent-tool-result-preview,
+  .agent-diff-body,
+  .agent-json {
+    max-width: 100%;
+  }
+  .chat-msg .chat-text img,
+  .agent-card-md img,
+  .conv-mermaid,
+  .conv-mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
+  /* Composer card sits at 4px lateral margin to maximize textarea
+     width on narrow phones. Composer-actions column stays just
+     wide enough for the 80px buttons. */
+  #chat-form.composer { margin-left: 4px; margin-right: 4px; }
+
   /* Composer buttons bump to 44px tall on mobile (Apple HIG finger
      target). Composer is taller naturally because the actions row
      lives below the textarea. Stop hides its Esc kbd hint on
