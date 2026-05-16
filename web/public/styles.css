@@ -2353,25 +2353,9 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   pointer-events: auto;        /* allow tooltip on hover */
   cursor: not-allowed;
 }
-/* Tiny "soon" badge floats top-right of the button to make the
-   work-in-progress state read at a glance, not just on hover. */
-.composer-btn-mic::after {
-  content: 'soon';
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  text-decoration: none;
-  padding: 1px 5px;
-  border-radius: 8px;
-  background: rgba(240, 180, 64, .85);
-  color: #1a1a1a;
-  opacity: 1;
-  pointer-events: none;
-}
+/* (Retired) Tiny "soon" badge on the mic button. The strikethrough
+   + dashed border + disabled state already read as WIP — the extra
+   chip cluttered the composer. */
 .composer-btn-mic:hover {
   background: rgba(255, 255, 255, .10);
   border-color: rgba(255, 255, 255, .25);
