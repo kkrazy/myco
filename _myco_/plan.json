@@ -423,14 +423,25 @@
       "id": "fr-6",
       "text": "add link to fr/td/bug for easy navigation to the specific items in the plan view",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T09:57:23.487Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [
         "kkrazy"
       ],
-      "comments": []
+      "comments": [
+        {
+          "id": "fr6done",
+          "user": "claude",
+          "text": "✓ done — shipped in commit `79076eb`, deployed to mycobeta (image stamp `2026-05-16T12:47:01Z`).\n\n**Deep-link to plan items via `<origin>/#<id>`:**\n\n- **Stable DOM anchor:** every plan-item `<li>` carries `id=\"artifact-item-<id>\"` (`web/public/app.js renderItem`), so pasting `https://mycobeta.labxnow.ai/#fr-7` scrolls right to it.\n- **Copy-link affordance:** the id chip (`fr-7`, `td-3`, `bug-2`) now has `role=\"button\"` + `tabindex=\"0\"` + `data-deep-link-id`. Click (or keyboard Enter / Space) calls `_copyArtifactItemDeepLink` which writes `<origin><pathname>#<id>` to `navigator.clipboard`, updates `location.hash` via `history.replaceState` (no back-button pollution), and flashes a 1.2 s green `.artifact-item-id-copied` badge on the chip as confirmation.\n- **Hash → focus pipeline:** `_focusArtifactItemFromHash` resolves the hash on page load AND on every `hashchange` event. It looks up which artifact type owns the id (`_findArtifactTypeForItem` walks `state.artifacts`), opens that tab via `showArtifactView`, then `_scrollToArtifactItem` calls `scrollIntoView({block:'center', behavior:'smooth'})` and adds the `.artifact-item-deep-link-focused` class for ~2.4 s.\n- **Cache-not-ready fallback:** if the artifact cache hasn't been hydrated yet when the hash arrives, the requested id is stashed on `state.pendingDeepLinkId` and consumed by the next `_onArtifactsCacheUpdated` (artifacts-init / state-update) or the post-render bind block, whichever fires first. So a deep link in the URL on cold load lands cleanly even though the items render asynchronously.\n- **Hash whitelist:** only fragments matching `^(fr|td|bug|test)-\\d+$` (or legacy hex) are intercepted; other `#…` fragments pass through untouched so future fragment-routing can coexist.\n- **Visual feedback:** `.artifact-item-deep-link-focused` runs a 1.6 s × 2 cool-blue box-shadow pulse keyframe so the landed item is immediately findable in a long list.\n- **Tests:** test.sh adds seven static guards under the artifact-render block — li id, `data-deep-link-id` chip, both helper functions, the `hashchange` listener, and both CSS classes. All 18 node tests still pass.\n- **Live verification on mycobeta:** `artifact-item-${escHtml(it.id)}` ×1, `_copyArtifactItemDeepLink` ×3, `_focusArtifactItemFromHash` ×3, `artifact-item-deep-link-focused` ×1 in styles.css, `data-deep-link-id` ×2 — all greps green on the running container.\n\nTry it: open the Plan tab, click any id chip — the URL bar gets `#<id>` and the permalink lands on your clipboard.\n\nNot deployed to production myco yet — say the word if you want fr-6 promoted there too.",
+          "ts": "2026-05-16T13:00:00.000Z",
+          "meta": {
+            "kind": "run-summary",
+            "manual": true
+          }
+        }
+      ]
     }
   ],
   "updatedAt": "2026-05-16T09:57:23.487Z"
