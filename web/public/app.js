@@ -2229,10 +2229,66 @@ function _enforceChatHistoryCap() {
   // unwraps existing groups and rebuilds from the flat list, so
   // it's safe to fire from every mutation path.
   _groupTurns(list);
+  // Cluster consecutive turn-groups within TASK_BURST_GAP_MS of
+  // each other into a "task burst" — visually linked via a shared
+  // left bar. Time-gap heuristic: turns within 5 min belong to the
+  // same task.
+  _groupTaskBursts(list);
   // Insert "Today" / "Yesterday" / "May 15" dividers when adjacent
   // top-level rows cross a date boundary. Helps long, multi-day
   // sessions read as discrete chunks of work.
   _insertDateSeparators(list);
+}
+
+// Task-burst grouping: walk top-level turn-groups, cluster those
+// within TASK_BURST_GAP_MS of each other (start of next vs end of
+// previous) into a "task burst". Marker classes task-burst-start /
+// -mid / -end let CSS draw a shared left bar + tighten the inter-
+// turn gap so the eye groups them as one task. Idempotent: clears
+// its own prior tags first.
+const TASK_BURST_GAP_MS = 5 * 60 * 1000;
+function _groupTaskBursts(list) {
+  if (!list) return;
+  for (const el of list.querySelectorAll(':scope > .task-burst-start, :scope > .task-burst-mid, :scope > .task-burst-end')) {
+    el.classList.remove('task-burst-start', 'task-burst-mid', 'task-burst-end');
+  }
+  const groups = [...list.querySelectorAll(':scope > .turn-group')];
+  if (groups.length < 2) return;
+  let i = 0;
+  while (i < groups.length) {
+    const start = i;
+    let prevEndIso = _turnEndTs(groups[i]);
+    i++;
+    while (i < groups.length) {
+      const curStartIso = groups[i].dataset && groups[i].dataset.ts;
+      if (!curStartIso || !prevEndIso) break;
+      const gap = new Date(curStartIso).getTime() - new Date(prevEndIso).getTime();
+      if (!Number.isFinite(gap) || gap > TASK_BURST_GAP_MS) break;
+      prevEndIso = _turnEndTs(groups[i]) || curStartIso;
+      i++;
+    }
+    const end = i - 1;
+    if (end > start) {
+      groups[start].classList.add('task-burst-start');
+      for (let j = start + 1; j < end; j++) groups[j].classList.add('task-burst-mid');
+      groups[end].classList.add('task-burst-end');
+    }
+  }
+}
+
+// Find the timestamp of the LAST event inside a turn-group's body,
+// which is the right "burst-end" anchor — using the head ts (start
+// of the turn) would underestimate gaps for slow turns.
+function _turnEndTs(group) {
+  if (!group) return null;
+  const body = group.querySelector(':scope > .turn-body');
+  if (!body) return group.dataset && group.dataset.ts || null;
+  // Walk body children backwards, return first one with a ts.
+  for (let i = body.children.length - 1; i >= 0; i--) {
+    const t = body.children[i].dataset && body.children[i].dataset.ts;
+    if (t) return t;
+  }
+  return group.dataset && group.dataset.ts || null;
 }
 
 // Walk top-level children of #chat-messages and slot a .date-sep
@@ -3542,19 +3598,138 @@ function _chromeEventLine(ev, ts) {
   return wrap;
 }
 
+// Collapsible JSON tree. Renders objects/arrays as <details> blocks
+// so the user can drill into structure without raw-text reading.
+// Default state: depth 0-1 open, depth 2+ closed. Primitives render
+// inline with syntax-color classes. Cycle / depth guard at 12.
+function _renderJsonTree(value, depth = 0) {
+  if (depth > 12) return '<span class="agent-mute">[deep]</span>';
+  if (value === null) return '<span class="json-null">null</span>';
+  if (typeof value === 'boolean') return `<span class="json-bool">${value}</span>`;
+  if (typeof value === 'number') return `<span class="json-num">${value}</span>`;
+  if (typeof value === 'string') {
+    // Multi-line strings stay readable: wrap in pre when they contain
+    // newlines, otherwise inline.
+    if (value.indexOf('\n') >= 0 && value.length > 80) {
+      return `<pre class="json-str-multiline">${escHtml(value)}</pre>`;
+    }
+    return `<span class="json-str">${escHtml(JSON.stringify(value))}</span>`;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) return '<span class="json-bracket">[]</span>';
+    const items = value.map((v, i) =>
+      `<div class="json-item"><span class="json-idx">${i}:</span> ${_renderJsonTree(v, depth + 1)}</div>`
+    ).join('');
+    const isOpen = depth <= 1 ? ' open' : '';
+    return `<details class="json-block"${isOpen}><summary class="json-summary"><span class="json-bracket">[</span><span class="agent-mute"> ${value.length} item${value.length === 1 ? '' : 's'} </span><span class="json-bracket">]</span></summary>${items}</details>`;
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (!keys.length) return '<span class="json-bracket">{}</span>';
+    const items = keys.map((k) =>
+      `<div class="json-item"><span class="json-key">${escHtml(k)}</span><span class="json-colon">:</span> ${_renderJsonTree(value[k], depth + 1)}</div>`
+    ).join('');
+    const isOpen = depth <= 1 ? ' open' : '';
+    return `<details class="json-block"${isOpen}><summary class="json-summary"><span class="json-bracket">{</span><span class="agent-mute"> ${keys.length} key${keys.length === 1 ? '' : 's'} </span><span class="json-bracket">}</span></summary>${items}</details>`;
+  }
+  return escHtml(String(value));
+}
+
+// Render an Edit tool call as a unified diff. Splits both halves
+// into lines, finds the longest common prefix/suffix, and only
+// shows the differing middle as -/+ lines (with a small context
+// window above/below). Falls back to a fully-marked diff if the
+// halves don't share boundaries.
+function _renderEditDiff(filePath, oldStr, newStr) {
+  const oldLines = String(oldStr || '').split('\n');
+  const newLines = String(newStr || '').split('\n');
+  // Trim a shared head/tail so the diff focuses on what actually
+  // changed. Each common line shown as a muted " " context row;
+  // diff body shows minus/plus runs.
+  let head = 0;
+  while (head < oldLines.length && head < newLines.length && oldLines[head] === newLines[head]) head++;
+  let tail = 0;
+  while (
+    tail < (oldLines.length - head) &&
+    tail < (newLines.length - head) &&
+    oldLines[oldLines.length - 1 - tail] === newLines[newLines.length - 1 - tail]
+  ) tail++;
+  const ctxBefore = Math.max(0, head - 2);
+  const ctxAfter = Math.min(2, tail);
+  const rows = [];
+  for (let i = ctxBefore; i < head; i++) rows.push({ kind: ' ', text: oldLines[i] });
+  for (let i = head; i < oldLines.length - tail; i++) rows.push({ kind: '-', text: oldLines[i] });
+  for (let i = head; i < newLines.length - tail; i++) rows.push({ kind: '+', text: newLines[i] });
+  for (let i = oldLines.length - tail; i < oldLines.length - tail + ctxAfter; i++) rows.push({ kind: ' ', text: oldLines[i] });
+
+  const pathHead = filePath
+    ? `<div class="agent-diff-head"><span class="agent-diff-path">${escHtml(filePath)}</span><span class="agent-diff-stat">−${oldLines.length - head - tail} +${newLines.length - head - tail}</span></div>`
+    : '';
+  const body = rows.map((r) => {
+    const cls = r.kind === '+' ? 'agent-diff-add'
+              : r.kind === '-' ? 'agent-diff-del'
+              : 'agent-diff-ctx';
+    const prefix = r.kind === '+' ? '+ '
+                 : r.kind === '-' ? '− '   // U+2212 minus
+                 : '  ';
+    return `<div class="${cls}">${escHtml(prefix + r.text)}</div>`;
+  }).join('');
+  return `<div class="agent-diff">${pathHead}<pre class="agent-diff-body">${body}</pre></div>`;
+}
+
+// Render a Write tool call as an all-additions block. New file —
+// every line is a +. Long files get a scrollable body via CSS
+// max-height on .agent-diff-body.
+function _renderWriteDiff(filePath, content) {
+  const lines = String(content || '').split('\n');
+  const head = filePath
+    ? `<div class="agent-diff-head"><span class="agent-diff-path">${escHtml(filePath)} <span class="agent-mute">(new file)</span></span><span class="agent-diff-stat">+${lines.length}</span></div>`
+    : '';
+  const body = lines.map((l) => `<div class="agent-diff-add">${escHtml('+ ' + l)}</div>`).join('');
+  return `<div class="agent-diff">${head}<pre class="agent-diff-body">${body}</pre></div>`;
+}
+
 // Render the full payload for a chrome event as HTML. Returns ''
 // when nothing structured to show (the head row carries everything).
 function _chromeEventDetails(ev) {
   if (!ev || !ev.type) return '';
   if (ev.type === 'tool_use') {
+    // Edit / MultiEdit / Write: surface as a proper diff instead of
+    // a raw JSON dump. Edit has {file_path, old_string, new_string};
+    // Write has {file_path, content}; MultiEdit has {file_path,
+    // edits: [{old_string, new_string}, ...]}. Falls back to the
+    // JSON-pre format for everything else.
     const input = ev.input == null ? {} : ev.input;
-    return `<pre class="agent-chrome-pre">${escHtml(JSON.stringify(input, null, 2))}</pre>`;
+    if (ev.name === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
+      return _renderEditDiff(input.file_path, input.old_string, input.new_string);
+    }
+    if (ev.name === 'MultiEdit' && Array.isArray(input.edits)) {
+      const parts = input.edits.map((e, i) =>
+        _renderEditDiff(`${input.file_path || ''} (edit ${i + 1}/${input.edits.length})`,
+                        e.old_string || '', e.new_string || ''));
+      return parts.join('<div class="agent-diff-sep"></div>');
+    }
+    if (ev.name === 'Write' && typeof input.content === 'string') {
+      return _renderWriteDiff(input.file_path, input.content);
+    }
+    return `<div class="agent-json">${_renderJsonTree(input)}</div>`;
   }
   if (ev.type === 'tool_result') {
     const content = String(ev.content || '');
     if (!content) return '<span class="agent-mute">(empty result)</span>';
-    // Long results are scrollable inside the details pane via CSS
-    // max-height; truncating in JS would lose information.
+    // If the content parses as JSON, render as a collapsible tree.
+    // Common for Grep / Glob / sub-agent / Read-of-json-file results.
+    // Length-cap the parse attempt — multi-MB JSON would block the
+    // main thread. Plain-text payloads fall through to the pre block.
+    const trimmed = content.trim();
+    if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length < 200_000) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') {
+          return `<div class="agent-json${ev.isError ? ' agent-json-error' : ''}">${_renderJsonTree(parsed)}</div>`;
+        }
+      } catch { /* fall through */ }
+    }
     return `<pre class="agent-chrome-pre${ev.isError ? ' agent-chrome-pre-error' : ''}">${escHtml(content)}</pre>`;
   }
   if (ev.type === 'turn_result') {

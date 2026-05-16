@@ -4063,6 +4063,165 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   gap: 2px;
   padding: 4px 0 2px;
 }
+/* Collapsible JSON tree — rendered for tool_use input + tool_result
+   content that parses as JSON. Each object/array uses <details>
+   with the bracket counts on the summary; primitives get color
+   classes. Default open at depth 0-1, closed deeper. */
+.agent-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, .22);
+  border-radius: 4px;
+  padding: 6px 10px;
+  max-height: 360px;
+  overflow: auto;
+  color: var(--fg, #c9d1d9);
+}
+.agent-json-error { border-left: 2px solid rgba(255, 130, 130, .6); }
+.agent-json .json-block { margin: 0; }
+.agent-json .json-summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: inline;
+}
+.agent-json .json-summary::before {
+  content: '▸';
+  display: inline-block;
+  width: 12px;
+  opacity: 0.5;
+  font-size: 0.7em;
+  transform: translateY(-1px);
+}
+.agent-json details[open] > .json-summary::before { content: '▾'; }
+.agent-json summary::-webkit-details-marker { display: none; }
+.agent-json .json-item {
+  margin-left: 14px;
+  padding: 1px 0;
+}
+.agent-json .json-key { color: #8ab4f8; }
+.agent-json .json-idx { color: rgba(255, 255, 255, .35); font-size: 0.92em; }
+.agent-json .json-colon { color: rgba(255, 255, 255, .45); margin-right: 2px; }
+.agent-json .json-str { color: #b5f4a5; word-break: break-word; }
+.agent-json .json-num { color: #ffb86b; }
+.agent-json .json-bool { color: #c792ea; }
+.agent-json .json-null { color: rgba(255, 255, 255, .45); font-style: italic; }
+.agent-json .json-bracket { color: rgba(255, 255, 255, .55); }
+.agent-json .json-str-multiline {
+  display: block;
+  margin: 2px 0 2px 14px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, .25);
+  border-radius: 3px;
+  font-size: 0.96em;
+  color: #b5f4a5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* Edit / Write / MultiEdit tool calls render as a styled diff
+   inside the chrome-batch expanded body. Unified format, monospace,
+   with -/+ glyphs and bg tints. Long diffs are scrollable via
+   max-height on the body so the chat-pane stays compact. */
+.agent-diff {
+  margin: 4px 0;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, .18);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+.agent-diff-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  color: var(--muted, #8b949e);
+  background: rgba(255, 255, 255, .03);
+  border-bottom: 1px solid rgba(255, 255, 255, .05);
+}
+.agent-diff-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg, #c9d1d9);
+}
+.agent-diff-stat {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.agent-diff-body {
+  margin: 0;
+  padding: 4px 0;
+  max-height: 360px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  background: transparent;
+}
+.agent-diff-add,
+.agent-diff-del,
+.agent-diff-ctx {
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.agent-diff-add {
+  background: rgba(80, 200, 120, .10);
+  color: #6fdc97;
+}
+.agent-diff-del {
+  background: rgba(255, 130, 130, .10);
+  color: #ff8a8a;
+}
+.agent-diff-ctx { color: var(--muted, #8b949e); opacity: 0.7; }
+.agent-diff-sep {
+  height: 1px;
+  margin: 6px 0;
+  background: rgba(255, 255, 255, .06);
+}
+
+/* Task-burst grouping — consecutive turn-groups within ~5min of
+   each other share a left bar so the eye reads them as ONE task.
+   Tags assigned by _groupTaskBursts: task-burst-start / -mid /
+   -end. Standalone turn-groups (no adjacent neighbor) stay
+   unmarked. Tracks the same "shared bar" visual idiom as the Q&A
+   clustering (resolved AskUserQuestion runs). */
+.turn-group.task-burst-start,
+.turn-group.task-burst-mid,
+.turn-group.task-burst-end {
+  position: relative;
+  margin-left: 6px;
+  padding-left: 10px;
+}
+.turn-group.task-burst-start::before,
+.turn-group.task-burst-mid::before,
+.turn-group.task-burst-end::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: rgba(76, 175, 130, .35);
+}
+.turn-group.task-burst-start::before { border-top-left-radius: 2px; }
+.turn-group.task-burst-end::before { border-bottom-left-radius: 2px; }
+/* Tighten vertical spacing inside the burst so the turns visually
+   belong together (vs the larger gap between bursts). */
+.turn-group.task-burst-mid,
+.turn-group.task-burst-end {
+  margin-top: 2px;
+}
+.turn-group.task-burst-start { margin-top: 14px; }
+
 /* Date separator — "Today" / "Yesterday" / "May 15" divider slotted
    between top-level chat rows when the UTC date changes. Helps long
    multi-day sessions read as discrete chunks of work. */
