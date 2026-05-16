@@ -2323,11 +2323,27 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    recording so the user can't miss that the mic is hot. Hidden via
    the `hidden` HTML attribute until JS confirms the browser
    supports SpeechRecognition (older Firefox / WebView fall back
-   to no mic — composer still works fine). */
+   to no mic — composer still works fine). The "Speak" label is
+   struck through + dimmed to flag the feature as in-progress. */
 .composer-btn-mic {
   background: rgba(255, 255, 255, .05);
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, .12);
+  opacity: 0.7;
+}
+.composer-btn-mic .composer-btn-label {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(255, 255, 255, .6);
+}
+.composer-btn-mic.chat-mic-recording .composer-btn-label {
+  /* During an active recording the strikethrough is misleading —
+     it IS doing something. Drop the line-through, the red pulse
+     covers the "experimental" cue on its own. */
+  text-decoration: none;
+}
+.composer-btn-mic.chat-mic-recording {
+  opacity: 1;
 }
 .composer-btn-mic:hover {
   background: rgba(255, 255, 255, .10);
