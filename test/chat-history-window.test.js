@@ -1,9 +1,11 @@
 // bug-9 regression: getChatHistory accepts { limit, before } for
 // windowed reads, and getChatHistoryLength returns the total filtered
 // count. The initial chat-history WS frame on attach is capped at
-// DEFAULT_CHAT_HISTORY_LIMIT (100) so the chat pane opens fast on
-// multi-hour sessions; older windows are fetched on demand via the new
-// GET /sessions/:id/chat/history?before=&limit= route.
+// DEFAULT_CHAT_HISTORY_LIMIT (25 — lowered from 100 in round 2 after
+// user feedback that 100 markdown rows was still slow on first paint)
+// so the chat pane opens fast on multi-hour sessions; older windows
+// are fetched on demand via the new GET /sessions/:id/chat/history
+// ?before=&limit= route.
 //
 // This file pins the server contract — the route + WS-frame call
 // sites depend on it.
@@ -51,9 +53,15 @@ function seedSession(sid, n) {
 
 console.log('── bug-9: windowed getChatHistory + getChatHistoryLength ──');
 
-t('DEFAULT_CHAT_HISTORY_LIMIT is exported and equals 100', () => {
-  assert.strictEqual(sessionsMod.DEFAULT_CHAT_HISTORY_LIMIT, 100,
-    'the WS chat-history frame default must be 100 to keep chat pane snappy');
+t('DEFAULT_CHAT_HISTORY_LIMIT is exported and equals 25', () => {
+  // Lowered from 100 to 25 in round 2 (user feedback: chat pane still
+  // slow on reload with 100 markdown rows). The load-older button +
+  // paginated /chat/history?before= route fetch earlier windows on
+  // demand, so a smaller initial window is no info loss — just faster
+  // first paint. Bumping back to 100 (or anything > 50) would re-
+  // introduce the sluggish-reload symptom this constant is pinned for.
+  assert.strictEqual(sessionsMod.DEFAULT_CHAT_HISTORY_LIMIT, 25,
+    'the WS chat-history frame default must be 25 to keep first paint fast');
 });
 
 t('no opts → returns ALL filtered messages (backward compat)', () => {

@@ -656,14 +656,16 @@ async function importExistingTranscripts() {
 // session — fine to keep in sessions.json.
 const MAX_CHAT_MESSAGES = 500;
 
-// bug-9: default initial window when no limit is requested. The
-// chat-history WS frame on attach gates on this — 500 messages of
-// rendered markdown (with renderMd + mermaid + turn-grouping passes)
-// makes the chat pane sluggish to open. 100 is enough to land the
-// user in recent context; the new /chat/history?before=…&limit=…
-// route + the client "load older" button fetches earlier windows
-// on demand.
-const DEFAULT_CHAT_HISTORY_LIMIT = 100;
+// bug-9 / round 2: default initial window when no limit is requested.
+// The chat-history WS frame on attach gates on this — 500 messages
+// of rendered markdown (with renderMd + mermaid + turn-grouping
+// passes) made the chat pane sluggish to open. Round 1 dropped it
+// to 100; round 2 (after user feedback that the pane was still
+// slow on reload) drops it to 25 — quarter of round 1. The load-
+// older button + the paginated /chat/history?before=…&limit=… route
+// fetch earlier windows on demand, so cutting the initial window
+// further is no info loss; just a faster first paint.
+const DEFAULT_CHAT_HISTORY_LIMIT = 25;
 
 // Read the chat history with optional windowing.
 //
