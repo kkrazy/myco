@@ -1214,13 +1214,17 @@ function openSession(id, opts = {}) {
         // crash the client; just drop the bytes.
       } else if (msg.t === 'pong') {
         state.lastPongAt = Date.now();
+      } else if (msg.t === 'timeline-init') {
+        // bug-9 round 6: pre-merged timeline frame. Items are
+        // sorted by ts server-side, mixing chat-message + agent-
+        // event payloads. We wipe both panes then render each item
+        // in arrival order — no two-stream race, no tab-switch
+        // order corruption.
+        _applyTimelineInit(msg);
       } else if (msg.t === 'chat-history') {
-        // bug-9: msg.total is the server's authoritative count of the
-        // filtered chat history. msg.messages is now capped at the
-        // initial DEFAULT_CHAT_HISTORY_LIMIT window (100); older
-        // messages are fetched on demand via the new GET
-        // /sessions/:id/chat/history?before=… route (the load-older
-        // button calls _revealOrFetchOlderChat).
+        // Legacy initial chat-history frame — kept for backward
+        // compat with older mycod that doesn't yet send
+        // timeline-init. Live deployments use timeline-init.
         applyChatHistory(msg.messages, msg.total);
       } else if (msg.t === 'chat') {
         try {
@@ -1564,6 +1568,48 @@ function _capChatMessagesBytes() {
     state.chatMessages = arr.slice(keepFromIdx);
     try { console.log('[chat-cap] dropped ' + dropped + ' oldest message(s) to stay under ' + MAX_CHAT_BYTES + ' bytes (kept ' + state.chatMessages.length + ', ' + bytes + ' bytes)'); } catch {}
   }
+}
+
+// bug-9 round 6: pre-merged timeline frame from the server. items
+// are already chronologically sorted; we wipe both chat-msg + agent
+// card panes, then render each item in arrival order via the
+// appropriate renderer based on its `kind`. Replaces the previous
+// two-frame (`chat-history` + `agent-replay`) initial protocol that
+// caused tab-switch order corruption when the two streams were
+// merged client-side.
+function _applyTimelineInit(msg) {
+  const items = Array.isArray(msg && msg.items) ? msg.items : [];
+  const totals = (msg && msg.totals) || {};
+  // Reset state.
+  state.chatMessages = [];
+  state.chatTotal = (typeof totals.chat === 'number') ? totals.chat : 0;
+  // Wipe the chat-messages list — both chat bubbles AND agent cards.
+  // The load-older button (if present) gets removed too; the new
+  // _enforceChatHistoryCap pass after rendering will re-add it if
+  // chatTotal > shipped count.
+  const list = document.getElementById('chat-messages');
+  if (list) {
+    for (const el of [...list.children]) el.remove();
+  }
+  // Render items in order. Each item is { kind, ts, message?|event? }.
+  for (const it of items) {
+    if (!it) continue;
+    if (it.kind === 'chat' && it.message) {
+      // Mirror appendChatMessage's state-side push so the message
+      // is in state.chatMessages AND in the DOM, but skip the
+      // dedup / menu / mention logic — we're rendering history,
+      // not handling a live frame.
+      state.chatMessages.push(it.message);
+      _appendChatMessageDom(it.message);
+    } else if (it.kind === 'event' && it.event) {
+      _appendAgentEvent(it.event);
+    }
+  }
+  _capChatMessagesBytes();
+  _enforceChatHistoryCap();
+  _rescanPendingMenu();
+  _renderPendingMenuCallout();
+  scrollChatToLatest();
 }
 
 function applyChatHistory(messages, total) {

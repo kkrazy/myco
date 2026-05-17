@@ -639,6 +639,87 @@ function attachWebSocket(session, ws, opts = {}) {
   return _attachAgentWebSocket(session, ws, opts);
 }
 
+// bug-9 round 6: pre-merged timeline frame for initial attach.
+// Reads `chatBytes` worth of chat-history + `eventBytes` worth of
+// agent events, merges them by ts, sends as ONE chronologically-
+// ordered list. Replaces the previous round-5 design where
+// chat-history + agent-replay were two independent frames that
+// each wiped their own pane state — that caused order corruption
+// on tab-switch/reconnect because the two pane streams had to be
+// post-merged client-side and a race could leave them out of
+// order until the next render pass.
+//
+// Wire shape:
+//   { t: 'timeline-init',
+//     items: [ { kind: 'chat',  message: {...} }
+//            , { kind: 'event', event:   {...} }
+//            , … ],
+//     totals: { chat: N, events: M },     // server-side totals
+//     bytes:  { chat: cB, events: eB } }  // bytes actually shipped
+//
+// items are sorted by ts ascending (oldest first → newest last).
+// The client renders them in order; live `chat` + `agent-event`
+// frames continue to flow separately afterwards and naturally land
+// at the end of the timeline (newer than anything in items).
+function _shipTimelineInit(session, ws, sessionId, chatBytes, eventBytes, includeEvents) {
+  if (ws.readyState !== ws.OPEN) return;
+  // Chat slice.
+  const chatHistory = sessionsMod.getChatHistory(sessionId, { maxBytes: chatBytes });
+  const chatTotal = sessionsMod.getChatHistoryLength(sessionId);
+  // Event slice (owner attach only). Dedup the buffer first (bug-7
+  // round 2), then byte-trim to fit `eventBytes`.
+  let events = [];
+  let eventTotal = 0;
+  if (includeEvents && Array.isArray(session.buffer) && session.buffer.length) {
+    const seen = new Set();
+    for (const ev of session.buffer) {
+      let sig;
+      try { sig = JSON.stringify(ev); } catch { sig = null; }
+      if (sig && seen.has(sig)) continue;
+      if (sig) seen.add(sig);
+      events.push(ev);
+    }
+    eventTotal = events.length;
+    if (eventBytes > 0 && events.length) {
+      let bytes = 0;
+      let keepFromIdx = events.length;
+      for (let i = events.length - 1; i >= 0; i--) {
+        let sz;
+        try { sz = JSON.stringify(events[i]).length; } catch { sz = 0; }
+        if (bytes && bytes + sz > eventBytes) break;
+        bytes += sz;
+        keepFromIdx = i;
+      }
+      events = events.slice(keepFromIdx);
+    }
+  }
+  // Merge sorted by ts. Tagged items keep their kind so the client
+  // can dispatch each to the right renderer in arrival order.
+  const items = [];
+  for (const m of chatHistory) if (m && m.ts) items.push({ kind: 'chat', ts: m.ts, message: m });
+  for (const e of events)      if (e && e.ts) items.push({ kind: 'event', ts: e.ts, event: e });
+  items.sort((a, b) => {
+    if (a.ts === b.ts) return 0;
+    return a.ts < b.ts ? -1 : 1;
+  });
+  let chatBytesShipped = 0, eventBytesShipped = 0;
+  for (const it of items) {
+    try {
+      const sz = JSON.stringify(it).length;
+      if (it.kind === 'chat') chatBytesShipped += sz; else eventBytesShipped += sz;
+    } catch {}
+  }
+  try {
+    ws.send(JSON.stringify({
+      t: 'timeline-init',
+      items,
+      totals: { chat: chatTotal, events: eventTotal },
+      bytes:  { chat: chatBytesShipped, events: eventBytesShipped },
+    }));
+    console.log(`[timeline-init] ${sessionId} sent ${items.length} item(s) — chat ${chatHistory.length}/${chatTotal} (${chatBytesShipped} B), events ${events.length}/${eventTotal} (${eventBytesShipped} B)`);
+  } catch {}
+}
+
 // bug-9 round 4 — shared shipper for the agent-replay WS frame.
 // Dedups the buffer (bug-7 round 2 backstop) and byte-trims to the
 // passed-in budget. Used twice on attach: once for the small initial
@@ -700,14 +781,15 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
   const user = opts.user || null;
   const sessionId = session.sessionId;
 
-  // bug-9 round 5: single tiny initial frame. No auto-backfill.
-  // The user fetches older history by scrolling up (calls into
-  // GET /sessions/:id/chat/history?before=&limit=…), capped at
-  // 16 KB total in client memory. The agent-replay stream has no
-  // load-older route yet — events older than the 1 KB initial
-  // window stay on disk in events.jsonl for forensic inspection.
-  _shipAgentReplay(session, ws, sessionId, INITIAL_AGENT_REPLAY_BYTES, 'initial');
-  _shipChatHistory(ws, sessionId, sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 'initial');
+  // bug-9 round 6: single pre-merged timeline frame. 1 KB worth of
+  // chat-history + 1 KB worth of agent events, sorted by ts on the
+  // server, shipped as ONE chronologically-ordered list. The client
+  // renders items in arrival order — no two-stream race, no tab-
+  // switch order corruption.
+  _shipTimelineInit(session, ws, sessionId,
+    sessionsMod.INITIAL_CHAT_HISTORY_BYTES,
+    INITIAL_AGENT_REPLAY_BYTES,
+    /*includeEvents*/ true);
   console.log(`[agent-attach] ${sessionId} user=${user || 'unknown'} mode=agent replay-events=${(session.buffer || []).length} sdk-session=${session.sdkSessionId || 'none'}`);
   if (session.sdkSessionId && !session._iterating && (!session.buffer || !session.buffer.length)) {
     console.log(`[agent-resume] ${sessionId} ready to resume sdk-session=${session.sdkSessionId} on next user message`);
@@ -876,11 +958,12 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const user = opts.user || null;
   const sessionId = session.sessionId;
 
-  // bug-9 round 5: single tiny initial frame. No backfill — user
-  // scrolls up to fetch older history via /chat/history?before=.
-  // Viewer attach doesn't carry agent-replay frames (no
-  // session.buffer subscription on the read-only path).
-  _shipChatHistory(ws, sessionId, sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 'initial');
+  // bug-9 round 6: viewers get the same pre-merged timeline frame
+  // (chat-only — read-only viewers don't subscribe to agent events).
+  _shipTimelineInit(session, ws, sessionId,
+    sessionsMod.INITIAL_CHAT_HISTORY_BYTES,
+    0,
+    /*includeEvents*/ false);
   _sendAttachSnapshot(session, ws);
 
   const onChat = (message) => {

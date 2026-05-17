@@ -211,6 +211,25 @@ t('attach.js wire calls chat-history with the small INITIAL_CHAT_HISTORY_BYTES b
     'attach.js must NOT have a setTimeout that ships the DEFAULT chat-history budget — round-5 dropped the auto-backfill');
 });
 
+t('attach.js + app.js wire the round-6 pre-merged timeline-init frame', () => {
+  // Round 6 replaces the two-frame initial protocol (chat-history
+  // + agent-replay) with ONE pre-merged timeline-init frame. Server
+  // sorts items by ts before shipping; client wipes both panes and
+  // renders in arrival order. Fixes tab-switch order corruption.
+  const sa = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
+  assert.ok(/function _shipTimelineInit/.test(sa),
+    'attach.js must define _shipTimelineInit');
+  assert.ok(/t:\s*'timeline-init'/.test(sa),
+    "attach.js must ship the 'timeline-init' frame");
+  assert.ok(/_shipTimelineInit\(session, ws, sessionId/.test(sa),
+    'attach.js _attachAgentWebSocket must invoke _shipTimelineInit');
+  const ca = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  assert.ok(/msg\.t === 'timeline-init'/.test(ca),
+    "app.js must handle the 'timeline-init' WS frame");
+  assert.ok(/function _applyTimelineInit/.test(ca),
+    'app.js must define _applyTimelineInit');
+});
+
 t('app.js has the client-side MAX_CHAT_BYTES rolling cap (round 5)', () => {
   // The server caps the initial frame at 1 KB, but live `chat` frames
   // append to state.chatMessages indefinitely without a cap on the

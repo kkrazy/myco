@@ -119,6 +119,41 @@
 2. **`/loop` cron consumer.** The diagnostic /loop tick (cadence chosen by the user, currently 10 min) calls `./collect-logs.sh` each fire, then reads the fresh `+L` / `+M` lines per source and scans for resume-bug + menu-sync + general-error markers. The loop posts a one-line `📡 [diag-loop]` summary to chat every tick — even when there's nothing notable — so a quiet system is visibly alive. Auto-fix authority is limited to trivial fixes (log noise, typos, one-line bugs); anything touching WS protocol / auth / deploy / framing waits for explicit user approval. See the loop prompt in the active `CronList` for the full filter spec.
 
 3. **Adding new log markers.** When you instrument something for the loop to catch, give it a stable bracketed prefix (e.g. `[ws-attach]`, `[diag-resume]`, `[menu-pick]`) so the filters in step 2 can pick it out cleanly without ambiguous substring matches. Mirror the addition into the loop prompt's filter buckets so the next tick actually reports it.
+
+## Bash command timing — agent runtime hygiene
+
+**Goal:** keep the user from feeling "stuck" behind a long-running shell command. Track elapsed times per command, learn which ones are slow, and pre-emptively delegate the slow ones to a background subagent so the main conversation loop stays responsive.
+
+1. **Project memory at `_myco_/bash-elapsed.json`.** A simple JSON file the agent maintains across sessions:
+
+   ```json
+   {
+     "samples": [
+       { "cmd": "./test.sh",         "elapsedMs": 42300, "ts": "2026-05-17T01:30:00Z" },
+       { "cmd": "./deploy.sh",        "elapsedMs": 95000, "ts": "2026-05-17T01:34:11Z" },
+       { "cmd": "docker build .",     "elapsedMs": 30200, "ts": "2026-05-17T02:00:00Z" }
+     ],
+     "knownSlowPatterns": [
+       { "pattern": "^(\\./test\\.sh|\\./deploy\\.sh|docker build)", "p95Ms": 45000 }
+     ]
+   }
+   ```
+
+   Each Bash invocation records `{cmd-normalized, elapsedMs, ts}`. Cap at the last 200 samples (oldest dropped). The agent recomputes `p95Ms` per matched pattern from the rolling sample window.
+
+2. **Auto-delegate above the threshold.** `SLOW_BASH_THRESHOLD_MS = 30_000` (30 s). Before invoking a Bash command, the agent checks `knownSlowPatterns` and the most-recent samples for the same command shape:
+   - If the command matches a known-slow pattern OR the median of recent samples exceeds the threshold → use `Agent` (subagent) instead of `Bash`, so the main loop stays free.
+   - Brief the subagent fully (command, env vars, expected runtime, what success looks like, what to do on failure).
+   - Use `run_in_background: true` when the user can productively wait or pivot — the harness will notify on completion.
+
+3. **What counts as "the same command shape."** Strip transient bits (timestamps, generated tmpfile paths, session ids) before keying. Examples:
+   - `git push origin main` and `git push origin feature/x` → both key on `git push`.
+   - `ssh kkrazy@mycobeta.labxnow.ai '…'` → keys on `ssh kkrazy@<host>` (don't differentiate hosts unless they have different perf profiles).
+   - `docker build -t myco:latest .` → keys on `docker build`.
+
+4. **First-time commands.** No sample → run inline if it looks cheap (`grep`, `ls`, `node -e`, single-file reads). For anything that looks long-running (`./*.sh`, `docker …`, `npm install`, multi-step pipelines), pre-emptively delegate even on the first run; the user can correct later if the heuristic was wrong.
+
+5. **Why this matters.** Long-running shells block the main agent's responsiveness — the user can't ask a follow-up question or course-correct until the Bash returns. Subagents run in parallel and report back via notification, so the main loop stays interactive. The historical sampling is what lets the agent learn project-specific norms (e.g., `./test.sh` here regularly runs ~45 s — known-slow, auto-delegate).
 <!-- myco-best-practices-start -->
 # Best Practices
 
