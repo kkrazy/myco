@@ -9,9 +9,9 @@
   "theme_color": "#0d0d0d",
   "icons": [
     {
-      "src": "/hetu.jpg?v=1",
+      "src": "/hetu.png?v=2",
       "sizes": "140x138",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {

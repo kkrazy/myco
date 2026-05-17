@@ -1831,7 +1831,7 @@ function _maybeNotifyMention(message) {
     const n = new Notification(`${sender} ${target}`, {
       body: text,
       tag: 'myco-mention-' + (message.meta && message.meta.transcriptUuid || Date.now()),
-      icon: '/hetu.jpg',
+      icon: '/hetu.png',
       silent: false,
     });
     n.onclick = () => {
