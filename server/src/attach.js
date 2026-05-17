@@ -50,17 +50,21 @@ const CHAT_TEXT_LIMIT = 4000;
 const ASSISTANT_SCROLLBACK_LINES = 40;
 const ASSISTANT_CHAT_CONTEXT = 20;
 
-// bug-9 round 5: tight cap. Initial frame ships ONLY 1 KB so the
-// chat pane lights up immediately; no auto-backfill. The 16 KB
-// ceiling is the maximum the agent-replay payload will ever carry,
-// enforced both at the wire (byte-trim before send) and on the
-// client side via state.chatMessages rolling-cap.
+// bug-9 round 7: separate budgets for chat-history vs agent-replay.
+// The user's "1 KB initial / 16 KB rolling cap" directive was for
+// CHAT history specifically — user-typed messages average 50-200
+// bytes each, so 1 KB fits a reasonable handful. Agent events are
+// MUCH heavier (a single tool_use with input or tool_result with
+// content can be 500-1500 bytes), so 1 KB fits only 1-3 events and
+// the user sees ~one chrome batch instead of meaningful claude
+// activity. The agent-replay budget is bumped to 16 KB so the
+// initial paint includes a useful slice of claude's recent work.
 //
 // session.buffer + events.jsonl on disk are NOT touched; only the
-// wire frame is trimmed. Total attach payload is now bounded at
-// ~2 KB peak (1 KB chat-history + 1 KB agent-replay) instead of
-// the round-4 ~128 KB.
-const INITIAL_AGENT_REPLAY_BYTES = 1 * 1024;
+// wire frame is trimmed. Total attach payload is ~17 KB peak
+// (1 KB chat-history + 16 KB agent-replay) — still well under the
+// round-3 unified 256 KB.
+const INITIAL_AGENT_REPLAY_BYTES = 16 * 1024;
 const DEFAULT_AGENT_REPLAY_BYTES = 16 * 1024;
 
 // sessionId → AgentSession (or any session-shaped object registered via
