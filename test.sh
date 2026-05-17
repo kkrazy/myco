@@ -2269,6 +2269,14 @@ test_chat_window() {
   # exercises the merge math against a minimal DOM-like fake +
   # static-grep guards on the prod implementation in app.js.
   node_test_result test/chrome-batch-merge.test.js "test/chrome-batch-merge.test.js (9 cases)"
+  # bug-11 regression: collapsed chrome batch rows display AGGREGATE
+  # tool_result bytes across all sub-items, not just the last sub-
+  # item's bytes (e.g. × 5 ✓ result · 20 bytes for 5 results of 4
+  # bytes each, NOT × 5 ✓ result · 4 bytes). Locks per-batch byte
+  # accumulator (dataset.toolResultBytes) + bytes-free merge sig
+  # (dataset.chromeBatchSig) + label aggregation in _createChromeBatch,
+  # _appendToChromeBatch, and _mergeIdenticalChromeBatches.
+  node_test_result test/chrome-batch-bytes-aggregate.test.js "test/chrome-batch-bytes-aggregate.test.js (10 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

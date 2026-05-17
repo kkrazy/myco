@@ -4742,13 +4742,20 @@ function _createChromeBatch(ev, ts) {
   card.dataset.chromeCount = '1';
   card.dataset.firstTs = ts;
   card.dataset.lastTs = ts;
+  // bug-11: bootstrap the per-batch tool_result aggregator + persist a
+  // bytes-free signature for merge eligibility BEFORE rendering the
+  // head label, so the first event's bytes land in the aggregate and
+  // the visible label reflects the aggregate (which on a fresh batch
+  // equals the single event's bytes).
+  _bumpToolResultAggregator(card, ev);
+  card.dataset.chromeBatchSig = _chromeShortLabelSig(ev);
   const head = document.createElement('div');
   head.className = 'agent-card-head';
   head.innerHTML =
     `<span class="agent-card-ts">${escHtml(ts)}</span>` +
     `<span class="agent-chrome-glyph agent-mute" aria-hidden="true">▸</span>` +
     `<span class="agent-card-count agent-mute">× 1</span>` +
-    `<span class="agent-card-summary agent-mute agent-chrome-last">${escHtml(_chromeShortLabel(ev))}</span>`;
+    `<span class="agent-card-summary agent-mute agent-chrome-last">${escHtml(_chromeBatchHeadLabel(card, ev))}</span>`;
   card.appendChild(head);
   const body = document.createElement('div');
   body.className = 'agent-card-body agent-chrome-body';
@@ -4849,6 +4856,25 @@ function _mergeIdenticalChromeBatches(list) {
     if (anchorBody && elBody) {
       while (elBody.firstChild) anchorBody.appendChild(elBody.firstChild);
     }
+    // bug-11: combine the tool_result byte aggregators across the
+    // absorbed batch + re-render the visible head label with the
+    // combined total. Only fires when at least one of the two batches
+    // has tracked tool_result bytes (otherwise nothing to combine —
+    // the head stays as-is, e.g. for permission_request-only batches).
+    if (el.dataset.toolResultBytes != null || anchor.dataset.toolResultBytes != null) {
+      const sumBytes = (parseInt(anchor.dataset.toolResultBytes || '0', 10)) +
+                       (parseInt(el.dataset.toolResultBytes || '0', 10));
+      const sumCount = (parseInt(anchor.dataset.toolResultCount || '0', 10)) +
+                       (parseInt(el.dataset.toolResultCount || '0', 10));
+      anchor.dataset.toolResultBytes = String(sumBytes);
+      anchor.dataset.toolResultCount = String(sumCount);
+      if (el.dataset.toolResultLastError === '1') anchor.dataset.toolResultLastError = '1';
+      const summaryEl = anchor.querySelector('.agent-chrome-last');
+      if (summaryEl && sumCount > 0) {
+        const isError = anchor.dataset.toolResultLastError === '1';
+        summaryEl.textContent = (isError ? '⚠ result · ' : '✓ result · ') + sumBytes + ' bytes';
+      }
+    }
     // Tag so a regression test (and the user inspecting via devtools)
     // can see the merge actually happened.
     anchor.dataset.bug10Merged = String(parseInt(anchor.dataset.bug10Merged || '0', 10) + 1);
@@ -4856,11 +4882,21 @@ function _mergeIdenticalChromeBatches(list) {
   }
 }
 
-// Stable signature for a chrome batch — the visible label of its
-// most-recent chrome event (e.g. "perm asked · Bash"). Two batches
-// with the same signature are eligible to merge per bug-10.
+// Stable signature for a chrome batch — names the kind of activity
+// (e.g. "perm asked · Bash", "✓ result"). Two batches with the same
+// signature are eligible to merge per bug-10. bug-11: now reads from
+// dataset.chromeBatchSig (set by _createChromeBatch + refreshed by
+// _appendToChromeBatch) instead of the visible label, because the
+// visible label now varies with the aggregate byte count for
+// tool_result batches and would break merge eligibility as totals
+// diverge. Falls back to the legacy label-read for any batch that
+// pre-dates the dataset.chromeBatchSig field (defensive — shouldn't
+// happen in steady state).
 function _chromeBatchHeadSig(batchEl) {
   if (!batchEl) return null;
+  if (batchEl.dataset && batchEl.dataset.chromeBatchSig) {
+    return batchEl.dataset.chromeBatchSig;
+  }
   const last = batchEl.querySelector('.agent-chrome-last');
   if (!last) return null;
   const t = (last.textContent || '').trim();
@@ -4874,10 +4910,57 @@ function _appendToChromeBatch(card, ev, ts) {
   card.dataset.lastTs = ts;
   const countEl = card.querySelector('.agent-card-count');
   if (countEl) countEl.textContent = '× ' + n;
+  // bug-11: accumulate THIS event's tool_result bytes BEFORE relabeling
+  // so the head shows the aggregate INCLUDING this event, not just
+  // this event's individual bytes. Also refresh the bytes-free merge
+  // signature so a follow-up event of a different type swaps it
+  // correctly.
+  _bumpToolResultAggregator(card, ev);
+  card.dataset.chromeBatchSig = _chromeShortLabelSig(ev);
   const summaryEl = card.querySelector('.agent-chrome-last');
-  if (summaryEl) summaryEl.textContent = _chromeShortLabel(ev);
+  if (summaryEl) summaryEl.textContent = _chromeBatchHeadLabel(card, ev);
   const body = card.querySelector('.agent-chrome-body');
   if (body) body.appendChild(_chromeEventLine(ev, ts));
+}
+
+// bug-11: track per-batch aggregate bytes across tool_result events so
+// the collapsed head shows the SUM, not just the most-recent event's
+// bytes. Non-tool_result events leave the aggregator untouched (a
+// permission_request landing mid-batch doesn't reset prior accumulated
+// tool_result bytes; when the NEXT tool_result lands it still adds to
+// the running total).
+function _bumpToolResultAggregator(card, ev) {
+  if (!ev || ev.type !== 'tool_result') return;
+  const evBytes = (ev.content || '').length;
+  const total = parseInt(card.dataset.toolResultBytes || '0', 10) + evBytes;
+  const count = parseInt(card.dataset.toolResultCount || '0', 10) + 1;
+  card.dataset.toolResultBytes = String(total);
+  card.dataset.toolResultCount = String(count);
+  card.dataset.toolResultLastError = ev.isError ? '1' : '0';
+}
+
+// bug-11: render label for the chrome batch head — uses aggregate
+// bytes from dataset for tool_result events. For non-tool_result
+// events, falls back to the per-event label.
+function _chromeBatchHeadLabel(card, ev) {
+  if (ev && ev.type === 'tool_result') {
+    const total = parseInt(card.dataset.toolResultBytes || '0', 10);
+    const isError = card.dataset.toolResultLastError === '1';
+    return (isError ? '⚠ result · ' : '✓ result · ') + total + ' bytes';
+  }
+  return _chromeShortLabel(ev);
+}
+
+// bug-11: bytes-free signature used by _mergeIdenticalChromeBatches.
+// For tool_results, returns "✓ result" or "⚠ result" (no per-event
+// bytes). Two batches representing the same kind of activity stay
+// merge-eligible even when their aggregate byte totals differ. The
+// visible head label (which DOES include the aggregate bytes) is
+// intentionally NOT used as the merge key, because that would prevent
+// merging the moment the totals diverge.
+function _chromeShortLabelSig(ev) {
+  if (ev && ev.type === 'tool_result') return ev.isError ? '⚠ result' : '✓ result';
+  return _chromeShortLabel(ev);
 }
 
 // Short label for the chrome batch head — names the latest event so
