@@ -325,6 +325,29 @@ t('chat-history server route understands includeAgent query param', () => {
     '/chat/history route no longer parses includeAgent — paginator wire-break');
 });
 
+// 2026-05-17 (round 2): assistant_text agent-event now renders as a
+// `.chat-msg.from-claude.chat-msg-from-agent` bubble (the visual
+// counterpart of the user's chat bubble), NOT as an `agent-card`. The
+// previous look folded claude's reply into the chrome-strip styling
+// and the user reported "result never sent back to the chat window,
+// it sits in the chrome batch only".
+t('client assistant_text agent-event renders as chat-msg from-claude bubble (not agent-card)', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  assert.ok(/chat-msg from-claude chat-msg-from-agent/.test(app),
+    'assistant_text no longer creates a chat-msg.from-claude bubble — UI regression: claude reply will visually merge with chrome batches instead of standing out as a chat bubble.');
+  assert.ok(/bubble\.dataset\.evType\s*=\s*['"]assistant_text['"]/.test(app),
+    'assistant_text bubble missing data-ev-type marker — merge logic for consecutive blocks will break.');
+});
+
+t('agent-replay wipe-loop preserves chat-msg-from-agent bubbles only when re-creating them', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  // Should mention removing chat-msg-from-agent on wipe (so the loop
+  // can re-render them fresh) — otherwise the assistant_text bubble
+  // duplicates after each reconnect.
+  assert.ok(/chat-msg-from-agent/.test(app) && /isHumanChatMsg/.test(app),
+    'agent-replay wipe loop no longer distinguishes human chat-msg from chat-msg-from-agent bubbles — duplicate render on reconnect.');
+});
+
 t('_resortChatPaneByTs is invoked from the agent-replay client handler', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   // Find the agent-replay handler line, then walk forward to the

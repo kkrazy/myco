@@ -3691,9 +3691,17 @@ function _handleAgentFrame(msg) {
     const pane = _ensureAgentLogPane();
     if (pane) {
       for (const el of [...pane.children]) {
-        if (!el.classList || !el.classList.contains('chat-msg')) {
-          el.remove();
-        }
+        if (!el.classList) continue;
+        // Preserve human chat-msg bubbles (applyChatHistory's
+        // preserve-and-rebuild owns them) — those don't carry the
+        // chat-msg-from-agent marker. Wipe everything else:
+        //   - agent cards (tool_use / tool_result / chrome / fatal)
+        //   - chrome batches + turn footers + load-older button
+        //   - chat-msg-from-agent bubbles (assistant_text — these get
+        //     re-created from the agent-replay events loop below).
+        const isHumanChatMsg = el.classList.contains('chat-msg')
+          && !el.classList.contains('chat-msg-from-agent');
+        if (!isHumanChatMsg) el.remove();
       }
     }
     // bug-7 round 2: defensive dedup. If session.buffer itself contains
@@ -4058,23 +4066,55 @@ function _appendAgentEvent(ev) {
 
   // assistant_text — concatenate consecutive blocks into one rendered
   // markdown body so claude's narration reads as one continuous reply.
+  //
+  // 2026-05-17: switched the assistant_text DOM from `.agent-card.chat-msg-agent`
+  // to a real `.chat-msg.from-claude` bubble so claude's reply visually
+  // matches the user's bubble (avatar + ts + bubble styling) instead of
+  // hiding inside the agent-event chrome strip. The merge logic still
+  // operates on the bubble's `.chat-text` body via the same data-ev-type
+  // and data-assistant-text markers — consecutive assistant_text events
+  // append into the SAME bubble so streaming narrations read as one
+  // continuous reply (not 5 separate bubbles per turn).
   if (ev.type === 'assistant_text') {
     const prev = pane.lastElementChild;
     if (prev && prev.dataset && prev.dataset.evType === 'assistant_text') {
       const count = (parseInt(prev.dataset.combineCount || '1', 10)) + 1;
       prev.dataset.combineCount = String(count);
-      const body = prev.querySelector('.agent-card-body');
+      const body = prev.querySelector('.chat-text') || prev.querySelector('.agent-card-body');
       if (body) {
         const merged = (prev.dataset.assistantText || '') + '\n\n' + (ev.text || '');
         prev.dataset.assistantText = merged;
         body.innerHTML = renderMd(merged);
         renderMermaidInContainer(body).catch(() => {});
       }
-      // (No head-summary refresh: assistant_text head is just "<ts>
-      // claude" now, the body underneath is the live preview.)
       pane.scrollTop = pane.scrollHeight;
       return;
     }
+  }
+  // First assistant_text in a new streaming run: build a chat-msg
+  // bubble with `from-claude` styling. Carries data-ev-type +
+  // data-ts + data-assistant-text so the merge branch above + the
+  // post-replay _resortChatPaneByTs can find / extend / sort it.
+  if (ev.type === 'assistant_text') {
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-msg from-claude chat-msg-from-agent';
+    bubble.dataset.evType = 'assistant_text';
+    bubble.dataset.combineCount = '1';
+    bubble.dataset.assistantText = ev.text || '';
+    bubble.dataset.ts = ev.ts || new Date().toISOString();
+    const meta = document.createElement('div');
+    meta.className = 'chat-meta';
+    meta.innerHTML = `<span class="chat-user">claude</span><span class="chat-ts">${escHtml(ts)}</span>`;
+    bubble.appendChild(meta);
+    const body = document.createElement('div');
+    body.className = 'chat-text';
+    body.innerHTML = renderMd(ev.text || '');
+    bubble.appendChild(body);
+    pane.appendChild(bubble);
+    renderMermaidInContainer(body).catch(() => {});
+    pane.scrollTop = pane.scrollHeight;
+    _enforceChatHistoryCap();
+    return;
   }
 
   const card = document.createElement('div');
@@ -4094,20 +4134,11 @@ function _appendAgentEvent(ev) {
   body.className = 'agent-card-body';
   card.appendChild(body);
 
-  // Non-chrome events that survived to here: assistant_text (first
-  // block of a new run — subsequent blocks merge above), tool_use,
-  // tool_result, turn_result, fatal, and the catch-all "unknown" body.
-  if (ev.type === 'assistant_text') {
-    // Head is just "<ts> claude" — the body renders the full markdown
-    // immediately below (assistant_text is in AGENT_DEFAULT_EXPANDED,
-    // so the body is visible without a click). The 120-char first-line
-    // preview was redundant with the body underneath.
-    head.innerHTML += `<span class="agent-card-kind agent-card-claude">claude</span>`;
-    body.className += ' agent-card-md';
-    body.innerHTML = renderMd(ev.text || '');
-    card.dataset.assistantText = ev.text || '';   // seed merge accumulator
-    renderMermaidInContainer(body).catch(() => {});
-  } else if (ev.type === 'tool_use') {
+  // Non-chrome events that survived to here: tool_use, tool_result,
+  // turn_result, fatal, and the catch-all "unknown" body.
+  // (assistant_text is handled by the chat-msg-bubble branch above and
+  // returns before reaching the agent-card fallback.)
+  if (ev.type === 'tool_use') {
     const icon = _agentToolIcon(ev.name);
     const summary = _agentToolSummary(ev.name, ev.input);
     head.innerHTML += `<span class="agent-card-kind agent-card-tool">${escHtml(icon)} ${escHtml(ev.name)}</span>
