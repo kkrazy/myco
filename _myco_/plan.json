@@ -773,6 +773,81 @@
         "originalText": "the chrome batch which has a lot of sub-items included show the size \"x bytes\" of the last item only, it should show the sum of byte of all items included. the following is an example:\n12:10:23 ▸ × 5 ✓ result · 4 bytes\n12:10:23 $ Bash $ node -e \" const css = require('fs').readFileSync('web/public/styles.css', 'utf8'); const m = css.match(/\\.chat-msg\\.ch\n12:10:23 ✓ hook allow Bash\n12:10:23 ✓ result 4 bytes · for=gvDG2wSh\n12:14:00 ⊕ perm allow-always Bash\n12:14:00 ✓ result 4 bytes · for=rdsMxxM7",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-15",
+      "text": "**Problem:** Cross-session memory: notebook tab + cross-session announce + /recall\n\n**Theme A** from `_myco_/research/ai-team-collaboration.md` — the leverage layer for \"two sessions on the same project shouldn't re-discover the same finding\".\n\n**Subfeatures:**\n- `_myco_/notebook.md` — free-form team scratchpad, new artifact tab next to Plan/Arch/Test. Append-only by default; AI is encouraged to write findings here.\n- **Cross-session announce** — fs.watch on `_myco_/` per project; when one live AgentSession writes a notebook entry or plan item, other live sessions for the same project get a toast.\n- **`/recall <topic>`** slash command — greps `_myco_/*` for matches across chat + notebook + plan comments, top-N hits inline.\n- Optional Phase 1.5: session \"merge\" — open another session's historical transcript inline (read-only).\n\n**Source:** `_myco_/research/ai-team-collaboration.md` (theme A).",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T13:44:03.350Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchTheme": "A",
+        "researchDoc": "_myco_/research/ai-team-collaboration.md"
+      }
+    },
+    {
+      "id": "fr-16",
+      "text": "**Problem:** Approval queue + trust ladder + audit log\n\n**Theme B** — async review queue for high-stakes AI actions.\n\n**Subfeatures:**\n- Per-tool trust tier extended: allow / deny / **queue-for-review** (new). Queued tool calls pause the request without blocking the agent loop; chat continues.\n- **Review queue tab** (new chrome icon) — shows pending reviews across all the user's sessions: who requested (session label + AI persona), what (tool + input summary + risk reason), when, approve/reject inline.\n- **Reviewer routing** — plan items can carry `reviewer: alice`; tool calls in their scope route to alice's queue specifically.\n- **`_myco_/audit.jsonl`** — append (reviewer, action, tool, hash, ts) on every approve/reject. OAuth identity = attributable.\n- **Time-bounded auto-trust** — \"trust this AI with bash for 30 min\" or \"let it spend $5 of credits before pausing\".\n\nUnlocks \"team gives AI more agency without losing oversight\". Today every team has to either fully trust + risk wreckage, or fully gate + lose throughput.\n\n**Source:** `_myco_/research/ai-team-collaboration.md` (theme B).",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T13:44:03.350Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchTheme": "B",
+        "researchDoc": "_myco_/research/ai-team-collaboration.md"
+      }
+    },
+    {
+      "id": "fr-17",
+      "text": "**Problem:** AI ↔ human question routing: /ask @user with SLA + topic subscriptions\n\n**Theme C** — when AI hits ambiguity, route the question to a specific human (not OS-broadcast to everyone).\n\n**Subfeatures:**\n- **`/ask @user <question>`** as a first-class agent-event (the SDK's AskUserQuestion tool surface OR a /slash). Named user gets high-priority chip + OS notification + (later) email. Others see a muted \"alice has a question from session X\" line.\n- **Follow-the-thread answer** — when alice answers, the reply is posted back to the originating AI session as a `chat` frame with `meta.replyTo: <ask-id>`. AI sees it as conversational input.\n- **SLA / fallback** — `/ask @alice (default after 1h: just use prisma)` lets AI proceed with a sensible default. Avoids \"AI blocked for 8 hours\" pathology.\n- **Topic subscriptions** — `/subscribe auth` or `/subscribe src/auth/**` in a user's profile. When ANY session's chat mentions auth or touches a matching file, that user is added to the interested roster + digested.\n\nFirst version of `/ask` is ~50 LOC; subscriptions are another ~50 LOC scanner on top of the existing event stream.\n\n**Source:** `_myco_/research/ai-team-collaboration.md` (theme C).",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T13:44:03.350Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchTheme": "C",
+        "researchDoc": "_myco_/research/ai-team-collaboration.md"
+      }
+    },
+    {
+      "id": "fr-18",
+      "text": "**Problem:** Team observability dashboard: /team + cost rollup + stuck-session + replay\n\n**Theme D** — what every AI on your team is doing right now, and what it has spent.\n\n**Subfeatures:**\n- **`/team` route** (top-level, not per-session) — every session for users in the allowlist, with live status (running / waiting-on-perm / idle / dead), latest activity, current cost burn, and 1-line agent-state.\n- **Cost rollup** — sum `total_cost_usd` per user + per day + per project. Server tracks via existing turn_result events; UI shows a small bar chart.\n- **Stuck-session detector** — permission_request >5 min OR awaiting_claude >2 min with no chrome activity → yellow ⚠ chip on /team dashboard.\n- **Replay scrubber** — open any session's transcript at a point in time. Already have the data (rec.chat + events.jsonl with seq #); needs a read-only time-travel renderer. Higher effort — recommend Phase 4.\n\n**Source:** `_myco_/research/ai-team-collaboration.md` (theme D).",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T13:44:03.350Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchTheme": "D",
+        "researchDoc": "_myco_/research/ai-team-collaboration.md"
+      }
+    },
+    {
+      "id": "fr-19",
+      "text": "**Problem:** Async handoff: /handoff @user + resume summary + steering pass + inbox\n\n**Theme E** — clean async handoff between teammates on the same session.\n\n**Subfeatures:**\n- **`/handoff @bob <one-liner>`** — bookmark current session state with a special chat row (kind:'handoff'), ping bob, scroll to handoff marker on his first attach.\n- **Resume summary** — when a teammate attaches to a session idle >15 min, show a \"Resume\" banner: \"Last activity 2h ago. AI completed 3 turns since you left. Click to summarise.\" Click → AI generates a 5-bullet recap as a chat-msg.\n- **Steering pass** — explicit \"you have the wheel\" / \"give me the wheel\" so two humans don't simultaneously type at the same AI. Whoever has it sees a 🎯 driving chip, others get 👀 watching + read-only input.\n- **Inbox** — top-level item showing pending /ask + /handoff + review-queue entries directed at the current user across all their sessions. Single funnel for \"what needs my attention\".\n\n**Source:** `_myco_/research/ai-team-collaboration.md` (theme E).",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T13:44:03.350Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchTheme": "E",
+        "researchDoc": "_myco_/research/ai-team-collaboration.md"
+      }
     }
   ],
   "updatedAt": "2026-05-17T04:24:54.372Z"
