@@ -70,6 +70,52 @@ If you find yourself composing a multi-step shell sequence, that's a
 strong signal it should become a script (or be added to an existing
 one).
 
+## 5. Project memory under `_myco_/` belongs in git — commit + push every change
+
+The `_myco_/` directory is the **shared, team-visible memory of the
+project**. Everything under it is a first-class artifact that other
+collaborators (and future agent runs) depend on. Commit + push any
+change you make to it the same way you'd commit code.
+
+What lives there:
+
+- `plan.json` — todos / feature requests / bugs (`/td`, `/fr`, `/bug`)
+  with votes, comments, run-status, and per-item run-summary findings
+  posted back by the agent after each `▶ Run` dispatch.
+- `architecture.md` — long-form architecture notes the Arch-tab
+  extractor refreshes; the canonical "why is this thing shaped this
+  way" doc for the project.
+- `bash-elapsed.json` — rolling history of shell-command elapsed
+  times + known-slow patterns. Agents read this on session start to
+  decide whether to delegate long commands to a subagent. Shared
+  memory means every collaborator benefits from the runtime norms
+  one of them learned.
+- `README.md` — humans-only explainer of what lives in `_myco_/`
+  for someone browsing the repo on GitHub.
+- Future memory files the agent adds (e.g. failure-pattern catalogs,
+  per-feature design notes).
+
+**Why it matters.** Without committing `_myco_/`, every fresh clone /
+new teammate starts with no project memory — they re-discover the
+slow commands, re-vote on done plan items, and re-ask the same
+architectural questions. With it, the team operates on shared ground
+truth and onboarding is "git clone + open the Plan tab."
+
+**Commit cadence:** commit `_myco_/` whenever you commit code that
+relates to it (a plan-item closeout alongside the feature commit, an
+architecture-doc update alongside the structural change). For pure
+memory drift (the running session reformatted plan.json, or new
+bash-elapsed samples landed), commit it as a standalone
+`memory: sync` commit so the trail stays auditable. Don't let it
+sit uncommitted across sessions — the next teammate's `git pull`
+should be enough to give them the latest state.
+
+**`.gitignore`:** never add `_myco_/` to `.gitignore`. The only
+sub-paths that may go ignored are transient working files (e.g.
+`_myco_/logs/` daily log captures, `_myco_/cache/`) — those should
+have their own `.gitignore` entry inside `_myco_/`, not at the
+project root.
+
 ---
 
 *Toggle this section off via the **Best practices** checkbox if your
