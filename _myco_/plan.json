@@ -848,6 +848,156 @@
         "researchTheme": "E",
         "researchDoc": "_myco_/research/ai-team-collaboration.md"
       }
+    },
+    {
+      "id": "td-19",
+      "text": "**Problem:** Adopt two-pass code review: AI first-pass automation, human second-pass on every merged PR\n\n**Practice change** (no myco code). Source: `_myco_/research/ai-team-collaboration.md` §5.2.\n\n**What:** Every PR gets two passes. (1) AI first-pass — formatting, obvious bugs, missing tests, alignment with `_myco_/architecture.md`. Automate this (GitHub Action calling the SDK, or a /loop tick). (2) Human second-pass — design judgment, edge cases, \"does this make sense for our users\".\n\n**Anti-pattern to avoid:** rubber-stamping. The first time you skip the human pass, the result will be fine. The tenth time, you ship something embarrassing.\n\n**Done when:** PR template includes both checkboxes; a GitHub Action posts AI first-pass comments; team agrees the human-second-pass is mandatory for merge.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "td-20",
+      "text": "**Problem:** Standardize commit message format: what + why + what-this-leaves-undone\n\n**Practice change**. Source: §5.1 (\"Write for two readers\").\n\n**Why:** AI loads commit messages as primary context. Vague messages (\"fix bug\") starve future AI sessions and human reviewers equally. The team's commit messages from 2026-05-17 (e.g. `chat: re-apply seq-based ordering minimally — fixes \"agent reply merged with previous replies\"`) are the model — concise subject + body that explains the user-visible symptom + what changed + what was left undone.\n\n**Done when:** new section added to CLAUDE.md best-practices template (rule 7?) covering the 3-line minimum (what / why / un-done); pre-commit hook nudges authors who skip the body on diffs > N lines.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "td-21",
+      "text": "**Problem:** Define + document the per-tool AI trust ladder for this team\n\n**Practice change** + light artifact. Source: §5.1 (\"Calibrate AI trust per tool, not per session\").\n\n**What:** New file `_myco_/policy/ai-allowed-tools.md` documenting per-tool tier (allow / queue-for-review / deny) and the rationale. Reviewed quarterly.\n\n**Starting heuristic:**\n- `Read`, `Glob`, `Grep`, `WebFetch` (docs) → allow\n- `Bash` (read-only commands like `git status`, `ls`, `cat`) → allow\n- `Edit`, `Write` on source files → queue at first, promote to allow per-path after observation\n- `Bash` (mutating: `git push`, `npm install`, `rm`, `docker`) → queue\n- Anything touching prod creds, deploy keys, customer DBs → deny\n\n**Depends on:** fr-16 (review queue + trust ladder feature). Without fr-16 the file is documentation only; with fr-16 it becomes the actual policy the server enforces.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "td-22",
+      "text": "**Problem:** Pilot AI-guided onboarding for the next new contributor\n\n**Practice change**. Source: §5.2 (\"Onboarding flips\").\n\n**What:** Designate the next new contributor to start with an AI tour guide. Pre-load a tour-guide persona into the project's CLAUDE.md (or a separate file the SDK loads). The persona's job on Day 1: walk through the codebase, explain conventions, point at gotchas in `_myco_/notebook.md`. Week 1: pair with the new hire on their first small fix. Month 1: hand them their own plan items to dispatch.\n\n**Done when:** the pilot completes; we have a tour-guide persona refined into a reusable template; we document time-to-first-merge for the AI-guided vs control flow.\n\n**Tracks:** new-contributor TTFM (time to first merge) as a metric.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "td-23",
+      "text": "**Problem:** Add an AI-state question to the daily standup template\n\n**Practice change**. Source: §5.2 (\"Standups become AI-state syncs\").\n\n**What:** The 15-minute morning sync gets a fourth question: \"What is your AI session blocked on, and who can unblock it?\". If alice's session has been awaiting `/ask @bob` for 6 hours, that's the standup item.\n\n**Artifact:** the `/team` dashboard (fr-18) is the standup screen-share. Open it on the shared screen, walk through any yellow ⚠ chips (stuck-session detector).\n\n**Done when:** standup template updated; team norm sticks for two consecutive sprints; fr-18 lands and we're actually screen-sharing the dashboard.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "td-24",
+      "text": "**Problem:** Set up team metrics: 7-day revert rate, time-in-queue, cost-per-feature, plan-item test coverage\n\n**Practice change** + small tooling. Source: §5.5 (\"New metrics\").\n\n**Metrics:**\n1. *7-day revert rate* — diffs reverted within 7 days of merge. Proxy for AI's confidently-wrong rate. Compute from `git log --since=7d --grep=revert`.\n2. *Time-in-review-queue* — how long do permission requests sit before approve/reject. From fr-16's audit log.\n3. *Cost per shipped feature* — sum `total_cost_usd` from turn_results for sessions tagged to each plan-item run. From fr-18 cost rollup.\n4. *New-contributor TTFM* — days from first commit to first merged PR.\n5. *Plan-item test coverage* — fraction of closed plan items that landed with a test. Heuristic: search the closeout commit message for the test filename.\n\n**Done when:** a `./scripts/metrics.sh` exists that prints all five numbers; posted to chat weekly via a /loop tick.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "td-25",
+      "text": "**Problem:** Adopt smaller-atomic-commit discipline; pre-commit hook flags >500-line single-concept commits\n\n**Practice change**. Source: §5.1 (\"Commit smaller, more often\").\n\n**Why:** AI reasons better about a small atomic diff than a 1500-line \"weekly sync\" commit. The same discipline that makes human review easier makes AI's mental model of the codebase converge faster.\n\n**What:** Pre-commit hook that warns (not blocks) when a commit touches >500 lines AND looks like a single concept (no `feat:`+`refactor:`+`docs:` markers). Easy override for legitimate big diffs.\n\n**Done when:** hook installed in the project's `.git/hooks/`; documented in CLAUDE.md; team agrees it's a warning, never a block.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "fr-20",
+      "text": "**Problem:** Architectural Decision Records: _myco_/decisions/ + /adr slash command\n\n**Feature**, supports §5.2 (\"Decision logs become a team artifact\").\n\n**What:** New directory `_myco_/decisions/` holding ADR files (one per decision, named `YYYY-MM-DD-<topic>.md`). Format: Context / Decision / Consequences / Alternatives-rejected.\n\n**Slash command:** `/adr <title>` — AI drafts an ADR from the current chat thread's discussion, opens it as a new file for human edit, commits + pushes when approved.\n\n**Auto-read:** every AgentSession on this project reads `_myco_/decisions/*.md` into its initial context (lazily — only the most recent 5 or those tagged with @-mentions of files in the current change set). When AI proposes a rejected approach, it knows to flag the relevant ADR.\n\n**Done when:** directory + template exists; `/adr` slash command works end-to-end; SDK setting auto-loads ADRs.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "fr-21",
+      "text": "**Problem:** _myco_/policy/ artifacts: ai-allowed-tools, ai-deny-list, review-routing\n\n**Feature**, supports §5.5 (\"AI policy as a real artifact\").\n\n**What:** New directory `_myco_/policy/` holding three version-controlled artifacts:\n- `ai-allowed-tools.md` — what AI may run unattended (per-tool tier from td above)\n- `ai-deny-list.md` — never-touched paths (prod creds, customer DBs, deploy keys). Parsed by canUseTool / PreToolUse hook.\n- `review-routing.md` — who reviews what. Parsed by the review-queue routing logic from fr-16.\n\n**Why:** policy belongs in git, not in a Slack DM or a memo. Code-review-able, version-traceable, attributable.\n\n**Depends on:** fr-16 (review queue) for the routing artifact to do anything; the deny-list and allowed-tools artifacts can ship independently.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
+    },
+    {
+      "id": "fr-22",
+      "text": "**Problem:** AI tour guide persona + new-contributor walkthrough mode\n\n**Feature**, supports §5.2 (\"Onboarding flips\").\n\n**What:** A reusable persona template (loaded into the SDK's system prompt) that turns an AgentSession into an onboarding tour guide. Reads `_myco_/architecture.md`, `_myco_/decisions/*.md`, `_myco_/notebook.md`, and offers an interactive walkthrough: \"Where would you like to start? (a) auth flow, (b) data layer, (c) deploy pipeline …\". Knows the project conventions, points at common gotchas, suggests the new contributor's first small fix.\n\n**UI:** a new \"Onboard a teammate\" button in the session-spawn modal that creates a session pre-loaded with the tour-guide persona + a fresh chat with the welcome message.\n\n**Done when:** persona template lives at `_myco_/onboarding/tour-guide.md` (overridable per project); spawn-modal button exists; the pilot in the td above runs through it.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T14:47:49.246Z",
+      "addedBy": "claude",
+      "source": "research",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "researchDoc": "_myco_/research/ai-team-collaboration.md",
+        "researchSection": "5 (humans + workflows adapt)"
+      }
     }
   ],
   "updatedAt": "2026-05-17T04:24:54.372Z"
