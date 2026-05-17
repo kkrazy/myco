@@ -480,10 +480,53 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #no-session {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   color: var(--muted);
   font-size: .9rem;
+  /* Use the whole viewport breadth so the oversized slogan can
+     scale without colliding with the chrome buttons at the top. */
+  padding: 0 24px;
+  text-align: center;
+}
+/* Large, subtle brand slogan. Scales with viewport so it dominates
+   the empty home page without ever being LOUD. Hairline weight,
+   low-opacity foreground, slight letter-spacing for poise. Falls
+   back to a static size on tiny viewports via clamp(). */
+#no-session .ns-slogan {
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: clamp(2.4rem, 9vw, 7rem);
+  font-weight: 200;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+  color: rgba(255, 255, 255, .055);
+  /* Slight green wash to echo the accent — but kept barely-visible
+     so it reads as texture, not a banner. */
+  background: linear-gradient(135deg,
+    rgba(76, 175, 130, .065) 0%,
+    rgba(255, 255, 255, .055) 50%,
+    rgba(76, 175, 130, .055) 100%);
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  user-select: none;
+  pointer-events: none;
+  max-width: min(1200px, 100%);
+}
+#no-session .ns-hint {
+  font-size: .9rem;
+  color: var(--muted);
+  opacity: .55;
+  letter-spacing: 0.02em;
+}
+/* On mobile the chrome cluster overlays this area; tighten the
+   slogan so it doesn't push the hint off the bottom of the viewport. */
+@media (max-width: 900px) {
+  #no-session .ns-slogan {
+    font-size: clamp(2rem, 11vw, 4rem);
+  }
 }
 
 /* ── claude "waiting" indicator — minimalist three-dot typing animation.

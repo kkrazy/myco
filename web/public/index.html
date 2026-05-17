@@ -64,7 +64,16 @@
       <button id="btn-chat" title="Back to chat (main view)" hidden aria-label="Home">
         <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
       </button>
-      <div id="no-session">Select a session</div>
+      <div id="no-session" aria-label="Mycelium">
+        <!-- Subtle background slogan — myco's tagline. Visible only
+             when no session is selected; once a session opens, the
+             chatpane (z:30) covers this. The slogan is intentionally
+             oversized + low-contrast so it reads as ambient brand,
+             not a call-to-action. The smaller line below it is the
+             literal call to action. -->
+        <div class="ns-slogan" aria-hidden="true">Reliable Vibe Coding</div>
+        <div class="ns-hint">Select a session</div>
+      </div>
       <div id="myco-waiting" hidden aria-label="myco is thinking">
         <span class="mw-dot"></span>
         <span class="mw-dot"></span>
