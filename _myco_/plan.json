@@ -759,20 +759,41 @@
       "addedAt": "2026-05-17T04:24:48.661Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [
         {
           "id": "aa2cd4f37d30",
           "user": "kkrazy",
           "text": "the following is another example: 12:09:13 ▸ × 9 ✓ result · 921 bytes 12:09:13 $ Bash $ git log --oneline --all -- web/public/styles.css | head -20 | xargs -I {} sh -c 'git show {} --stat -- web/public/styl 12:09:14 ✓ hook allow Bash 12:09:14 ✓ result 637 bytes · for=DucGAzfp 12:09:17 $ Bash $ git log -L '/\\.chat-msg\\.chat-msg-menu \\.chat-text/,+5:web/public/styles.css' -3 --pretty=format:'%h %s' 2>&1 | head - 12:09:17 ✓ hook allow Bash 12:09:17 ✓ result 1316 bytes · for=GmVPRdqa 12:09:28 $ Bash $ git stash && bash -c 'node -e \" const css = require(\\\"fs\\\").readFileSync(\\\"web/public/styles.css\\\", \\\"utf8\\\"); const m 12:09:28 ✓ hook allow Bash 12:09:28 ✓ result 921 bytes · for=7tL7ArWv",
           "ts": "2026-05-17T04:26:51.584Z"
+        },
+        {
+          "id": "df723e8c2b1e",
+          "user": "claude",
+          "text": "✓ success · 408.1s · $8.4805 · 26↓/27798↑\n\n**bug-11 shipped** — pushed to `origin/main` as `1fee18c`.\n\n## What landed\n\n| File | Change |\n|---|---|\n| `web/public/app.js` | 4 edits: aggregator helper, batch head label, bytes-free sig, merge byte combination |\n| `test/chrome-batch-bytes-aggregate.test.js` | New — 10 cases (red-flipped first per Best Practices §5) |\n| `test.sh` | Wired the new test into the suite |\n\n## The fix in one diagram\n\n```mermaid\ngraph LR\n    EV1[tool_result<br/>10 bytes]\n    EV2[tool_result<br/>20 bytes]\n    EV3[tool_result<br/>30 bytes]\n\n    subgraph \"Before — bug\"\n        SUM_B[\"head: ✓ result · 30 bytes<br/>(only last event)\"]\n    end\n\n    subgraph \"After — fix\"\n        ACC[\"dataset.toolResultBytes<br/>accumulator\"]\n        SUM_A[\"head: ✓ result · 60 bytes<br/>(aggregate)\"]\n    end\n\n    EV1 --> SUM_B\n    …",
+          "ts": "2026-05-17T16:25:34.886Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-17T16:18:46.770Z"
+          }
         }
       ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the chrome batch which has a lot of sub-items included show the size \"x bytes\" of the last item only, it should show the sum of byte of all items included. the following is an example:\n12:10:23 ▸ × 5 ✓ result · 4 bytes\n12:10:23 $ Bash $ node -e \" const css = require('fs').readFileSync('web/public/styles.css', 'utf8'); const m = css.match(/\\.chat-msg\\.ch\n12:10:23 ✓ hook allow Bash\n12:10:23 ✓ result 4 bytes · for=gvDG2wSh\n12:14:00 ⊕ perm allow-always Bash\n12:14:00 ✓ result 4 bytes · for=rdsMxxM7",
         "rewritten": true
-      }
+      },
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-17T16:25:34.886Z",
+          "startedAt": "2026-05-17T16:18:46.770Z",
+          "summary": "408.1s · 26→27798 tok",
+          "result": "**bug-11 shipped** — pushed to `origin/main` as `1fee18c`.\n\n## What landed\n\n| File | Change |\n|---|---|\n| `web/public/app.js` | 4 edits: aggregator helper, batch head label, bytes-free sig, merge byte combination |\n| `test/chrome-batch-bytes-aggregate.test.js` | New — 10 cases (red-flipped first per Best Practices §5) |\n| `test.sh` | Wired the new test into the suite |\n\n## The fix in one diagram\n\n```mermaid\ngraph LR\n    EV1[tool_result<br/>10 bytes]\n    EV2[tool_result<br/>20 bytes]\n    EV3[tool_result<br/>30 bytes]\n\n    subgraph \"Before — bug\"\n        SUM_B[\"head: ✓ result · 30 bytes<br/>(only last event)\"]\n    end\n\n    subgraph \"After — fix\"\n        ACC[\"dataset.toolResultBytes<br/>accumulator\"]\n        SUM_A[\"head: ✓ result · 60 bytes<br/>(aggregate)\"]\n    end\n\n    EV1 --> SUM_B\n    EV2 --> SUM_B\n    EV3 --> SUM_B\n\n    EV1 --> ACC\n    EV2 --> ACC\n    EV3 --> ACC\n    ACC --> SUM_A\n```\n\n## Test results\n\n```\ntest/chrome-batch-bytes-aggregate.test.js  10 passed, 0 failed\ntest/chrome-batch-merge.test.js             9 passed, 0 failed  (regression check — no break)\n```\n\nThe reproducer test \"× 5 tool_results of 4 bytes each → head shows 20, not 4\" goes green. The user-comment reproducer \"× 9 tool_results of 921 bytes → head shows 8289\" also goes green. A bytes-free merge signature keeps bug-10's merge-eligibility behavior unchanged even as the visible label now varies with aggregate totals.\n\nHeads-up: pending task #2 (post-SDK arch refresh) still open."
+        }
+      ]
     },
     {
       "id": "fr-15",
@@ -998,7 +1019,23 @@
         "researchDoc": "_myco_/research/ai-team-collaboration.md",
         "researchSection": "5 (humans + workflows adapt)"
       }
+    },
+    {
+      "id": "bug-12",
+      "text": "**Problem:** Re-entering a session via the back icon leaves the chat window deactivated, blocking user input.\n**Expected:** The chat window should always be active when viewing a session.\n**Actual:** Clicking the icon to return to the session card and then reopening the same session deactivates the chat window.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-17T16:39:55.804Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "click the icon to go back to session card and then go back to the same session would case the chat window be disactivated. The chat window should be always active",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-17T04:24:54.372Z"
+  "updatedAt": "2026-05-17T16:40:00.934Z"
 }
