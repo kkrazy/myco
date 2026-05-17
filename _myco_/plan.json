@@ -579,19 +579,32 @@
       "id": "bug-10",
       "text": "**Problem:** Consecutive `perm asked · Bash` events render as separate rows, eating chat space.\n**Expected:** Adjacent identical perm-asked events collapse into a single row with the counts summed (e.g. `× 39 perm asked · Bash`).\n**Actual:** Each occurrence renders on its own line:\n```\n23:01:34 ▸ × 7 perm asked · Bash\n23:02:12 ▸ × 5 perm asked · Bash\n23:02:24 ▸ × 10 perm asked · Bash\n23:02:47 ▸ × 10 perm asked · Bash\n23:07:52 ▸ × 7 perm asked · Bash\n```",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T15:11:57.693Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "a2lv86879od7",
+          "user": "claude",
+          "ts": "2026-05-17T11:56:00.349Z",
+          "text": "✅ Fixed + verified. Shipped across multiple commits on 2026-05-17.\n\n**Implementation:** `_mergeIdenticalChromeBatches` in `web/public/app.js` walks #chat-messages children and absorbs adjacent same-sig chrome batches into the first anchor (count summed, body rows concatenated, lastTs advanced, duplicate removed). Fires from `_enforceChatHistoryCap` on every chat mutation, which itself fires from every render path (`renderChatPane`, `_appendChatMessageDom`, `_appendAgentEvent`).\n\n**2026-05-17 adjacency hardening:** the original algorithm used a global `firstBySig` map that collapsed batches across the ENTIRE pane by signature — which caused a worse regression where chrome batches around different turns (both with `■ success · .XXXX` label) merged across an assistant_text card, removing the visual separator and causing claude replies to fold into one card. Now the merge is adjacency-aware: any non-chrome element between two same-sig chrome batches breaks the chain and they stay distinct.\n\n**2026-05-17 consecutive-seq rule:** per user spec, `group msg of the same type only if they have consecutive seq # and of the same type`. Chrome adjacency check now also requires `ev.seq === prev.lastSeq + 1` — pure DOM adjacency isn't enough.\n\n**Tests (`test/chrome-batch-merge.test.js`, 9 cases):**\n- three same-sig batches collapse to one (count summed, body rows concat)\n- different-sig batches stay distinct (non-adjacent same-sig NOT merged)\n- single batch is a no-op\n- non-chrome children BREAK the merge chain (assistant_text between → no merge)\n- USER-REPORTED REPRODUCER: 7 + 5 + 10 + 10 + 7 → 39 (exact bug-10 scenario)\n- static-grep guards on the prod implementation\n- USER-REPORT REGRESSION (round 2): chrome batches across assistant_text cards DO NOT merge\n- static guard: load-older button computed regardless of CHAT_VISIBLE_LIMIT\n\nLive on mycobeta (`build.txt 2026-05-17T11:41:10Z`). Closing.",
+          "meta": {
+            "kind": "run-summary",
+            "manual": true
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "events like the following should be combined into 1 with x <count> all summed up, this would save alot of the chat space\n\n23:01:34 ▸ × 7 perm asked · Bash\n23:02:12 ▸ × 5 perm asked · Bash\n23:02:24 ▸ × 10 perm asked · Bash\n23:02:47 ▸ × 10 perm asked · Bash\n23:07:52 ▸ × 7 perm asked · Bash",
         "rewritten": true
-      }
+      },
+      "doneAt": "2026-05-17T11:56:00.348Z",
+      "doneBy": "kkrazy"
     },
     {
       "id": "fr-9",
