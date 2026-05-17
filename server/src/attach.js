@@ -817,10 +817,20 @@ function _shipChatHistory(ws, sessionId, maxBytes, phase, afterSeq) {
   }
   history = sessionsMod.getChatHistory(sessionId, { maxBytes });
   if (!history.length) return;
-  total = sessionsMod.getChatHistoryLength(sessionId);
+  // 2026-05-17: send total WITH includeAgent=true so the client's
+  // load-older counter starts off representing the FULL on-disk row
+  // count (including fromAgent claude-reply mirrors). Without this,
+  // the initial total counted only non-fromAgent rows; the first
+  // load-older fetch then bumped state.chatTotal up because the
+  // HTTP /chat/history?includeAgent=1 response reports the inclusive
+  // total. The user reported "hiddenCount=14, after click load,
+  // hiddenCount=18 — this is not right" — the count was growing
+  // instead of decreasing. With the inclusive total upfront, every
+  // load-older fetch monotonically decreases the count.
+  total = sessionsMod.getChatHistoryLength(sessionId, { includeAgent: true });
   try {
     ws.send(JSON.stringify({ t: 'chat-history', messages: history, total }));
-    console.log(`[chat-history] ${sessionId} ${phase} sent ${history.length} of ${total} message(s) within ${maxBytes}-byte budget`);
+    console.log(`[chat-history] ${sessionId} ${phase} sent ${history.length} of ${total} message(s) (incl. fromAgent) within ${maxBytes}-byte budget`);
   } catch {}
 }
 
