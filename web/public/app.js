@@ -2483,22 +2483,36 @@ function scrollChatToLatest() {
 function _resortChatPaneByTs() {
   const list = document.getElementById('chat-messages');
   if (!list) return;
-  // Snapshot children + their ts. Skip the load-older button so it
-  // stays pinned at the top of the list.
+  // 2026-05-17: globally-ordered re-sort by server-allocated seq #.
+  // data-seq (server-allocated per-session monotonic counter from
+  // sessions.allocSeq) is the authoritative ordering key — it's
+  // shared between chat-msg + agent-event streams, so user input +
+  // claude reply interleave correctly. data-ts is the fallback for
+  // legacy rows from before seq existed.
   const loadOlder = list.querySelector('#chat-load-older');
   const items = [];
   for (const el of list.children) {
     if (el === loadOlder) continue;
-    items.push({ el, ts: el.dataset && el.dataset.ts ? el.dataset.ts : '' });
+    const seqStr = el.dataset && el.dataset.seq;
+    const seq = seqStr ? parseInt(seqStr, 10) : null;
+    items.push({
+      el,
+      seq: Number.isFinite(seq) ? seq : null,
+      ts: el.dataset && el.dataset.ts ? el.dataset.ts : '',
+    });
   }
   if (items.length < 2) return;
-  // Decorate with original index so the sort is stable: equal-ts
-  // elements keep their relative order.
   for (let i = 0; i < items.length; i++) items[i].idx = i;
   items.sort((a, b) => {
-    // No-ts elements sort to the TOP (they're either pre-history or
-    // chrome rows whose ts couldn't be determined; keeping them at
-    // the front preserves the existing visual hierarchy).
+    // Prefer seq when both have one — authoritative, immune to clock drift.
+    if (a.seq != null && b.seq != null) {
+      if (a.seq === b.seq) return a.idx - b.idx;
+      return a.seq - b.seq;
+    }
+    // Mixed seq/no-seq: rows WITH seq are newer (seq is post-2026-05-17).
+    if (a.seq != null && b.seq == null) return 1;
+    if (a.seq == null && b.seq != null) return -1;
+    // Both no-seq: fall back to ts.
     if (!a.ts && b.ts) return -1;
     if (a.ts && !b.ts) return 1;
     if (a.ts === b.ts) return a.idx - b.idx;
@@ -2518,18 +2532,38 @@ function _resortChatPaneByTs() {
   for (const { el } of items) list.appendChild(el);
 }
 
+// 2026-05-17: globally-ordered insertion by server-allocated seq #.
+// Both chat-msg rows and agent-events get seq from the same monotonic
+// per-session counter (sessions.allocSeq), so a user's input + claude's
+// reply interleave correctly regardless of timestamp drift. Falls back
+// to data-ts string compare when seq is missing on EITHER side (legacy
+// rows from pre-seq sessions).
 function _insertChronological(list, el, ts) {
   if (!list || !el) return;
   if (ts) el.dataset.ts = ts;
-  const tsStr = el.dataset.ts || '';
-  if (!tsStr) { list.appendChild(el); return; }
+  const elSeq = el.dataset && el.dataset.seq ? parseInt(el.dataset.seq, 10) : null;
+  const elTs = el.dataset.ts || '';
+  if (elSeq == null && !elTs) { list.appendChild(el); return; }
   const children = list.children;
   for (let i = children.length - 1; i >= 0; i--) {
     const c = children[i];
     if (c === el) continue;
     if (c.id === 'chat-load-older') continue;
-    const cts = c.dataset.ts || '';
-    if (!cts || cts <= tsStr) {
+    const cSeq = c.dataset && c.dataset.seq ? parseInt(c.dataset.seq, 10) : null;
+    let cmp = null;   // -1 = c older than el, +1 = c newer, 0 = same
+    if (Number.isFinite(cSeq) && Number.isFinite(elSeq)) {
+      cmp = cSeq < elSeq ? -1 : (cSeq > elSeq ? 1 : 0);
+    } else if (Number.isFinite(cSeq)) {
+      cmp = 1;          // el has no seq, c has → el is older (pre-seq legacy)
+    } else if (Number.isFinite(elSeq)) {
+      cmp = -1;         // c has no seq, el has → c is older
+    } else {
+      // Both no-seq — fall back to ts.
+      const cts = c.dataset.ts || '';
+      if (!cts || cts <= elTs) cmp = -1;
+      else cmp = 1;
+    }
+    if (cmp <= 0) {
       const after = c.nextSibling;
       if (after) list.insertBefore(el, after); else list.appendChild(el);
       return;
@@ -3169,13 +3203,19 @@ function renderChatPane(scrollToBottom = false) {
   list.innerHTML = state.chatMessages
     .map((m, i) => renderChatMessage(m, i === lastMenuIdx))
     .join('');
-  // Stamp ts on the freshly-rendered chat bubbles so the
+  // Stamp ts + seq on the freshly-rendered chat bubbles so the
   // chronological merge below can place preserved agent cards in
-  // the right slots by timestamp.
+  // the right slots. data-seq (server-allocated monotonic counter,
+  // shared between chat-msg + agent-event) takes precedence over
+  // data-ts in the sort/insert paths — see _insertChronological +
+  // _resortChatPaneByTs.
   const chatNodes = list.querySelectorAll(':scope > .chat-msg');
   for (let i = 0; i < chatNodes.length && i < state.chatMessages.length; i++) {
-    const t = state.chatMessages[i] && state.chatMessages[i].ts;
-    if (t) chatNodes[i].dataset.ts = t;
+    const m = state.chatMessages[i];
+    if (m && m.ts) chatNodes[i].dataset.ts = m.ts;
+    if (m && m.meta && typeof m.meta.seq === 'number') {
+      chatNodes[i].dataset.seq = String(m.meta.seq);
+    }
   }
   // Chronological merge — slot each preserved agent card into the
   // chat-bubble list by its data-ts. Without this, agent cards
@@ -3355,7 +3395,15 @@ function renderChatMessage(m, isActiveMenu) {
   // line ('↗ Awaiting answer — open in popup' was retired); the row
   // itself is the affordance and gets `cursor: pointer` via CSS.
   const rowAttrs = (menuOpts && !isResolvedMenu) ? ' data-perm-reopen="1"' : '';
-  return `<div class="${cls}"${rowAttrs}>
+  // 2026-05-17: emit data-seq + data-ts in the markup directly.
+  // data-seq is the server-allocated monotonic per-session counter
+  // shared between chat-msg AND agent-event streams — it's the
+  // authoritative global ordering key. data-ts is the fallback for
+  // legacy rows that don't have seq.
+  const seq = m.meta && typeof m.meta.seq === 'number' ? m.meta.seq : null;
+  const seqAttr = seq != null ? ` data-seq="${seq}"` : '';
+  const tsAttr = m.ts ? ` data-ts="${escHtml(m.ts)}"` : '';
+  return `<div class="${cls}"${rowAttrs}${seqAttr}${tsAttr}>
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
     ${textHtml}
     ${optsHtml}
@@ -4033,6 +4081,9 @@ function _appendAgentEvent(ev) {
     } else {
       batch = _createChromeBatch(ev, ts);
       if (ev.ts) batch.dataset.ts = ev.ts;
+      // 2026-05-17: chrome batches also carry data-seq for global
+      // ordering. Anchor on the batch's FIRST event's seq.
+      if (typeof ev.seq === 'number') batch.dataset.seq = String(ev.seq);
       pane.appendChild(batch);
     }
     // turn_result IS a chrome event, so it lands in this same batch.
@@ -4170,6 +4221,12 @@ function _appendAgentEvent(ev) {
   });
 
   if (ev.ts) card.dataset.ts = ev.ts;
+  // 2026-05-17: stamp data-seq alongside data-ts so the global
+  // sort/insert paths use the server-allocated monotonic counter
+  // (which is shared between chat-msg and agent-event streams, so
+  // a user msg + claude reply interleave correctly even if their
+  // timestamps drift).
+  if (typeof ev.seq === 'number') card.dataset.seq = String(ev.seq);
   pane.appendChild(card);
   pane.scrollTop = pane.scrollHeight;
   _enforceChatHistoryCap();
