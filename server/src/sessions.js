@@ -650,11 +650,27 @@ async function importExistingTranscripts() {
 // ─── chat ─────────────────────────────────────────────────────────────────────
 
 // Chat history cap — older messages get trimmed (oldest first) when
-// the array exceeds this. Bumped from 200 → 500 so a multi-hour
-// working session keeps its full discussion + claude-reply trail
-// across restarts. At ~80 bytes per message that's ~40KB per
-// session — fine to keep in sessions.json.
-const MAX_CHAT_MESSAGES = 500;
+// the array exceeds this. PERSISTED history is intentionally kept
+// effectively-unbounded so a user scrolling back via the load-older
+// button reaches ALL of their conversation, not just the recent
+// window. The CLIENT-SIDE in-memory cap (MAX_CHAT_BYTES = 16 KB in
+// web/public/app.js) is what gates the chat pane's memory footprint;
+// older history is fetched on demand via
+// GET /sessions/:id/chat/history?before=&limit=.
+//
+// History timeline of MAX_CHAT_MESSAGES:
+//   pre-v1: 200       — short sessions only
+//   v1:     500       — multi-hour sessions (~40 KB per rec.chat)
+//   v2:     100_000   — current. Effectively-unbounded for normal
+//                       usage (a user typing 1 msg/min would take
+//                       2.3 months to hit it). At ~80 bytes / msg
+//                       that's ~8 MB per session — still reasonable
+//                       for sessions.json. If usage proves this is
+//                       still too tight, the next step is splitting
+//                       chat-history into a per-session jsonl file
+//                       under <cwd>/_myco_/chat-history.jsonl so
+//                       sessions.json stays small.
+const MAX_CHAT_MESSAGES = 100000;
 
 // bug-9 / round 5: tight rolling cap. Initial frame is a TINY 1 KB
 // (just enough to land the user in recent context immediately); the

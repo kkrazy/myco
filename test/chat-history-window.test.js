@@ -230,6 +230,49 @@ t('attach.js + app.js keep timeline-init helpers as DORMANT after the round-6.1 
     'app.js must keep _applyTimelineInit dormant for a future retry');
 });
 
+t('MAX_CHAT_MESSAGES persisted cap is effectively unbounded so scroll-up reaches the full history', () => {
+  // The 1k/16k caps are CLIENT-SIDE in-memory bounds. The persisted
+  // rec.chat in sessions.json should keep the entire conversation
+  // so a user scrolling back via the load-older button can reach
+  // any historical message, not just the recent ones.
+  //
+  // Use a source-grep + a functional appendChatMessage stress to
+  // catch a regression that drops MAX_CHAT_MESSAGES back down.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'sessions.js'), 'utf8');
+  const m = src.match(/const MAX_CHAT_MESSAGES\s*=\s*(\d+)/);
+  assert.ok(m, 'sessions.js must define MAX_CHAT_MESSAGES');
+  const cap = parseInt(m[1], 10);
+  assert.ok(cap >= 10000,
+    'MAX_CHAT_MESSAGES must be >= 10000 to keep multi-week conversation history available for scroll-up — was ' + cap + '. The user-facing client cap is 16 KB in-memory; the persisted store must outlive that by orders of magnitude.');
+});
+
+t('paginating through 2000 historical messages via opts.before walks the FULL chat', () => {
+  // Functional proof that the persisted history serves big windows:
+  // populate 2000 messages, then page through 200-at-a-time using
+  // the same { limit, before } shape the load-older button uses.
+  // Assert we reach msg-0 (the very oldest).
+  const sid = 'sess-chw-big';
+  seedSession(sid, 2000);
+  const total = sessionsMod.getChatHistoryLength(sid);
+  assert.strictEqual(total, 2000);
+  const seen = new Set();
+  let cursor = null;
+  let pages = 0;
+  for (let i = 0; i < 50; i++) {  // cap the loop so a bug can't infinite-loop the test
+    const opts = { limit: 200 };
+    if (cursor) opts.before = cursor;
+    const window = sessionsMod.getChatHistory(sid, opts);
+    if (!window.length) break;
+    pages++;
+    for (const m of window) seen.add(m.text);
+    cursor = window[0].ts;   // oldest of the window — next page is before this
+  }
+  assert.ok(pages >= 9 && pages <= 12, 'should take ~10 pages to walk 2000 messages 200 at a time, took ' + pages);
+  assert.strictEqual(seen.size, 2000, 'must have walked every message — got ' + seen.size + ' of 2000');
+  assert.ok(seen.has('msg 0') && seen.has('msg 1999'),
+    'must reach BOTH the oldest (msg 0) and the newest (msg 1999) via pagination');
+});
+
 t('app.js has the client-side MAX_CHAT_BYTES rolling cap (round 5)', () => {
   // The server caps the initial frame at 1 KB, but live `chat` frames
   // append to state.chatMessages indefinitely without a cap on the
