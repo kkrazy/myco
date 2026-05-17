@@ -125,20 +125,6 @@
       ]
     },
     {
-      "id": "td-6",
-      "text": "for selection question, there are options such as \"chat about it\", \"type something\", it will require typing a message and hit submit.\n\n— merged from `td-16` (added by @kkrazy): support \"type something\" or \"chat about it\" in menus like the following: \"🤔 Claude is waiting on a decision\n\nScope the auto-merge piece — when should the LLM run?\n\n[1] Background, fire-and-forget\n[2] On-demand /dedupe\n[3] Synchronous on add\n[4] Type something.\n[5] Chat about this\nPick here — goes straight to the session, no chat post.\"",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-14T14:42:45.137Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": [],
-      "mergedFrom": [
-        "td-16"
-      ]
-    },
-    {
       "id": "bug-5",
       "text": "when the app is inactive but the claude session might be still running in the background, when the app become active again, it wont pick up the new output from pty while the app is inactive",
       "layer": "Bug",
@@ -520,7 +506,9 @@
       "addedAt": "2026-05-16T13:48:55.576Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",

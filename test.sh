@@ -2277,6 +2277,13 @@ test_chat_window() {
   # (dataset.chromeBatchSig) + label aggregation in _createChromeBatch,
   # _appendToChromeBatch, and _mergeIdenticalChromeBatches.
   node_test_result test/chrome-batch-bytes-aggregate.test.js "test/chrome-batch-bytes-aggregate.test.js (10 cases)"
+  # bug-8 regression: the ▶ Run button on a plan item must be disabled
+  # once the item is done, AND must carry a layer-aware verb instead
+  # of the generic "Run": Bug → "Fix", Feature → "Implement",
+  # Todo → "Do". Locks the runEnabled gate (now includes !it.done),
+  # the new _runButtonLabel helper, and the runBtn template's use of
+  # the layer-derived label.
+  node_test_result test/plan-item-run-button.test.js "test/plan-item-run-button.test.js (13 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

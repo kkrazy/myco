@@ -5944,6 +5944,22 @@ function _renderMergeProposals(proposals, errMsg) {
   });
 }
 
+// bug-8: layer-aware verb for the ▶ Run button on plan items.
+//   Bug     → "Fix"     (it's broken — stop the bleeding)
+//   Feature → "Implement" (build the thing)
+//   Todo    → "Do"      (generic chore verb)
+//   unknown / missing layer (legacy untagged items) → "Run" fallback
+// Hoisted to module scope so renderItem inside renderArtifact can see
+// it without re-defining per-render.
+function _runButtonLabel(layer) {
+  switch (layer) {
+    case 'Bug':     return 'Fix';
+    case 'Feature': return 'Implement';
+    case 'Todo':    return 'Do';
+    default:        return 'Run';
+  }
+}
+
 function renderArtifact(type, artifact) {
   const body = document.getElementById(`artifact-body-${type}`);
   if (!body) return;
@@ -6080,17 +6096,25 @@ function renderArtifact(type, artifact) {
 
     // ▶ Run button: gated on a single upvote (lowered from 2 for
     // solo testing — flip back to 2 once group review is the norm)
-    // AND on every dependsOn prereq being done. Below threshold or
-    // with unmet deps the button is disabled with a tooltip.
+    // AND on every dependsOn prereq being done AND on the item not
+    // already being marked done (bug-8 — completed items shouldn't
+    // offer a Run action; reopen the item to re-run).
     const RUN_VOTE_THRESHOLD = 1;
     const enoughVotes = points >= RUN_VOTE_THRESHOLD;
-    const runEnabled = enoughVotes && unmetDeps.length === 0;
+    const notDone = !it.done;
+    const runEnabled = enoughVotes && unmetDeps.length === 0 && notDone;
+    // bug-8: layer-aware verb on the Run button. Bug → "Fix",
+    // Feature → "Implement", Todo → "Do". Unknown / missing layer
+    // (legacy untagged items) falls back to "Run".
+    const runLabel = _runButtonLabel(it.layer);
     const runTitle = runEnabled
-      ? 'Ask claude to work on this item — status + result will be linked back here'
-      : !enoughVotes
-        ? `Needs ${RUN_VOTE_THRESHOLD} upvote${RUN_VOTE_THRESHOLD === 1 ? '' : 's'} to run (currently ${points}). Click 👍 above to vote.`
-        : `Blocked by unmet prereq${unmetDeps.length === 1 ? '' : 's'}: ${unmetDeps.join(', ')}. Mark them done first.`;
-    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="Run">▶ Run</button>`;
+      ? `Ask claude to ${runLabel.toLowerCase()} this item — status + result will be linked back here`
+      : it.done
+        ? 'This item is marked done — Run is disabled. Reopen the item to re-run.'
+        : !enoughVotes
+          ? `Needs ${RUN_VOTE_THRESHOLD} upvote${RUN_VOTE_THRESHOLD === 1 ? '' : 's'} to run (currently ${points}). Click 👍 above to vote.`
+          : `Blocked by unmet prereq${unmetDeps.length === 1 ? '' : 's'}: ${unmetDeps.join(', ')}. Mark them done first.`;
+    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="${escHtml(runLabel)}">▶ ${escHtml(runLabel)}</button>`;
     const actionsRow = `<div class="artifact-item-actions">
         ${mergedBadge}
         ${depsChip}
