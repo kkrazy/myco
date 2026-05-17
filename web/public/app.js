@@ -1192,26 +1192,23 @@ function openSession(id, opts = {}) {
     try { showArtifactView('plan'); } catch {}
   }
 
-  // websocket with auto-reconnect. `connect` is closure-bound to `id`
-  // so reconnect-after-close stays on this session; the `state.ws !==
+  // websocket with auto-reconnect. `connect` is closure-bound to `id` and
+  // `qs` so reconnect-after-close stays on this session; the `state.ws !==
   // ws` guard inside the message handler also prevents stale-WS messages
   // from leaking into a freshly-switched session.
   //
-  // 2026-05-17 round 5: catch-up on reconnect. First connect uses the
-  // standard byte-budget initial frames. Subsequent reconnects pass
-  // afterSeq=<state.lastSeenSeq> so the server ships ONLY events +
-  // chat rows the client missed during the disconnect window. The qs
-  // is rebuilt per-connect so a long-lived lastSeenSeq updates each
-  // time `connect()` re-fires.
+  // 2026-05-17 round 5 REVERTED (06:10): the client-side auto-catch-up
+  // (sending ?afterSeq=<lastSeenSeq> on every reconnect) was disabled
+  // after a user-reported input regression. The server-side afterSeq
+  // support stays in place (HTTP /chat/history?afterSeq=N + WS
+  // ?afterSeq=N) for explicit callers; the client just always uses
+  // the standard byte-budget initial frames on reconnect.
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  let isReconnect = false;
+  const qs = _buildAttachQuery(isShared);
   let reconnectDelay = 1000;
   const maxDelay = 15000;
 
   function connect() {
-    const qs = _buildAttachQuery(isShared, {
-      afterSeq: isReconnect && typeof state.lastSeenSeq === 'number' ? state.lastSeenSeq : undefined,
-    });
     const ws = new WebSocket(`${proto}://${location.host}/attach/${encodeURIComponent(id)}${qs}`);
     state.ws = ws;
 
@@ -1350,11 +1347,6 @@ function openSession(id, opts = {}) {
     ws.addEventListener('close', () => {
       if (state.activeId !== id) return; // switched session OR error cleared activeId
       showConnOverlay('Reconnecting', null, 'Restoring session…');
-      // 2026-05-17 round 5: flag the next connect as a reconnect so
-      // _buildAttachQuery appends ?afterSeq=<lastSeenSeq>. Initial
-      // open uses the byte-budget initial frames; reconnect uses
-      // catch-up.
-      isReconnect = true;
       setTimeout(() => {
         if (state.activeId === id) connect();
       }, reconnectDelay);
@@ -2096,11 +2088,21 @@ function _appendChatMessageDom(message) {
   // message at the end, but live arrival order ≠ message order — a
   // delayed menu broadcast used to plant at the bottom even when its
   // seq placed it earlier. _insertChronological prefers seq when set.
+  //
+  // 2026-05-17 round 5: wrap in try/catch + always-append fallback so
+  // a bug in chronological insertion can NEVER swallow a live message.
+  // Symptom this guards against: user types "hi", Enter — message
+  // doesn't appear, can't tell if it sent.
+  let inserted = false;
   if (message.ts || (message.meta && typeof message.meta.seq === 'number')) {
-    _insertChronological(list, node, message.ts);
-  } else {
-    list.appendChild(node);
+    try {
+      _insertChronological(list, node, message.ts);
+      inserted = node.parentNode === list;
+    } catch (err) {
+      console.error('[appendChatMessage] _insertChronological failed:', err);
+    }
   }
+  if (!inserted) list.appendChild(node);
   scrollChatToLatest();
   _bindChatMenuClicks();
   // Mermaid runs only on the newly-appended node — existing SVGs (and
