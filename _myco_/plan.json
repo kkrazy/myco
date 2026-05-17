@@ -722,7 +722,30 @@
         "originalText": "Claude code sdk used by myco should read from a list of cmds or tasks to decide whether it should use subagent for the cmd/task",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-11",
+      "text": "**Problem:** Collapsed Chrome batch rows display only the last sub-item's byte size instead of the aggregate.\n**Expected:** `× 5 ✓ result · N bytes` where N is the sum of bytes across all included sub-items.\n**Actual:** Shows `4 bytes` (the last sub-item's size) even though 5 results are batched.\n**Context:** Example batch row `12:10:23 ▸ × 5 ✓ result · 4 bytes` collapsing sub-items each reporting `4 bytes`.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-17T04:24:48.661Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "aa2cd4f37d30",
+          "user": "kkrazy",
+          "text": "the following is another example: 12:09:13 ▸ × 9 ✓ result · 921 bytes 12:09:13 $ Bash $ git log --oneline --all -- web/public/styles.css | head -20 | xargs -I {} sh -c 'git show {} --stat -- web/public/styl 12:09:14 ✓ hook allow Bash 12:09:14 ✓ result 637 bytes · for=DucGAzfp 12:09:17 $ Bash $ git log -L '/\\.chat-msg\\.chat-msg-menu \\.chat-text/,+5:web/public/styles.css' -3 --pretty=format:'%h %s' 2>&1 | head - 12:09:17 ✓ hook allow Bash 12:09:17 ✓ result 1316 bytes · for=GmVPRdqa 12:09:28 $ Bash $ git stash && bash -c 'node -e \" const css = require(\\\"fs\\\").readFileSync(\\\"web/public/styles.css\\\", \\\"utf8\\\"); const m 12:09:28 ✓ hook allow Bash 12:09:28 ✓ result 921 bytes · for=7tL7ArWv",
+          "ts": "2026-05-17T04:26:51.584Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the chrome batch which has a lot of sub-items included show the size \"x bytes\" of the last item only, it should show the sum of byte of all items included. the following is an example:\n12:10:23 ▸ × 5 ✓ result · 4 bytes\n12:10:23 $ Bash $ node -e \" const css = require('fs').readFileSync('web/public/styles.css', 'utf8'); const m = css.match(/\\.chat-msg\\.ch\n12:10:23 ✓ hook allow Bash\n12:10:23 ✓ result 4 bytes · for=gvDG2wSh\n12:14:00 ⊕ perm allow-always Bash\n12:14:00 ✓ result 4 bytes · for=rdsMxxM7",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-17T02:00:00.000Z"
+  "updatedAt": "2026-05-17T04:24:54.372Z"
 }

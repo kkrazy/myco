@@ -705,22 +705,37 @@ const DEFAULT_CHAT_HISTORY_LIMIT = 50;
 
 // Read the chat history with optional windowing.
 //
-//   opts.maxBytes  byte budget — walk from the tail and keep adding
-//                  messages as long as cumulative JSON size <= budget.
-//                  Used by the chat-history WS frame on attach so the
-//                  first paint is bounded regardless of message sizes.
-//   opts.limit     max messages to return (count). Used by the
-//                  load-older paginator when the client wants a fixed-
-//                  size window.
-//   opts.before    ISO ts — return only messages strictly older than
-//                  this. Used by the load-older paginator.
+//   opts.maxBytes      byte budget — walk from the tail and keep adding
+//                      messages as long as cumulative JSON size <= budget.
+//                      Used by the chat-history WS frame on attach so the
+//                      first paint is bounded regardless of message sizes.
+//   opts.limit         max messages to return (count). Used by the
+//                      load-older paginator when the client wants a fixed-
+//                      size window.
+//   opts.before        ISO ts — return only messages strictly older than
+//                      this. Used by the load-older paginator.
+//   opts.includeAgent  boolean — when true, mirrored claude-text rows
+//                      (meta.fromAgent:true / meta.fromTranscript:true)
+//                      are INCLUDED in the result. Default false.
+//                      Used by the load-older paginator: when the user
+//                      scrolls back past the byte budget that
+//                      agent-replay shipped, fromAgent rows are the
+//                      ONLY surviving record of claude's older replies
+//                      (agent-replay shipped only the tail bytes). The
+//                      client renders them as plain chat-msg bubbles —
+//                      no duplicate-render risk because the events.jsonl
+//                      / session.buffer tail doesn't reach that far back.
 //
 // When BOTH maxBytes and limit are set, the smaller of the two
 // effective windows wins (whichever produces fewer messages).
 //
-// Filters meta.fromTranscript:true rows before slicing — those are
-// duplicates of the agent-event assistant_text stream and shouldn't
-// reach the client as chat-bubbles (see the comment block below).
+// Default (includeAgent=false) filters meta.fromTranscript:true AND
+// meta.fromAgent:true rows before slicing — those are durable mirrors
+// of the assistant_text stream that the agent-event/agent-replay
+// channel already renders as cards. Surfacing them here too would
+// duplicate-render (chat bubble next to agent-text card). Storage is
+// preserved in rec.chat for forensic / paginated retrieval — only the
+// default wire frame to clients is filtered.
 //
 // Result is always chronologically ordered (oldest → newest within
 // the returned window), matching the existing chat-history contract.
@@ -728,16 +743,21 @@ function getChatHistory(sessionId, opts) {
   opts = opts || {};
   const rec = loadStore().sessions[sessionId];
   if (!rec || !Array.isArray(rec.chat)) return [];
-  // Drop assistant-text rows mirrored from the JSONL transcript
-  // (meta.fromTranscript === true). The AgentSession event buffer
-  // hydrated from <cwd>/_myco_/events.jsonl already replays those as
-  // structured 'agent-event' (assistant_text) cards via the
-  // agent-replay frame sent on attach; sending them again here as
+  const includeAgent = !!opts.includeAgent;
+  // Drop assistant-text rows mirrored from EITHER channel:
+  //  - meta.fromTranscript === true (pre-SDK JSONL transcript watcher,
+  //    `persistAssistantTextToChat` in attach.js)
+  //  - meta.fromAgent     === true (SDK-era persistence backstop,
+  //    `_persistAssistantTextToRecChat` in agent-session.js)
+  // Both kinds are re-rendered as cards via the agent-event /
+  // agent-replay stream on every attach. Sending them here too as
   // generic chat-msg bubbles produces the visible duplicate observed
   // in #chat-messages (chat bubble + agent card, same text). Storage
   // is preserved in rec.chat for historical inspection / forensic
   // tooling — only the wire frame to clients is filtered.
-  let filtered = rec.chat.filter((m) => !(m && m.meta && m.meta.fromTranscript === true));
+  let filtered = includeAgent
+    ? rec.chat.slice()
+    : rec.chat.filter((m) => !(m && m.meta && (m.meta.fromTranscript === true || m.meta.fromAgent === true)));
   if (opts.before) {
     const beforeTs = String(opts.before);
     filtered = filtered.filter((m) => m && m.ts && String(m.ts) < beforeTs);
@@ -768,11 +788,24 @@ function getChatHistory(sessionId, opts) {
 // Convenience: how many filtered messages exist total. Used by the
 // /chat/history route so the client can render a "showing N of M"
 // hint + know when there are no more older windows to fetch.
-function getChatHistoryLength(sessionId) {
+// Count of messages getChatHistory would return for the given opts.
+// `opts.includeAgent` mirrors getChatHistory's parameter — when true,
+// fromAgent / fromTranscript rows count too. Used by /chat/history so
+// the client knows whether to show a "load older" button.
+function getChatHistoryLength(sessionId, opts) {
+  opts = opts || {};
+  const includeAgent = !!opts.includeAgent;
   const rec = loadStore().sessions[sessionId];
   if (!rec || !Array.isArray(rec.chat)) return 0;
+  if (includeAgent) return rec.chat.length;
   let n = 0;
-  for (const m of rec.chat) if (!(m && m.meta && m.meta.fromTranscript === true)) n++;
+  // Same filter contract as getChatHistory — drop both fromTranscript
+  // and fromAgent mirrors so the visible "showing N of M" matches the
+  // window of rows we'd actually ship by default.
+  for (const m of rec.chat) {
+    if (m && m.meta && (m.meta.fromTranscript === true || m.meta.fromAgent === true)) continue;
+    n++;
+  }
   return n;
 }
 

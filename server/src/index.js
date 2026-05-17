@@ -800,19 +800,29 @@ app.delete('/sessions/:id/file-chat', async (req, res) => {
 // (100) to keep the chat pane snappy on long sessions. Older messages
 // are fetched on demand by the client's "load older" button:
 //
-//   GET /sessions/:id/chat/history?before=<isoTs>&limit=<n>
+//   GET /sessions/:id/chat/history?before=<isoTs>&limit=<n>&includeAgent=1
 //
-//     before  — return messages with ts strictly less than this. The
-//               client passes the oldest currently-rendered row's ts
-//               to fetch the preceding window. Required so the same
-//               messages don't ride down twice.
-//     limit   — max messages to return; default DEFAULT_CHAT_HISTORY
-//               _LIMIT, clamped to 1..500 (the on-disk cap).
+//     before        — return messages with ts strictly less than this.
+//                     The client passes the oldest currently-rendered
+//                     row's ts to fetch the preceding window. Required
+//                     so the same messages don't ride down twice.
+//     limit         — max messages to return; default DEFAULT_CHAT_HISTORY
+//                     _LIMIT, clamped to 1..500 (the on-disk cap).
+//     includeAgent  — "1"/"true" to include fromAgent/fromTranscript
+//                     mirrored rows (persisted claude-text history).
+//                     Default OFF so the initial wire frame doesn't
+//                     duplicate-render against agent-replay cards; ON
+//                     for the load-older paginator so claude's older
+//                     replies surface as bubbles when the user scrolls
+//                     past the in-memory agent-replay byte window
+//                     (events.jsonl / session.buffer only retain a
+//                     bounded tail, but rec.chat is durable up to
+//                     MAX_CHAT_MESSAGES).
 //
 // Response: { messages, total, hasMore }
 //   messages — oldest→newest within the window (matches the WS frame
 //              contract).
-//   total    — total filtered (non-fromTranscript) rows in rec.chat;
+//   total    — total visible rows (with same filter the window uses);
 //              client uses it to render a "showing N of M" hint.
 //   hasMore  — true iff there are still older messages before the
 //              returned window. Lets the client gray out the load-
@@ -824,14 +834,16 @@ app.get('/sessions/:id/chat/history', (req, res) => {
   let limit = parseInt(String(req.query.limit || ''), 10);
   if (!Number.isFinite(limit) || limit < 1) limit = sessionsMod.DEFAULT_CHAT_HISTORY_LIMIT;
   if (limit > 500) limit = 500;
-  const window = sessionsMod.getChatHistory(ctx.id, { before, limit });
-  const total = sessionsMod.getChatHistoryLength(ctx.id);
+  const includeAgent = req.query.includeAgent === '1' || req.query.includeAgent === 'true';
+  const opts = { before, limit, includeAgent };
+  const window = sessionsMod.getChatHistory(ctx.id, opts);
+  const total = sessionsMod.getChatHistoryLength(ctx.id, { includeAgent });
   // hasMore = there's a message older than the window's oldest row.
   let hasMore = false;
   if (window.length) {
     const oldestTs = window[0] && window[0].ts;
     if (oldestTs) {
-      const earlier = sessionsMod.getChatHistory(ctx.id, { before: oldestTs, limit: 1 });
+      const earlier = sessionsMod.getChatHistory(ctx.id, { before: oldestTs, limit: 1, includeAgent });
       hasMore = earlier.length > 0;
     }
   }

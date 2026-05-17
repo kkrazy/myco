@@ -41,6 +41,107 @@ SKIP=0
 skip()    { SKIP=$((SKIP+1)); echo "  ~ $1 (skipped)"; }
 have_node() { command -v node >/dev/null 2>&1; }
 
+# ─── parallel node-test runner ────────────────────────────────────────────────
+# Goal: cut wall time by running every test/*.test.js in the background up
+# front, then having each call-site read the pre-computed exit code instead
+# of blocking on `node …` serially. The slow tests (capture-claude-session-id
+# ~65 s, transcript-watcher-safety-poll ~12 s, chat-history-window ~6 s) form
+# the long pole; everything else lands in under 1 s and now overlaps with them.
+#
+# Usage from a check site (replaces `if node test/foo …; then pass …; else fail …; fi`):
+#
+#   node_test_result test/foo.test.js "test/foo.test.js (N cases)"
+#
+# The helper returns 0 on pass, 1 on fail (so the caller can keep chaining
+# with `&&`/`||` if needed). It calls pass/fail itself so the existing tally
+# stays accurate. If the pre-run wasn't done (no host node), it falls back
+# to a synchronous `node …` invocation so the script still works on a host
+# that gains node mid-run.
+NODE_TEST_RESULT_DIR=""
+
+# Fire every test/*.test.js in the background and stash {basename}.exit /
+# {basename}.out into a tempdir so call-sites can read the result later.
+# Idempotent — second call no-ops.
+node_test_prelaunch() {
+  if [ -n "$NODE_TEST_RESULT_DIR" ]; then return; fi
+  if ! have_node; then return; fi
+  NODE_TEST_RESULT_DIR=$(mktemp -d -t myco-node-tests.XXXXXX)
+  trap 'rm -rf "$NODE_TEST_RESULT_DIR"' EXIT
+  local f
+  for f in test/*.test.js; do
+    [ -f "$f" ] || continue
+    local key
+    key=$(basename "$f")
+    (
+      node "$f" > "$NODE_TEST_RESULT_DIR/$key.out" 2>&1
+      echo "$?" > "$NODE_TEST_RESULT_DIR/$key.exit"
+    ) &
+  done
+  # We deliberately do NOT `wait` here — call-sites that need a particular
+  # result will block on the .exit file via node_test_result. That lets
+  # the static-check phase keep ripping in the foreground while node
+  # processes burn cycles in the background.
+}
+
+# Return 0 / 1 + emit pass/fail for the given test file.
+# Args: <path/to/test.js> <human label>
+node_test_result() {
+  local f="$1" label="$2"
+  if ! have_node; then skip "$label (no host node)"; return 0; fi
+  node_test_prelaunch
+  local key
+  key=$(basename "$f")
+  local exit_file="$NODE_TEST_RESULT_DIR/$key.exit"
+  # Wait up to 180 s for the background runner to finish this test.
+  local waited=0
+  while [ ! -f "$exit_file" ]; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ "$waited" -gt 180 ]; then
+      fail "$label — background runner exceeded 180s budget; re-run with 'node $f'"
+      return 1
+    fi
+  done
+  local code
+  code=$(cat "$exit_file")
+  if [ "$code" = "0" ]; then
+    pass "$label"
+    return 0
+  else
+    fail "$label — re-run with 'node $f' to see failures"
+    return 1
+  fi
+}
+
+# Variant for tests that should SKIP on failure rather than fail
+# (used by agent-session.test.js — it needs real SDK creds + network
+# round-trip; absence of either shouldn't red the suite).
+# Args: <path/to/test.js> <pass label> <skip message>
+node_test_result_or_skip() {
+  local f="$1" pass_label="$2" skip_msg="$3"
+  if ! have_node; then skip "$pass_label (no host node)"; return 0; fi
+  node_test_prelaunch
+  local key
+  key=$(basename "$f")
+  local exit_file="$NODE_TEST_RESULT_DIR/$key.exit"
+  local waited=0
+  while [ ! -f "$exit_file" ]; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ "$waited" -gt 180 ]; then
+      skip "$skip_msg (background runner exceeded 180s budget)"
+      return 0
+    fi
+  done
+  local code
+  code=$(cat "$exit_file" 2>/dev/null || echo "127")
+  if [ "$code" = "0" ]; then
+    pass "$pass_label"
+  else
+    skip "$skip_msg"
+  fi
+}
+
 # Drive one OAuth round-trip via the /auth/github/* test bypass and echo the
 # minted myco session token. Args: <port> <login>. Echoes the token on stdout
 # (empty on failure).
@@ -60,6 +161,12 @@ mint_session_via_oauth() {
 }
 
 # ─── static checks ───────────────────────────────────────────────────────────
+
+# Kick off every test/*.test.js in parallel up front. Each call-site that
+# would have done `if node test/foo … fi` now reads the cached exit code
+# from the background runner. Wall-time savings: ~20 s on the host-side
+# section (long-pole is capture-claude-session-id at ~65 s).
+node_test_prelaunch
 
 test_server_js_files() {
   local missing=""
@@ -251,27 +358,11 @@ test_best_practices_template() {
   grep -qF "BP_SENTINEL_START = '<!-- myco-best-practices-start -->'" server/src/sessions.js \
     && pass "sessions.js: sentinel constant pinned (idempotent injection key)" \
     || fail "sessions.js: sentinel constant changed — old blocks won't be detected"
-  if have_node; then
-    if node test/best-practices-inject.test.js >/dev/null 2>&1; then
-      pass "test/best-practices-inject.test.js (6 cases)"
-    else
-      fail "test/best-practices-inject.test.js — re-run with 'node test/best-practices-inject.test.js' to see failures"
-    fi
-  else
-    skip "test/best-practices-inject.test.js (no host node)"
-  fi
+  node_test_result test/best-practices-inject.test.js "test/best-practices-inject.test.js (6 cases)"
   # /td /fr /bug must mirror new plan items to _myco_/plan.json — the
   # GET /artifact handler reads the on-disk file first and would
   # otherwise silently drop the in-memory-only addition on next open.
-  if have_node; then
-    if node test/slash-todo-inject.test.js >/dev/null 2>&1; then
-      pass "test/slash-todo-inject.test.js (12 cases)"
-    else
-      fail "test/slash-todo-inject.test.js — re-run with 'node test/slash-todo-inject.test.js' to see failures"
-    fi
-  else
-    skip "test/slash-todo-inject.test.js (no host node)"
-  fi
+  node_test_result test/slash-todo-inject.test.js "test/slash-todo-inject.test.js (12 cases)"
   # /clear must wipe rec.chat AND emit a chat-clear state-update so all
   # attached chat panes drop their local list. Pair of static greps +
   # the runtime regression test below.
@@ -291,15 +382,7 @@ test_best_practices_template() {
   grep -q '\[agent-attach\]' server/src/attach.js \
     && pass "attach.js: [agent-attach] diagnostic log present" \
     || fail "attach.js: [agent-attach] diagnostic log present"
-  if have_node; then
-    if node test/slash-clear.test.js >/dev/null 2>&1; then
-      pass "test/slash-clear.test.js (4 cases)"
-    else
-      fail "test/slash-clear.test.js — re-run with 'node test/slash-clear.test.js' to see failures"
-    fi
-  else
-    skip "test/slash-clear.test.js (no host node)"
-  fi
+  node_test_result test/slash-clear.test.js "test/slash-clear.test.js (4 cases)"
   # Chat-routing rewrite (2026-05-14): plain text → agent by default;
   # @<known-user> → chat-only mention with highlight. The static greps
   # below + the regression test guard the invariants of that routing.
@@ -457,16 +540,7 @@ test_best_practices_template() {
   grep -q "const mode = 'agent'" server/src/sessions.js \
     && pass "sessions.js: spawnSession hardcodes mode='agent' (Phase 9)" \
     || fail "sessions.js: spawnSession does not pin mode='agent'"
-  if have_node; then
-    if node test/agent-session.test.js >/dev/null 2>&1; then
-      pass "test/agent-session.test.js (6 cases — incl phase-2 menu round-trip)"
-    else
-      # Network or auth may fail in CI; skip rather than red the suite.
-      skip "test/agent-session.test.js (skipped — SDK or auth unavailable)"
-    fi
-  else
-    skip "test/agent-session.test.js (no host node)"
-  fi
+  node_test_result_or_skip test/agent-session.test.js "test/agent-session.test.js (6 cases — incl phase-2 menu round-trip)" "test/agent-session.test.js (skipped — SDK or auth unavailable)"
   # Phase 2: canUseTool synthesizes chat-pane menus + resolveMenuPick
   # threads the answer back. handleMenuPick routes to agent sessions
   # when session.mode === 'agent'.
@@ -706,47 +780,15 @@ test_best_practices_template() {
   else
     fail "artifacts: sync helper called only $count times, expected ≥8"
   fi
-  if have_node; then
-    if node test/artifact-sync-from-file.test.js >/dev/null 2>&1; then
-      pass "test/artifact-sync-from-file.test.js (5 cases)"
-    else
-      fail "test/artifact-sync-from-file.test.js — re-run with 'node test/artifact-sync-from-file.test.js' to see failures"
-    fi
-  else
-    skip "test/artifact-sync-from-file.test.js (no host node)"
-  fi
-  if have_node; then
-    if node test/dedupe-context.test.js >/dev/null 2>&1; then
-      pass "test/dedupe-context.test.js (5 cases)"
-    else
-      fail "test/dedupe-context.test.js — re-run with 'node test/dedupe-context.test.js' to see failures"
-    fi
-  else
-    skip "test/dedupe-context.test.js (no host node)"
-  fi
+  node_test_result test/artifact-sync-from-file.test.js "test/artifact-sync-from-file.test.js (5 cases)"
+  node_test_result test/dedupe-context.test.js "test/dedupe-context.test.js (5 cases)"
   # One-shot migration: rewrites pre-ca9bcf1 hex-id plan items to
   # fr-N/td-N/bug-N (addedAt order). Idempotent.
   [ -x migrate-plan-ids.js ] \
     && pass "migrate-plan-ids.js present + executable" \
     || fail "migrate-plan-ids.js present + executable"
-  if have_node; then
-    if node test/migrate-plan-ids.test.js >/dev/null 2>&1; then
-      pass "test/migrate-plan-ids.test.js (4 cases)"
-    else
-      fail "test/migrate-plan-ids.test.js — re-run with 'node test/migrate-plan-ids.test.js' to see failures"
-    fi
-  else
-    skip "test/migrate-plan-ids.test.js (no host node)"
-  fi
-  if have_node; then
-    if node test/chat-routing.test.js >/dev/null 2>&1; then
-      pass "test/chat-routing.test.js (7 cases)"
-    else
-      fail "test/chat-routing.test.js — re-run with 'node test/chat-routing.test.js' to see failures"
-    fi
-  else
-    skip "test/chat-routing.test.js (no host node)"
-  fi
+  node_test_result test/migrate-plan-ids.test.js "test/migrate-plan-ids.test.js (4 cases)"
+  node_test_result test/chat-routing.test.js "test/chat-routing.test.js (7 cases)"
 }
 
 test_conv_view_css() {
@@ -1007,20 +1049,28 @@ test_new_session_readonly() {
   # The inner .chat-text inside a menu card must be flattened — otherwise
   # the from-claude bubble (green tint + left border + padding) draws a
   # second card *inside* the outer menu card, wasting horizontal space.
-  # Test: the chat-msg-menu .chat-text rule sets background: transparent
-  # so the from-claude tint can't bleed through.
+  # Commit 2d8234f shrank the rule body to just `margin: 0 0 4px 0;` —
+  # the outer .chat-msg.chat-msg-menu rule already zeros out
+  # background/border/padding, so the inner .chat-text only needs the
+  # vertical margin and inherits the flattening implicitly. The test
+  # now guards two invariants: (1) the selector still exists at all
+  # (refactor-protection), and (2) the body declares NO background-
+  # color or visible border that would reintroduce nested-card chrome.
   if have_node; then
     node -e "
       const css = require('fs').readFileSync('web/public/styles.css', 'utf8');
       const m = css.match(/\.chat-msg\.chat-msg-menu\s+\.chat-text\s*\{([^}]*)\}/);
       if (!m) { console.error('selector missing'); process.exit(1); }
       const body = m[1];
-      const checks = [
-        [/background:\s*transparent/, 'background: transparent'],
-        [/border-left:\s*none/,        'border-left: none'],
-      ];
-      for (const [re, label] of checks) {
-        if (!re.test(body)) { console.error('missing: ' + label); process.exit(1); }
+      const bg = body.match(/background(?:-color)?:\s*([^;]+);/);
+      if (bg && !/transparent|none/i.test(bg[1])) {
+        console.error('regression: opaque background in menu .chat-text: ' + bg[1].trim()); process.exit(1);
+      }
+      const borderProps = body.match(/border(?:-(?:top|bottom|left|right))?:\s*[^;]+;/g) || [];
+      for (const prop of borderProps) {
+        if (!/none|0(?:px)?(?:\s|;)/i.test(prop)) {
+          console.error('regression: visible border in menu .chat-text: ' + prop); process.exit(1);
+        }
       }
     " >/dev/null 2>&1 \
       && pass "styles.css: menu .chat-text flattened (no nested card)" \
@@ -1752,15 +1802,7 @@ test_chat_window() {
   # voters, and arch notes. Hand-editing and round-trips through
   # mutation paths (refresh/run/mark/vote/comment/delete) all flow
   # through writeArtifactToFile.
-  if have_node; then
-    if node test/artifact-myco-dir.test.js >/dev/null 2>&1; then
-      pass "test/artifact-myco-dir.test.js (16 cases)"
-    else
-      fail "test/artifact-myco-dir.test.js — re-run with 'node test/artifact-myco-dir.test.js' to see failures"
-    fi
-  else
-    skip "test/artifact-myco-dir.test.js (no host node)"
-  fi
+  node_test_result test/artifact-myco-dir.test.js "test/artifact-myco-dir.test.js (16 cases)"
   grep -qF 'writeArtifactToFile(rec, type, artifact)' server/src/artifacts.js \
     && pass "artifacts.js: persistArtifact mirrors to disk on every mutation" \
     || fail "artifacts.js: persistArtifact missing disk mirror — _myco_/ state will go stale"
@@ -2052,15 +2094,7 @@ test_chat_window() {
   # `<project>/subagents/agent-*.jsonl` must NEVER be returned by
   # findNewestJsonl, and isClaudeSessionId must reject non-UUID names so
   # claude --resume can't be invoked with a bogus id.
-  if have_node; then
-    if node test/find-newest-jsonl.test.js >/dev/null 2>&1; then
-      pass "test/find-newest-jsonl.test.js (6 cases)"
-    else
-      fail "test/find-newest-jsonl.test.js — re-run with 'node test/find-newest-jsonl.test.js' to see failures"
-    fi
-  else
-    skip "test/find-newest-jsonl.test.js (no host node)"
-  fi
+  node_test_result test/find-newest-jsonl.test.js "test/find-newest-jsonl.test.js (6 cases)"
   # Phase 9 step 2: PTY-only test files (menu-pick-race + menu-multiselect)
   # were retired with the PTY driver — those tests exercised wizard
   # detection, queued-pick retries, and CR/no-CR PTY writes that don't
@@ -2071,27 +2105,11 @@ test_chat_window() {
   # surfaces thinking content, plan/auto-mode transitions, framework
   # errors, command-permission changes, and queued slash commands so
   # readonly viewers see the same narrative the owner does in their TUI.
-  if have_node; then
-    if node test/transcript-parser-types.test.js >/dev/null 2>&1; then
-      pass "test/transcript-parser-types.test.js (21 cases)"
-    else
-      fail "test/transcript-parser-types.test.js — re-run with 'node test/transcript-parser-types.test.js' to see failures"
-    fi
-  else
-    skip "test/transcript-parser-types.test.js (no host node)"
-  fi
+  node_test_result test/transcript-parser-types.test.js "test/transcript-parser-types.test.js (21 cases)"
   # state-update broadcast paths — chat-pane ↔ PTY sync. Covers menu
   # mutation emits, artifact mutation emits, in-flight tool tracker,
   # attach snapshot frames, and client-side dispatcher wiring.
-  if have_node; then
-    if node test/state-update.test.js >/dev/null 2>&1; then
-      pass "test/state-update.test.js (18 cases)"
-    else
-      fail "test/state-update.test.js — re-run with 'node test/state-update.test.js' to see failures"
-    fi
-  else
-    skip "test/state-update.test.js (no host node)"
-  fi
+  node_test_result test/state-update.test.js "test/state-update.test.js (18 cases)"
   # Each new transcript role / JSONL type must be wired in both the
   # parser (server) and the renderer (client). Sentinels protect both
   # ends of the pipeline.
@@ -2121,15 +2139,7 @@ test_chat_window() {
   # session. Verified mycobeta demo010 (2026-05-13): user's plan
   # response landed in the new jsonl (c8ce8492-…) but the watcher was
   # on 49d7d4da-… → chat row never persisted live.
-  if have_node; then
-    if node test/active-claude-session.test.js >/dev/null 2>&1; then
-      pass "test/active-claude-session.test.js (8 cases)"
-    else
-      fail "test/active-claude-session.test.js — re-run with 'node test/active-claude-session.test.js' to see failures"
-    fi
-  else
-    skip "test/active-claude-session.test.js (no host node)"
-  fi
+  node_test_result test/active-claude-session.test.js "test/active-claude-session.test.js (8 cases)"
   grep -qF 'function readActiveClaudeSessionForCwd' server/src/sessions.js \
     && pass "sessions.js: readActiveClaudeSessionForCwd helper defined" \
     || fail "sessions.js: readActiveClaudeSessionForCwd missing — transcript watcher won't follow claude /resume re-execs"
@@ -2202,15 +2212,7 @@ test_chat_window() {
   # original gate (`!rec.claudeSessionId`) silently froze the store at
   # the first-ever id, so every readonly viewer for a long-running
   # session pointed at a transcript that stopped at the first restart.
-  if have_node; then
-    if node test/capture-claude-session-id.test.js >/dev/null 2>&1; then
-      pass "test/capture-claude-session-id.test.js (4 cases)"
-    else
-      fail "test/capture-claude-session-id.test.js — re-run with 'node test/capture-claude-session-id.test.js' to see failures"
-    fi
-  else
-    skip "test/capture-claude-session-id.test.js (no host node)"
-  fi
+  node_test_result test/capture-claude-session-id.test.js "test/capture-claude-session-id.test.js (4 cases)"
   # Regression: captureClaudeSessionId must REPLACE a stale stored id,
   # not just set-when-null. The original buggy gate was `!rec.claudeSessionId`
   # which silently refused to update. Two acceptable shapes: the inline
@@ -2226,28 +2228,12 @@ test_chat_window() {
   # Regression: claude's assistant text from the transcript jsonl must
   # mirror into rec.chat so chat survives a refresh. Pre-fix the
   # _localOnly chat rows on the client never reached disk.
-  if have_node; then
-    if node test/persist-assistant-chat.test.js >/dev/null 2>&1; then
-      pass "test/persist-assistant-chat.test.js (7 cases)"
-    else
-      fail "test/persist-assistant-chat.test.js — re-run with 'node test/persist-assistant-chat.test.js' to see failures"
-    fi
-  else
-    skip "test/persist-assistant-chat.test.js (no host node)"
-  fi
+  node_test_result test/persist-assistant-chat.test.js "test/persist-assistant-chat.test.js (7 cases)"
   # Regression: when a [run:plan#<id>]-tagged dispatch finishes, the
   # turn_result outcome must append a run-summary comment to the item
   # (user='claude', meta.kind='run-summary') so findings live ON the
   # item. Added with the @myco-prefix removal 2026-05-16.
-  if have_node; then
-    if node test/plan-run-comment.test.js >/dev/null 2>&1; then
-      pass "test/plan-run-comment.test.js (4 cases)"
-    else
-      fail "test/plan-run-comment.test.js — re-run with 'node test/plan-run-comment.test.js' to see failures"
-    fi
-  else
-    skip "test/plan-run-comment.test.js (no host node)"
-  fi
+  node_test_result test/plan-run-comment.test.js "test/plan-run-comment.test.js (4 cases)"
   # fr-4 regression: /td /fr /bug with >8-word body OR the /td! /fr!
   # /bug! bang variants kick off an async claude rewrite that
   # reshapes the description into a tight issue-style body. Item is
@@ -2255,29 +2241,13 @@ test_chat_window() {
   # then updated in place when claude returns. Short crisp items skip
   # the rewrite entirely. The test stubs btw.runClaudeP to control
   # the rewrite output without hitting the API.
-  if have_node; then
-    if node test/plan-item-rewrite.test.js >/dev/null 2>&1; then
-      pass "test/plan-item-rewrite.test.js (5 cases)"
-    else
-      fail "test/plan-item-rewrite.test.js — re-run with 'node test/plan-item-rewrite.test.js' to see failures"
-    fi
-  else
-    skip "test/plan-item-rewrite.test.js (no host node)"
-  fi
+  node_test_result test/plan-item-rewrite.test.js "test/plan-item-rewrite.test.js (5 cases)"
   # bug-9 regression: getChatHistory accepts {limit, before}; the
   # chat-history WS frame on attach caps at DEFAULT_CHAT_HISTORY_LIMIT
   # (100); GET /sessions/:id/chat/history?before= pages older windows.
   # Pins the server contract that bug-9's client load-older flow
   # depends on.
-  if have_node; then
-    if node test/chat-history-window.test.js >/dev/null 2>&1; then
-      pass "test/chat-history-window.test.js (10 cases)"
-    else
-      fail "test/chat-history-window.test.js — re-run with 'node test/chat-history-window.test.js' to see failures"
-    fi
-  else
-    skip "test/chat-history-window.test.js (no host node)"
-  fi
+  node_test_result test/chat-history-window.test.js "test/chat-history-window.test.js (10 cases)"
   # bug-7 round 2 regression: the agent-replay WS frame must dedup
   # identical events from session.buffer before shipping. Suspected
   # upstream is _hydrateBufferFromDisk overlapping with the SDK's
@@ -2286,30 +2256,24 @@ test_chat_window() {
   # adjacency rule renders them as stacked identical "▸ × N ✓ result"
   # rows (the original bug-7 symptom that 7cb8ed5 only partially
   # fixed via the post-replay wipe).
-  if have_node; then
-    if node test/agent-replay-dedup.test.js >/dev/null 2>&1; then
-      pass "test/agent-replay-dedup.test.js (7 cases)"
-    else
-      fail "test/agent-replay-dedup.test.js — re-run with 'node test/agent-replay-dedup.test.js' to see failures"
-    fi
-  else
-    skip "test/agent-replay-dedup.test.js (no host node)"
-  fi
+  node_test_result test/agent-replay-dedup.test.js "test/agent-replay-dedup.test.js (7 cases)"
   # bug-10 regression: multiple chrome batches with the same head
   # signature (e.g. five consecutive `× N perm asked · Bash` rows)
   # collapse into ONE row via _mergeIdenticalChromeBatches, invoked
   # from _enforceChatHistoryCap on every chat mutation. The test
   # exercises the merge math against a minimal DOM-like fake +
   # static-grep guards on the prod implementation in app.js.
-  if have_node; then
-    if node test/chrome-batch-merge.test.js >/dev/null 2>&1; then
-      pass "test/chrome-batch-merge.test.js (7 cases)"
-    else
-      fail "test/chrome-batch-merge.test.js — re-run with 'node test/chrome-batch-merge.test.js' to see failures"
-    fi
-  else
-    skip "test/chrome-batch-merge.test.js (no host node)"
-  fi
+  node_test_result test/chrome-batch-merge.test.js "test/chrome-batch-merge.test.js (7 cases)"
+  # 2026-05-17 chat persistence + cross-device + ordering contract.
+  # Locks the four pillars documented in CLAUDE.md → "Chat persistence
+  # & cross-device consistency": (1) every device sees identical
+  # state, (2) every user input + every claude reply persisted
+  # indefinitely (up to MAX_CHAT_MESSAGES=100k), (3) client memory
+  # frugality via byte-capped initial WS frame + load-older paginator
+  # with includeAgent=1, (4) strict chronological order in rec.chat,
+  # getChatHistory, and the agent-replay client handler. Touching any
+  # of those interfaces without keeping this test green is a regression.
+  node_test_result test/chat-persistence-contract.test.js "test/chat-persistence-contract.test.js (19 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
@@ -2354,15 +2318,7 @@ test_chat_window() {
   # fs.watch silently stopped firing (overlay/bind-mount/Docker
   # filesystem quirk). The safety setInterval guarantees forward
   # progress regardless of fs.watch's mood.
-  if have_node; then
-    if node test/transcript-watcher-safety-poll.test.js >/dev/null 2>&1; then
-      pass "test/transcript-watcher-safety-poll.test.js (3 cases)"
-    else
-      fail "test/transcript-watcher-safety-poll.test.js — re-run to see failures"
-    fi
-  else
-    skip "test/transcript-watcher-safety-poll.test.js (no host node)"
-  fi
+  node_test_result test/transcript-watcher-safety-poll.test.js "test/transcript-watcher-safety-poll.test.js (3 cases)"
   grep -qF 'safetyPollTimer = setInterval' server/src/transcript.js \
     && pass "transcript.js: fs.watch safety poll wired" \
     || fail "transcript.js: safety poll missing"

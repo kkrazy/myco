@@ -107,6 +107,47 @@
 
 1. **Always use Mermaid diagrams** for any architecture, flow, sequence, or state diagrams. Never use ASCII art boxes or plain-text diagrams.
 
+## Chat persistence & cross-device consistency
+
+The chat surface is the central conversational record of a session and MUST behave identically regardless of which device or browser tab the user attaches from. The contract has three pillars:
+
+1. **Cross-device interaction is consistent.** The server is the only source of truth (`rec.chat` in `/data/sessions.json` + `session.buffer` + `<absCwd>/_myco_/events.jsonl`). Every attached client renders the same state. No device-local chat storage; nothing in `localStorage` shapes what's shown. When a user types on phone, every laptop attached to the same session sees the message a moment later via the live `chat` WS frame, and a fresh attach from any other device reconstructs the same view from `getChatHistory(sessionId, …)` + `_shipAgentReplay(session, …)`.
+
+2. **All chat history is persisted indefinitely** — every user input (`appendChatMessage` from `handleChatMessage`) AND every claude reply (`_persistAssistantTextToRecChat` in `agent-session.js`, mirroring each `assistant_text` block into `rec.chat` with `meta.fromAgent:true`). The retention cap is `MAX_CHAT_MESSAGES = 100_000` per session — effectively unbounded for normal use. No row is ever dropped because of byte budgets; budgets only gate the WIRE-FRAME shipped on attach, never the on-disk record. Claude's text history is the same first-class citizen as human chat; it survives container restarts, 5-min reaper kills, deploys, and `events.jsonl` rotations.
+
+3. **The chat window client only shows a portion of the history to save client-side memory.** The client maintains a rolling `state.chatMessages` capped at `MAX_CHAT_BYTES = 16 KB` (`web/public/app.js _capChatMessagesBytes`). Initial attach ships ~1 KB of chat-history + ~16 KB of agent-replay so the first paint is sub-100ms. When the user scrolls up, the load-older button fires `GET /sessions/:id/chat/history?before=<oldestTs>&limit=<N>&includeAgent=1` — `includeAgent=1` surfaces the persisted `meta.fromAgent:true` rows that the default WS frame filters out (to avoid duplicate-render against agent-replay cards while session.buffer is fresh). Prepending older rows + re-capping evicts the youngest end from memory so the cap holds.
+
+4. **Chronological order of user input + claude reply is always preserved.** Every row carries an ISO `ts` and the pane must render in strict tail-ascending order regardless of which channel delivered the row. Persistence: `getChatHistory` always returns oldest→newest within a window; `appendChatMessage` writes in arrival order; the chat-history WS frame ships in order. Reload: when chat-history bubbles and agent-replay cards arrive back-to-back, `_resortChatPaneByTs` (`web/public/app.js`) re-sorts the DOM by `data-ts` so a slight arrival skew doesn't leave the timeline corrupted. Load-older: prepended `fromAgent` bubbles slot into chronological position via the same `data-ts` sort. Live: the `chat` and `agent-event` WS frames are processed in arrival order on a single event loop so order matches the server's emit order. Any future channel that pushes into `#chat-messages` MUST call `_resortChatPaneByTs` after its append, and any future server-side helper that hands back chat rows MUST guarantee tail-ascending output.
+
+```mermaid
+flowchart TB
+  subgraph server [Server — authoritative]
+    recChat[(rec.chat<br/>100k cap<br/>user + claude<br/>indefinite)]
+    sessBuf[(session.buffer<br/>5k events<br/>events.jsonl tail)]
+  end
+  subgraph attach [Attach pipeline]
+    chatHist["chat-history frame<br/>1 KB initial → 16 KB backfill<br/>filters fromAgent by default"]
+    agentReplay["agent-replay frame<br/>16 KB tail<br/>tool calls + assistant_text cards"]
+    paginate["GET /chat/history?<br/>before=&includeAgent=1<br/>surfaces older claude text<br/>as bubbles"]
+  end
+  subgraph client [Client device — fungible]
+    memChat["state.chatMessages<br/>16 KB rolling cap"]
+    pane["#chat-messages DOM<br/>bubbles + cards merged<br/>by ts"]
+  end
+  recChat --> chatHist
+  recChat --> paginate
+  sessBuf --> agentReplay
+  chatHist --> memChat
+  agentReplay --> pane
+  paginate --> memChat
+  memChat --> pane
+  device1["Device A attach"] --> chatHist
+  device2["Device B attach"] --> chatHist
+  device1 -.identical view.- device2
+```
+
+**Regression guard:** `test/chat-persistence-contract.test.js` locks all three pillars. Touching `getChatHistory`, `appendChatMessage`, `_persistAssistantTextToRecChat`, `MAX_CHAT_MESSAGES`, or the `/chat/history` route MUST keep these tests green.
+
 ## Diagnostics
 
 1. **Polling the local mycod with `./collect-logs.sh`.** The running myco server (mycod) is a Node process inside a Docker container (PID 1 in the `myco` container). Its stdout/stderr is captured into an in-memory rolling buffer by `server/src/logCapture.js` (CAPACITY = 5000, see `logCapture.init()` wiring in `server/src/index.js`). A bearer-gated `GET /logs?n=N` endpoint exposes that buffer over HTTP. `./collect-logs.sh` is the human/cron-runnable helper that:

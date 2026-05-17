@@ -331,7 +331,17 @@ class AgentSession extends EventEmitter {
     if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
       for (const block of m.message.content) {
         if (block.type === 'text') {
-          this._emit({ type: 'assistant_text', text: block.text || '' });
+          const txt = block.text || '';
+          this._emit({ type: 'assistant_text', text: txt });
+          // bug-fix (2026-05-17): also persist into rec.chat (tagged
+          // `meta.fromAgent:true`) as a durable backstop. See
+          // _persistAssistantTextToRecChat for the full contract;
+          // the short version is: agent-event card is the live
+          // render channel, rec.chat is the forensic / paginated
+          // history record, and the fromAgent rows are filtered out
+          // of the default chat-history WS frame to avoid duplicate
+          // renders on attach.
+          this._persistAssistantTextToRecChat(txt);
         } else if (block.type === 'tool_use') {
           this.openToolCalls.set(block.id, {
             name: block.name,
@@ -785,6 +795,57 @@ class AgentSession extends EventEmitter {
     // get the live event via the agent-event listener.
     this._persistEventToDisk(stamped);
     this.emit('agent-event', stamped);
+  }
+
+  // bug-fix (2026-05-17): mirror each assistant_text block into
+  // rec.chat as a `claude` chat-msg row tagged `meta.fromAgent:true`.
+  //
+  // Why: pre-SDK, the transcript JSONL watcher (`persistAssistantTextToChat`
+  // in attach.js) recorded every assistant text block into rec.chat
+  // with `meta.fromTranscript:true`. The SDK era left that path stale
+  // because there's no JSONL transcript file the watcher could read —
+  // claude replies now live ONLY in `session.buffer` + the
+  // `<cwd>/_myco_/events.jsonl` append log. Both can be wiped
+  //  (5-min reaper kills the AgentSession; events.jsonl can be deleted
+  //  out from under us during workspace surgery), so a tab-switch /
+  //  reload was losing claude's text if the buffer/jsonl chain broke.
+  //
+  // What we DO NOT do:
+  //   - we do NOT emit('chat', msg) live — that would race the
+  //     `agent-event` (assistant_text) frame and produce a duplicate
+  //     render (chat-bubble next to the agent-text card). The card is
+  //     the live channel; this function is purely the persistence backstop.
+  //   - getChatHistory filters out `meta.fromAgent:true` rows by default
+  //     (parallel to fromTranscript) so the chat-history WS frame sent
+  //     on attach doesn't re-render them as bubbles alongside the
+  //     agent-replay cards — same duplicate-avoidance contract that
+  //     governs the old fromTranscript pattern.
+  //
+  // Net: rec.chat now keeps a durable, paginated record of claude's
+  // text for forensic / future-tooling use (e.g., extractor /readChatTail,
+  // future "load-claude-history" pagination). UI behavior is unchanged.
+  _persistAssistantTextToRecChat(text) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    const msg = {
+      user: 'claude',
+      text: trimmed,
+      ts: new Date().toISOString(),
+      meta: { fromAgent: true },
+    };
+    try {
+      const sessionsMod = require('./sessions');
+      if (sessionsMod.appendChatMessage) {
+        sessionsMod.appendChatMessage(this.sessionId, msg);
+      }
+    } catch (err) {
+      console.error(`[persist-chat] ${this.sessionId} failed to write: ${err && err.message ? err.message : err}`);
+      return;
+    }
+    // Deliberately NO this.emit('chat', msg) here — the agent-event
+    // stream (assistant_text card) is the live render channel; emitting
+    // 'chat' would produce a duplicate bubble next to the card.
+    console.log(`[persist-chat] ${this.sessionId} mirrored assistant_text (${trimmed.length} chars) to rec.chat fromAgent:true`);
   }
 
   // Read up to the last MAX_EVENTS events from <cwd>/_myco_/

@@ -3060,8 +3060,17 @@ async function _fetchOlderChatFromServer() {
   const btn = list ? list.querySelector('#chat-load-older') : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Loading older…'; }
   try {
+    // includeAgent=1: pull the durable rec.chat mirror of claude's
+    // replies (meta.fromAgent:true rows). The initial chat-history WS
+    // frame on attach intentionally hides those to avoid duplicate-
+    // rendering against the live agent-event / agent-replay cards.
+    // Once the user has scrolled past what session.buffer kept (capped
+    // tail), fromAgent rows are the ONLY surviving record of older
+    // claude text — render them as plain chat bubbles. Server contract:
+    // see app.get('/sessions/:id/chat/history') in server/src/index.js.
     const url = `/sessions/${encodeURIComponent(sid)}/chat/history`
-      + `?before=${encodeURIComponent(oldest.ts)}&limit=${CHAT_LOAD_OLDER_BATCH}`;
+      + `?before=${encodeURIComponent(oldest.ts)}&limit=${CHAT_LOAD_OLDER_BATCH}`
+      + `&includeAgent=1`;
     const res = await authedFetch(url);
     if (!res || !res.ok) return;
     const data = await res.json().catch(() => null);
