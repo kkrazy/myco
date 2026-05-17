@@ -378,6 +378,35 @@ t('client assistant_text agent-event renders as chat-msg from-claude bubble (not
     'assistant_text bubble missing data-ev-type marker — merge logic for consecutive blocks will break.');
 });
 
+// USER-REPORT REGRESSION 2026-05-17 round 2 (per best-practices rule 5):
+// User: "switching table still lost the recent claude reply". After
+// my round-1 fix (assistant_text persisted to rec.chat as fromAgent +
+// rendered as chat-msg bubble), the bubble was still vanishing on
+// tab switch. Root cause: renderChatPane's preserve loop classified
+// any .chat-msg as "rebuild from state.chatMessages", but
+// state.chatMessages doesn't contain fromAgent rows (getChatHistory
+// filters them out). So every applyChatHistory pass nuked my new
+// chat-msg-from-agent bubble with no rebuild source.
+//
+// Fix: preserve chat-msg-from-agent bubbles like agent cards (they
+// come from the agent-event stream, NOT state.chatMessages).
+t('USER-REPORT REGRESSION 2026-05-17 round 2: renderChatPane preserves chat-msg-from-agent across applyChatHistory', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  // Locate the renderChatPane preserve loop.
+  const lines = app.split('\n');
+  let preserveStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/const preserve = \[\];/.test(lines[i])) { preserveStart = i; break; }
+  }
+  assert.ok(preserveStart >= 0, 'preserve loop not found in renderChatPane');
+  // The preserve loop body must EXPLICITLY push chat-msg-from-agent
+  // bubbles into preserve (before checking the generic .chat-msg
+  // class which falls through to "continue = rebuild from state").
+  const body = lines.slice(preserveStart, preserveStart + 15).join('\n');
+  assert.ok(/contains\(['"]chat-msg-from-agent['"]\)\s*\)\s*\{\s*preserve\.push/.test(body),
+    'renderChatPane preserve loop no longer keeps chat-msg-from-agent — switch-tab will lose the claude reply (user reported regression).');
+});
+
 t('agent-replay wipe-loop preserves chat-msg-from-agent bubbles only when re-creating them', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   // Should mention removing chat-msg-from-agent on wipe (so the loop

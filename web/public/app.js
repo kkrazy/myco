@@ -3137,17 +3137,35 @@ function renderChatPane(scrollToBottom = false) {
   }
   // Preserve non-chat-message children. The chat-pane DOM is shared
   // between two streams:
-  //   1. state.chatMessages → chat bubbles + menu rows (.chat-msg)
+  //   1. state.chatMessages → chat bubbles + menu rows (.chat-msg
+  //      WITHOUT the chat-msg-from-agent marker) → rebuilt from
+  //      state.chatMessages.
   //   2. agent-event stream → agent cards, turn footers, chrome
-  //      batches, load-older button (NOT in state.chatMessages)
+  //      batches, load-older button, AND chat-msg-from-agent bubbles
+  //      (assistant_text reply rendered as chat-bubble — created by
+  //      _appendAgentEvent, NOT in state.chatMessages because
+  //      getChatHistory filters meta.fromAgent rows out by default).
+  //      These must be PRESERVED, not rebuilt.
   // The old `list.innerHTML = …` wipe destroyed stream-2 content
   // every time chat-history arrived from the server — manifesting as
-  // "history disappears after refresh." Detach the preserved
-  // children, rebuild the .chat-msg list, then re-merge by ts so
+  // "history disappears after refresh." Detach the preserved children,
+  // rebuild the .chat-msg list (human-only), then re-merge by ts so
   // both streams interleave chronologically.
+  //
+  // 2026-05-17 fix (round 3): chat-msg-from-agent bubbles
+  // (assistant_text reply rendered as a bubble) MUST be preserved.
+  // Previously they fell into the "rebuilt" bucket because they
+  // matched the .chat-msg selector, but state.chatMessages doesn't
+  // include them — so they got wiped on every renderChatPane call
+  // with no source to rebuild from. Hence "switch tab loses recent
+  // claude reply": the assistant_text bubble is created by
+  // _appendAgentEvent on agent-replay, then the very next
+  // applyChatHistory (which fires every attach) wiped it.
   const preserve = [];
   for (const el of list.children) {
-    if (el.classList && el.classList.contains('chat-msg')) continue;   // chat bubble/menu → rebuilt
+    if (!el.classList) { preserve.push(el); continue; }
+    if (el.classList.contains('chat-msg-from-agent')) { preserve.push(el); continue; }   // agent-stream bubble — preserve
+    if (el.classList.contains('chat-msg')) continue;   // human chat bubble/menu → rebuilt
     preserve.push(el);
   }
   for (const el of preserve) el.remove();
