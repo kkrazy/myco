@@ -216,12 +216,25 @@
       "id": "td-11",
       "text": "the main window load all history at once, which cause performance problem on mobile device. Need to optimze to only load the recent history need to current window and trigger loading of history when user scroll the window up.",
       "layer": "Todo",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-15T01:15:58.370Z",
       "addedBy": "ryan-blues",
       "source": "user",
       "voters": [],
-      "comments": []
+      "comments": [
+        {
+          "id": "2fc9d142bd55",
+          "user": "claude",
+          "text": "✓ closed — implemented in `75b5858+434f24c+079cedc+c3b85fb+e5d6de6`.\n\nShipped upstream across a series of chat-history pagination commits: `75b5858 chat: bug-9 cap initial chat-history at 100 + paginate older via /chat/history?before=` introduced the server-side `before=<ts>` route + initial-cap of 100; `434f24c`, `079cedc`, `c3b85fb`, `e5d6de6` polished the client-side scroll-up load-more (wheel-up trigger at scrollTop=0, infinite-fetch-loop fix, 1MB in-memory cap, retire load-older button when server reports 0 older rows). Net behavior: mobile no longer loads the full history on attach (1KB initial + 16KB rolling cap per `CLAUDE.md \"Chat persistence\" §3`), and scrolling up paginates older rows via `GET /sessions/:id/chat/history?before=<oldestTs>&limit=<N>`. Matches td-11's expected behavior exactly. Closing.",
+          "ts": "2026-05-17T17:21:12.403Z",
+          "meta": {
+            "kind": "closure",
+            "closedBy": "claude",
+            "closedAt": "2026-05-17T17:21:12.403Z"
+          }
+        }
+      ],
+      "ranAt": "2026-05-17T17:21:12.403Z"
     },
     {
       "id": "td-12",
@@ -342,7 +355,7 @@
       "id": "bug-7",
       "text": "fix duolicate entries in the chat pane like the following: 16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T08:35:18.181Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -365,6 +378,17 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-16T14:52:29.833Z"
           }
+        },
+        {
+          "id": "35ccc4dfa5f6",
+          "user": "claude",
+          "text": "✓ closed — implemented in `5b8287b`.\n\nShipped upstream as `5b8287b chat: bug-7 round 2 — dedup identical agent-replay events at the wire (+ client backstop)`. Round 1 (`7cb8ed5`) wiped prior agent cards before re-render but didn't prevent the server from re-sending duplicates. Round 2 added the wire-level dedup (server stops sending events whose `seq` the client has already seen via `?afterSeq=N`) plus a client backstop in `_appendChatMessageDom` for any escapees. The \"16:06:43 ▸ × 10 ✓ result · 3671 bytes\" stacked-duplicate symptom is resolved. A claude run-summary comment was posted on this item but `done` was never flipped. Closing.",
+          "ts": "2026-05-17T17:21:12.403Z",
+          "meta": {
+            "kind": "closure",
+            "closedBy": "claude",
+            "closedAt": "2026-05-17T17:21:12.403Z"
+          }
         }
       ],
       "runs": [
@@ -382,7 +406,8 @@
           "summary": "519.9s · 28→25761 tok",
           "result": "Pushed `75b5858..5b8287b` to `origin/main`.\n\n## bug-7 round 2 — root cause + three-layer fix\n\n**Why round 1 (`7cb8ed5`) wasn't enough.** It wiped the cards before re-rendering on each agent-replay frame, which handles the *cross-reconnect* doubling case. But your re-dispatch shows three identical `▸ × 10 ✓ result · 3671 bytes` batches stacked **from a single agent-replay frame** — the wipe ran exactly once, and the N copies all arrived in that one payload. That means `session.buffer` itself is carrying duplicates.\n\n**Suspected upstream:** container restart → `_hydrateBufferFromDisk` loads the events.jsonl tail (MAX_EVENTS=5000) → SDK `query({ resume: sdkSessionId })` re-walks the conversation tail → our `_handleEvent` re-emits those messages → `_emit` pushes to `this.buffer` AND appends to events.jsonl AGAIN. Now the buffer (and disk) carry recent events twice; the chrome-batch adjacency rule turns it into stacked-batch render.\n\n**Three layers of defense shipped (`5b8287b`):**\n\n| Layer | Where | What |\n|---|---|---|\n| Primary | `attach._attachAgentWebSocket` | JSON-stringify dedup of `session.buffer` before shipping the agent-replay frame. Two legit events always carry different `ts` (set by `_emit`'s `new Date().toISOString()` wrap), so this only catches byte-identical dups. Logs dropped count: `[agent-replay] <sid> dedup dropped N duplicate event(s) …`. |\n| Defense in depth | `_handleAgentFrame` agent-replay branch | Matching client-side dedup pre-loop. Belt-and-braces for any future server change. |\n| Pre-existing | `_handleAgentFrame` wipe (from `7cb8ed5`) | Still handles the cross-reconnect doubling case. |\n\n**Tests:** new `test/agent-replay-dedup.test.js` (7 cases) — 30-identical-`tool_result` reproducer, ts-differing legit case, order preservation, non-serializable safety, source-grep guards. All 20 node tests pass.\n\n**Root cause not patched here.** Once `5b8287b` is live, the `[agent-replay] … dedup dropped N` log line will tell us *which sessions* are hitti"
         }
-      ]
+      ],
+      "ranAt": "2026-05-17T17:21:12.403Z"
     },
     {
       "id": "fr-3",
@@ -447,7 +472,7 @@
       "id": "fr-6",
       "text": "add link to fr/td/bug for easy navigation to the specific items in the plan view",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T09:57:23.487Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -464,6 +489,17 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-16T12:35:44.471Z"
           }
+        },
+        {
+          "id": "c427170eeea2",
+          "user": "claude",
+          "text": "✓ closed — implemented in `79076eb`.\n\nShipped upstream as `79076eb plan: fr-6 deep-link to plan items via #<id> URL hash` and verified in `33ca75c plan.json: close fr-6 with verification comment`. Each plan-item `<li>` now carries `id=\"artifact-item-<itemId>\"`, so URLs of the form `/?session=<sid>#<itemId>` (e.g. `#fr-6`, `#bug-11`) scroll the plan tab to the named item on load. A claude run-summary comment exists on this item; the `done` flag was missed by the close-with-comment commit. Closing.",
+          "ts": "2026-05-17T17:21:12.403Z",
+          "meta": {
+            "kind": "closure",
+            "closedBy": "claude",
+            "closedAt": "2026-05-17T17:21:12.403Z"
+          }
         }
       ],
       "runs": [
@@ -474,13 +510,14 @@
           "summary": "365.7s · 31→15302 tok",
           "result": "**fr-6 implementation summary:**\n\n| Surface | Change |\n|---|---|\n| **`web/public/app.js renderItem`** | Each `<li>` now carries `id=\"artifact-item-<itemId>\"`. The id chip gets `data-deep-link-id`, `role=\"button\"`, `tabindex=\"0\"`, and a tooltip \"Click to copy a deep link to this item\". |\n| **`web/public/app.js _copyArtifactItemDeepLink`** | Click / Enter / Space on the id chip writes `<origin><pathname>#<id>` to `navigator.clipboard`, updates `location.hash` via `history.replaceState` (no history pollution), and flashes a 1.2 s green \"copied\" badge on the chip. |\n| **`web/public/app.js _focusArtifactItemFromHash`** | Reads `location.hash`, finds which artifact type contains the id, opens that tab via `showArtifactView`, then scrolls the matching `<li>` into view with a 2 s deep-link pulse. Bails out cleanly if the cache isn't populated yet — stashes the id on `state.pendingDeepLinkId` and consumes it on the next cache update / render. |\n| **`web/public/app.js _onArtifactsCacheUpdated`** | Tries to resolve the hash on every cache update — handles the initial-load case where the artifacts-init frame arrives after the URL was parsed. |\n| **`web/public/app.js` hashchange listener** | Module-level `window.addEventListener('hashchange', …)` — pasting a permalink in the address bar re-focuses the item. |\n| **`web/public/app.js renderArtifact bind block`** | Consumes `state.pendingDeepLinkId` post-render so a deep link that arrived before the items had DOM ids still lands cleanly. |\n| **`web/public/styles.css`** | `.artifact-item-id[data-deep-link-id]` gets `cursor: copy` + hover/focus styles; `.artifact-item-id-copied` is the 1.2 s green flash; `.artifact-item-deep-link-focused` runs a 1.6 s × 2 cool-blue box-shadow pulse keyframe on the focused `<li>`. |\n| **`test.sh`** | Seven new static guards: stable li id, `data-deep-link-id` chip, copy helper, focus helper, hashchange listener, plus both CSS classes. |\n| **Tests** | All 18 node tests still pass. |\n\nReady to commit + p"
         }
-      ]
+      ],
+      "ranAt": "2026-05-17T17:21:12.403Z"
     },
     {
       "id": "fr-7",
       "text": "**Problem:** Users miss chat events that require their attention when the browser tab isn't focused.\n**Expected:** Promote in-chat notifications to the browser level so the OS surfaces them natively.\n**Actual:** Notifications stay confined to the chat UI and are only visible when the user is already looking at it.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T13:41:23.687Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -497,6 +534,17 @@
             "kind": "run-summary",
             "manual": true
           }
+        },
+        {
+          "id": "567a52cfc94e",
+          "user": "claude",
+          "text": "✓ closed — implemented in `6ce4fea`.\n\nShipped upstream as `6ce4fea chat: fr-7 OS notifications for permission menus + long-turn completion`. Adds `_maybeNotifyMenuPending` + `_maybeNotifyTurnComplete` in `web/public/app.js` that fire native Web Notifications (with `icon: /hetu.png`) when (a) a permission_request lands while the user isn't foregrounded, and (b) a long-running turn completes. **Mobile-Android reliability** (the original \"user misses chat events\" gap on suspended tabs) was filed as the follow-up `fr-8 — Web Push` because foreground Notification API alone doesn't survive Android's background tab suspension; the foundation Web Push needs (service worker) lives in `fr-23 — Convert myco to a PWA`. fr-7 itself is implementation-complete. Closing.",
+          "ts": "2026-05-17T17:21:12.403Z",
+          "meta": {
+            "kind": "closure",
+            "closedBy": "claude",
+            "closedAt": "2026-05-17T17:21:12.403Z"
+          }
         }
       ],
       "meta": {
@@ -510,7 +558,8 @@
           "ts": "2026-05-16T13:45:55.994Z",
           "summary": null
         }
-      ]
+      ],
+      "ranAt": "2026-05-17T17:21:12.403Z"
     },
     {
       "id": "bug-8",
@@ -755,7 +804,7 @@
       "id": "bug-11",
       "text": "**Problem:** Collapsed Chrome batch rows display only the last sub-item's byte size instead of the aggregate.\n**Expected:** `× 5 ✓ result · N bytes` where N is the sum of bytes across all included sub-items.\n**Actual:** Shows `4 bytes` (the last sub-item's size) even though 5 results are batched.\n**Context:** Example batch row `12:10:23 ▸ × 5 ✓ result · 4 bytes` collapsing sub-items each reporting `4 bytes`.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-17T04:24:48.661Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -778,6 +827,17 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-17T16:18:46.770Z"
           }
+        },
+        {
+          "id": "606ac4ef64c2",
+          "user": "claude",
+          "text": "✓ closed — implemented in `1fee18c`.\n\nShipped in this session as `1fee18c chat: bug-11 — collapsed chrome batch shows AGGREGATE tool_result bytes`. Added per-batch `dataset.toolResultBytes` accumulator + bytes-free merge signature + helper `_chromeBatchHeadLabel(card, ev)` so the collapsed head displays the SUM across all tool_result events, not just the most-recently-appended event's bytes. Regression test in `test/chrome-batch-bytes-aggregate.test.js` (10 cases incl. the user's exact `5×4=20` reproducer + the comment-thread `9×921=8289` case + three static-grep guards). Existing `bug-10 chrome-batch-merge` tests still pass (9/9, no regression). Closing.",
+          "ts": "2026-05-17T17:21:12.403Z",
+          "meta": {
+            "kind": "closure",
+            "closedBy": "claude",
+            "closedAt": "2026-05-17T17:21:12.403Z"
+          }
         }
       ],
       "meta": {
@@ -793,7 +853,8 @@
           "summary": "408.1s · 26→27798 tok",
           "result": "**bug-11 shipped** — pushed to `origin/main` as `1fee18c`.\n\n## What landed\n\n| File | Change |\n|---|---|\n| `web/public/app.js` | 4 edits: aggregator helper, batch head label, bytes-free sig, merge byte combination |\n| `test/chrome-batch-bytes-aggregate.test.js` | New — 10 cases (red-flipped first per Best Practices §5) |\n| `test.sh` | Wired the new test into the suite |\n\n## The fix in one diagram\n\n```mermaid\ngraph LR\n    EV1[tool_result<br/>10 bytes]\n    EV2[tool_result<br/>20 bytes]\n    EV3[tool_result<br/>30 bytes]\n\n    subgraph \"Before — bug\"\n        SUM_B[\"head: ✓ result · 30 bytes<br/>(only last event)\"]\n    end\n\n    subgraph \"After — fix\"\n        ACC[\"dataset.toolResultBytes<br/>accumulator\"]\n        SUM_A[\"head: ✓ result · 60 bytes<br/>(aggregate)\"]\n    end\n\n    EV1 --> SUM_B\n    EV2 --> SUM_B\n    EV3 --> SUM_B\n\n    EV1 --> ACC\n    EV2 --> ACC\n    EV3 --> ACC\n    ACC --> SUM_A\n```\n\n## Test results\n\n```\ntest/chrome-batch-bytes-aggregate.test.js  10 passed, 0 failed\ntest/chrome-batch-merge.test.js             9 passed, 0 failed  (regression check — no break)\n```\n\nThe reproducer test \"× 5 tool_results of 4 bytes each → head shows 20, not 4\" goes green. The user-comment reproducer \"× 9 tool_results of 921 bytes → head shows 8289\" also goes green. A bytes-free merge signature keeps bug-10's merge-eligibility behavior unchanged even as the visible label now varies with aggregate totals.\n\nHeads-up: pending task #2 (post-SDK arch refresh) still open."
         }
-      ]
+      ],
+      "ranAt": "2026-05-17T17:21:12.403Z"
     },
     {
       "id": "fr-15",
@@ -1035,7 +1096,18 @@
         "originalText": "click the icon to go back to session card and then go back to the same session would case the chat window be disactivated. The chat window should be always active",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-23",
+      "text": "**Problem:** myco isn't installable as a PWA. No home-screen icon, mobile tabs get reaped on memory pressure, and the SW foundation for Web Push (`fr-7`, `fr-8`, `td-18`) doesn't exist yet.\n\n**Expected:** Tap-to-install (Chrome/Edge/iOS-A2HS), home-screen icon, standalone window, fast first paint, and a SW that unblocks backgrounded notifications.\n\n**Scope (in order):**\n\n1. **Service worker** `web/public/sw.js` — register from `app.js`, cache vendor bundle cache-first, leave `app.js` / `index.html` / `/auth/*` / `/sessions/*` / `/attach/*` / `/chat/history` / `/logs` network-only. Cache name keyed by deploy SHA → atomic invalidation.\n2. **Multi-size icons** — `hetu-192.png` / `-512.png` / `-512-maskable.png` from existing transparent `hetu.png` via `scripts/generate-pwa-icons.mjs` (jimp). Manifest update. Chrome requires ≥192 PNG for install prompt.\n3. **Install button** — `#btn-install` in sidebar header, captures `beforeinstallprompt`, hides in standalone mode. iOS fallback tooltip with share-sheet A2HS instructions (iOS lacks `beforeinstallprompt`).\n4. **Splash + status bar** — `apple-touch-startup-image` × iOS screen-size matrix, generated by same icon script. Android picks up from existing `theme_color`/`background_color`.\n5. **Atomic-update discipline (MANDATORY)** — `skipWaiting()` + `clients.claim()` on activate, server stamps build SHA on `/auth/check`, client offers 1-tap refresh on mismatch. Without this, a SW makes deploys WORSE (cached stale code). If item 5 is dropped, item 1 must be dropped too.\n6. **Tests** — extend `test_pwa_icon` with `test_service_worker`: SW exists, register call in `app.js`, manifest has ≥192 icon, `sw.js` served `no-cache`, `clients.claim()` present, cache name version-templated.\n\n**Out of scope:** offline session-shell read (mostly theater for server-driven app), background sync, share-target. Web Push lives in `fr-7`/`fr-8`.\n\n**Unblocks:** `fr-7`, `fr-8`, `td-18` (all blocked on a registered SW).\n\n**Effort:** ~½ day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-17T17:01:47.818Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-17T16:40:00.934Z"
+  "updatedAt": "2026-05-17T17:21:12.403Z"
 }
