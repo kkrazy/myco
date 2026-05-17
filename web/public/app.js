@@ -4521,8 +4521,17 @@ function _chromeEventDetails(ev) {
     if (ev.durationMs != null) lines.push(`duration: ${ev.durationMs}ms`);
     if (ev.numTurns != null) lines.push(`turns: ${ev.numTurns}`);
     const head = `<div class="agent-chrome-kv">${lines.map((l) => escHtml(l)).join('<br>')}</div>`;
-    const result = ev.result ? `<div class="agent-chrome-result">${renderMd(String(ev.result))}</div>` : '';
-    return head + result;
+    // 2026-05-17: do NOT render ev.result inside the chrome batch
+    // body. The reply text is already rendered as a standalone
+    // assistant_text agent-card (either from the SDK's assistant
+    // message OR — via the round-4 dedup-fallback in
+    // agent-session.js's `result` branch — synthesized from
+    // result.result when the SDK ships text ONLY via result).
+    // Duplicating it inside the chrome batch caused the user to
+    // report "after tab switch the message is displayed as part of
+    // the chrome batch" — they saw the chrome batch's inline copy
+    // and perceived the standalone card as missing/merged.
+    return head;
   }
   if (ev.type === 'permission_request' || ev.type === 'permission_resolved') {
     const lines = [];
