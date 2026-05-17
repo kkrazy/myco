@@ -2798,39 +2798,44 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #files-tree li:hover { background: rgba(80, 120, 200, .08); border-left-color: rgba(80, 120, 200, .35); }
 #files-tree li.heavy { opacity: .5; }
 
-/* Inline ext-icon span — content set per kind/extension via class. */
+/* fr-9 polish: Lucide-style SVG icons match the main app's chrome
+   cluster. .ft-ic is the SVG container; the actual <svg.ft-svg>
+   lives inside. currentColor lets per-extension CSS tint the
+   stroke without forking the SVG markup. */
 #files-tree li .ft-ic {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
-  text-align: center;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
-  border-radius: 3px;
-  padding: 1px 0;
-  line-height: 1.2;
+  height: 18px;
   flex-shrink: 0;
+  color: rgba(255, 255, 255, .55);
 }
-#files-tree li.kind-dir .ft-ic { color: #ffc56b; font-size: 12px; }
-#files-tree li.kind-dir .ft-ic::before { content: '▸'; }
-#files-tree li.kind-symlink .ft-ic { color: #8ad; font-size: 12px; }
-#files-tree li.kind-symlink .ft-ic::before { content: '↗'; }
-#files-tree li.kind-other .ft-ic { color: rgba(255,255,255,.3); }
-#files-tree li.kind-other .ft-ic::before { content: '·'; }
-/* File-extension-driven badges set in JS via .ft-ic.ext-XXX */
-#files-tree li .ft-ic.ext-js   { background: rgba(247,223,30,.20); color: #f7df1e; }
-#files-tree li .ft-ic.ext-ts   { background: rgba(49,120,198,.25); color: #6cb1ff; }
-#files-tree li .ft-ic.ext-json { background: rgba(140,140,140,.20); color: #ccc; }
-#files-tree li .ft-ic.ext-md   { background: rgba(120,170,250,.20); color: #aac8ff; }
-#files-tree li .ft-ic.ext-css  { background: rgba(120,200,255,.20); color: #79c0ff; }
-#files-tree li .ft-ic.ext-html { background: rgba(255,140,90,.20); color: #ffaa7a; }
-#files-tree li .ft-ic.ext-sh   { background: rgba(120,200,120,.20); color: #9cdc90; }
-#files-tree li .ft-ic.ext-py   { background: rgba(80,140,200,.25); color: #6cb1ff; }
-#files-tree li .ft-ic.ext-go   { background: rgba(0,180,210,.20); color: #5fdcef; }
-#files-tree li .ft-ic.ext-rs   { background: rgba(220,120,50,.20); color: #ffaa7a; }
-#files-tree li .ft-ic.ext-yml  { background: rgba(200,80,80,.20); color: #ff9090; }
-#files-tree li .ft-ic.ext-default { color: rgba(255,255,255,.4); }
-#files-tree li .ft-ic.ext-default::before { content: '·'; font-size: 14px; }
+#files-tree li .ft-ic .ft-svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+/* Folder = warm yellow (matches the chrome-cluster Files icon's
+   intent of "workspace files"). Symlink = blue-link tone. Other
+   (FIFO/socket/etc.) = muted neutral. */
+#files-tree li .ft-ic.kind-dir       { color: #ffc56b; }
+#files-tree li .ft-ic.kind-symlink   { color: #8ad; }
+#files-tree li .ft-ic.kind-other     { color: rgba(255,255,255,.3); }
+/* Per-extension file-icon tints. Same palette as before; just
+   applied to SVG stroke now instead of text background. */
+#files-tree li .ft-ic.ext-js   { color: #f7df1e; }
+#files-tree li .ft-ic.ext-ts   { color: #6cb1ff; }
+#files-tree li .ft-ic.ext-json { color: #c4c4c4; }
+#files-tree li .ft-ic.ext-md   { color: #aac8ff; }
+#files-tree li .ft-ic.ext-css  { color: #79c0ff; }
+#files-tree li .ft-ic.ext-html { color: #ffaa7a; }
+#files-tree li .ft-ic.ext-sh   { color: #9cdc90; }
+#files-tree li .ft-ic.ext-py   { color: #6cb1ff; }
+#files-tree li .ft-ic.ext-go   { color: #5fdcef; }
+#files-tree li .ft-ic.ext-rs   { color: #ffaa7a; }
+#files-tree li .ft-ic.ext-yml  { color: #ff9090; }
+#files-tree li .ft-ic.ext-default { color: rgba(255, 255, 255, .5); }
 
 /* fr-9: git status badge — 1-letter chip next to the name. Colors
    match conventional VCS UI (Modified=green, Added=bright-green,
@@ -2857,31 +2862,84 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #files-tree li .ft-git-\! { background: transparent; color: rgba(255,255,255,.25); }
 
 /* fr-9: per-row download button. Margin-left:auto pushes it to the
-   right edge so the tree's left-aligned name + icon column stays
-   clean. Hidden until the row is hovered (or always-visible on
-   touch devices via @media-hover). */
+   right edge. Now uses a Lucide SVG (download arrow) instead of a
+   text glyph. Hidden until row hover on desktop; always-visible at
+   .55 opacity on touch where there's no hover state. */
 #files-tree li .ft-download {
   margin-left: auto;
   background: transparent;
   border: none;
-  color: rgba(255, 255, 255, .35);
+  color: rgba(255, 255, 255, .4);
   cursor: pointer;
-  font-size: 13px;
-  padding: 0 4px;
-  border-radius: 3px;
+  padding: 6px;                   /* big enough hit target without bloating row height */
+  border-radius: 4px;
   flex-shrink: 0;
   opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: opacity .12s, background .12s, color .12s;
 }
+#files-tree li .ft-download .ft-svg { width: 14px; height: 14px; }
 #files-tree li:hover .ft-download { opacity: 1; }
 #files-tree li .ft-download:hover {
   background: rgba(120, 170, 255, .14);
   color: #98c0ff;
 }
-/* Touch devices: no hover → keep the download button always
-   visible (just muted) so users can tap it. */
+#files-tree li .ft-download:active {
+  background: rgba(120, 170, 255, .22);
+}
+/* Touch devices: no hover. Keep the button always-visible at .55
+   opacity. Also enlarge for thumb-friendly hit target. */
 @media (hover: none) {
-  #files-tree li .ft-download { opacity: 0.5; }
+  #files-tree li .ft-download {
+    opacity: 0.55;
+    padding: 10px;                /* 14px icon + 20px padding = 34px tap target */
+  }
+  #files-tree li .ft-download .ft-svg { width: 16px; height: 16px; }
+}
+
+/* fr-9 polish: header back/collapse buttons use SVG icons too.
+   Sized to match the chrome-cluster buttons + larger tap targets
+   on touch. */
+#files-header button .ft-svg,
+#files-view-header button .ft-svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+#files-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+@media (hover: none) {
+  /* 44px Apple HIG-recommended tap target on touch devices. */
+  #files-header button {
+    padding: 12px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  #files-header button .ft-svg { width: 18px; height: 18px; }
+}
+
+/* Mobile usability bumps for the tree itself:
+   - Row min-height of 40-44px so taps don't miss
+   - Slightly larger font + more horizontal padding
+   - Active-tap feedback via :active background */
+@media (hover: none) {
+  #files-tree li {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 14px;
+    gap: 10px;
+  }
+  #files-tree li .ft-ic { width: 20px; height: 20px; }
+  #files-tree li .ft-ic .ft-svg { width: 18px; height: 18px; }
+  #files-tree li:active {
+    background: rgba(80, 120, 200, .14);
+  }
 }
 
 #files-tree-msg {

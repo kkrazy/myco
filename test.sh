@@ -2271,7 +2271,7 @@ test_chat_window() {
   # Content-Disposition contract, and the client-side renderFilesList
   # + triggerFileDownload helpers including the stopPropagation guard
   # so a download click doesn't ALSO open the file viewer.
-  node_test_result test/files-git-decorators.test.js "test/files-git-decorators.test.js (11 cases)"
+  node_test_result test/files-git-decorators.test.js "test/files-git-decorators.test.js (12 cases)"
   # 2026-05-17 chat persistence + cross-device + ordering contract.
   # Locks the four pillars documented in CLAUDE.md → "Chat persistence
   # & cross-device consistency": (1) every device sees identical

@@ -181,6 +181,23 @@ t('static guard: renderFilesList emits git-status badge + download button', () =
     'triggerFileDownload helper missing');
 });
 
+t('static guard: file-tree icons use Lucide-style SVGs (match main app chrome)', () => {
+  // Polish 2026-05-17: replaced text-letter badges ("JS", "TS", etc.)
+  // with inline Lucide-style SVGs to match the main app's chrome
+  // cluster (24x24 viewBox, stroke 1.75, currentColor, round caps).
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  assert.ok(/const FT_SVG = \{/.test(app),
+    'FT_SVG icon library missing — main-app icon consistency lost');
+  // Each of the four core icons should be defined.
+  for (const key of ['folder', 'file', 'link', 'download']) {
+    assert.ok(new RegExp(`\\b${key}\\s*:\\s*'<svg`).test(app),
+      `FT_SVG.${key} icon missing`);
+  }
+  // Common Lucide attrs should be present (viewBox, stroke-width 1.75).
+  assert.ok(/viewBox="0 0 24 24"[^>]*stroke="currentColor"[^>]*stroke-width="1\.75"/.test(app),
+    'SVG attrs drifted from the main-app Lucide style (viewBox 24x24, currentColor, stroke 1.75)');
+});
+
 t('static guard: download click stops propagation (does NOT open the file viewer)', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   // Look for the click handler in renderFilesList that branches on the

@@ -191,16 +191,24 @@
       <div id="files-wrap" hidden>
         <div id="files-tree-pane">
           <header id="files-header">
-            <button id="files-tree-back" hidden title="Up">‹</button>
+            <!-- Lucide-style SVG icons to match the main chrome cluster:
+                 stroke 1.75, 24x24 viewBox, currentColor, round caps. -->
+            <button id="files-tree-back" hidden title="Up" aria-label="Up one level">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
             <span id="files-crumb"></span>
-            <button id="files-tree-collapse" title="Collapse the tree to give the file viewer more room" aria-label="Collapse tree pane">◀</button>
+            <button id="files-tree-collapse" title="Collapse the tree to give the file viewer more room" aria-label="Collapse tree pane">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>
+            </button>
           </header>
           <ul id="files-tree"></ul>
           <div id="files-tree-msg" hidden></div>
         </div>
         <div id="files-view-pane" hidden>
           <header id="files-view-header">
-            <button id="files-view-back" title="Back to tree">‹</button>
+            <button id="files-view-back" title="Back to tree" aria-label="Back to tree">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
             <span id="files-view-crumbs"></span>
             <span class="header-spacer"></span>
             <!-- Owner-only edit affordances. JS hides these for viewers

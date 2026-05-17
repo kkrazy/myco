@@ -6680,7 +6680,7 @@ function renderFilesList(entries, truncated, relPath) {
     // route. Click is stopPropagation'd so it doesn't open the file.
     const gitBadge = e.gitStatus ? renderGitStatusBadge(e.gitStatus) : '';
     const downloadBtn = e.kind === 'file'
-      ? `<button class="ft-download" data-action="download" title="Download" aria-label="Download ${escHtml(e.name)}">⬇</button>`
+      ? `<button class="ft-download" data-action="download" title="Download" aria-label="Download ${escHtml(e.name)}">${FT_SVG.download}</button>`
       : '';
     parts.push(
       `<li class="${cls}" data-name="${escHtml(e.name)}" data-kind="${e.kind}">` +
@@ -6756,27 +6756,55 @@ function triggerFileDownload(relPath) {
   try { a.click(); } finally { a.remove(); }
 }
 
-// Compact uppercase badge per file kind/extension. CSS colors it by class.
+// fr-9 polish: Lucide-style SVG icons matching the main app's chrome
+// cluster (stroke 1.75, 24×24 viewBox, currentColor, round caps).
+// Replaces the prior text-letter badges ("JS", "TS", "PY", etc.) that
+// looked inconsistent next to the main app's pure-SVG chrome buttons.
+// Extension still affects color (via .ft-ic.ext-<lang>) so file kind
+// is glanceable without the badge text.
+//
+// Three building-block icons cover the tree:
+//   folder    — dir
+//   file      — regular file (color-tinted by extension via CSS)
+//   link-2    — symlink
+//   circle    — "other" (FIFO, socket, etc.)
+//
+// SVG paths are inlined (1 KB total) so we don't pay an HTTP round
+// trip per icon. currentColor lets CSS tint per extension without
+// duplicating SVG markup.
+const FT_SVG = {
+  folder: '<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+  file:   '<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  fileCode:'<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/><path d="m9 18 3-3-3-3"/><path d="m15 12 3 3-3 3" style="display:none"/></svg>',
+  link:   '<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>',
+  dot:    '<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/></svg>',
+  download:'<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
+};
+
+// Extension → color-class. CSS rules on .ft-ic.ext-<lang> set the
+// stroke color via currentColor inheritance.
+const FT_EXT_CLASS = {
+  js: 'ext-js', mjs: 'ext-js', cjs: 'ext-js', jsx: 'ext-js',
+  ts: 'ext-ts', tsx: 'ext-ts',
+  json: 'ext-json',
+  md: 'ext-md', markdown: 'ext-md',
+  css: 'ext-css', scss: 'ext-css',
+  html: 'ext-html', htm: 'ext-html', svg: 'ext-html', xml: 'ext-html',
+  sh: 'ext-sh', bash: 'ext-sh', zsh: 'ext-sh',
+  py: 'ext-py', rb: 'ext-default', go: 'ext-go', rs: 'ext-rs',
+  yml: 'ext-yml', yaml: 'ext-yml', toml: 'ext-yml',
+  c: 'ext-default', h: 'ext-default', cpp: 'ext-default', hpp: 'ext-default',
+  java: 'ext-default', kt: 'ext-default', swift: 'ext-default', sql: 'ext-default',
+};
+
 function renderFileTreeIcon(entry) {
-  if (entry.kind === 'dir' || entry.kind === 'symlink' || entry.kind === 'other') {
-    return `<span class="ft-ic"></span>`;
-  }
+  if (entry.kind === 'dir')      return `<span class="ft-ic kind-dir">${FT_SVG.folder}</span>`;
+  if (entry.kind === 'symlink')  return `<span class="ft-ic kind-symlink">${FT_SVG.link}</span>`;
+  if (entry.kind === 'other')    return `<span class="ft-ic kind-other">${FT_SVG.dot}</span>`;
+  // file: color-tint by extension; fallback to default muted gray.
   const ext = (entry.name.split('.').pop() || '').toLowerCase();
-  const map = {
-    js: 'JS', mjs: 'JS', cjs: 'JS', jsx: 'JS',
-    ts: 'TS', tsx: 'TS',
-    json: 'JSON', md: 'MD', markdown: 'MD',
-    css: 'CSS', scss: 'CSS',
-    html: 'HTML', htm: 'HTML', svg: 'HTML', xml: 'HTML',
-    sh: 'SH', bash: 'SH', zsh: 'SH',
-    py: 'PY', rb: 'RB', go: 'GO', rs: 'RS',
-    yml: 'YML', yaml: 'YML', toml: 'YML',
-    c: 'C', h: 'C', cpp: 'C++', hpp: 'C++',
-    java: 'JV', kt: 'KT', swift: 'SW', sql: 'SQL',
-  };
-  const cls = map[ext] ? `ext-${ext.replace('+', '')}` : 'ext-default';
-  const label = map[ext] || '';
-  return `<span class="ft-ic ${cls}">${escHtml(label)}</span>`;
+  const cls = FT_EXT_CLASS[ext] || 'ext-default';
+  return `<span class="ft-ic ${cls}">${FT_SVG.file}</span>`;
 }
 
 async function openFileInViewer(relPath) {
@@ -6912,7 +6940,14 @@ function _toggleFilesTreeCollapsed() {
   try { localStorage.setItem('myco_files_tree_collapsed', willCollapse ? '1' : '0'); } catch {}
   const btn = document.getElementById('files-tree-collapse');
   if (btn) {
-    btn.textContent = willCollapse ? '▶' : '◀';
+    // fr-9 polish: swap the Lucide SVG instead of replacing
+    // textContent (which would wipe out the inline SVG). Use
+    // panel-left-close ↔ panel-left-open variants.
+    btn.innerHTML = willCollapse
+      // panel-left-open (expand affordance — chevron points right INTO the panel)
+      ? '<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m13 9 3 3-3 3"/></svg>'
+      // panel-left-close (collapse affordance — chevron points left, hiding the panel)
+      : '<svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>';
     btn.title = willCollapse
       ? 'Expand the tree pane'
       : 'Collapse the tree to give the file viewer more room';
