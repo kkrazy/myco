@@ -2263,7 +2263,15 @@ test_chat_window() {
   # from _enforceChatHistoryCap on every chat mutation. The test
   # exercises the merge math against a minimal DOM-like fake +
   # static-grep guards on the prod implementation in app.js.
-  node_test_result test/chrome-batch-merge.test.js "test/chrome-batch-merge.test.js (7 cases)"
+  node_test_result test/chrome-batch-merge.test.js "test/chrome-batch-merge.test.js (9 cases)"
+  # fr-9: file explorer surfaces git change decorators + download
+  # button. Tests the server-side listDir gitStatus enrichment
+  # (modified/added/untracked/dir-aggregate paths against a real
+  # tempdir git repo), the /sessions/:id/file/download route + its
+  # Content-Disposition contract, and the client-side renderFilesList
+  # + triggerFileDownload helpers including the stopPropagation guard
+  # so a download click doesn't ALSO open the file viewer.
+  node_test_result test/files-git-decorators.test.js "test/files-git-decorators.test.js (11 cases)"
   # 2026-05-17 chat persistence + cross-device + ordering contract.
   # Locks the four pillars documented in CLAUDE.md → "Chat persistence
   # & cross-device consistency": (1) every device sees identical

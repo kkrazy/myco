@@ -6674,10 +6674,20 @@ function renderFilesList(entries, truncated, relPath) {
   for (const e of entries) {
     const cls = `kind-${e.kind}` + (e.heavy ? ' heavy' : '');
     const ic = renderFileTreeIcon(e);
+    // fr-9: git status decorator + download button. Decorator (M/A/D/?/etc.)
+    // sits between the icon and the name. Download button is only on
+    // files (not dirs / symlinks) and triggers the new /file/download
+    // route. Click is stopPropagation'd so it doesn't open the file.
+    const gitBadge = e.gitStatus ? renderGitStatusBadge(e.gitStatus) : '';
+    const downloadBtn = e.kind === 'file'
+      ? `<button class="ft-download" data-action="download" title="Download" aria-label="Download ${escHtml(e.name)}">⬇</button>`
+      : '';
     parts.push(
       `<li class="${cls}" data-name="${escHtml(e.name)}" data-kind="${e.kind}">` +
       `${ic}` +
+      `${gitBadge}` +
       `<span class="ft-name">${escHtml(e.name)}${e.kind === 'dir' ? '/' : ''}</span>` +
+      `${downloadBtn}` +
       `</li>`
     );
   }
@@ -6685,7 +6695,15 @@ function renderFilesList(entries, truncated, relPath) {
   ul.innerHTML = parts.join('');
 
   ul.querySelectorAll('li[data-name]').forEach((li) => {
-    li.addEventListener('click', () => {
+    li.addEventListener('click', (ev) => {
+      // fr-9: download button click — don't open the file viewer.
+      if (ev.target && ev.target.closest && ev.target.closest('[data-action="download"]')) {
+        ev.stopPropagation();
+        const name = li.dataset.name;
+        const child = relPath === '.' ? name : `${relPath}/${name}`;
+        triggerFileDownload(child);
+        return;
+      }
       const name = li.dataset.name;
       const kind = li.dataset.kind;
       const child = relPath === '.' ? name : `${relPath}/${name}`;
@@ -6698,6 +6716,44 @@ function renderFilesList(entries, truncated, relPath) {
       // symlinks/other: no-op in v1
     });
   });
+}
+
+// fr-9: render a colored 1-letter git-status badge. Maps the
+// porcelain code from server-side _gitStatusMap to a visible chip.
+//   M (modified)  → green
+//   A (added)     → green-bright
+//   D (deleted)   → red
+//   R / C         → blue
+//   U (unmerged)  → orange
+//   ? (untracked) → muted
+//   ! (ignored)   → dim
+function renderGitStatusBadge(status) {
+  const s = String(status || '').slice(0, 1);
+  const label = s === '?' ? '?' : (s === '!' ? '!' : s);
+  return `<span class="ft-git-status ft-git-${escHtml(s)}" title="git status: ${escHtml(s)}">${escHtml(label)}</span>`;
+}
+
+// fr-9: trigger a browser download via the /file/download route.
+// Creates a temporary anchor with the auth token in the query
+// string (authedFetch normally adds it as a Bearer header, but the
+// browser's native download navigation can't carry one). Same auth
+// + containment as the read route — the server validates.
+function triggerFileDownload(relPath) {
+  if (!state.activeId) return;
+  const id = state.activeId;
+  const tok = encodeURIComponent(state.token || '');
+  const p = encodeURIComponent(relPath);
+  const url = `/sessions/${encodeURIComponent(id)}/file/download?path=${p}&token=${tok}`;
+  // Anchor with the `download` attribute triggers a Save As dialog
+  // instead of in-page navigation. Filename comes from the server's
+  // Content-Disposition header.
+  const a = document.createElement('a');
+  a.href = url;
+  a.rel = 'noopener noreferrer';
+  // Hint the basename; the Content-Disposition header overrides.
+  a.download = relPath.split('/').pop() || '';
+  document.body.appendChild(a);
+  try { a.click(); } finally { a.remove(); }
 }
 
 // Compact uppercase badge per file kind/extension. CSS colors it by class.

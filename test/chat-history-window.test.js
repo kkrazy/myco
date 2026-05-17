@@ -53,12 +53,13 @@ function seedSession(sid, n) {
 
 console.log('── bug-9: windowed getChatHistory + getChatHistoryLength ──');
 
-t('INITIAL_CHAT_HISTORY_BYTES is exported and equals 1 KB', () => {
-  // Round 5: tight initial. 1 KB lands the user in recent context
-  // instantly. No auto-backfill any more — scroll up to load older
-  // (capped at DEFAULT_CHAT_HISTORY_BYTES total).
-  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 1 * 1024,
-    'initial WS chat-history frame must cap at 1 KB for instant first paint');
+t('INITIAL_CHAT_HISTORY_BYTES is exported and equals 8 KB', () => {
+  // Round 5 was 1 KB; 2026-05-17 bumped to 8 KB (user-requested)
+  // so the first paint shows ~30-50 messages of context instead of
+  // 5-8. The user explicitly wants the latest conversation visible
+  // at the bottom on init, so a bigger initial window pays for itself.
+  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 8 * 1024,
+    'initial WS chat-history frame must cap at 8 KB so first paint shows recent context');
 });
 
 t('DEFAULT_CHAT_HISTORY_BYTES is exported and equals 16 KB', () => {
@@ -273,21 +274,23 @@ t('paginating through 2000 historical messages via opts.before walks the FULL ch
     'must reach BOTH the oldest (msg 0) and the newest (msg 1999) via pagination');
 });
 
-t('app.js has the client-side MAX_CHAT_BYTES rolling cap (round 5)', () => {
-  // The server caps the initial frame at 1 KB, but live `chat` frames
-  // append to state.chatMessages indefinitely without a cap on the
-  // client side. Round 5 adds _capChatMessagesBytes() called from
-  // applyChatHistory + appendChatMessage + _fetchOlderChatFromServer
-  // so the array never exceeds MAX_CHAT_BYTES (16 KB).
+t('app.js has the client-side MAX_CHAT_BYTES rolling cap (1 MB after 2026-05-17 bump)', () => {
+  // The server ships the initial frame capped at INITIAL_CHAT_HISTORY_BYTES
+  // (8 KB), but live `chat` frames + scroll-up load-older grow the
+  // client's state.chatMessages indefinitely otherwise. _capChatMessagesBytes
+  // applies a rolling tail-cap so the array never exceeds MAX_CHAT_BYTES.
+  // 2026-05-17 bumped from 16 KB to 1 MB (user-requested) — mobile RAM
+  // handles 1 MB fine and the cap rarely fires in normal use.
+  // 2026-05-17 also added state._scrolledBack to disable the cap once
+  // the user has explicitly fetched older history (prevents the cap
+  // from dropping the rows they just loaded).
   const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
-  assert.ok(/const MAX_CHAT_BYTES\s*=\s*16\s*\*\s*1024/.test(src),
-    'app.js must define MAX_CHAT_BYTES = 16 * 1024');
+  assert.ok(/const MAX_CHAT_BYTES\s*=\s*1024\s*\*\s*1024/.test(src),
+    'app.js must define MAX_CHAT_BYTES = 1024 * 1024 (1 MB)');
   assert.ok(/function _capChatMessagesBytes/.test(src),
     'app.js must define _capChatMessagesBytes helper');
-  // Should be called from all THREE mutation sites.
-  const callCount = (src.match(/_capChatMessagesBytes\(\)/g) || []).length;
-  assert.ok(callCount >= 3,
-    'app.js must invoke _capChatMessagesBytes from applyChatHistory + appendChatMessage + _fetchOlderChatFromServer (count was ' + callCount + ')');
+  assert.ok(/if \(state\._scrolledBack\) return/.test(src),
+    'app.js _capChatMessagesBytes must short-circuit when state._scrolledBack is set — otherwise scroll-up load-older infinite-loops because the cap evicts fetched rows.');
 });
 
 t('index.js has the GET /sessions/:id/chat/history route', () => {

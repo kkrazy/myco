@@ -662,6 +662,43 @@ app.get('/sessions/:id/file', async (req, res) => {
   } catch (e) { fileApiError(res, e); }
 });
 
+// fr-9: download a file from the session workspace as an attachment.
+// Same auth + containment as the read route, but streams raw bytes
+// (binary-safe) with Content-Disposition: attachment;filename=… so
+// the browser triggers a save dialog instead of rendering inline.
+app.get('/sessions/:id/file/download', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const relPath = req.query.path;
+  if (!relPath) return res.status(400).json({ error: 'path required' });
+  let abs;
+  try {
+    abs = await filesApi.safeJoin(ctx.root, relPath);
+  } catch (e) { return fileApiError(res, e); }
+  // Verify it's a regular file (not a directory or symlink leading
+  // off-root — safeJoin already rejected escaping symlinks).
+  let st;
+  try {
+    st = await require('fs/promises').stat(abs);
+  } catch (e) {
+    if (e.code === 'ENOENT') return res.status(404).json({ error: 'not found' });
+    if (e.code === 'EACCES' || e.code === 'EPERM') return res.status(403).json({ error: 'permission denied' });
+    return res.status(500).json({ error: e.message });
+  }
+  if (!st.isFile()) return res.status(400).json({ error: 'not a regular file' });
+  // Filename for Content-Disposition. Strip any path components and
+  // sanitize for the header so we can't smuggle a CR/LF.
+  const path = require('path');
+  const baseName = path.basename(String(relPath)).replace(/[\r\n"\\]/g, '_').slice(0, 200) || 'file';
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Length', String(st.size));
+  res.setHeader('Content-Disposition', `attachment; filename="${baseName}"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(abs, (err) => {
+    if (err && !res.headersSent) res.status(500).json({ error: err.message });
+  });
+});
+
 app.put('/sessions/:id/file', async (req, res) => {
   const ctx = fileApiPreamble(req, res, 'viewer');
   if (!ctx) return;

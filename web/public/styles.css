@@ -2832,6 +2832,58 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #files-tree li .ft-ic.ext-default { color: rgba(255,255,255,.4); }
 #files-tree li .ft-ic.ext-default::before { content: '·'; font-size: 14px; }
 
+/* fr-9: git status badge — 1-letter chip next to the name. Colors
+   match conventional VCS UI (Modified=green, Added=bright-green,
+   Deleted=red, Renamed=blue, Unmerged=orange, Untracked=muted,
+   Ignored=dim). */
+#files-tree li .ft-git-status {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  border-radius: 3px;
+  padding: 1px 0;
+  flex-shrink: 0;
+}
+#files-tree li .ft-git-M { background: rgba(76, 175, 130, .18); color: #6fd29a; }
+#files-tree li .ft-git-A { background: rgba(120, 220, 130, .20); color: #9be59f; }
+#files-tree li .ft-git-D { background: rgba(220, 120, 120, .20); color: #ff9a9a; }
+#files-tree li .ft-git-R { background: rgba(120, 170, 255, .20); color: #98c0ff; }
+#files-tree li .ft-git-C { background: rgba(120, 170, 255, .20); color: #98c0ff; }
+#files-tree li .ft-git-U { background: rgba(240, 180, 80, .25); color: #ffb86b; }
+#files-tree li .ft-git-\? { background: rgba(140, 140, 140, .18); color: #b0b0b0; }
+#files-tree li .ft-git-\! { background: transparent; color: rgba(255,255,255,.25); }
+
+/* fr-9: per-row download button. Margin-left:auto pushes it to the
+   right edge so the tree's left-aligned name + icon column stays
+   clean. Hidden until the row is hovered (or always-visible on
+   touch devices via @media-hover). */
+#files-tree li .ft-download {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, .35);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity .12s, background .12s, color .12s;
+}
+#files-tree li:hover .ft-download { opacity: 1; }
+#files-tree li .ft-download:hover {
+  background: rgba(120, 170, 255, .14);
+  color: #98c0ff;
+}
+/* Touch devices: no hover → keep the download button always
+   visible (just muted) so users can tap it. */
+@media (hover: none) {
+  #files-tree li .ft-download { opacity: 0.5; }
+}
+
 #files-tree-msg {
   padding: 12px;
   font: 12px 'JetBrains Mono', monospace;

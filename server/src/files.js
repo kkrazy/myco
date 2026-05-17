@@ -18,6 +18,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8192;
@@ -25,6 +26,90 @@ const MAX_LIST_ENTRIES = 2000;
 const HEAVY_DIRS = new Set([
   'node_modules', '.git', '.venv', '__pycache__', 'dist', 'build', '.next',
 ]);
+
+// fr-9: read `git status --porcelain` from a directory and return a
+// Map<relpath-from-git-root, statusChar>. The status char is the
+// 2-char git index+worktree code collapsed to a single user-facing
+// letter:
+//
+//   M = modified (in worktree or staged)
+//   A = added (staged but not yet committed)
+//   D = deleted (in worktree or staged)
+//   R = renamed
+//   C = copied
+//   U = unmerged
+//   ? = untracked
+//   ! = ignored (only shown if --ignored — we don't pass that)
+//
+// Tolerates non-git workspaces (returns empty Map). Cached at the
+// request scope by the caller — single execFile per listDir call.
+async function _gitStatusMap(absRoot) {
+  // Quick check: is this a git working tree?
+  try {
+    await fsp.access(path.join(absRoot, '.git'));
+  } catch {
+    // Could be in a subdir of a git repo; try `git rev-parse` instead
+    // — but that costs a fork. For now, only enrich when .git exists
+    // at the session root. The common case (per-session workspace =
+    // git repo) is covered.
+    return new Map();
+  }
+  let stdout = '';
+  try {
+    stdout = await new Promise((resolve, reject) => {
+      execFile('git', ['-C', absRoot, 'status', '--porcelain', '-uall'],
+        { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
+        (err, stdout) => err ? reject(err) : resolve(stdout));
+    });
+  } catch {
+    // git not available, not a repo, timeout, etc. — degrade silently.
+    return new Map();
+  }
+  const map = new Map();
+  // Each line: "XY path" where X = index status, Y = worktree status.
+  // Rename: "R  oldpath -> newpath". We map both paths to 'R' if a
+  // rename, else use the more-meaningful status (worktree > index).
+  for (const line of stdout.split('\n')) {
+    if (!line || line.length < 4) continue;
+    const idxChar = line[0];
+    const wtChar = line[1];
+    const rest = line.slice(3);
+    let primary = ' ';
+    if (idxChar !== ' ' && idxChar !== '?') primary = idxChar;
+    if (wtChar !== ' ' && wtChar !== '?') primary = wtChar;
+    if (idxChar === '?' && wtChar === '?') primary = '?';
+    if (idxChar === '!' || wtChar === '!') primary = '!';
+    if (idxChar === 'U' || wtChar === 'U') primary = 'U';
+    // Rename: "R  old -> new" — both paths get 'R'.
+    const arrowIdx = rest.indexOf(' -> ');
+    if (idxChar === 'R' && arrowIdx >= 0) {
+      const oldPath = rest.slice(0, arrowIdx);
+      const newPath = rest.slice(arrowIdx + 4);
+      map.set(oldPath, 'R');
+      map.set(newPath, 'R');
+    } else {
+      map.set(rest, primary);
+    }
+  }
+  return map;
+}
+
+// Compute the directory-level git status by checking if ANY child has a
+// non-clean status. Walks the gitStatusMap once and returns the
+// "loudest" status for entries under `dirRelPath`. Used so a parent
+// dir like `src/` shows 'M' when any file inside is modified.
+function _dirGitStatus(gitMap, dirRelPath) {
+  if (!gitMap || gitMap.size === 0) return null;
+  const prefix = dirRelPath === '.' || dirRelPath === '' ? '' : (dirRelPath + '/');
+  // Priority order — show the most actionable status.
+  let best = null;
+  const rank = { '?': 1, '!': 0, 'M': 4, 'A': 5, 'D': 3, 'R': 6, 'C': 6, 'U': 7 };
+  for (const [p, s] of gitMap) {
+    if (prefix && !p.startsWith(prefix)) continue;
+    if (best === null || (rank[s] || 0) > (rank[best] || 0)) best = s;
+  }
+  return best;
+}
 
 function err(code, msg) {
   const e = new Error(msg);
@@ -94,6 +179,13 @@ async function listDir(absRoot, relPath) {
   const truncated = dirents.length > MAX_LIST_ENTRIES;
   if (truncated) dirents.length = MAX_LIST_ENTRIES;
 
+  // fr-9: enrich entries with git status. Single execFile per
+  // listDir call; nonzero cost on large repos but bounded by
+  // 5s timeout. Empty Map for non-git workspaces.
+  const gitMap = await _gitStatusMap(absRoot);
+  const relDir = path.relative(absRoot, abs) || '.';
+  const relDirPrefix = relDir === '.' ? '' : (relDir + '/');
+
   const entries = [];
   for (const d of dirents) {
     const childAbs = path.join(abs, d.name);
@@ -105,12 +197,24 @@ async function listDir(absRoot, relPath) {
     else if (d.isFile()) kind = 'file';
     else if (d.isSymbolicLink()) kind = 'symlink';
     else kind = 'other';
+    // Git status: file → exact-path match; dir → aggregate from
+    // child paths under it.
+    let gitStatus = null;
+    if (gitMap.size > 0) {
+      const entryRelPath = relDirPrefix + d.name;
+      if (kind === 'dir') {
+        gitStatus = _dirGitStatus(gitMap, entryRelPath);
+      } else {
+        gitStatus = gitMap.get(entryRelPath) || null;
+      }
+    }
     entries.push({
       name: d.name,
       kind,
       size: estat.size,
       mtime: estat.mtimeMs,
       heavy: kind === 'dir' && HEAVY_DIRS.has(d.name),
+      ...(gitStatus ? { gitStatus } : {}),
     });
   }
   entries.sort((a, b) => {
