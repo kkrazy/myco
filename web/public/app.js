@@ -3015,30 +3015,44 @@ function _ensureLoadOlderButton(list, hiddenCount) {
   }
   btn.textContent = `Load older (${hiddenCount} hidden) — or scroll up`;
   btn.dataset.hiddenCount = String(hiddenCount);
-  // 2026-05-17: scroll-event trigger.
+  // 2026-05-17: scroll-up triggers load-older via TWO event types:
+  //
+  // 1. `scroll` event — fires when the list is actually overflowing
+  //    and the user scrolls within it. Triggers when scrollTop <= 64
+  //    (near the top). This is the mobile-friendly path.
+  //
+  // 2. `wheel` event — fires when the user moves their wheel/trackpad
+  //    OVER the list, even if the list isn't tall enough to scroll.
+  //    Catches the desktop case where the initial 8KB of messages
+  //    fit in the viewport (no scrollbar, no scroll events) but the
+  //    user still scrolls UP via wheel. Triggers on deltaY < 0
+  //    (upward intent) when scrollTop is already at 0 (top).
   //
   // First attempt used IntersectionObserver, but it auto-fired on
-  // attach (button-at-top was "in view" at scrollTop=0) — undesired
-  // and undid the scroll-to-bottom init.
-  //
-  // Second attempt used a "first scroll is arming, second scroll
-  // fires" gate. Worked on mobile (layout-shift synthetic scroll
-  // armed the flag during init) but broke on desktop (no synthetic
-  // scroll → user had to scroll twice to trigger the load).
-  //
-  // Final shape: just fire on every scroll where scrollTop <= 64
-  // AND list.scrollHeight > clientHeight (avoid firing when the
-  // list is too small to scroll). scrollChatToLatest sets scrollTop
-  // = scrollHeight (MAX), not 0, so the synthetic init scroll won't
-  // trip this. A single-flight gate inside _fetchOlderChatFromServer
-  // protects against rapid-fire on small scrollTop oscillations.
+  // attach. Second attempt used a "first scroll = arming" gate that
+  // broke desktop. Final shape uses both `scroll` AND `wheel` so
+  // every scroll-up gesture — whether the list overflows or not —
+  // triggers the load.
   if (!list.dataset.loadOlderScrollHandlerArmed) {
     list.dataset.loadOlderScrollHandlerArmed = '1';
-    list.addEventListener('scroll', () => {
-      if (list.scrollHeight <= list.clientHeight) return;   // not actually scrollable
-      if (list.scrollTop > 64) return;
+    const maybeFire = () => {
       const currentBtn = list.querySelector('#chat-load-older');
       if (currentBtn && !currentBtn.disabled) _revealOlderChat();
+    };
+    list.addEventListener('scroll', () => {
+      if (list.scrollHeight <= list.clientHeight) return;
+      if (list.scrollTop > 64) return;
+      maybeFire();
+    }, { passive: true });
+    list.addEventListener('wheel', (ev) => {
+      // Only upward intent. If the list is scrollable AND scrollTop
+      // > 64, let the native scroll happen first; the scroll handler
+      // above will catch the eventual top-reach. We only fire here
+      // when the list is at the top already AND user is still trying
+      // to scroll up (the desktop fits-in-viewport case).
+      if (!ev || ev.deltaY >= 0) return;
+      if (list.scrollTop > 0) return;
+      maybeFire();
     }, { passive: true });
   }
 }
