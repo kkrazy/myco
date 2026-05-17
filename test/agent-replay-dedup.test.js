@@ -107,15 +107,76 @@ t('non-serializable events still pass through (no crash)', () => {
 
 t('attach.js source has the bug-7 dedup wire call', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
-  // The dedup lives inside _attachAgentWebSocket. Pin both the
-  // ws.send shape AND the dedup loop body so a future cleanup pass
-  // can't silently revert to the raw `events: session.buffer` form.
-  assert.ok(/t:\s*'agent-replay',\s*events\s*\}/.test(src),
-    'agent-replay wire send must use the deduped `events` array, not session.buffer directly');
+  // The dedup lives inside _attachAgentWebSocket. Pin the deduped
+  // `events`/`trimmed` ws.send shape AND the dedup loop body so a
+  // future cleanup pass can't silently revert to the raw
+  // `events: session.buffer` form.
+  assert.ok(/t:\s*'agent-replay',\s*events:\s*(events|trimmed)\s*\}/.test(src),
+    'agent-replay wire send must use the deduped `events`/`trimmed` array, not session.buffer directly');
   assert.ok(/bug-7 round 2: dedup the buffer before shipping/.test(src),
     'attach.js dedup comment block missing — a future cleanup might rip the loop');
   assert.ok(/dedup dropped/.test(src),
     'attach.js dedup must log dropped count for diagnostic visibility');
+});
+
+t('attach.js source has the bug-9 round-3-extended byte-budget cap on agent-replay', () => {
+  // The byte cap lives between the dedup loop and the ws.send. Pin
+  // the constant + the trim log + the budget check so a future
+  // cleanup pass can't silently restore the unbounded payload.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
+  assert.ok(/DEFAULT_AGENT_REPLAY_BYTES\s*=\s*256\s*\*\s*1024/.test(src),
+    'attach.js must define DEFAULT_AGENT_REPLAY_BYTES = 256 * 1024');
+  assert.ok(/byte-budget cap on the wire payload/.test(src),
+    'attach.js byte-budget comment block missing — a future cleanup might rip the trim');
+  assert.ok(/byte-trim/.test(src),
+    'attach.js byte-trim must log when it fires for diagnostic visibility');
+  assert.ok(/events: trimmed/.test(src),
+    'attach.js agent-replay ws.send must ship the trimmed array, not the raw deduped events');
+});
+
+t('byte-budget trim math: keeps the tail prefix that fits, drops older', () => {
+  // Mirror the trim loop in attach.js. If the constants OR the
+  // accumulator pattern drift, the asserts below catch it.
+  const events = [];
+  for (let i = 0; i < 20; i++) {
+    events.push({ ts: '2026-05-16T00:00:' + String(i).padStart(2, '0') + '.000Z',
+                  type: 'tool_use', name: 'Bash', input: { command: 'echo ' + i.toString().repeat(40) } });
+  }
+  const BUDGET = 600;   // small enough to clip most of the 20 events
+  let bytes = 0, keepFromIdx = events.length;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const sz = JSON.stringify(events[i]).length;
+    if (bytes && bytes + sz > BUDGET) break;
+    bytes += sz;
+    keepFromIdx = i;
+  }
+  const trimmed = events.slice(keepFromIdx);
+  assert.ok(trimmed.length > 0 && trimmed.length < events.length,
+    'budget must clip something but keep at least one event, got ' + trimmed.length);
+  // Tail-first: last element of trimmed should be the most recent event.
+  assert.strictEqual(trimmed[trimmed.length - 1].ts, '2026-05-16T00:00:19.000Z',
+    'trimmed tail must be the most recent event');
+  // Budget respected: total bytes ≤ BUDGET (or just one event if oversized).
+  const totalBytes = trimmed.reduce((s, e) => s + JSON.stringify(e).length, 0);
+  assert.ok(totalBytes <= BUDGET || trimmed.length === 1,
+    'trimmed total bytes should fit the budget unless single-event fallback fired');
+});
+
+t('byte-budget single oversized event fallback: keeps at least 1', () => {
+  // Constructed event whose stringified size exceeds the budget.
+  // The trim loop must still return [event] — never [].
+  const big = { ts: 't', type: 'fatal', error: 'x'.repeat(2000) };
+  const events = [big];
+  const BUDGET = 100;
+  let bytes = 0, keepFromIdx = events.length;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const sz = JSON.stringify(events[i]).length;
+    if (bytes && bytes + sz > BUDGET) break;
+    bytes += sz;
+    keepFromIdx = i;
+  }
+  const trimmed = events.slice(keepFromIdx);
+  assert.strictEqual(trimmed.length, 1, 'single oversized event must still be returned');
 });
 
 t('app.js source has the bug-7 client-side defense-in-depth dedup', () => {

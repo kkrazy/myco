@@ -50,6 +50,15 @@ const CHAT_TEXT_LIMIT = 4000;
 const ASSISTANT_SCROLLBACK_LINES = 40;
 const ASSISTANT_CHAT_CONTEXT = 20;
 
+// bug-9 round 3 (extended): byte budget for the initial agent-replay
+// WS frame. session.buffer holds up to MAX_EVENTS=5000 events; ones
+// further back than the budget are dropped from the wire payload to
+// keep first paint snappy. The on-disk events.jsonl + the in-memory
+// session.buffer are NOT touched — only the agent-replay frame is
+// trimmed. Same 256 KB budget the chat-history frame uses so the
+// total attach payload is bounded predictably.
+const DEFAULT_AGENT_REPLAY_BYTES = 256 * 1024;
+
 // sessionId → AgentSession (or any session-shaped object registered via
 // _registerExternalSession). Module-level Map so getSession/attachWebSocket
 // /state-update plumbing all hit the same store.
@@ -653,7 +662,33 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     if (dropped > 0) {
       console.log(`[agent-replay] ${sessionId} dedup dropped ${dropped} duplicate event(s) from session.buffer of ${session.buffer.length} total — bug-7 backstop`);
     }
-    ws.send(JSON.stringify({ t: 'agent-replay', events }));
+    // bug-9 round 3 (extended): byte-budget cap on the wire payload.
+    // Walk events tail→head accumulating JSON-stringify sizes; keep
+    // the most-recent prefix that fits DEFAULT_AGENT_REPLAY_BYTES.
+    // ALWAYS keep at least one event so a single oversized payload
+    // doesn't make the client think there's no history. session.buffer
+    // + events.jsonl on disk stay intact — only the WS frame is
+    // trimmed. The trade-off: forensics over deep history requires
+    // server-side inspection (jq the events.jsonl), not the chat pane.
+    let trimmed = events;
+    let trimmedBytes = 0;
+    if (events.length) {
+      let bytes = 0;
+      let keepFromIdx = events.length;
+      for (let i = events.length - 1; i >= 0; i--) {
+        let sz;
+        try { sz = JSON.stringify(events[i]).length; } catch { sz = 0; }
+        if (bytes && bytes + sz > DEFAULT_AGENT_REPLAY_BYTES) break;
+        bytes += sz;
+        keepFromIdx = i;
+      }
+      if (keepFromIdx > 0) {
+        trimmedBytes = bytes;
+        trimmed = events.slice(keepFromIdx);
+        console.log(`[agent-replay] ${sessionId} byte-trim ${events.length} → ${trimmed.length} events (${bytes} bytes, budget ${DEFAULT_AGENT_REPLAY_BYTES})`);
+      }
+    }
+    ws.send(JSON.stringify({ t: 'agent-replay', events: trimmed }));
   }
   console.log(`[agent-attach] ${sessionId} user=${user || 'unknown'} mode=agent replay-events=${(session.buffer || []).length} sdk-session=${session.sdkSessionId || 'none'}`);
   if (session.sdkSessionId && !session._iterating && (!session.buffer || !session.buffer.length)) {
