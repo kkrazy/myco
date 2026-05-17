@@ -50,14 +50,18 @@ const CHAT_TEXT_LIMIT = 4000;
 const ASSISTANT_SCROLLBACK_LINES = 40;
 const ASSISTANT_CHAT_CONTEXT = 20;
 
-// bug-9 round 3 (extended): byte budget for the initial agent-replay
-// WS frame. session.buffer holds up to MAX_EVENTS=5000 events; ones
-// further back than the budget are dropped from the wire payload to
-// keep first paint snappy. The on-disk events.jsonl + the in-memory
-// session.buffer are NOT touched — only the agent-replay frame is
-// trimmed. Same 256 KB budget the chat-history frame uses so the
-// total attach payload is bounded predictably.
-const DEFAULT_AGENT_REPLAY_BYTES = 256 * 1024;
+// bug-9 round 5: tight cap. Initial frame ships ONLY 1 KB so the
+// chat pane lights up immediately; no auto-backfill. The 16 KB
+// ceiling is the maximum the agent-replay payload will ever carry,
+// enforced both at the wire (byte-trim before send) and on the
+// client side via state.chatMessages rolling-cap.
+//
+// session.buffer + events.jsonl on disk are NOT touched; only the
+// wire frame is trimmed. Total attach payload is now bounded at
+// ~2 KB peak (1 KB chat-history + 1 KB agent-replay) instead of
+// the round-4 ~128 KB.
+const INITIAL_AGENT_REPLAY_BYTES = 1 * 1024;
+const DEFAULT_AGENT_REPLAY_BYTES = 16 * 1024;
 
 // sessionId → AgentSession (or any session-shaped object registered via
 // _registerExternalSession). Module-level Map so getSession/attachWebSocket
@@ -635,79 +639,78 @@ function attachWebSocket(session, ws, opts = {}) {
   return _attachAgentWebSocket(session, ws, opts);
 }
 
+// bug-9 round 4 — shared shipper for the agent-replay WS frame.
+// Dedups the buffer (bug-7 round 2 backstop) and byte-trims to the
+// passed-in budget. Used twice on attach: once for the small initial
+// frame, once for the backfill ~200ms later. Same frame type both
+// times so the client's existing wipe-and-render handler in
+// _handleAgentFrame absorbs the second send transparently.
+function _shipAgentReplay(session, ws, sessionId, maxBytes, phase) {
+  if (!Array.isArray(session.buffer) || !session.buffer.length) return;
+  if (ws.readyState !== ws.OPEN) return;
+  // Dedup (bug-7 round 2).
+  const seen = new Set();
+  const events = [];
+  let dropped = 0;
+  for (const ev of session.buffer) {
+    let sig;
+    try { sig = JSON.stringify(ev); } catch { sig = null; }
+    if (sig && seen.has(sig)) { dropped++; continue; }
+    if (sig) seen.add(sig);
+    events.push(ev);
+  }
+  if (dropped > 0 && phase === 'initial') {
+    console.log(`[agent-replay] ${sessionId} dedup dropped ${dropped} duplicate event(s) from session.buffer of ${session.buffer.length} total — bug-7 backstop`);
+  }
+  // Byte-trim (bug-9 round 3, parametrized by phase).
+  let trimmed = events;
+  if (events.length && maxBytes > 0) {
+    let bytes = 0;
+    let keepFromIdx = events.length;
+    for (let i = events.length - 1; i >= 0; i--) {
+      let sz;
+      try { sz = JSON.stringify(events[i]).length; } catch { sz = 0; }
+      if (bytes && bytes + sz > maxBytes) break;
+      bytes += sz;
+      keepFromIdx = i;
+    }
+    if (keepFromIdx > 0) {
+      trimmed = events.slice(keepFromIdx);
+      console.log(`[agent-replay] ${sessionId} ${phase} byte-trim ${events.length} → ${trimmed.length} events (${bytes} bytes, budget ${maxBytes})`);
+    }
+  }
+  try { ws.send(JSON.stringify({ t: 'agent-replay', events: trimmed })); } catch {}
+}
+
+// bug-9 round 4 — shared shipper for the chat-history WS frame.
+// Reads from rec.chat via getChatHistory({maxBytes}). Used twice on
+// attach: small initial frame + backfill.
+function _shipChatHistory(ws, sessionId, maxBytes, phase) {
+  if (ws.readyState !== ws.OPEN) return;
+  const history = sessionsMod.getChatHistory(sessionId, { maxBytes });
+  if (!history.length) return;
+  const total = sessionsMod.getChatHistoryLength(sessionId);
+  try {
+    ws.send(JSON.stringify({ t: 'chat-history', messages: history, total }));
+    console.log(`[chat-history] ${sessionId} ${phase} sent ${history.length} of ${total} message(s) within ${maxBytes}-byte budget`);
+  } catch {}
+}
+
 function _attachAgentWebSocket(session, ws, opts = {}) {
   const user = opts.user || null;
   const sessionId = session.sessionId;
 
-  if (Array.isArray(session.buffer) && session.buffer.length) {
-    // bug-7 round 2: dedup the buffer before shipping so the client
-    // doesn't end up rendering identical chrome batches stacked. The
-    // suspected upstream cause is `_hydrateBufferFromDisk` (on a
-    // container restart) overlapping with the SDK's `resume` replay —
-    // the recent events are loaded from events.jsonl AND the SDK
-    // re-walks the same conversation tail, so `_handleEvent` re-emits
-    // them and they end up in `this.buffer` twice. The client wipe in
-    // _handleAgentFrame can't help when the SAME events all arrive in
-    // ONE agent-replay frame; this dedup catches them at the wire.
-    const seen = new Set();
-    const events = [];
-    let dropped = 0;
-    for (const ev of session.buffer) {
-      let sig;
-      try { sig = JSON.stringify(ev); } catch { sig = null; }
-      if (sig && seen.has(sig)) { dropped++; continue; }
-      if (sig) seen.add(sig);
-      events.push(ev);
-    }
-    if (dropped > 0) {
-      console.log(`[agent-replay] ${sessionId} dedup dropped ${dropped} duplicate event(s) from session.buffer of ${session.buffer.length} total — bug-7 backstop`);
-    }
-    // bug-9 round 3 (extended): byte-budget cap on the wire payload.
-    // Walk events tail→head accumulating JSON-stringify sizes; keep
-    // the most-recent prefix that fits DEFAULT_AGENT_REPLAY_BYTES.
-    // ALWAYS keep at least one event so a single oversized payload
-    // doesn't make the client think there's no history. session.buffer
-    // + events.jsonl on disk stay intact — only the WS frame is
-    // trimmed. The trade-off: forensics over deep history requires
-    // server-side inspection (jq the events.jsonl), not the chat pane.
-    let trimmed = events;
-    let trimmedBytes = 0;
-    if (events.length) {
-      let bytes = 0;
-      let keepFromIdx = events.length;
-      for (let i = events.length - 1; i >= 0; i--) {
-        let sz;
-        try { sz = JSON.stringify(events[i]).length; } catch { sz = 0; }
-        if (bytes && bytes + sz > DEFAULT_AGENT_REPLAY_BYTES) break;
-        bytes += sz;
-        keepFromIdx = i;
-      }
-      if (keepFromIdx > 0) {
-        trimmedBytes = bytes;
-        trimmed = events.slice(keepFromIdx);
-        console.log(`[agent-replay] ${sessionId} byte-trim ${events.length} → ${trimmed.length} events (${bytes} bytes, budget ${DEFAULT_AGENT_REPLAY_BYTES})`);
-      }
-    }
-    ws.send(JSON.stringify({ t: 'agent-replay', events: trimmed }));
-  }
+  // bug-9 round 5: single tiny initial frame. No auto-backfill.
+  // The user fetches older history by scrolling up (calls into
+  // GET /sessions/:id/chat/history?before=&limit=…), capped at
+  // 16 KB total in client memory. The agent-replay stream has no
+  // load-older route yet — events older than the 1 KB initial
+  // window stay on disk in events.jsonl for forensic inspection.
+  _shipAgentReplay(session, ws, sessionId, INITIAL_AGENT_REPLAY_BYTES, 'initial');
+  _shipChatHistory(ws, sessionId, sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 'initial');
   console.log(`[agent-attach] ${sessionId} user=${user || 'unknown'} mode=agent replay-events=${(session.buffer || []).length} sdk-session=${session.sdkSessionId || 'none'}`);
   if (session.sdkSessionId && !session._iterating && (!session.buffer || !session.buffer.length)) {
     console.log(`[agent-resume] ${sessionId} ready to resume sdk-session=${session.sdkSessionId} on next user message`);
-  }
-
-  // bug-9: cap the initial chat-history WS frame at the recent
-  // DEFAULT_CHAT_HISTORY_LIMIT messages so the chat pane opens fast
-  // even on multi-hour sessions. Total length goes along so the
-  // client knows whether to surface a "load older" button.
-  // bug-9 round 3: byte-budget cap on the initial chat-history WS
-  // frame (256 KB by default — see sessions.DEFAULT_CHAT_HISTORY_BYTES).
-  // The wire payload + first-paint render workload are bounded by
-  // total size, not message count, so a few large markdown blobs
-  // don't blow the budget like a count-based cap would.
-  const history = sessionsMod.getChatHistory(sessionId, { maxBytes: sessionsMod.DEFAULT_CHAT_HISTORY_BYTES });
-  const total = sessionsMod.getChatHistoryLength(sessionId);
-  if (history.length) {
-    ws.send(JSON.stringify({ t: 'chat-history', messages: history, total }));
   }
 
   if (session._initSnapshot) {
@@ -873,18 +876,11 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   const user = opts.user || null;
   const sessionId = session.sessionId;
 
-  // bug-9: same windowed initial frame as the owner WS — viewers also
-  // benefit from a snappy chat pane open + the same load-older flow.
-  // bug-9 round 3: byte-budget cap on the initial chat-history WS
-  // frame (256 KB by default — see sessions.DEFAULT_CHAT_HISTORY_BYTES).
-  // The wire payload + first-paint render workload are bounded by
-  // total size, not message count, so a few large markdown blobs
-  // don't blow the budget like a count-based cap would.
-  const history = sessionsMod.getChatHistory(sessionId, { maxBytes: sessionsMod.DEFAULT_CHAT_HISTORY_BYTES });
-  const total = sessionsMod.getChatHistoryLength(sessionId);
-  if (history.length) {
-    ws.send(JSON.stringify({ t: 'chat-history', messages: history, total }));
-  }
+  // bug-9 round 5: single tiny initial frame. No backfill — user
+  // scrolls up to fetch older history via /chat/history?before=.
+  // Viewer attach doesn't carry agent-replay frames (no
+  // session.buffer subscription on the read-only path).
+  _shipChatHistory(ws, sessionId, sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 'initial');
   _sendAttachSnapshot(session, ws);
 
   const onChat = (message) => {

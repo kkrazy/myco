@@ -113,25 +113,28 @@ t('attach.js source has the bug-7 dedup wire call', () => {
   // `events: session.buffer` form.
   assert.ok(/t:\s*'agent-replay',\s*events:\s*(events|trimmed)\s*\}/.test(src),
     'agent-replay wire send must use the deduped `events`/`trimmed` array, not session.buffer directly');
-  assert.ok(/bug-7 round 2: dedup the buffer before shipping/.test(src),
+  assert.ok(/bug-7 round 2/.test(src) && /Dedup/.test(src),
     'attach.js dedup comment block missing — a future cleanup might rip the loop');
   assert.ok(/dedup dropped/.test(src),
     'attach.js dedup must log dropped count for diagnostic visibility');
 });
 
-t('attach.js source has the bug-9 round-3-extended byte-budget cap on agent-replay', () => {
-  // The byte cap lives between the dedup loop and the ws.send. Pin
-  // the constant + the trim log + the budget check so a future
-  // cleanup pass can't silently restore the unbounded payload.
+t('attach.js source has the bug-9 round-4 two-phase byte-budget cap on agent-replay', () => {
+  // The byte cap now has TWO budgets (round 4 two-phase): initial
+  // 8 KB for first paint + default 64 KB backfill. Both budgets are
+  // constants in attach.js; both phases call _shipAgentReplay which
+  // dedupes + byte-trims to the passed-in budget.
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
-  assert.ok(/DEFAULT_AGENT_REPLAY_BYTES\s*=\s*256\s*\*\s*1024/.test(src),
-    'attach.js must define DEFAULT_AGENT_REPLAY_BYTES = 256 * 1024');
-  assert.ok(/byte-budget cap on the wire payload/.test(src),
-    'attach.js byte-budget comment block missing — a future cleanup might rip the trim');
+  assert.ok(/INITIAL_AGENT_REPLAY_BYTES\s*=\s*1\s*\*\s*1024/.test(src),
+    'attach.js must define INITIAL_AGENT_REPLAY_BYTES = 1 * 1024 (round 5 tight cap)');
+  assert.ok(/DEFAULT_AGENT_REPLAY_BYTES\s*=\s*16\s*\*\s*1024/.test(src),
+    'attach.js must define DEFAULT_AGENT_REPLAY_BYTES = 16 * 1024 (round 5 rolling cap)');
+  assert.ok(/_shipAgentReplay/.test(src),
+    'attach.js must factor the agent-replay send into _shipAgentReplay so the helper is called twice (initial + backfill)');
   assert.ok(/byte-trim/.test(src),
     'attach.js byte-trim must log when it fires for diagnostic visibility');
-  assert.ok(/events: trimmed/.test(src),
-    'attach.js agent-replay ws.send must ship the trimmed array, not the raw deduped events');
+  assert.ok(/t:\s*'agent-replay',\s*events:\s*trimmed/.test(src),
+    'attach.js agent-replay ws.send must ship the trimmed array');
 });
 
 t('byte-budget trim math: keeps the tail prefix that fits, drops older', () => {

@@ -53,16 +53,19 @@ function seedSession(sid, n) {
 
 console.log('── bug-9: windowed getChatHistory + getChatHistoryLength ──');
 
-t('DEFAULT_CHAT_HISTORY_BYTES is exported and equals 256 KB', () => {
-  // Round 3 (the current cap): byte-budget instead of count. One 30 KB
-  // markdown blob and one 50-char "ok" cost wildly different to
-  // render; a count-based cap couldn't see the difference. The byte
-  // budget bounds wire payload + first-paint workload predictably.
-  // The load-older button + paginated /chat/history?before= route
-  // fetch earlier windows on demand, so a smaller initial budget is
-  // no info loss — just faster first paint.
-  assert.strictEqual(sessionsMod.DEFAULT_CHAT_HISTORY_BYTES, 256 * 1024,
-    'the WS chat-history frame default must cap at 256 KB to keep first paint fast');
+t('INITIAL_CHAT_HISTORY_BYTES is exported and equals 1 KB', () => {
+  // Round 5: tight initial. 1 KB lands the user in recent context
+  // instantly. No auto-backfill any more — scroll up to load older
+  // (capped at DEFAULT_CHAT_HISTORY_BYTES total).
+  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 1 * 1024,
+    'initial WS chat-history frame must cap at 1 KB for instant first paint');
+});
+
+t('DEFAULT_CHAT_HISTORY_BYTES is exported and equals 16 KB', () => {
+  // Round 5: total rolling cap on client-side state.chatMessages. The
+  // /chat/history?before= route also caps per-fetch at this budget.
+  assert.strictEqual(sessionsMod.DEFAULT_CHAT_HISTORY_BYTES, 16 * 1024,
+    'chat-history rolling cap must be 16 KB');
 });
 
 t('DEFAULT_CHAT_HISTORY_LIMIT (legacy count-cap) is still exported for the /chat/history?limit= route', () => {
@@ -190,16 +193,39 @@ t('limit=0 falls through (treated as no-limit, no-op)', () => {
   assert.strictEqual(all.length, 5);
 });
 
-t('attach.js wire calls chat-history with the byte budget', () => {
-  // Source-level guard against a future cleanup pass dropping the
-  // cap and silently restoring the "ship all 500" behavior.
+t('attach.js wire calls chat-history with the small INITIAL_CHAT_HISTORY_BYTES budget (round 5)', () => {
+  // Source-level guards. Round 5 dropped the backfill setTimeout —
+  // initial frame is the only auto-sent one; scroll-up loads more.
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
-  assert.ok(src.includes('DEFAULT_CHAT_HISTORY_BYTES'),
-    'attach.js must reference DEFAULT_CHAT_HISTORY_BYTES when sending the chat-history WS frame');
-  assert.ok(/maxBytes:\s*sessionsMod\.DEFAULT_CHAT_HISTORY_BYTES/.test(src),
-    'attach.js must pass maxBytes: DEFAULT_CHAT_HISTORY_BYTES to getChatHistory');
+  assert.ok(src.includes('INITIAL_CHAT_HISTORY_BYTES'),
+    'attach.js must reference INITIAL_CHAT_HISTORY_BYTES for the tiny initial frame');
+  assert.ok(/_shipChatHistory/.test(src),
+    'attach.js must factor the chat-history send into _shipChatHistory');
   assert.ok(/messages:\s*history,\s*total/.test(src),
     'chat-history WS frame must carry `total` so the client knows whether more exists');
+  // Round-5 contract: no auto-backfill — scroll-up loads more.
+  // Allow setTimeout to exist elsewhere in attach.js (the
+  // SESSION_KEEPALIVE_GRACE_MS kill timer uses one), but not paired
+  // with DEFAULT_*_BYTES.
+  assert.ok(!/setTimeout\([^)]*\)\s*=>\s*\{[\s\S]*?DEFAULT_CHAT_HISTORY_BYTES/.test(src),
+    'attach.js must NOT have a setTimeout that ships the DEFAULT chat-history budget — round-5 dropped the auto-backfill');
+});
+
+t('app.js has the client-side MAX_CHAT_BYTES rolling cap (round 5)', () => {
+  // The server caps the initial frame at 1 KB, but live `chat` frames
+  // append to state.chatMessages indefinitely without a cap on the
+  // client side. Round 5 adds _capChatMessagesBytes() called from
+  // applyChatHistory + appendChatMessage + _fetchOlderChatFromServer
+  // so the array never exceeds MAX_CHAT_BYTES (16 KB).
+  const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  assert.ok(/const MAX_CHAT_BYTES\s*=\s*16\s*\*\s*1024/.test(src),
+    'app.js must define MAX_CHAT_BYTES = 16 * 1024');
+  assert.ok(/function _capChatMessagesBytes/.test(src),
+    'app.js must define _capChatMessagesBytes helper');
+  // Should be called from all THREE mutation sites.
+  const callCount = (src.match(/_capChatMessagesBytes\(\)/g) || []).length;
+  assert.ok(callCount >= 3,
+    'app.js must invoke _capChatMessagesBytes from applyChatHistory + appendChatMessage + _fetchOlderChatFromServer (count was ' + callCount + ')');
 });
 
 t('index.js has the GET /sessions/:id/chat/history route', () => {

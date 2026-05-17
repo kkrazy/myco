@@ -1536,6 +1536,36 @@ function timeAgo(iso) {
 
 // ── chat (collaborator discussion + claude assistant) ────────────────────────
 
+// bug-9 round 5: client-side rolling cap. The chat pane never holds
+// more than MAX_CHAT_BYTES of history in state.chatMessages at any
+// time. Initial attach loads ~1 KB; scroll-up loads more (capped at
+// MAX_CHAT_BYTES); live chat frames append + drop oldest as needed.
+// The DOM cap (CHAT_HARD_CAP / CHAT_VISIBLE_LIMIT) is independent
+// and operates on rendered cards; this cap operates on the array
+// of message objects.
+const MAX_CHAT_BYTES = 16 * 1024;
+
+function _capChatMessagesBytes() {
+  const arr = state.chatMessages;
+  if (!Array.isArray(arr) || arr.length < 2) return;
+  let bytes = 0;
+  let keepFromIdx = arr.length;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    let sz;
+    try { sz = JSON.stringify(arr[i]).length; } catch { sz = 0; }
+    // Always keep at least one message — a single oversized row
+    // shouldn't blank the pane.
+    if (bytes && bytes + sz > MAX_CHAT_BYTES) break;
+    bytes += sz;
+    keepFromIdx = i;
+  }
+  if (keepFromIdx > 0) {
+    const dropped = keepFromIdx;
+    state.chatMessages = arr.slice(keepFromIdx);
+    try { console.log('[chat-cap] dropped ' + dropped + ' oldest message(s) to stay under ' + MAX_CHAT_BYTES + ' bytes (kept ' + state.chatMessages.length + ', ' + bytes + ' bytes)'); } catch {}
+  }
+}
+
 function applyChatHistory(messages, total) {
   state.chatMessages = Array.isArray(messages) ? messages.slice() : [];
   // bug-9: track the server's authoritative total of (non-fromTranscript)
@@ -1547,6 +1577,10 @@ function applyChatHistory(messages, total) {
   state.chatTotal = (typeof total === 'number' && total >= state.chatMessages.length)
     ? total
     : state.chatMessages.length;
+  // bug-9 round 5: enforce the 16 KB rolling cap before render.
+  // Server should have already trimmed this frame to fit, but a
+  // defensive cap covers a stale-client / protocol-drift case.
+  _capChatMessagesBytes();
   // Always land on the latest message — applyChatHistory fires on initial
   // connect and on every reconnect, and the user expects to see the most
   // recent activity, not the start of the thread.
@@ -1639,6 +1673,27 @@ function appendChatMessage(message) {
     }
   }
   state.chatMessages.push(message);
+  // bug-9 round 5: drop oldest if this push pushed total over 16 KB.
+  // If anything was dropped, the DOM is now ahead of state — let
+  // _enforceChatHistoryCap (called downstream from
+  // _appendChatMessageDom) ensure the visible-window archive logic
+  // matches the new shorter array.
+  const lenBefore = state.chatMessages.length;
+  _capChatMessagesBytes();
+  if (state.chatMessages.length < lenBefore) {
+    // Drop the now-dropped chat-msg DOM nodes from the head of the
+    // list. The cap removed (lenBefore - state.chatMessages.length)
+    // oldest messages, so peel the same number off the top of the
+    // rendered .chat-msg list.
+    const drop = lenBefore - state.chatMessages.length;
+    const list = document.getElementById('chat-messages');
+    if (list) {
+      const oldChatMsgs = list.querySelectorAll(':scope > .chat-msg');
+      for (let i = 0; i < drop && i < oldChatMsgs.length; i++) {
+        oldChatMsgs[i].remove();
+      }
+    }
+  }
   _appendChatMessageDom(message);
   _updatePendingMenuFromMessage(message);
   // Every NEW menu broadcast (different hash from anything we've seen)
@@ -2369,6 +2424,54 @@ function scrollChatToLatest() {
 // Called from renderChatPane when re-merging preserved agent cards
 // with newly-rendered chat bubbles by timestamp. Live appends
 // (latest ts) take the appendChild path naturally.
+// bug-9 round 4 / reload-order fix: stable-sort every direct child of
+// #chat-messages by its data-ts attribute. Used as a defensive pass
+// after agent-replay's event loop appends cards at the end (which
+// would otherwise put them after the chat-msg bubbles regardless of
+// the agent events' actual timestamps). The sort is stable + uses
+// appendChild for re-attach (preserves event handlers, dataset, and
+// rendered DOM state — only the position in the parent changes).
+//
+// Skips chat-load-older + any element without a data-ts (those keep
+// their relative order at the front of the list).
+function _resortChatPaneByTs() {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  // Snapshot children + their ts. Skip the load-older button so it
+  // stays pinned at the top of the list.
+  const loadOlder = list.querySelector('#chat-load-older');
+  const items = [];
+  for (const el of list.children) {
+    if (el === loadOlder) continue;
+    items.push({ el, ts: el.dataset && el.dataset.ts ? el.dataset.ts : '' });
+  }
+  if (items.length < 2) return;
+  // Decorate with original index so the sort is stable: equal-ts
+  // elements keep their relative order.
+  for (let i = 0; i < items.length; i++) items[i].idx = i;
+  items.sort((a, b) => {
+    // No-ts elements sort to the TOP (they're either pre-history or
+    // chrome rows whose ts couldn't be determined; keeping them at
+    // the front preserves the existing visual hierarchy).
+    if (!a.ts && b.ts) return -1;
+    if (a.ts && !b.ts) return 1;
+    if (a.ts === b.ts) return a.idx - b.idx;
+    return a.ts < b.ts ? -1 : 1;
+  });
+  // Detect whether the sort actually changes anything before paying
+  // for the DOM re-attaches. Most calls (live append at the tail)
+  // hit this fast path.
+  let needsReflow = false;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].idx !== i) { needsReflow = true; break; }
+  }
+  if (!needsReflow) return;
+  // Re-attach in sorted order. appendChild moves the node, preserving
+  // event handlers + dataset + descendant DOM. Cheap relative to a
+  // re-render.
+  for (const { el } of items) list.appendChild(el);
+}
+
 function _insertChronological(list, el, ts) {
   if (!list || !el) return;
   if (ts) el.dataset.ts = ts;
@@ -2931,6 +3034,12 @@ async function _fetchOlderChatFromServer() {
     const prevTopId = oldest.meta && oldest.meta.transcriptUuid;
     state.chatMessages = data.messages.concat(state.chatMessages);
     if (typeof data.total === 'number') state.chatTotal = data.total;
+    // bug-9 round 5: enforce the 16 KB rolling cap. The prepended
+    // older window plus what was already in memory may exceed it;
+    // _capChatMessagesBytes walks from the tail and slices to fit
+    // — so the user effectively "swaps" the youngest end of their
+    // view for the older content they just scrolled into.
+    _capChatMessagesBytes();
     renderChatPane(/*scrollToBottom*/ false);
     // Restore approximate scroll: find the previously-top message in
     // the rebuilt DOM and scrollIntoView. _ensureLoadOlderButton fires
@@ -3021,6 +3130,14 @@ function renderChatPane(scrollToBottom = false) {
   // happened. With it, a chat bubble at 13:01 + tool call at 13:02
   // + chat bubble at 13:03 render in that order.
   for (const el of preserve) _insertChronological(list, el, el.dataset.ts || '');
+  // Defensive: after the per-element chronological merge, run a
+  // pane-wide stable sort. _insertChronological assumes the rest of
+  // the list is monotonically sorted; if it isn't (e.g. agent-replay
+  // appended cards at the end before this rebuild), the per-element
+  // walk can land an item in the wrong slot. The pane-wide resort
+  // is O(n log n) on a few hundred items — fast — and is a no-op
+  // when the list is already sorted (early-return inside).
+  _resortChatPaneByTs();
   if (scrollToBottom) scrollChatToLatest();
   _bindChatMenuClicks();
   // marked emits ```mermaid``` blocks as <pre><code class="language-mermaid">.
@@ -3554,6 +3671,16 @@ function _handleAgentFrame(msg) {
       console.log('[agent-replay] dedup dropped ' + dropped + ' duplicate event(s) of ' + msg.events.length + ' total (bug-7 root cause is server-side — investigate session.buffer hydrate-vs-emit + events.jsonl trim)');
     }
     for (const ev of deduped) _appendAgentEvent(ev);
+    // bug-9 round 4 + reload-order fix: agent-replay appends events at
+    // the end of #chat-messages, regardless of where they belong
+    // chronologically vs already-rendered chat-msg bubbles. When the
+    // initial chat-history frame arrives BEFORE agent-replay (or any
+    // re-attach order swaps), the agent cards stack at the bottom and
+    // the timeline reads broken until applyChatHistory's preserve-and-
+    // rebuild fires the chronological merge. Even then a brief flash
+    // of wrong order is visible. Re-sort the whole pane by data-ts
+    // here so the order is correct the moment the loop exits.
+    _resortChatPaneByTs();
     return;
   }
   if (msg.t === 'agent-init') {

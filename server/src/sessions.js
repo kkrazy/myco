@@ -656,24 +656,29 @@ async function importExistingTranscripts() {
 // session — fine to keep in sessions.json.
 const MAX_CHAT_MESSAGES = 500;
 
-// bug-9 / round 3: cap the initial chat-history WS frame by BYTE
-// BUDGET rather than message count. A count-based cap treated one
-// 50-char "ok" the same as one 30 KB markdown blob — wildly
-// different first-paint render cost. Byte-budget keeps the wire
-// payload predictable AND the renderMd / mermaid / turn-grouping
-// work bounded.
+// bug-9 / round 5: tight rolling cap. Initial frame is a TINY 1 KB
+// (just enough to land the user in recent context immediately); the
+// chat pane holds AT MOST 16 KB in memory at any time. The user
+// scrolls up to load older windows; live messages append and drop
+// oldest as needed to stay under the 16 KB ceiling.
 //
-// History timeline of the cap:
-//   round 1: 100 messages   — still slow on long sessions
-//   round 2: 25 messages    — better, but variable (a few huge
-//                             markdown replies could still drag)
-//   round 3: 256 KB         — current. byte budget across the JSON-
-//                             stringify size of each kept message.
+// History timeline of the cap (each round was user-driven tighter):
+//   round 1: 100 messages              — too slow on long sessions
+//   round 2: 25 messages               — better, but variable
+//   round 3: 256 KB byte budget        — predictable, but heavy paint
+//   round 4: 8 KB initial + 64 KB total — two-phase (perceptually
+//                                         fast, but the backfill
+//                                         re-render was visible)
+//   round 5: 1 KB initial, 16 KB rolling cap. No auto-backfill. User
+//           scrolls up to fetch more via /chat/history?before=. The
+//           client-side state.chatMessages cap drops the oldest when
+//           live messages would push it over 16 KB.
 //
-// The load-older button + the paginated /chat/history?before=…
-// route fetch earlier windows on demand, so a smaller initial
-// window is no info loss — just faster first paint.
-const DEFAULT_CHAT_HISTORY_BYTES = 256 * 1024;
+// rec.chat on disk (and the MAX_CHAT_MESSAGES=500 entry cap below)
+// is unchanged — only the wire payload + in-memory client state are
+// bounded.
+const INITIAL_CHAT_HISTORY_BYTES = 1 * 1024;
+const DEFAULT_CHAT_HISTORY_BYTES = 16 * 1024;
 
 // Legacy alias — some callsites + tests still reference the old
 // LIMIT constant. Keep it as a small fixed count (used by the
@@ -869,6 +874,7 @@ Object.assign(module.exports, {
   clearChatHistory,
   DEFAULT_CHAT_HISTORY_LIMIT,
   DEFAULT_CHAT_HISTORY_BYTES,
+  INITIAL_CHAT_HISTORY_BYTES,
   // exposed for summarizer + share-info
   loadStore,
   saveStore,
