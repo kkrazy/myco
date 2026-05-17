@@ -333,6 +333,9 @@ class AgentSession extends EventEmitter {
         if (block.type === 'text') {
           const txt = block.text || '';
           this._emit({ type: 'assistant_text', text: txt });
+          // Track per-turn accumulator so the `result` branch below
+          // can dedup. Reset on turn_start; flushed on turn_result.
+          this._currentTurnAssistantText = (this._currentTurnAssistantText || '') + txt;
           // bug-fix (2026-05-17): also persist into rec.chat (tagged
           // `meta.fromAgent:true`) as a durable backstop. See
           // _persistAssistantTextToRecChat for the full contract;
@@ -381,6 +384,31 @@ class AgentSession extends EventEmitter {
     }
     if (m.type === 'result') {
       this._lastStatus = null;  // SDK signals completion; no spinner equivalent
+      // 2026-05-17 round 4: the SDK's `result` message carries `result:
+      // string` — the final assistant reply. Sometimes (short single-turn
+      // replies; cached fast-path responses) the reply ONLY ships here,
+      // never as a separate `assistant` message with text blocks. Without
+      // this branch the user sees claude's reply INSIDE the turn_result
+      // chrome card body — never as a chat-msg bubble — and it doesn't
+      // persist to rec.chat (so tab-switch loses it).
+      //
+      // Dedup contract: if the per-turn accumulator already contains
+      // the result text (or extends it / is extended by it), the
+      // assistant_text path already covered it — skip to avoid the
+      // duplicate-render the user explicitly called out ("no duplicate
+      // msg"). Otherwise emit + persist a fresh assistant_text bubble.
+      const accumulated = (this._currentTurnAssistantText || '').trim();
+      const resultText = String(m.result || '').trim();
+      const subtype = m.subtype || '';
+      // Only emit for success results (error subtype carries diagnostics,
+      // not claude's reply, and would pollute the bubble stream).
+      if (resultText && subtype === 'success' && !this._textCoversSubject(accumulated, resultText)) {
+        this._emit({ type: 'assistant_text', text: resultText });
+        this._persistAssistantTextToRecChat(resultText);
+      }
+      // Reset the per-turn accumulator now that the turn is done so
+      // the next turn starts clean.
+      this._currentTurnAssistantText = '';
       this._emit({
         type: 'turn_result',
         subtype: m.subtype,
@@ -833,6 +861,27 @@ class AgentSession extends EventEmitter {
   // Net: rec.chat now keeps a durable, paginated record of claude's
   // text for forensic / future-tooling use (e.g., extractor /readChatTail,
   // future "load-claude-history" pagination). UI behavior is unchanged.
+  // Returns true if `cover` already contains the meaningful content of
+  // `subject` — used to dedup the SDK's `result` text against the
+  // per-turn assistant_text accumulator. Whitespace + simple Markdown
+  // wrapping differences are tolerated:
+  //   - covered if subject is empty
+  //   - covered if cover.contains(subject) (subject is a substring)
+  //   - covered if subject.contains(cover) AND cover is at least 90%
+  //     of subject's length (the result is just a slight extension —
+  //     the accumulator basically captured the same thing)
+  // Otherwise returns false → the caller should emit a fresh bubble.
+  _textCoversSubject(cover, subject) {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const c = norm(cover);
+    const s = norm(subject);
+    if (!s) return true;
+    if (!c) return false;
+    if (c.includes(s)) return true;
+    if (s.includes(c) && c.length >= Math.floor(s.length * 0.9)) return true;
+    return false;
+  }
+
   _persistAssistantTextToRecChat(text) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
@@ -945,6 +994,11 @@ class AgentSession extends EventEmitter {
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
     const envelope = { type: 'user', message: { role: 'user', content: trimmed } };
+    // Reset the per-turn assistant-text accumulator (used by the
+    // `result` branch in _handleEvent to dedup the SDK's final
+    // result text against any text already streamed via assistant
+    // messages this turn).
+    this._currentTurnAssistantText = '';
     this._emit({ type: 'turn_start', prompt: trimmed.slice(0, 200) });
     if (this._iterating && this._msgQueue) {
       // Hot path: SDK is already iterating, just push.

@@ -431,6 +431,69 @@ t('USER-REPORT REGRESSION 2026-05-17 round 2: renderChatMessage emits data-ts at
     'renderChatMessage no longer emits data-ts in markup — menu rows can float to TOP of chat (user reported regression).');
 });
 
+// USER-REPORT REGRESSION 2026-05-17 round 4 (per best-practices rule 5):
+// User: "the claude reply is in a 'success' chrome item, but not shown
+// in the chat, looks like we need to get the 'claude reply' from
+// multiple item types". For short single-turn replies, the SDK
+// sometimes ships claude's text ONLY in the result message
+// (SDKResultSuccess.result), never as a separate `assistant` message
+// with text blocks. _handleEvent's `result` branch must capture this
+// text too — deduped against the per-turn assistant_text accumulator
+// to honor the user's "no duplicate msg" requirement.
+t('USER-REPORT REGRESSION 2026-05-17 round 4: result branch emits assistant_text when SDK only ships text via result', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'agent-session.js'), 'utf8');
+  // Locate the m.type === 'result' branch.
+  const lines = src.split('\n');
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/m\.type\s*===\s*['"]result['"]/.test(lines[i])) { start = i; break; }
+  }
+  assert.ok(start >= 0, 'result branch not found in _handleEvent');
+  const branch = lines.slice(start, start + 50).join('\n');
+  assert.ok(/this\._emit\(\s*\{\s*type:\s*['"]assistant_text['"]/.test(branch),
+    'result branch no longer emits assistant_text when result.result has text — short SDK replies will be lost (only visible inside the chrome card body, not as a chat bubble).');
+  assert.ok(/_persistAssistantTextToRecChat\(resultText\)/.test(branch),
+    'result branch no longer persists result text to rec.chat — tab-switch will lose short replies.');
+  assert.ok(/_textCoversSubject\(accumulated,\s*resultText\)/.test(branch),
+    'result branch no longer dedupes against per-turn assistant_text accumulator — risk of duplicate render (user said "no duplicate msg").');
+});
+
+t('USER-REPORT REGRESSION 2026-05-17 round 4: _textCoversSubject dedup helper handles substring + 90% extension cases', () => {
+  // Direct unit-test the helper by reflecting it out via a Function.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'agent-session.js'), 'utf8');
+  const m = src.match(/_textCoversSubject\(cover,\s*subject\)\s*\{[\s\S]*?\n\s{2}\}/);
+  assert.ok(m, '_textCoversSubject helper not found');
+  // Build a callable from the body (works because the helper has no
+  // closure / instance dependencies).
+  const body = m[0].replace(/_textCoversSubject\(cover,\s*subject\)\s*\{/, '');
+  // Trim the trailing `  }` so we have just the body, then wrap.
+  const fnBody = body.replace(/\n\s{2}\}\s*$/, '');
+  const fn = new Function('cover', 'subject', fnBody);
+  // Empty subject → always covered.
+  assert.strictEqual(fn('anything', ''), true);
+  // Empty cover + non-empty subject → not covered.
+  assert.strictEqual(fn('', 'Hi!'), false);
+  // Direct substring → covered.
+  assert.strictEqual(fn('Hi! How are you?', 'Hi!'), true);
+  // Subject extends cover by < 10% → covered (slight tail).
+  assert.strictEqual(fn('Hi! Hello!', 'Hi! Hello! .'), true);
+  // Subject is brand new content → not covered.
+  assert.strictEqual(fn('Hi!', 'A whole different answer goes here.'), false);
+});
+
+t('USER-REPORT REGRESSION 2026-05-17 round 4: write() resets _currentTurnAssistantText accumulator', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'agent-session.js'), 'utf8');
+  const lines = src.split('\n');
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s+write\(text\)\s*\{/.test(lines[i])) { start = i; break; }
+  }
+  assert.ok(start >= 0, 'write() method not found');
+  const body = lines.slice(start, start + 30).join('\n');
+  assert.ok(/this\._currentTurnAssistantText\s*=\s*['"]\s*['"]/.test(body),
+    'write() no longer resets _currentTurnAssistantText — dedup accumulator will carry across turns and incorrectly suppress new result text.');
+});
+
 // USER-SUGGESTION 2026-05-17 round 3: monotonic sequence # ordering.
 // User: "what about add a sequence # to each msg as it appends to
 // the chat pane and display in the order according to the sequence #".
