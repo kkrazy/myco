@@ -785,6 +785,15 @@ class AgentSession extends EventEmitter {
 
   _emit(event) {
     const stamped = { ts: new Date().toISOString(), ...event };
+    // Monotonic per-session sequence number. Used by the client to
+    // sort chat-pane rows independently of ts (more robust under
+    // clock drift / out-of-order delivery / missing ts). Same
+    // counter is shared with chat-msg appends in sessions.js, so
+    // chat bubbles + agent cards interleave correctly by seq.
+    try {
+      const sessionsMod = require('./sessions');
+      if (sessionsMod.allocSeq) stamped.seq = sessionsMod.allocSeq(this.sessionId);
+    } catch {}
     this.buffer.push(stamped);
     if (this.buffer.length > MAX_EVENTS) {
       this.buffer = this.buffer.slice(-MAX_EVENTS);
@@ -865,7 +874,20 @@ class AgentSession extends EventEmitter {
       }
       if (events.length) {
         this.buffer = events;
-        console.log(`[events-persist] ${this.sessionId} hydrated ${events.length} event(s) from ${this._eventsFile}`);
+        // Bump the sessions.js seq counter so newly-allocated seqs
+        // don't collide with events persisted before the last
+        // process exit. Find max seq in the hydrated buffer.
+        let maxSeq = 0;
+        for (const ev of events) {
+          if (typeof ev.seq === 'number' && ev.seq > maxSeq) maxSeq = ev.seq;
+        }
+        if (maxSeq > 0) {
+          try {
+            const sessionsMod = require('./sessions');
+            if (sessionsMod.bumpSeqAtLeast) sessionsMod.bumpSeqAtLeast(this.sessionId, maxSeq);
+          } catch {}
+        }
+        console.log(`[events-persist] ${this.sessionId} hydrated ${events.length} event(s) from ${this._eventsFile} (maxSeq=${maxSeq})`);
       }
     } catch (err) {
       console.warn(`[events-persist] ${this.sessionId} hydrate failed: ${err.message}`);

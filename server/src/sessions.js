@@ -809,11 +809,73 @@ function getChatHistoryLength(sessionId, opts) {
   return n;
 }
 
+// Allocate the next monotonic sequence number for a session.
+// rec.seqCounter is the per-session in-memory counter (initialized
+// lazily from max(rec.chat[].meta.seq) on first call). Used to stamp
+// every chat-msg + every agent-event with a strictly increasing
+// integer so the client can sort by seq instead of ts (which is
+// fragile under clock drift / out-of-order deliveries / missing ts).
+//
+// agent-events bump the counter in-memory only (no saveStore call —
+// disk write per event is expensive). On respawn, the counter is
+// rehydrated from max(rec.chat seq) + AgentSession._hydrateBufferFromDisk
+// calls bumpSeqAtLeast(maxBufferSeq) to account for events that
+// landed since the last chat-msg append.
+//
+// Chat-msg appends DO call saveStore (already happening for the
+// rec.chat write) so the counter persists to disk every time it
+// matters for cross-restart durability.
+function _initSeqCounter(rec) {
+  if (typeof rec.seqCounter === 'number') return;
+  let max = 0;
+  if (Array.isArray(rec.chat)) {
+    for (const c of rec.chat) {
+      const s = c && c.meta && c.meta.seq;
+      if (typeof s === 'number' && s > max) max = s;
+    }
+  }
+  rec.seqCounter = max;
+}
+
+function allocSeq(sessionId) {
+  const store = loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return 0;
+  _initSeqCounter(rec);
+  rec.seqCounter += 1;
+  return rec.seqCounter;
+}
+
+// Ensure the in-memory counter is at LEAST `minSeq`. Called by
+// AgentSession after hydrating its event buffer from disk so seq
+// allocations don't collide with events persisted before the last
+// process exit.
+function bumpSeqAtLeast(sessionId, minSeq) {
+  const store = loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return 0;
+  _initSeqCounter(rec);
+  if (typeof minSeq === 'number' && minSeq > rec.seqCounter) rec.seqCounter = minSeq;
+  return rec.seqCounter;
+}
+
 function appendChatMessage(sessionId, msg) {
   const store = loadStore();
   const rec = store.sessions[sessionId];
   if (!rec) return null;
   if (!Array.isArray(rec.chat)) rec.chat = [];
+  // Stamp meta.seq if the caller didn't provide one. Live arrival
+  // order = persisted seq order = render order.
+  if (!msg.meta) msg.meta = {};
+  if (typeof msg.meta.seq !== 'number') {
+    _initSeqCounter(rec);
+    rec.seqCounter += 1;
+    msg.meta.seq = rec.seqCounter;
+  } else {
+    // Caller-provided seq — make sure the counter doesn't fall behind.
+    _initSeqCounter(rec);
+    if (msg.meta.seq > rec.seqCounter) rec.seqCounter = msg.meta.seq;
+  }
   rec.chat.push(msg);
   if (rec.chat.length > MAX_CHAT_MESSAGES) {
     rec.chat = rec.chat.slice(-MAX_CHAT_MESSAGES);
@@ -921,6 +983,8 @@ Object.assign(module.exports, {
   getChatHistoryLength,
   appendChatMessage,
   clearChatHistory,
+  allocSeq,
+  bumpSeqAtLeast,
   DEFAULT_CHAT_HISTORY_LIMIT,
   DEFAULT_CHAT_HISTORY_BYTES,
   INITIAL_CHAT_HISTORY_BYTES,

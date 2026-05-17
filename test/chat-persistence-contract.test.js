@@ -431,6 +431,93 @@ t('USER-REPORT REGRESSION 2026-05-17 round 2: renderChatMessage emits data-ts at
     'renderChatMessage no longer emits data-ts in markup — menu rows can float to TOP of chat (user reported regression).');
 });
 
+// USER-SUGGESTION 2026-05-17 round 3: monotonic sequence # ordering.
+// User: "what about add a sequence # to each msg as it appends to
+// the chat pane and display in the order according to the sequence #".
+// Implementation: server-side allocSeq + bumpSeqAtLeast stamp
+// rec.chat.meta.seq + agent-event.seq with a monotonic per-session
+// counter; client-side _insertChronological + _resortChatPaneByTs
+// prefer data-seq (numeric) over data-ts (string) when both sides
+// have one. Eliminates ordering fragility from clock drift, missing
+// ts, mixed render paths.
+t('USER-SUGGESTION 2026-05-17: sessions.allocSeq + bumpSeqAtLeast exported', () => {
+  const sessions = require('../server/src/sessions');
+  assert.strictEqual(typeof sessions.allocSeq, 'function',
+    'sessions.allocSeq missing — server can no longer stamp monotonic seq on chat-msg/agent-event.');
+  assert.strictEqual(typeof sessions.bumpSeqAtLeast, 'function',
+    'sessions.bumpSeqAtLeast missing — AgentSession hydrate cannot reconcile counter after restart.');
+});
+
+t('USER-SUGGESTION 2026-05-17: allocSeq returns strictly increasing values per session', () => {
+  const sid = 'sess-seq-1';
+  seed(sid);
+  const sessions = require('../server/src/sessions');
+  const a = sessions.allocSeq(sid);
+  const b = sessions.allocSeq(sid);
+  const c = sessions.allocSeq(sid);
+  assert.strictEqual(typeof a, 'number');
+  assert.ok(b > a, `seq not monotonic: ${a} → ${b}`);
+  assert.ok(c > b, `seq not monotonic: ${b} → ${c}`);
+});
+
+t('USER-SUGGESTION 2026-05-17: appendChatMessage auto-stamps meta.seq', () => {
+  const sid = 'sess-seq-append';
+  seed(sid);
+  const sessions = require('../server/src/sessions');
+  sessions.appendChatMessage(sid, { user: 'alice', text: 'a', ts: '2026-05-17T01:00:00.001Z' });
+  sessions.appendChatMessage(sid, { user: 'alice', text: 'b', ts: '2026-05-17T01:00:00.002Z' });
+  sessions.appendChatMessage(sid, { user: 'alice', text: 'c', ts: '2026-05-17T01:00:00.003Z' });
+  const rows = chatOf(sid);
+  assert.strictEqual(typeof rows[0].meta.seq, 'number');
+  assert.ok(rows[1].meta.seq > rows[0].meta.seq);
+  assert.ok(rows[2].meta.seq > rows[1].meta.seq);
+});
+
+t('USER-SUGGESTION 2026-05-17: bumpSeqAtLeast advances counter past externally-stamped values', () => {
+  const sid = 'sess-seq-bump';
+  seed(sid);
+  const sessions = require('../server/src/sessions');
+  sessions.bumpSeqAtLeast(sid, 9999);
+  const next = sessions.allocSeq(sid);
+  assert.ok(next > 9999, `bumpSeqAtLeast didn't advance counter: next=${next}`);
+});
+
+t('USER-SUGGESTION 2026-05-17: agent-session.js _emit stamps seq via allocSeq', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'agent-session.js'), 'utf8');
+  assert.ok(/sessionsMod\.allocSeq\(this\.sessionId\)/.test(src),
+    '_emit no longer calls sessions.allocSeq — agent-events will lack seq and lose seq-based ordering.');
+  assert.ok(/sessionsMod\.bumpSeqAtLeast\(this\.sessionId,\s*maxSeq\)/.test(src),
+    '_hydrateBufferFromDisk no longer calls bumpSeqAtLeast — post-restart seq allocations may collide with persisted events.');
+});
+
+t('USER-SUGGESTION 2026-05-17: client _resortChatPaneByTs prefers data-seq over data-ts', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  // Locate the function body and check it reads data-seq + compares
+  // numerically before falling back to ts string compare.
+  const m = app.match(/function _resortChatPaneByTs\(\)[\s\S]*?\n\}/);
+  assert.ok(m, '_resortChatPaneByTs not found');
+  const body = m[0];
+  assert.ok(/dataset\.seq/.test(body),
+    '_resortChatPaneByTs no longer reads data-seq — seq-based ordering broken.');
+  assert.ok(/a\.seq\s*-\s*b\.seq|a\.seq\s*<\s*b\.seq/.test(body),
+    '_resortChatPaneByTs no longer does numeric seq comparison.');
+});
+
+t('USER-SUGGESTION 2026-05-17: client _insertChronological reads data-seq for placement', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  const m = app.match(/function _insertChronological\(list, el, ts\)[\s\S]*?\n\}/);
+  assert.ok(m, '_insertChronological not found');
+  const body = m[0];
+  assert.ok(/dataset\.seq/.test(body),
+    '_insertChronological no longer reads data-seq — live arrivals won\'t place by seq.');
+});
+
+t('USER-SUGGESTION 2026-05-17: renderChatMessage emits data-seq when meta.seq is set', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  assert.ok(/seqAttr\s*=\s*seq\s*!=\s*null\s*\?\s*`\s*data-seq="\$\{seq\}"`/.test(app),
+    'renderChatMessage no longer emits data-seq attr — chat-msg rows lose seq-based ordering.');
+});
+
 t('USER-REPORT REGRESSION 2026-05-17 round 2: _appendChatMessageDom inserts chronologically (not appendChild)', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   // Locate _appendChatMessageDom and assert it uses _insertChronological

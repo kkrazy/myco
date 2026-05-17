@@ -1996,17 +1996,17 @@ function _appendChatMessageDom(message) {
   const node = _htmlToNode(html);
   if (!node) return;
   if (message.ts) node.dataset.ts = message.ts;
-  // 2026-05-17: chronological insertion. Plain appendChild() puts
-  // every live message at the end, but live arrival order ≠ message
-  // ts order — a delayed menu broadcast (claude asks permission AFTER
-  // some chrome activity already landed) used to plant the menu at
-  // the bottom even though its ts placed it earlier. Worse, a
-  // missing-or-stale data-ts on prior rows then made _resortChatPaneByTs
-  // float the menu to the TOP (user reported "permission result
-  // appeared before my input" on 2026-05-17 round 2). Always insert by
-  // ts so the live append matches the chronological order the post-
-  // resort would produce.
-  if (message.ts) {
+  // 2026-05-17 round 3: stamp data-seq (server-allocated monotonic
+  // counter) for sort-by-seq. data-seq takes precedence over data-ts
+  // in _insertChronological + _resortChatPaneByTs.
+  if (message.meta && typeof message.meta.seq === 'number') {
+    node.dataset.seq = String(message.meta.seq);
+  }
+  // Chronological insertion. Plain appendChild() puts every live
+  // message at the end, but live arrival order ≠ message order — a
+  // delayed menu broadcast used to plant at the bottom even when its
+  // seq placed it earlier. _insertChronological prefers seq when set.
+  if (message.ts || (message.meta && typeof message.meta.seq === 'number')) {
     _insertChronological(list, node, message.ts);
   } else {
     list.appendChild(node);
@@ -2497,22 +2497,40 @@ function scrollChatToLatest() {
 function _resortChatPaneByTs() {
   const list = document.getElementById('chat-messages');
   if (!list) return;
-  // Snapshot children + their ts. Skip the load-older button so it
-  // stays pinned at the top of the list.
+  // Snapshot children + their seq/ts. Skip the load-older button so
+  // it stays pinned at the top of the list. data-seq is the
+  // authoritative ordering key (server-stamped monotonic counter,
+  // see sessions.allocSeq); data-ts is the fallback when seq is
+  // missing (older buffer events, pre-seq sessions).
   const loadOlder = list.querySelector('#chat-load-older');
   const items = [];
   for (const el of list.children) {
     if (el === loadOlder) continue;
-    items.push({ el, ts: el.dataset && el.dataset.ts ? el.dataset.ts : '' });
+    const seqStr = el.dataset && el.dataset.seq;
+    const seq = seqStr != null && seqStr !== '' ? parseInt(seqStr, 10) : null;
+    items.push({
+      el,
+      seq: Number.isFinite(seq) ? seq : null,
+      ts: el.dataset && el.dataset.ts ? el.dataset.ts : '',
+    });
   }
   if (items.length < 2) return;
-  // Decorate with original index so the sort is stable: equal-ts
+  // Decorate with original index so the sort is stable: equal-key
   // elements keep their relative order.
   for (let i = 0; i < items.length; i++) items[i].idx = i;
   items.sort((a, b) => {
-    // No-ts elements sort to the TOP (they're either pre-history or
-    // chrome rows whose ts couldn't be determined; keeping them at
-    // the front preserves the existing visual hierarchy).
+    // Prefer seq when both sides have one — it's the authoritative
+    // monotonic ordering (immune to clock drift).
+    if (a.seq != null && b.seq != null) {
+      if (a.seq === b.seq) return a.idx - b.idx;
+      return a.seq - b.seq;
+    }
+    // Mixed seq/no-seq: rows WITH seq are newer than rows without
+    // (seq was introduced 2026-05-17; pre-seq rows are older).
+    if (a.seq != null && b.seq == null) return 1;
+    if (a.seq == null && b.seq != null) return -1;
+    // Both no-seq: fall back to ts. No-ts elements sort to the TOP
+    // (legacy behavior — chrome rows / pre-history).
     if (!a.ts && b.ts) return -1;
     if (a.ts && !b.ts) return 1;
     if (a.ts === b.ts) return a.idx - b.idx;
@@ -2535,15 +2553,39 @@ function _resortChatPaneByTs() {
 function _insertChronological(list, el, ts) {
   if (!list || !el) return;
   if (ts) el.dataset.ts = ts;
+  // Prefer numeric seq when set on the inserting element (server-
+  // stamped monotonic counter). Fall back to ts string comparison
+  // when seq is missing. Matches _resortChatPaneByTs's comparator.
+  const seqStr = el.dataset && el.dataset.seq;
+  const elSeq = seqStr != null && seqStr !== '' ? parseInt(seqStr, 10) : null;
   const tsStr = el.dataset.ts || '';
-  if (!tsStr) { list.appendChild(el); return; }
+  if (elSeq == null && !tsStr) { list.appendChild(el); return; }
   const children = list.children;
   for (let i = children.length - 1; i >= 0; i--) {
     const c = children[i];
     if (c === el) continue;
     if (c.id === 'chat-load-older') continue;
-    const cts = c.dataset.ts || '';
-    if (!cts || cts <= tsStr) {
+    const cSeqStr = c.dataset && c.dataset.seq;
+    const cSeq = cSeqStr != null && cSeqStr !== '' ? parseInt(cSeqStr, 10) : null;
+    let cmp = null;   // -1 / 0 / +1 — cmp(c, el): c older → -1, c newer → +1
+    if (cSeq != null && elSeq != null) {
+      cmp = cSeq < elSeq ? -1 : (cSeq > elSeq ? 1 : 0);
+    } else if (cSeq != null && elSeq == null) {
+      // c has seq, el doesn't → el is older (pre-seq legacy)
+      cmp = 1;
+    } else if (cSeq == null && elSeq != null) {
+      // c doesn't have seq, el does → c is older
+      cmp = -1;
+    } else {
+      // Both no-seq, fall back to ts.
+      const cts = c.dataset.ts || '';
+      if (!cts && !tsStr) cmp = 0;
+      else if (!cts) cmp = -1;  // legacy no-ts sorts oldest
+      else if (!tsStr) cmp = 1;
+      else cmp = cts < tsStr ? -1 : (cts > tsStr ? 1 : 0);
+    }
+    if (cmp <= 0) {
+      // c is older-or-equal to el → insert el after c
       const after = c.nextSibling;
       if (after) list.insertBefore(el, after); else list.appendChild(el);
       return;
@@ -3398,7 +3440,14 @@ function renderChatMessage(m, isActiveMenu) {
   // claude's permission-ask appear ABOVE prior chrome batches — the
   // out-of-order rendering the user reported on 2026-05-17 round 2.
   const tsAttr = m.ts ? ` data-ts="${escHtml(m.ts)}"` : '';
-  return `<div class="${cls}"${rowAttrs}${tsAttr}>
+  // 2026-05-17 round 3: data-seq (monotonic per-session sequence
+  // number stamped server-side by sessions.allocSeq) is the
+  // authoritative ordering key. Older messages without seq fall
+  // back to data-ts. _insertChronological + _resortChatPaneByTs
+  // prefer numeric seq when present on both sides of a comparison.
+  const seq = m.meta && typeof m.meta.seq === 'number' ? m.meta.seq : null;
+  const seqAttr = seq != null ? ` data-seq="${seq}"` : '';
+  return `<div class="${cls}"${rowAttrs}${tsAttr}${seqAttr}>
     <div class="chat-meta"><span class="chat-user">${escHtml(m.user || '?')}</span><span class="chat-ts">${escHtml(ts)}</span></div>
     ${textHtml}
     ${optsHtml}
@@ -4134,8 +4183,11 @@ function _appendAgentEvent(ev) {
   }
   // First assistant_text in a new streaming run: build a chat-msg
   // bubble with `from-claude` styling. Carries data-ev-type +
-  // data-ts + data-assistant-text so the merge branch above + the
-  // post-replay _resortChatPaneByTs can find / extend / sort it.
+  // data-ts + data-seq + data-assistant-text so the merge branch
+  // above + the post-replay _resortChatPaneByTs can find / extend /
+  // sort it. data-seq is the authoritative ordering attribute (see
+  // sessions.js allocSeq); data-ts is a fallback when seq is missing
+  // (older buffer events / non-SDK sessions).
   if (ev.type === 'assistant_text') {
     const bubble = document.createElement('div');
     bubble.className = 'chat-msg from-claude chat-msg-from-agent';
@@ -4143,6 +4195,7 @@ function _appendAgentEvent(ev) {
     bubble.dataset.combineCount = '1';
     bubble.dataset.assistantText = ev.text || '';
     bubble.dataset.ts = ev.ts || new Date().toISOString();
+    if (typeof ev.seq === 'number') bubble.dataset.seq = String(ev.seq);
     const meta = document.createElement('div');
     meta.className = 'chat-meta';
     meta.innerHTML = `<span class="chat-user">claude</span><span class="chat-ts">${escHtml(ts)}</span>`;
@@ -4151,7 +4204,11 @@ function _appendAgentEvent(ev) {
     body.className = 'chat-text';
     body.innerHTML = renderMd(ev.text || '');
     bubble.appendChild(body);
-    pane.appendChild(bubble);
+    // Use chronological insertion (by seq if available, else ts) so
+    // streaming arrivals land in the right slot even if other rows
+    // pre-date them. Plain appendChild lands at end; that breaks
+    // ordering when chat-msg / chrome rows were rendered first.
+    _insertChronological(pane, bubble, bubble.dataset.ts);
     renderMermaidInContainer(body).catch(() => {});
     pane.scrollTop = pane.scrollHeight;
     _enforceChatHistoryCap();
@@ -4167,6 +4224,12 @@ function _appendAgentEvent(ev) {
   card.className = 'agent-card chat-msg-agent agent-card-' + (ev.type || 'unknown');
   card.dataset.evType = ev.type || 'unknown';
   card.dataset.combineCount = '1';
+  // 2026-05-17 round 3: stamp data-ts + data-seq on every agent card
+  // so _insertChronological + _resortChatPaneByTs can place it in the
+  // correct slot. data-seq (server-allocated monotonic counter) is
+  // the authoritative key when present; data-ts is the fallback.
+  if (ev.ts) card.dataset.ts = ev.ts;
+  if (typeof ev.seq === 'number') card.dataset.seq = String(ev.seq);
   const head = document.createElement('div');
   head.className = 'agent-card-head';
   head.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>`;
@@ -4638,6 +4701,13 @@ function _createChromeBatch(ev, ts) {
   card.dataset.chromeCount = '1';
   card.dataset.firstTs = ts;
   card.dataset.lastTs = ts;
+  // 2026-05-17 round 3: stamp data-ts + data-seq so sort-by-seq
+  // (and ts fallback) place this chrome batch in chronological order.
+  // For batches, data-ts/data-seq track the FIRST event in the batch;
+  // _appendToChromeBatch keeps them as-is since batches anchor on
+  // their start position.
+  if (ev.ts) card.dataset.ts = ev.ts;
+  if (typeof ev.seq === 'number') card.dataset.seq = String(ev.seq);
   const head = document.createElement('div');
   head.className = 'agent-card-head';
   head.innerHTML =
