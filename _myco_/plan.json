@@ -311,7 +311,14 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": []
+      "comments": [
+        {
+          "id": "cfed2caf10f3",
+          "user": "kkrazy",
+          "text": "Include decision made, why, and design",
+          "ts": "2026-05-17T22:10:19.238Z"
+        }
+      ]
     },
     {
       "id": "td-18",
