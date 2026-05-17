@@ -1540,16 +1540,23 @@ function timeAgo(iso) {
 
 // ── chat (collaborator discussion + claude assistant) ────────────────────────
 
-// bug-9 round 5: client-side rolling cap. The chat pane never holds
-// more than MAX_CHAT_BYTES of history in state.chatMessages at any
-// time. Initial attach loads ~1 KB; scroll-up loads more (capped at
-// MAX_CHAT_BYTES); live chat frames append + drop oldest as needed.
-// The DOM cap (CHAT_HARD_CAP / CHAT_VISIBLE_LIMIT) is independent
-// and operates on rendered cards; this cap operates on the array
-// of message objects.
-const MAX_CHAT_BYTES = 16 * 1024;
+// Client-side rolling cap on state.chatMessages. Live appends drop
+// the oldest to stay under MAX_CHAT_BYTES. Scroll-up load-older
+// explicitly DISABLES the cap (sets state._scrolledBack = true)
+// because the user just asked to see older history — capping would
+// drop the rows they just fetched.
+//
+// 2026-05-17 user-set: 1 MB cap (was 16 KB). Mobile devices still
+// handle 1 MB of chat-msg objects easily, and bumping the ceiling
+// means the cap rarely fires for normal interaction — the user
+// only hits it on truly long sessions.
+const MAX_CHAT_BYTES = 1024 * 1024;
 
 function _capChatMessagesBytes() {
+  // 2026-05-17: skip the cap entirely once the user has scrolled
+  // into older history. They explicitly asked to see older rows;
+  // trimming the tail would drop the ones they just fetched.
+  if (state._scrolledBack) return;
   const arr = state.chatMessages;
   if (!Array.isArray(arr) || arr.length < 2) return;
   let bytes = 0;
@@ -3130,12 +3137,19 @@ async function _fetchOlderChatFromServer() {
     const prevTopId = oldest.meta && oldest.meta.transcriptUuid;
     state.chatMessages = data.messages.concat(state.chatMessages);
     if (typeof data.total === 'number') state.chatTotal = data.total;
-    // bug-9 round 5: enforce the 16 KB rolling cap. The prepended
-    // older window plus what was already in memory may exceed it;
-    // _capChatMessagesBytes walks from the tail and slices to fit
-    // — so the user effectively "swaps" the youngest end of their
-    // view for the older content they just scrolled into.
-    _capChatMessagesBytes();
+    // 2026-05-17 bug fix: DO NOT call _capChatMessagesBytes() here.
+    // The cap walks tail → head and keeps the youngest 16 KB. After
+    // a load-older prepend, that drops the very rows the user just
+    // fetched — surfacing as an infinite-loop log: "scroll up →
+    // fetch 50 → cap drops 50 → button still says serverPending=N
+    // → IntersectionObserver re-fires → fetch again". Mark the
+    // session as "scrolled back" so subsequent live appends don't
+    // auto-cap either — once the user has explicitly walked into
+    // older history, the rolling-tail policy is the wrong shape.
+    // (Live appends still go through _appendChatMessageDom which
+    // calls _enforceChatHistoryCap for DOM-level archive, but the
+    // state.chatMessages array is no longer trimmed.)
+    state._scrolledBack = true;
     renderChatPane(/*scrollToBottom*/ false);
     // Restore approximate scroll: find the previously-top message in
     // the rebuilt DOM and scrollIntoView. _ensureLoadOlderButton fires

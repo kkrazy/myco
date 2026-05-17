@@ -693,7 +693,10 @@ const MAX_CHAT_MESSAGES = 100000;
 // rec.chat on disk (and the MAX_CHAT_MESSAGES=500 entry cap below)
 // is unchanged — only the wire payload + in-memory client state are
 // bounded.
-const INITIAL_CHAT_HISTORY_BYTES = 1 * 1024;
+// 2026-05-17 user-set: 8 KB initial chat-history (was 1 KB). Gives
+// the user roughly 30-50 messages at first paint instead of 5-8 —
+// enough to see the recent conversation context without scroll-up.
+const INITIAL_CHAT_HISTORY_BYTES = 8 * 1024;
 const DEFAULT_CHAT_HISTORY_BYTES = 16 * 1024;
 
 // Legacy alias — some callsites + tests still reference the old

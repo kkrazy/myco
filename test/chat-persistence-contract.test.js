@@ -179,7 +179,7 @@ t('getChatHistory({includeAgent:true}) surfaces fromAgent rows', () => {
 });
 
 t('initial-attach byte budget is small (1 KB) + backfill is 16 KB', () => {
-  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 1 * 1024);
+  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 8 * 1024);
   assert.strictEqual(sessionsMod.DEFAULT_CHAT_HISTORY_BYTES, 16 * 1024);
 });
 
