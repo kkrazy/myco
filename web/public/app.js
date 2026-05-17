@@ -3015,28 +3015,30 @@ function _ensureLoadOlderButton(list, hiddenCount) {
   }
   btn.textContent = `Load older (${hiddenCount} hidden) — or scroll up`;
   btn.dataset.hiddenCount = String(hiddenCount);
-  // 2026-05-17: scroll-event trigger replaces IntersectionObserver.
-  // The observer was firing IMMEDIATELY on attach (because list.scrollTop
-  // starts at 0, the button at the top of the list IS in view) — that
-  // auto-triggered _revealOlderChat before the user did anything,
-  // and the chat-pane initial-scroll-to-bottom hadn't run yet. Now
-  // we listen for scroll events on the list and fire only when the
-  // user actively scrolls AND list.scrollTop is near 0.
+  // 2026-05-17: scroll-event trigger.
+  //
+  // First attempt used IntersectionObserver, but it auto-fired on
+  // attach (button-at-top was "in view" at scrollTop=0) — undesired
+  // and undid the scroll-to-bottom init.
+  //
+  // Second attempt used a "first scroll is arming, second scroll
+  // fires" gate. Worked on mobile (layout-shift synthetic scroll
+  // armed the flag during init) but broke on desktop (no synthetic
+  // scroll → user had to scroll twice to trigger the load).
+  //
+  // Final shape: just fire on every scroll where scrollTop <= 64
+  // AND list.scrollHeight > clientHeight (avoid firing when the
+  // list is too small to scroll). scrollChatToLatest sets scrollTop
+  // = scrollHeight (MAX), not 0, so the synthetic init scroll won't
+  // trip this. A single-flight gate inside _fetchOlderChatFromServer
+  // protects against rapid-fire on small scrollTop oscillations.
   if (!list.dataset.loadOlderScrollHandlerArmed) {
     list.dataset.loadOlderScrollHandlerArmed = '1';
-    let userScrolledAtLeastOnce = false;
     list.addEventListener('scroll', () => {
-      // Mark armed AFTER the first scroll so we don't fire on the
-      // synthetic scroll triggered by scrollChatToLatest on initial
-      // attach (which is "scrolled" from 0 to scrollHeight).
-      if (!userScrolledAtLeastOnce) {
-        userScrolledAtLeastOnce = true;
-        return;
-      }
-      if (list.scrollTop <= 64) {
-        const currentBtn = list.querySelector('#chat-load-older');
-        if (currentBtn && !currentBtn.disabled) _revealOlderChat();
-      }
+      if (list.scrollHeight <= list.clientHeight) return;   // not actually scrollable
+      if (list.scrollTop > 64) return;
+      const currentBtn = list.querySelector('#chat-load-older');
+      if (currentBtn && !currentBtn.disabled) _revealOlderChat();
     }, { passive: true });
   }
 }
