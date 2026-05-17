@@ -2273,7 +2273,7 @@ test_chat_window() {
   # with includeAgent=1, (4) strict chronological order in rec.chat,
   # getChatHistory, and the agent-replay client handler. Touching any
   # of those interfaces without keeping this test green is a regression.
-  node_test_result test/chat-persistence-contract.test.js "test/chat-persistence-contract.test.js (21 cases)"
+  node_test_result test/chat-persistence-contract.test.js "test/chat-persistence-contract.test.js (22 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone

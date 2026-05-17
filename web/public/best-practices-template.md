@@ -116,6 +116,59 @@ sub-paths that may go ignored are transient working files (e.g.
 have their own `.gitignore` entry inside `_myco_/`, not at the
 project root.
 
+## 6. Every user-reported problem ships with a regression test — automatically
+
+When the user reports a bug, surprise, or "this looks wrong" — no
+matter how small — add a test that would have caught the original
+problem BEFORE shipping the fix. This is not optional, and it is
+not a separate task the user has to ask for.
+
+**The flow is:**
+
+1. User reports a problem (anywhere — chat, voice memo, /bug, a
+   screenshot, "hmm that's weird"). Repeat it back in your own words
+   so you've understood the symptom precisely.
+2. Write a test that fails the way the user's report fails. Run it
+   to confirm it red-flips against the current code. If the project's
+   test framework can't easily express the failure, write the
+   smallest meaningful surrogate (static-grep guard, DOM-shape
+   assertion, server-route smoke) — better a partial guard than no
+   guard at all.
+3. Implement the fix until the test goes green.
+4. Wire the test into the project's runner (`./test.sh`,
+   `pytest`, `cargo test`, …) so it runs on every future change.
+5. Note the regression in the commit message: "fix: <bug>. test:
+   `test/<name>` would have caught it."
+
+**Why "automatic" instead of "when asked":**
+
+- The user reporting a problem twice means they should never see
+  it a third time. A test is the only way to make that promise.
+- Reports are the single highest-signal source of "what really
+  breaks in this code" — the issues users actually hit are worth
+  catching, the imagined ones are not.
+- Tests written from a user's words capture the user-visible
+  contract, not just the implementer's mental model. They're
+  durable through refactors that touch the internal shape.
+- Without the rule, every user report becomes a one-shot fix; the
+  same class of bug re-lands in 2 weeks under a different name.
+
+**Scope of "problem":**
+
+- Functional bug: "the X never shows up after Y"
+- Visual / UX surprise: "this looks like it belongs in the chrome
+  strip instead of the chat bubble"
+- Performance regression: "saving takes 8 s now, used to be 0.5 s"
+- Cross-device / cross-browser drift: "works on laptop, missing on
+  phone"
+- Data-loss / persistence gap: "I switched tabs and the reply
+  disappeared"
+
+All of these count. The test doesn't have to be elaborate — even a
+single `grep` that asserts the fix's marker stays present is a
+sufficient floor. The point is: the user's complaint must be encoded
+in code so the next iteration can't quietly re-break it.
+
 ---
 
 *Toggle this section off via the **Best practices** checkbox if your

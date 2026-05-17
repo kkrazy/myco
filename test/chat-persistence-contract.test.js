@@ -331,6 +331,45 @@ t('chat-history server route understands includeAgent query param', () => {
 // previous look folded claude's reply into the chrome-strip styling
 // and the user reported "result never sent back to the chat window,
 // it sits in the chrome batch only".
+
+// ── user-reported-problem regression ────────────────────────────
+// Quoted verbatim from the bug report 2026-05-17 12:45 PT:
+//   "looks like the result never sent back to the chat window, it sits
+//    in the chrome batch only."
+// Session myco-intro on mycobeta. User typed "hi", claude replied
+// "Hi! 👋 Is everything okay?...", and the reply rendered as an
+// agent-card without bubble styling — visually merging with the
+// chrome strip immediately above. Per best-practices rule 5 (every
+// user-reported problem ships with a regression test), this assertion
+// pins the bubble class so the agent-card style can't quietly come back.
+t('USER-REPORT REGRESSION 2026-05-17: assistant_text MUST render as chat-msg bubble, not chrome-batch-styled card', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  // The branch that creates the first assistant_text element should
+  // build a bubble carrying ALL the chat-msg classes — `chat-msg`,
+  // `from-claude` (color/avatar), and `chat-msg-from-agent` (the
+  // disambiguator for the agent-replay wipe loop). No agent-card
+  // class should be added; that's what made the reply look like
+  // chrome.
+  const lines = app.split('\n');
+  let createLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/bubble\.className\s*=\s*['"]chat-msg from-claude chat-msg-from-agent['"]/.test(lines[i])) {
+      createLine = i; break;
+    }
+  }
+  assert.ok(createLine >= 0,
+    'assistant_text bubble create-line missing or wrong class set — user-reported regression: claude reply will look like chrome again.');
+  // Walk back ~10 lines to find the surrounding `if (ev.type === 'assistant_text')`
+  // and verify the chat-text body uses renderMd(ev.text) — i.e. the
+  // bubble actually CONTAINS the reply rather than being an empty
+  // shell.
+  const window = lines.slice(Math.max(0, createLine - 10), createLine + 20).join('\n');
+  assert.ok(/className\s*=\s*['"]chat-text['"]/.test(window),
+    'assistant_text bubble missing inner .chat-text body — reply will be visually empty.');
+  assert.ok(/renderMd\(ev\.text/.test(window),
+    'assistant_text bubble body not piped through renderMd — markdown / mermaid will render as raw text.');
+});
+
 t('client assistant_text agent-event renders as chat-msg from-claude bubble (not agent-card)', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   assert.ok(/chat-msg from-claude chat-msg-from-agent/.test(app),

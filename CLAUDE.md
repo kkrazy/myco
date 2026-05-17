@@ -268,6 +268,44 @@ If you find yourself composing a multi-step shell sequence, that's a
 strong signal it should become a script (or be added to an existing
 one).
 
+## 5. Every user-reported problem ships with a regression test — automatically
+
+When the user reports a bug, surprise, or "this looks wrong" — no
+matter how small — add a test that would have caught the original
+problem BEFORE shipping the fix. This is not optional, and it is
+not a separate task the user has to ask for.
+
+**The flow:**
+
+1. Read back the user's report in your own words to confirm you
+   understand the symptom.
+2. Write a test that fails the way the user's report fails. Run it
+   to confirm it red-flips against the current code. If the
+   framework can't easily express the failure, write the smallest
+   meaningful surrogate (static-grep guard, DOM-shape assertion,
+   server-route smoke) — better a partial guard than no guard at all.
+3. Implement the fix until the test goes green.
+4. Wire the test into the project's runner (`./test.sh`, `pytest`,
+   `cargo test`, …) so it runs on every future change.
+5. Note the regression in the commit message: "fix: <bug>. test:
+   `test/<name>` would have caught it."
+
+**Why automatic (not when-asked):**
+
+- The user reporting a problem twice means they should never see
+  it a third time. A test is the only way to make that promise.
+- Reports are the highest-signal source of "what really breaks";
+  the bugs users actually hit are worth catching, the imagined
+  ones are not.
+- Tests written from user reports capture the user-visible
+  contract, durable through internal refactors.
+
+**Scope of "problem":** functional bug, visual / UX surprise,
+performance regression, cross-device drift, data-loss / persistence
+gap — all of these count. The test doesn't have to be elaborate. The
+point is that the user's complaint must be encoded in code so the
+next iteration can't quietly re-break it.
+
 ---
 
 *Toggle this section off via the **Best practices** checkbox if your
