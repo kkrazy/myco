@@ -3100,12 +3100,13 @@ function _revealOlderChat() {
 // currently-known message.
 async function _fetchOlderChatFromServer() {
   const sid = state.activeId;
-  if (!sid) return;
-  if (state._fetchingOlderChat) return;   // single-flight gate
+  if (!sid) { console.log('[diag-fetch-older] skip: no activeId'); return; }
+  if (state._fetchingOlderChat) { console.log('[diag-fetch-older] skip: in-flight'); return; }
   // Use the oldest currently-known message's ts as the `before` cursor.
   const oldest = state.chatMessages.find((m) => m && m.ts);
-  if (!oldest) return;
+  if (!oldest) { console.log('[diag-fetch-older] skip: no oldest ts'); return; }
   state._fetchingOlderChat = true;
+  console.log('[diag-fetch-older] starting before=' + oldest.ts + ' chatMessages.length=' + state.chatMessages.length);
   const list = document.getElementById('chat-messages');
   const btn = list ? list.querySelector('#chat-load-older') : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Loading older…'; }
@@ -3120,13 +3121,30 @@ async function _fetchOlderChatFromServer() {
       + `?before=${encodeURIComponent(oldest.ts)}&limit=${CHAT_LOAD_OLDER_BATCH}`
       + `&includeAgent=1`;
     const res = await authedFetch(url);
-    if (!res || !res.ok) return;
+    if (!res || !res.ok) {
+      console.log('[diag-fetch-older] HTTP failed: status=' + (res ? res.status : 'no-response'));
+      return;
+    }
     const data = await res.json().catch(() => null);
+    console.log('[diag-fetch-older] response: messages=' + ((data && data.messages) || []).length
+      + ' total=' + (data && data.total) + ' hasMore=' + (data && data.hasMore));
     if (!data || !Array.isArray(data.messages) || !data.messages.length) {
       // Server has no older messages despite chatTotal > length —
-      // probably a sync drift (someone /clear'd, etc.). Update the
-      // total so the load-older button can retire.
+      // probably a sync drift, OR the unfetched rows are all
+      // fromAgent (filtered when includeAgent=0) and we just asked
+      // with includeAgent=1 but they were all newer than oldest.ts.
+      // Either way, update total + retire the button.
       if (typeof data.total === 'number') state.chatTotal = data.total;
+      // 2026-05-17: force-retire the button when server says 0 rows
+      // older. The previous code re-ran _enforceChatHistoryCap which
+      // would re-create the button if state.chatTotal still exceeded
+      // state.chatMessages.length — causing the IntersectionObserver
+      // to fire again forever. Trim state.chatTotal down so
+      // serverPending = 0 and the button retires.
+      if (state.chatTotal > state.chatMessages.length) {
+        console.log('[diag-fetch-older] forcing state.chatTotal down from ' + state.chatTotal + ' to ' + state.chatMessages.length + ' (server returned 0 older rows; the gap is unfetchable, likely all fromAgent rows newer than oldest.ts)');
+        state.chatTotal = state.chatMessages.length;
+      }
       _enforceChatHistoryCap();
       return;
     }
