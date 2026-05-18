@@ -1,118 +1,49 @@
-// GitHub integration: per-user PAT storage + issue creation.
+// Back-compat shim for the pre-Gitee github.js API.
 //
-// Tokens live in $MYCO_STATE_DIR/gh-tokens.json keyed by myco username.
-// File mode is 0600 so it's only readable by the mycod process owner.
-// (Plain on-disk storage; relies on filesystem permissions, not encryption.
-// An attacker with read access to the state dir can read the tokens, same
-// as any other secret in the .env file.)
+// Until td-4, this module owned the token jar (gh-tokens.json) + the
+// GitHub-only protocol calls (detectRepo, createIssue). Adding Gitee
+// support meant splitting that into two concerns:
+//
+//   git-tokens.js — provider-keyed token storage on disk.
+//   git-hosts.js  — provider dispatch for detect / createIssue / fetchUser.
+//
+// To avoid touching every caller, we keep this module's old surface
+// alive as a github-flavored wrapper over the new dispatcher. Callers
+// that explicitly want GitHub (the OAuth callback storing a token, the
+// PAT login route validating + storing) keep working unchanged.
+//
+// New callers should require('./git-hosts') instead.
 
-const fs = require('fs');
-const fsp = require('fs/promises');
-const path = require('path');
-const os = require('os');
-const https = require('https');
-const { execFile } = require('child_process');
-
-const STATE_DIR = process.env.MYCO_STATE_DIR || path.join(os.homedir(), '.myco');
-const TOKENS_FILE = path.join(STATE_DIR, 'gh-tokens.json');
-
-let _cache = null;
-
-function load() {
-  if (_cache) return _cache;
-  try {
-    _cache = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
-    if (!_cache || typeof _cache !== 'object') _cache = {};
-  } catch {
-    _cache = {};
-  }
-  return _cache;
-}
-
-function persist() {
-  if (!_cache) return;
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  const tmp = TOKENS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(_cache, null, 2), { mode: 0o600 });
-  // Renames preserve target file's mode if it exists; explicit chmod after
-  // ensures fresh files also get 0600.
-  try { fs.chmodSync(tmp, 0o600); } catch {}
-  fs.renameSync(tmp, TOKENS_FILE);
-  try { fs.chmodSync(TOKENS_FILE, 0o600); } catch {}
-}
+const gitHosts = require('./git-hosts');
+const gitTokens = require('./git-tokens');
 
 function getToken(user) {
-  if (!user) return null;
-  const store = load();
-  return store[user] || null;
+  // User-level only — pre-td-4 callers had no repo context. The
+  // per-repo lookup is intentionally NOT exposed through this shim;
+  // new code should require('./git-hosts').getToken(user, provider,
+  // owner, repo) directly.
+  return gitTokens.getToken(user, 'github');
 }
 
 function setToken(user, token) {
-  if (!user || !token) throw new Error('user and token required');
-  const store = load();
-  store[user] = String(token).trim();
-  persist();
+  // OAuth callback + PAT login both land here with a user-level
+  // access_token (one credential good for all the user's github
+  // repos). Store at the bare 'github' key so per-repo PATs set via
+  // /setpat can override on a case-by-case basis.
+  return gitTokens.setUserToken(user, 'github', token);
 }
 
-// Detect the GitHub owner/repo for an absolute cwd by reading its git
-// remote. Uses the git CLI; returns null if cwd isn't a repo or has no
-// github.com remote.
-function detectRepo(absCwd) {
-  return new Promise((resolve) => {
-    if (!absCwd) return resolve(null);
-    execFile('git', ['-C', absCwd, 'remote', 'get-url', 'origin'], { timeout: 4000 }, (err, stdout) => {
-      if (err) return resolve(null);
-      const url = String(stdout || '').trim();
-      // Match git@github.com:OWNER/REPO(.git)? OR https://github.com/OWNER/REPO(.git)?
-      const m = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\s*$/i);
-      if (!m) return resolve(null);
-      resolve({ owner: m[1], repo: m[2] });
-    });
-  });
+// detectRepo used to only ever return GitHub matches. Preserve that
+// behavior so callers that haven't been refactored don't suddenly start
+// trying to POST GitHub URLs to gitee.com — they need to opt-in.
+async function detectRepo(absCwd) {
+  const host = await gitHosts.detectHost(absCwd);
+  if (!host || host.provider !== 'github') return null;
+  return { owner: host.owner, repo: host.repo };
 }
 
-// Create a GitHub issue via REST. Resolves to { number, url } on success,
-// or { error, status } on failure. Never throws.
-function createIssue({ token, owner, repo, title, body, labels }) {
-  return new Promise((resolve) => {
-    const payload = JSON.stringify({
-      title: String(title || '').slice(0, 250),
-      body: String(body || ''),
-      labels: Array.isArray(labels) ? labels : undefined,
-    });
-    const req = https.request({
-      hostname: 'api.github.com',
-      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
-      method: 'POST',
-      headers: {
-        'Authorization': `token ${token}`,
-        'User-Agent': 'myco/1.0',
-        'Accept': 'application/vnd.github+json',
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-      timeout: 15000,
-    }, (res) => {
-      let chunks = '';
-      res.on('data', (d) => { chunks += d.toString(); });
-      res.on('end', () => {
-        let parsed = {};
-        try { parsed = JSON.parse(chunks); } catch {}
-        if (res.statusCode >= 200 && res.statusCode < 300 && parsed.number) {
-          resolve({ number: parsed.number, url: parsed.html_url });
-        } else {
-          resolve({
-            error: parsed.message || `GitHub API ${res.statusCode}`,
-            status: res.statusCode,
-          });
-        }
-      });
-    });
-    req.on('error', (err) => resolve({ error: err.message, status: 0 }));
-    req.on('timeout', () => { try { req.destroy(); } catch {}; resolve({ error: 'timeout', status: 0 }); });
-    req.write(payload);
-    req.end();
-  });
+function createIssue(opts) {
+  return gitHosts.createIssue({ ...opts, provider: 'github' });
 }
 
 module.exports = { getToken, setToken, detectRepo, createIssue };

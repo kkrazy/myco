@@ -1967,6 +1967,14 @@ test_chat_window() {
   grep -q "names: \['fr'\]" server/src/slashcmds.js && pass "/fr command registered" || fail "/fr command missing"
   grep -q "names: \['td', 'todo'\]" server/src/slashcmds.js && pass "/td command registered (alias /todo)" || fail "/td command missing"
   grep -q "names: \['bug'\]" server/src/slashcmds.js && pass "/bug command registered" || fail "/bug command missing"
+  # td-4: /setpat saves a per-repo PAT for the session's current
+  # github or gitee remote. Auto-detects the provider from cwd — no
+  # provider arg in the usage. Regressions to either of these break
+  # the documented "one PAT per repo" UX.
+  grep -q "names: \['setpat'\]" server/src/slashcmds.js && pass "/setpat command registered" || fail "/setpat command missing"
+  grep -qF "usage: '/setpat <token>'" server/src/slashcmds.js \
+    && pass "/setpat usage shows single-arg form (auto-detect provider)" \
+    || fail "/setpat usage should be single-arg — provider should be auto-detected from session.cwd, not user-supplied"
   # /m: removed 2026-05-15 in the chat-routing rewrite. Plain text now
   # routes to the running Claude PTY by default, which makes /m redundant.
   # The negative assertion below (slashcmds: /m removed) lives in the
@@ -2306,6 +2314,17 @@ test_chat_window() {
   # + triggerFileDownload helpers including the stopPropagation guard
   # so a download click doesn't ALSO open the file viewer.
   node_test_result test/files-git-decorators.test.js "test/files-git-decorators.test.js (12 cases)"
+  # td-4: per-(user, repo) PAT storage + github/gitee provider dispatch
+  # for /feature, /bug. Locks the storage shape (per-repo entry wins,
+  # user-level fallback for OAuth-issued github tokens), detectHost's
+  # github vs. gitee classification across SSH + HTTPS URLs, the
+  # provider-specific REST payload construction (gitee uses
+  # form-urlencoded + access_token field + /repos/{owner}/issues with
+  # repo in the body, NOT /repos/{owner}/{repo}/issues like github),
+  # /setpat's single-arg auto-detection of the session's repo, and the
+  # github.js back-compat shim's user-level setToken path so the OAuth
+  # callback keeps working.
+  node_test_result test/gitee-host-dispatch.test.js "test/gitee-host-dispatch.test.js (31 cases)"
   # 2026-05-17 chat persistence + cross-device + ordering contract.
   # Locks the four pillars documented in CLAUDE.md → "Chat persistence
   # & cross-device consistency": (1) every device sees identical

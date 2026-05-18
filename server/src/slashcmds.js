@@ -6,7 +6,8 @@
 // (success or human-readable error). The dispatcher posts the handler's
 // reply as a chat message tagged with the assistant user.
 
-const github = require('./github');
+const github = require('./github');           // kept as legacy back-compat shim
+const gitHosts = require('./git-hosts');       // provider-aware dispatch (github + gitee)
 const permissions = require('./permissions');
 // Lazy property access on sessionsMod — pty.js → slashcmds.js → sessions.js
 // is a circular chain. sessions.js exports its API via Object.assign AFTER
@@ -19,7 +20,7 @@ const ASSISTANT_USER = 'claude';
 const COMMANDS = [
   {
     names: ['feature', 'feat'],
-    summary: 'Raise a feature request issue on the session\'s GitHub repo',
+    summary: 'Raise a feature request issue on the session\'s github/gitee repo',
     usage: '/feature <title>',
     handler: handleFeature,
   },
@@ -116,6 +117,12 @@ const COMMANDS = [
     summary: 'Ask claude to break a description into todos / FRs and add them to the Plan (incl. dependsOn for ordering)',
     usage: '/add2plan <description>',
     handler: handleAdd2Plan,
+  },
+  {
+    names: ['setpat'],
+    summary: 'Save a personal access token for this session\'s repo (github or gitee, auto-detected)',
+    usage: '/setpat <token>',
+    handler: handleSetPat,
   },
   {
     names: ['help'],
@@ -760,23 +767,34 @@ async function handleIssue(ctx, { kind, labels }) {
     ctx.reply(`Usage: /${kind} <title>\nExample: /${kind} add dark mode toggle`);
     return;
   }
-  const token = github.getToken(ctx.user);
-  if (!token) {
-    // Tokens are populated automatically by the OAuth callback. If we're here
-    // the OAuth round-trip didn't include the `repo` scope, or the token has
-    // been revoked on github.com. A fresh sign-in fixes both.
+  // Detect provider from the session's git remote BEFORE the token check —
+  // the error message is more useful when we can tell the user "set a gitee
+  // token" vs. "set a github token".
+  const host = await gitHosts.detectHost(ctx.absCwd);
+  if (!host) {
     ctx.reply(
-      `(no GitHub token on file for @${ctx.user}. Sign out and back in via GitHub ` +
-      `to refresh — the OAuth grant must include the \`repo\` scope.)`
+      `(could not detect a github.com or gitee.com remote for this session's cwd: ${ctx.absCwd}. ` +
+      `\`/${kind}\` requires \`git remote get-url origin\` to point at one of those hosts.)`
     );
     return;
   }
-  const repo = await github.detectRepo(ctx.absCwd);
-  if (!repo) {
-    ctx.reply(
-      `(could not detect a github.com remote for this session's cwd: ${ctx.absCwd}. ` +
-      `\`/${kind}\` requires \`git remote get-url origin\` to point at github.com.)`
-    );
+  // Per-repo PAT first (set via /setpat), then user-level OAuth token as
+  // fallback (only github has one — gitee has no OAuth flow yet).
+  const token = gitHosts.getToken(ctx.user, host.provider, host.owner, host.repo);
+  if (!token) {
+    if (host.provider === 'github') {
+      ctx.reply(
+        `(no GitHub token on file for @${ctx.user} for ${host.owner}/${host.repo}. ` +
+        `Sign out and back in via GitHub to refresh the OAuth token (must include \`repo\` scope), ` +
+        `or run \`/setpat <token>\` to save a per-repo PAT.)`
+      );
+    } else {
+      ctx.reply(
+        `(no Gitee PAT on file for @${ctx.user} for ${host.owner}/${host.repo}. ` +
+        `Generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`) ` +
+        `and run \`/setpat <token>\` from this session.)`
+      );
+    }
     return;
   }
   const body = [
@@ -785,14 +803,73 @@ async function handleIssue(ctx, { kind, labels }) {
     '---',
     `Filed by **@${ctx.user}** via [myco](https://myco.labxnow.ai/) on ${new Date().toISOString().slice(0, 19).replace('T', ' ')} UTC.`,
   ].join('\n');
-  const result = await github.createIssue({
-    token, owner: repo.owner, repo: repo.repo, title, body, labels,
+  const result = await gitHosts.createIssue({
+    provider: host.provider,
+    token, owner: host.owner, repo: host.repo, title, body, labels,
   });
   if (result.error) {
-    ctx.reply(`(GitHub error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
+    const label = host.provider === 'gitee' ? 'Gitee' : 'GitHub';
+    ctx.reply(`(${label} error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
     return;
   }
-  ctx.reply(`✓ Filed ${kind} request #${result.number} on ${repo.owner}/${repo.repo}: ${result.url}`);
+  ctx.reply(`✓ Filed ${kind} request #${result.number} on ${host.owner}/${host.repo}: ${result.url}`);
+}
+
+// /setpat <token>
+//
+// Saves a personal access token for THIS SESSION's repo. The provider
+// (github / gitee) and the owner/repo are auto-detected from the
+// session's git remote — the user just pastes their token.
+//
+// Each (user, repo) pair gets exactly one PAT. Re-running /setpat
+// overwrites the previous one. The user-level OAuth token (set by the
+// GitHub login flow) stays in place as a fallback for any GitHub repo
+// without a per-repo PAT.
+//
+// We validate the token by hitting the provider's /user endpoint before
+// persisting — so a typo or wrong-provider paste surfaces immediately,
+// not on the next /feature.
+async function handleSetPat(ctx) {
+  const token = String(ctx.args || '').trim();
+  if (!token) {
+    ctx.reply(
+      `Usage: /setpat <token>\n` +
+      `Saves a PAT for this session's repo. Provider is auto-detected from \`git remote get-url origin\` ` +
+      `(github.com or gitee.com).\n` +
+      `For Gitee, generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`).`
+    );
+    return;
+  }
+  if (token.length < 8) {
+    ctx.reply(`(token looks too short — did you paste a placeholder?)`);
+    return;
+  }
+  // Detect provider+owner+repo from the session's cwd. "One PAT per repo"
+  // means we need to know WHICH repo before we can store anything.
+  const host = await gitHosts.detectHost(ctx.absCwd);
+  if (!host) {
+    ctx.reply(
+      `(no github.com or gitee.com remote in this session's cwd: ${ctx.absCwd}. ` +
+      `\`/setpat\` saves a PAT scoped to the current repo; make sure ` +
+      `\`git remote get-url origin\` points at one of those hosts.)`
+    );
+    return;
+  }
+  let profile;
+  try { profile = await gitHosts.fetchUser({ provider: host.provider, token }); }
+  catch (err) {
+    ctx.reply(`(${host.provider} rejected the token: ${err.message})`);
+    return;
+  }
+  try { gitHosts.setRepoToken(ctx.user, host.provider, host.owner, host.repo, token); }
+  catch (err) {
+    ctx.reply(`(could not save token: ${err.message})`);
+    return;
+  }
+  ctx.reply(
+    `✓ Saved ${host.provider} PAT for ${host.owner}/${host.repo} ` +
+    `(validated as ${host.provider}:${profile.login}). \`/feature\` and \`/bug\` will use it.`,
+  );
 }
 
 // /decide <n> — answer the currently-pending dialog by sending its option

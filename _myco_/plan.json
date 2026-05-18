@@ -107,8 +107,23 @@
       "addedAt": "2026-05-14T03:43:13.099Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": []
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "ff42b8d297fb",
+          "user": "kkrazy",
+          "text": "gitee is similar to github, suggestion ways to support gitee including how to setup credentials via token",
+          "ts": "2026-05-18T05:22:50.680Z"
+        },
+        {
+          "id": "td4-2026051806-impl",
+          "user": "claude",
+          "text": "Scope A landed. Provider-aware token jar (server/src/git-tokens.js) keyed per-(user, provider/owner/repo) with user-level OAuth fallback. New server/src/git-hosts.js dispatches detectHost + createIssue + fetchUser to github/gitee strategies. github.js kept as back-compat shim so OAuth callback + PAT login still work unchanged. /setpat <token> slash command auto-detects provider+owner+repo from session.cwd (one-arg UX honoring the \"one PAT per repo\" constraint). /feature + /bug now work on both github.com and gitee.com remotes. Tests: test/gitee-host-dispatch.test.js, 31 cases, all green. test.sh wires it in + adds static guard on the new /setpat usage shape. CLAUDE.md + troubleshooting updated. Next steps if needed: scope B (Gitee OAuth) so users don't have to paste PATs manually, scope C (Gitee as login provider with its own allowlist).",
+          "ts": "2026-05-18T06:00:00.000Z"
+        }
+      ]
     },
     {
       "id": "td-5",
@@ -1111,7 +1126,23 @@
         "originalText": "chrome batch messages should be visible to all users in the session, right now it's only visible to owner",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-26",
+      "text": "**Problem:** Git commits are not attributed to the current user's GitHub identity, so authorship/accountability is lost.\n\n**Expected:** `git commit` uses the current user's GitHub id (name + email matching their GitHub account) as the author, so every commit traces back to a real contributor.\n\n**Actual:** Commits are made under a default/shared identity, making it impossible to tell who authored a change.\n\n**Design:**\n- Resolve the active GitHub id via `gh api user` (login + `users/{login}` for public email, fallback to `{id}+{login}@users.noreply.github.com`).\n- Cache the resolved `{name, email}` per workspace; refresh on `gh auth` change.\n- Before each commit, set `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and committer) from the cache; fail fast with a clear message if `gh` is not authenticated.\n- Add a pre-commit hook entry point so this runs consistently across local and agent-driven commits.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T04:44:01.376Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "git commit to use current user github id so that the work is accountable. please add some design to this fr as you rewrite and adding to plan item list",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-18T02:19:47.654Z"
+  "updatedAt": "2026-05-18T04:44:11.335Z"
 }

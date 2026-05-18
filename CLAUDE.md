@@ -48,8 +48,11 @@
 3. **What still lives at the container level (NOT per-session):**
    - `/data/sessions.json` — the session registry (id, label, cwd,
      mode, allow/deny lists, chat history). Cross-session shared.
-   - `/data/auth-sessions.json` + `/data/gh-tokens.json` — auth state,
-     shared across all sessions for a user.
+   - `/data/auth-sessions.json` + `/data/git-tokens.json` — auth state,
+     shared across all sessions for a user. (`gh-tokens.json` was the
+     pre-td-4 flat per-user GitHub-only file — `git-tokens.js` reads it
+     once on first load and migrates it into `git-tokens.json` under
+     the user-level `github` slot.)
    - `/root/.claude/.credentials.json` — SDK auth, shared. (Per-user,
      not per-session.)
 
@@ -70,7 +73,7 @@
    - Container bind-mounts:
      ```
      $MYCO_STATE_DIR        → /data    (sessions.json, .env, auth-sessions.json,
-                                        allowed-github-users.txt, gh-tokens.json, caddy/, …)
+                                        allowed-github-users.txt, git-tokens.json, caddy/, …)
      $MYCO_STATE_DIR/home   → /root    (claude config: .claude/, .claude.json)
      $MYCO_STATE_DIR/wks    → /wks     (workspaces)
      $MYCO_STATE_DIR/Caddyfile → /etc/caddy/Caddyfile  (read-only)
@@ -83,7 +86,7 @@
    - The OAuth App's callback must be `<MYCO_PUBLIC_ORIGIN>/auth/github/callback`. Scopes requested: `read:user user:email repo`.
    - `$STATE_DIR/allowed-github-users.txt` lists invited GitHub logins, one per line (`#` comments). Only listed users can complete sign-in. Add with `./deploy.sh --allow-github-user <login>` (idempotent, no container restart).
    - Minted myco session tokens live in `$STATE_DIR/auth-sessions.json` (mode 0600, 30-day sliding TTL).
-   - The OAuth access token for each user is mirrored into `$STATE_DIR/gh-tokens.json` (mode 0600) — used by `/feature`/`/bug` slash commands and any future git operations.
+   - The OAuth access token for each user is mirrored into `$STATE_DIR/git-tokens.json` (mode 0600) at the user-level `github` slot. Per-repo PATs (set via `/setpat <token>` from a session) live in the same file under `<provider>/<owner>/<repo>` keys and override the user-level fallback. Used by `/feature`/`/bug` slash commands — they auto-detect provider (github vs. gitee) from the session's `git remote get-url origin` and pick the right PAT. Gitee has no OAuth flow yet — Gitee repos require an explicit `/setpat` from the session.
 
 5. **Override knobs:** `MYCO_DEPLOY_HOST`, `MYCO_STATE_DIR`, `MYCO_IMAGE_TAG`, `MYCO_CONTAINER`. `--skip-tests` skips `./test.sh`, `--dry-run` reports the plan without shipping or swapping.
 
@@ -95,7 +98,9 @@
 
 3. **OAuth callback shows "Not invited yet"** — the GitHub login isn't in `$STATE_DIR/allowed-github-users.txt`. Add with `./deploy.sh --allow-github-user <login>` and have the user retry. No container restart needed (the file is read on each login attempt).
 
-4. **`/feature`/`/bug` reports "no GitHub token on file"** — the OAuth grant didn't include the `repo` scope (older sign-ins predating the scope addition), or the user revoked the token from GitHub Settings → Applications. The user signs out (status-bar `@username` → confirm) and back in to refresh.
+4. **`/feature`/`/bug` reports "no GitHub token on file"** — the OAuth grant didn't include the `repo` scope (older sign-ins predating the scope addition), or the user revoked the token from GitHub Settings → Applications. Either sign out (status-bar `@username` → confirm) + back in to refresh OAuth, or run `/setpat <token>` from the session to save a per-repo PAT (also works as the manual fallback when prod's OAuth `.env` isn't configured).
+
+5. **`/feature`/`/bug` reports "no Gitee PAT on file"** — Gitee has no OAuth flow yet, so PATs must be set manually per-repo. Generate one at https://gitee.com/profile/personal_access_tokens (scope: `issues`) and run `/setpat <token>` from a session whose `git remote get-url origin` is a `gitee.com:owner/repo` URL. The PAT is stored in `$STATE_DIR/git-tokens.json` keyed by `(myco-user, gitee/owner/repo)`.
 
 ## Code Style
 
