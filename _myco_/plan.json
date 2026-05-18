@@ -1286,7 +1286,18 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "fr-37",
+      "text": "**Problem:** When `web/public/best-practices-template.md` is updated (e.g. §7+§8 in `ccb5625`+`103bc88`), the new content reaches ONLY new projects spawned after the deploy + the Arch-tab UI banner on browser refresh. Existing projects whose CLAUDE.md already contains `<!-- myco-best-practices-start -->` KEEP the old template forever — the agent reads stale content on every turn across full deploys.\n\n**Root cause:** `injectBestPracticesIntoClaudeMd` in `server/src/sessions.js:514` short-circuits `if (existing.includes(BP_SENTINEL_START)) return;` to protect user hand-edits. Side effect: zero update propagation.\n\n**Expected:**\n- Stamp each injection with `<!-- myco-bp-hash:<sha256-of-template> -->` inside the block\n- On call, if block exists: compare embedded hash vs current template hash\n- Match → no-op\n- Differ → re-inject new template, preserving text bracketed by NEW inner markers `<!-- myco-bp-custom-start -->` ... `<!-- myco-bp-custom-end -->` where teammates put hand-edits\n- Fresh injections embed BOTH markers so users have a documented place for additions\n\n**Files:** `server/src/sessions.js` (~30 lines added); `web/public/best-practices-template.md` (header note about custom-marker pair); `test/best-practices-inject.test.js` (drift triggers re-inject, custom block survives, matching-hash no-ops).\n\n**Migration:** existing CLAUDE.md files lack new markers — first post-deploy attach treats missing hash as drift, re-injects with markers + current content. Idempotent thereafter.\n\n**Effort:** ~½ day. Strict superset of current behavior.\n\n**Payoff:** §7+§8 shipped this session won't reach existing projects without this. Future template edits propagate automatically on next attach.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T17:15:17.177Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-18T16:54:11.799Z"
+  "updatedAt": "2026-05-18T17:15:17.177Z"
 }
