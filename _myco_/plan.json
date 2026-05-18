@@ -1231,7 +1231,62 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "fr-32",
+      "text": "**Problem:** myco dual-writes session state — `/data/sessions.json` (registry, chat, allow/deny) AND `<project>/_myco_/events.jsonl` (agent-event log). They desync on crashes; plan-item updates, chat appends, run-outcomes each have their own persistence path with no single durable order.\n\n**Source:** [OpenHands](https://github.com/All-Hands-AI/OpenHands). Every state change = typed `Event` (Action vs Observation) appended to `EventLog`. In-memory state = FOLD over the log; restart = re-fold from snapshot + tail.\n\n**Expected for myco:**\n- New `server/src/event-store.js`: `append(type, payload)` + `fold(handlers)` + `snapshot(every N)`\n- ALL state mutations route through it: chat, plan-item edit, allow-list update, run-outcome\n- `sessions.json` becomes a derived projection rebuilt on startup (or from periodic snapshot)\n- Crash recovery = replay log from last snapshot deterministically\n\n**Why for multi-user myco:** Two clients editing simultaneously (owner adds td-N while viewer comments on bug-M) can race the sessions.json write today. Append-only log serializes naturally; fold layer resolves conflicts.\n\n**Files touched:** `agent-session.js` (1042 lines, emit via store), `sessions.js` (~700, loadStore/saveStore L66-79 becomes projection), `artifacts.js` (plan/test/arch route through store). One-shot migration script reads existing dual-write state, rebuilds unified log.\n\n**Effort:** L (~2 days). Tests: kill server mid-write, restart, assert state matches last appended event.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T16:54:11.799Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-33",
+      "text": "**Problem:** Chat messages in myco are atomic envelopes — a tool result streaming over 10s re-renders the whole bubble each time. Reconnecting viewers see partial state as fully-replaced rows, losing scroll position. Tool input + tool result + assistant text flatten into one agent-event blob with no per-part id for partial updates.\n\n**Source:** [OpenCode (sst)](https://github.com/sst/opencode). Their `messages` + `parts` model: messages are envelopes; \"parts\" (text-part, tool-call-part, tool-result-part, status-part) are independently streamable atoms, each with stable id. Server broadcasts part-by-part; client patches in place by id.\n\n**Expected for myco:**\n- Typed envelope carrying `parts: [{ id, type, ... }]`\n- Part types: `assistant-text`, `tool-call`, `tool-result`, `status`, `error`\n- Server emits `{ t:'part-add'|'part-update'|'part-done', sessionId, msgId, part }` instead of monolithic agent-event\n- Client renderer keys by `part.id` — incremental updates patch the right DOM node\n- Viewer reconnect: server replays missing parts via `?afterPartSeq=N` (extends existing `?afterSeq`)\n\n**Why for multi-user myco:** Multiple viewers watching a slow tool call see whole-bubble re-renders out of order today. Part-keyed patches converge to identical DOM across all attached clients without race.\n\n**Depends on:** `fr-27` (typed wire protocol). Ideally land them together so new part frames are catalogued from day one.\n\n**Files touched:** `agent-session.js` (split tool_result into per-part fragments), `attach.js` (new `t:'part-*'` frame family), `app.js` (~8077 lines, chat-bubble renderer becomes part-keyed).\n\n**Effort:** L (~3 days). Tests: part arrives out of order → final DOM still correct.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T16:54:11.799Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-34",
+      "text": "**Problem:** When a user wants to \"try a different approach\" mid-session (e.g. revert before the last 3 turns + explore a different prompt), the only path is to start a new session — losing context, chat history, plan items, workspace edits. No native fork / checkpoint mechanism.\n\n**Source:** [opcode (winfunc)](https://github.com/winfunc/opcode). Tauri 2 / React desktop GUI for Claude Code with branching checkpoint timeline (`src-tauri/src/checkpoint/`). User snapshots at turn N, forks, switches branches, diffs any two checkpoints.\n\n**Expected for myco:**\n- New `server/src/checkpoints.js`: `snapshot(sessionId, turnId, label?)`, `fork(sessionId, ckId)`, `list(sessionId)`, `restore(sessionId, ckId)`, `diff(sessionId, ckA, ckB)`\n- Storage: `<project>/_myco_/checkpoints/<turn>/` containing truncated `events.jsonl` snapshot + git-stash of workspace tree (use git plumbing, not new VCS)\n- Forked session = sibling session id sharing checkpoint pointer; events diverge into the new session's events.jsonl\n- UI: timeline gutter in chat pane with Fork / Restore / Diff actions\n\n**Why for multi-user myco:** When multiple users collaborate on a session and someone wants to explore an alternative without disrupting others, fork lets them branch off without losing shared history. Useful for /run exploration of multiple plan-item approaches.\n\n**Files touched:** new `checkpoints.js` (~200 lines); `sessions.js` (+ `parentSessionId` + `forkedAt` fields); `agent-session.js` (honor `forkedFromCheckpoint` on spawn); `app.js` (timeline gutter UI). New routes: `POST /sessions/:id/checkpoint`, `POST /sessions/:id/fork/:ckId`, `GET /sessions/:id/checkpoints`, `GET /sessions/:id/diff?a=&b=`.\n\n**Effort:** L+ (~4 days; biggest piece is git-worktree integration for the workspace side). Tests: snapshot → mutate → restore → assert state matches snapshot.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T16:54:11.799Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-35",
+      "text": "**Problem:** myco's `permissions.js`, `myco-mcp.js`, and other modules hold process-global state (registries, in-flight tool calls, allow-list caches) implicitly shared across all concurrent sessions. As multi-user concurrency grows, shared-mutable state is a footgun: a permission update in session A can race a permission check in session B; the MCP server's plan-item appender uses a session-id closure but the surrounding module is singleton.\n\n**Source:** [Goose (block)](https://github.com/block/goose). They migrated from a global `AgentRef` to a per-`session_id` `AgentManager` with own ExtensionManager / ToolMonitor / channels. [Discussion #4389](https://github.com/block/goose/discussions/4389) documents the motivation: eliminate global lock contention when many sessions run concurrently.\n\n**Expected for myco:**\n- Introduce `class SessionContext` in `agent-session.js` carrying: `sessionId`, `permissionsCache`, `mcpServer`, `toolMonitor`, per-session event bus\n- Refactor `permissions.js` (~180 lines) to export `createPermissionsForSession(sessionId)` factories instead of singleton methods\n- Refactor `myco-mcp.js` (~152 lines) so per-session closure becomes a SessionContext member, not closure-captured variable\n- Audit other modules for hidden globals: `summarizer.js`, `transcript.js`, `slashcmds.js`\n\n**Why for multi-user myco:** Today a permission allow-list mutation in session A's chat could be observed mid-check by session B if they share in-memory cache. Per-session isolation prevents whole class of cross-session leakage. Cheap to do BEFORE concurrency grows; painful after (every change backported into per-session shape).\n\n**Effort:** M (~1.5 days). Tests: spawn 5 concurrent SessionContexts, mutate permissions in each, assert no cross-contamination.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T16:54:11.799Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-36",
+      "text": "**Problem:** Users repeatedly run the same multi-step workflows by hand — \"kick off N-thread architecture review,\" \"extract patterns from project X via WebFetch + summarise into _myco_/research/,\" \"file a bug + write regression test first per BP §5 + commit.\" These workflows live in tribal knowledge or ad-hoc chat prompts; they're not shareable, not parameterised, not versioned.\n\n**Source:** [Goose (block)](https://github.com/block/goose). \"Recipes\" = YAML files containing: prompt template + required extensions + parameters + retry policy. Subrecipes nest as isolated sub-sessions whose summaries return to parent orchestrator. Portable, version-controlled, composable.\n\n**Expected for myco:**\n- New `_myco_/recipes/*.yaml` per-project recipe dir (auto-injected like CLAUDE.md)\n- Recipe shape:\n  ```yaml\n  name: arch-review\n  params: [target_branch]\n  steps:\n    - subagent: general-purpose\n      prompt: \"Review {target_branch} for X\"\n      verify: \"output contains 'Recommendations:'\"\n  ```\n- Slash command `/recipe <name> [params]` in `slashcmds.js` (~1042 lines) to invoke\n- Subrecipes nest as isolated sub-sessions (via Agent tool); summaries return to parent's chat\n- New Plan-tab subview: \"Recipes\" — list / run / view past runs\n- Plan-item integration: a plan item can declare a recipe to run on `/run`\n\n**Why for multi-user myco:** Recipes are inherently team artifacts — one user authors, all users (and agent on /run dispatch) can invoke. Multi-user becomes the WHY: single-user setup has less need to crystallise workflows; team setup amplifies leverage.\n\n**Files touched:** new `recipes.js` (~200 lines); `slashcmds.js` (/recipe handler); `sessions.js spawnSession` (seed `_myco_/recipes/` on spawn); new UI subview in `app.js`.\n\n**Effort:** M+ (~2 days). Tests: invoke recipe with params, verify subagent fires, verify summary returns to parent chat.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-18T16:54:11.799Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-18T16:46:57.688Z"
+  "updatedAt": "2026-05-18T16:54:11.799Z"
 }
