@@ -1063,7 +1063,37 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "td-26",
+      "text": "show info",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-18T01:32:40.552Z",
+      "addedBy": "ryan-blues",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "td-27",
+      "text": "**Problem:** Creating a new session leaves the plan view showing stale data from the previously selected session.\n**Expected:** Adding a new session initializes the plan view with that session's own data (empty/default state).\n**Actual:** The plan view continues to display whatever was shown before the new session was added.",
+      "layer": "Todo",
+      "done": true,
+      "addedAt": "2026-05-18T02:04:08.276Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "adding new session will not initialize the plan view with session specific data. it will show whatever was shown before",
+        "rewritten": true
+      },
+      "ranAt": "2026-05-18T02:10:08.459Z"
     }
   ],
-  "updatedAt": "2026-05-17T17:25:04.890Z"
+  "updatedAt": "2026-05-18T02:04:14.486Z"
 }

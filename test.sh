@@ -2284,6 +2284,13 @@ test_chat_window() {
   # the new _runButtonLabel helper, and the runBtn template's use of
   # the layer-derived label.
   node_test_result test/plan-item-run-button.test.js "test/plan-item-run-button.test.js (13 cases)"
+  # ryan-blues bug regression: creating a new session must not leave
+  # the plan view showing stale data from the previously selected
+  # session. Locks the state.artifacts cache to a { sessionId, byType }
+  # shape, the loadArtifact lookup's sessionId-equality guard, the
+  # artifacts-init handler tagging the cache with state.activeId, and
+  # the _resetUiForNewSession reset.
+  node_test_result test/plan-cache-session-isolation.test.js "test/plan-cache-session-isolation.test.js (9 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

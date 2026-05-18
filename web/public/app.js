@@ -46,7 +46,15 @@ const state = {
   // `artifacts-init` WS frame; updated live via `state-update` frames.
   // loadArtifact() prefers this cache over an HTTP GET so tab switches
   // are instant and always in sync with what the server just broadcast.
-  artifacts: {},
+  //
+  // ryan-blues bug fix: the cache is TAGGED with the session id it was
+  // populated for. A lookup whose sessionId doesn't match state.activeId
+  // is treated as a miss — without this, switching to a new session
+  // would render the prior session's stale plan items until the new
+  // session's artifacts-init arrived. The session-switch path
+  // (_resetUiForNewSession) also re-inits this structure as belt-and-
+  // suspenders. byType is the actual { plan, test, arch } map.
+  artifacts: { sessionId: null, byType: {} },
   // In-flight tool-call tracker mirrored from the server. Keyed by
   // tool_use_id; populated by `state-update { kind: 'tool-progress' }`
   // frames. The chat pane surfaces a "waiting on Agent · 47s"
@@ -1082,6 +1090,12 @@ function _teardownPreviousSession() {
 // list, chat panes, etc.). Does not start any network I/O.
 function _resetUiForNewSession(id) {
   state.activeId = id;
+  // ryan-blues bug fix: re-init the artifact cache bound to the new
+  // session id. The loadArtifact lookup guard handles the same case,
+  // but resetting here is belt-and-suspenders — guarantees the next
+  // _findArtifactTypeForItem / cache read can't accidentally see
+  // stale data from any code path that bypasses the lookup guard.
+  state.artifacts = { sessionId: id, byType: {} };
   state.viewerMode = false;
   state.pendingMenu = null;                  // clear any inline menu callout
   state.pendingMenuQueue = [];               // and the modal queue
@@ -1267,8 +1281,11 @@ function openSession(id, opts = {}) {
       } else if (msg.t === 'artifacts-init') {
         // Bootstrap the artifact cache on attach so opening a Plan /
         // Test / Arch tab is instant + always in sync — no HTTP GET
-        // round-trip required.
-        state.artifacts = msg.artifacts || {};
+        // round-trip required. Cache is TAGGED with state.activeId so
+        // a later session-switch (which advances activeId before this
+        // session's artifacts-init has been processed) cannot serve
+        // stale data — see ryan-blues bug fix.
+        state.artifacts = { sessionId: state.activeId, byType: msg.artifacts || {} };
         _onArtifactsCacheUpdated();
       } else if (msg.t === 'presence' && Array.isArray(msg.users)) {
         _renderPresence(msg.users);
@@ -5025,7 +5042,14 @@ function _applyStateUpdate(msg) {
   }
   if (msg.kind === 'artifact') {
     if (msg.artifactType && msg.artifact) {
-      state.artifacts[msg.artifactType] = msg.artifact;
+      // ryan-blues bug fix: rebind the cache to the current session
+      // before writing. A state-update frame that arrived on a now-
+      // closed WS for a previous session would otherwise corrupt the
+      // current session's cache.
+      if (state.artifacts.sessionId !== state.activeId) {
+        state.artifacts = { sessionId: state.activeId, byType: {} };
+      }
+      state.artifacts.byType[msg.artifactType] = msg.artifact;
       _onArtifactsCacheUpdated(msg.artifactType);
     }
     return;
@@ -5116,9 +5140,9 @@ function _onArtifactsCacheUpdated(type) {
 // state.pendingDeepLinkId when the hash arrived before the items had
 // DOM ids.
 function _findArtifactTypeForItem(itemId) {
-  if (!state.artifacts || !itemId) return null;
+  if (!state.artifacts || !state.artifacts.byType || !itemId) return null;
   for (const t of ['plan', 'test']) {   // arch has no items, not addressable
-    const a = state.artifacts[t];
+    const a = state.artifacts.byType[t];
     if (a && Array.isArray(a.items) && a.items.some((it) => it && it.id === itemId)) return t;
   }
   return null;
@@ -5782,7 +5806,14 @@ async function loadArtifact(type) {
   // Prefer the cache populated by the artifacts-init / state-update WS
   // frames — that's the freshest authoritative state. Tab switches are
   // instant + always in sync without an HTTP round-trip.
-  const cached = state.artifacts && state.artifacts[type];
+  //
+  // ryan-blues bug fix: the cache lookup MUST verify state.artifacts.sessionId
+  // === sid. A spawn-new-session flow advances state.activeId BEFORE the
+  // new session's artifacts-init WS frame arrives — without this check
+  // the lookup would return the prior session's plan items and render
+  // them against the new session's tab.
+  const cacheValid = state.artifacts && state.artifacts.sessionId === sid && state.artifacts.byType;
+  const cached = cacheValid ? state.artifacts.byType[type] : null;
   const cachedHas = cached && (
     (type === 'arch' && typeof cached.markdown === 'string' && cached.markdown.trim()) ||
     (type !== 'arch' && Array.isArray(cached.items) && cached.items.length)
@@ -5792,7 +5823,8 @@ async function loadArtifact(type) {
     return;
   }
   // Cache miss — fall back to HTTP. Happens on cold reload of an
-  // artifact tab before the WS attach delivers artifacts-init.
+  // artifact tab before the WS attach delivers artifacts-init, AND
+  // when a session-switch invalidated the cache.
   try {
     const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/artifact?type=${encodeURIComponent(type)}`);
     if (!res || !res.ok) return;
@@ -5804,7 +5836,12 @@ async function loadArtifact(type) {
       || (type !== 'arch' && artifact && Array.isArray(artifact.items) && artifact.items.length);
     if (hasContent) {
       renderArtifact(type, artifact);
-      state.artifacts[type] = artifact;   // populate cache so the next call is instant
+      // Populate cache for the next call — and (re)bind it to sid so
+      // a subsequent lookup for the same session is fast.
+      if (state.artifacts.sessionId !== sid) {
+        state.artifacts = { sessionId: sid, byType: {} };
+      }
+      state.artifacts.byType[type] = artifact;
     }
   } catch {}
 }
