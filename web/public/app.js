@@ -5629,12 +5629,26 @@ function _bindStopAgent() {
 
 function _sendStopAgent() {
   if (!state.activeId) return;
-  // The shared sendChatMessage path queues if WS is mid-reconnect and
-  // applies the same auth/identity wrapping as a normal chat send.
-  // Server maps literal "esc" to session.interrupt(). Optimistically
-  // flip awaitingClaude off so the indicator dims immediately;
-  // server-side status will repaint authoritatively.
-  sendChatMessage('esc');
+  // bug-14: send a dedicated interrupt frame instead of the legacy
+  // chat-text-esc path. The legacy path persisted the literal stop
+  // keyword as a user-typed chat row + broadcast it to viewers AS IF
+  // the user had typed it — confusing UX, and made Stop look broken
+  // when the SDK abort had no immediate visible effect. The dedicated
+  // frame routes directly to session.interrupt() server-side with a
+  // brief assistant ack note + no chat-history pollution.
+  //
+  // Queue-if-reconnecting: skip. Stop is intent-based — if the WS
+  // is dead, the user wants the interrupt NOW, not after reconnect;
+  // by the time we reconnect the in-flight turn has likely either
+  // finished or been killed by the reaper. A queued late-fire would
+  // interrupt an UNRELATED future turn.
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    console.warn('[stop] ws not open — interrupt dropped (not queued, to avoid hitting a later turn)');
+    return;
+  }
+  try { ws.send(JSON.stringify({ t: 'interrupt' })); }
+  catch (err) { console.warn('[stop] interrupt send failed:', err && err.message); }
 }
 
 // Global key handler for the permission modal: Esc defers, digits 1-9

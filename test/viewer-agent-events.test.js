@@ -117,8 +117,11 @@ function _viewerBody() {
   const start = src.indexOf('function attachViewerWebSocket');
   assert.ok(start > 0, 'attachViewerWebSocket must exist');
   // Find the end of the function (next `\nfunction ` at module-level
-  // column 0). The function is ~100 lines so 4000 chars is enough.
-  const slice = src.slice(start, start + 4500);
+  // column 0). The function grows as new WS-frame branches land (e.g.
+  // bug-14 added the interrupt branch). 8000-char window leaves
+  // headroom for several more such additions without false-tripping
+  // the static-grep guards below.
+  const slice = src.slice(start, start + 8000);
   const endIdx = slice.search(/\nfunction [a-zA-Z_]/m);
   return endIdx > 0 ? slice.slice(0, endIdx) : slice;
 }

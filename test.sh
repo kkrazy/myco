@@ -2320,6 +2320,15 @@ test_chat_window() {
   # tail on attach so viewers see recent chrome batches not just
   # events going forward.
   node_test_result test/viewer-agent-events.test.js "test/viewer-agent-events.test.js (9 cases)"
+  # bug-14 regression: the Stop button must invoke the SDK interrupt
+  # via a dedicated {t:'interrupt'} WS frame, NOT by sending the
+  # literal text "esc" through the chat-message path. The legacy path
+  # persisted "esc" as a user-typed chat row + broadcast it to all
+  # attached viewers — confusing UX, and made Stop appear broken when
+  # the SDK abort had no immediate visible effect. Locks the new
+  # interrupt frame handler in both owner + viewer attach paths +
+  # the client-side _sendStopAgent rewrite.
+  node_test_result test/stop-button-interrupt.test.js "test/stop-button-interrupt.test.js (8 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

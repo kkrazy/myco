@@ -273,8 +273,17 @@
       "addedAt": "2026-05-15T02:57:51.389Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": []
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "564eb9dfd798",
+          "user": "kkrazy",
+          "text": "Maybe having up to 8 subagents to avoid resource constrain",
+          "ts": "2026-05-18T19:28:46.877Z"
+        }
+      ]
     },
     {
       "id": "dd9b5676e094",
@@ -1158,7 +1167,9 @@
       "addedAt": "2026-05-18T16:06:35.089Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",

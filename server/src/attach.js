@@ -920,6 +920,23 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
       if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT));
       return;
     }
+    // bug-14: dedicated interrupt frame. The Stop button used to send
+    // {t:'chat', text:'esc'} which polluted chat history with a fake
+    // user-typed "esc" row AND broadcast it to other viewers. Direct
+    // interrupt frame bypasses chat persistence entirely — call
+    // session.interrupt() and emit a brief ack note. session.interrupt()
+    // is a safe no-op when no abort controller is live.
+    if (msg.t === 'interrupt' && user) {
+      console.log(`[ws-frame] ${sessionId} t=interrupt user=${user}`);
+      if (typeof session.interrupt === 'function') session.interrupt();
+      session.emit('chat', {
+        user: ASSISTANT_USER,
+        text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
+        ts: new Date().toISOString(),
+        meta: { kind: 'interrupt-ack' },
+      });
+      return;
+    }
     if (msg.t === 'menu-pick' && Number.isFinite(msg.n)) {
       const hashTag = typeof msg.hash === 'string' ? msg.hash.slice(-12) : 'no-hash';
       console.log(`[ws-frame] ${sessionId} t=menu-pick n=${msg.n} hash=${hashTag} user=${user || '(anon)'}`);
@@ -1115,6 +1132,19 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     }
     if (msg.t === 'menu-submit' && user) {
       handleMenuSubmit(sessionId, session, typeof msg.hash === 'string' ? msg.hash : null);
+    }
+    // bug-14: viewers can also interrupt — same precedent as menu-pick
+    // (viewers already affect the SDK turn by resolving permission
+    // menus). Logged distinctly so audit trail shows who interrupted.
+    if (msg.t === 'interrupt' && user) {
+      console.log(`[ws-frame] ${sessionId} t=interrupt user=${user} (viewer)`);
+      if (typeof session.interrupt === 'function') session.interrupt();
+      session.emit('chat', {
+        user: ASSISTANT_USER,
+        text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
+        ts: new Date().toISOString(),
+        meta: { kind: 'interrupt-ack' },
+      });
     }
   }
 
