@@ -4,7 +4,7 @@
       "id": "bug-1",
       "text": "After redoply, the claude session enter resume window and unable to auto recover from it.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-12T10:07:39.716Z",
       "addedBy": "ryan-blues",
       "source": "user",
@@ -17,8 +17,27 @@
           "user": "ryan-blues",
           "text": "It is after reployment, the old session unable to recover from the resume window and need manual intervention to continue",
           "ts": "2026-05-12T10:08:47.744Z"
+        },
+        {
+          "id": "1dc12ddc5b81",
+          "user": "kkrazy",
+          "text": "Verify if its still a problem, close if fixed already",
+          "ts": "2026-05-18T19:33:42.364Z"
+        },
+        {
+          "id": "ed5267b3caaa",
+          "user": "claude",
+          "text": "✓ closed — architecturally obsolete (verification per @kkrazy comment).\n\n**Why this failure mode can no longer occur.** Bug-1 described the pre-Phase-9 PTY-era symptom where `claude --resume <id>` would render an interactive TUI \"resume window\" prompt that the PTY scraper couldn't reliably auto-dismiss. Phase 9 (commit `6a73a4f docs: prune stale PTY/TUI references — SDK-driven sessions only`) retired the entire PTY driver: `pty.js`, `menu-interceptor.js`, `pty-patterns.js` deleted; all sessions run as `AgentSession` instances driven by `@anthropic-ai/claude-agent-sdk`'s `query()` loop.\n\n**Current post-redeploy resume flow** (server/src/sessions.js `ensureLiveSession` L529-569 → agent-session.js L247): server restart kills the in-memory AgentSession; `sessions.json` persists `rec.sdkSessionId` to disk; next user attach calls `ensureLiveSession(sessionId)` → respawns AgentSession with `resumeSdkSessionId`; first user message triggers `query({ ..., resume: this.sdkSessionId })`. The SDK reads the JSONL transcript directly and continues the conversation. **No TUI prompt anywhere in the path**; no auto-recovery mechanism that could fail.\n\n**What's already locked in to prevent regression:**\n- `test_phase9_retirement` in `test.sh` asserts `pty.js`, `menu-interceptor.js`, `pty-patterns.js` STAY deleted — any revert that brings back PTY scraping fails this gate.\n- `test/capture-claude-session-id.test.js` covers the SDK-resume happy path including the related fix for stale jsonl-id replacement when the SDK creates a new jsonl post-resume.\n- Zero matches in `server/src/` for `resume.window`, `RESUME_PROMPT`, `isResumePrompt`, or `[diag-resume]` log markers — the failure-mode detection code that would be needed to even DESCRIBE this bug is gone.\n\n**Verified failure modes that do exist in the new flow** (separate bugs, not this one):\n- `sdkSessionId` points at a deleted jsonl → SDK throws on resume → AgentSession emits `fatal` event. Visible failure, not silent hang.\n- SDK's subscription auth expired during the restart window → similar visible error path.\nNeither matches bug-1's \"stuck in resume window needing manual intervention\" symptom.\n\nClosing.",
+          "ts": "2026-05-18T19:35:57.322Z",
+          "meta": {
+            "kind": "closure",
+            "closedBy": "claude",
+            "closedAt": "2026-05-18T19:35:57.322Z",
+            "reason": "architecturally obsolete (Phase 9)"
+          }
         }
-      ]
+      ],
+      "ranAt": "2026-05-18T19:35:57.322Z"
     },
     {
       "id": "td-1",
@@ -1310,5 +1329,5 @@
       "comments": []
     }
   ],
-  "updatedAt": "2026-05-18T17:15:17.177Z"
+  "updatedAt": "2026-05-18T19:35:57.322Z"
 }
