@@ -2523,12 +2523,26 @@ test_chat_window() {
   grep -Pzoq "(?i)bare-digit menu pick[\s\S]{0,2000}handleMenuPick\(sessionId" server/src/attach.js \
     && pass "attach.js: bare-digit chat shortcut routes through handleMenuPick" \
     || fail "attach.js: bare-digit chat shortcut bypasses handleMenuPick"
-  # Companion regression: when claude broadcasts a NEW canUseTool
-  # menu, mark any older still-unanswered rows superseded so they
-  # don't haunt the modal queue.
+  # Post-bug-21 contract (fix 0eb1289): the supersede-on-broadcast
+  # sweep DELIBERATELY does not run from menu.js anymore — it was the
+  # cause of the parallel-canUseTool deadlock (orphaning sibling
+  # resolver promises). Supersede still runs from
+  # sessions.ensureLiveSession on AgentSession respawn (where the old
+  # menus genuinely refer to dead resolvers from a killed process),
+  # and the helper still lives in attach.js for that caller.
+  grep -q "function _supersedeStaleMenus" server/src/attach.js \
+    && pass "attach.js: _supersedeStaleMenus helper defined" \
+    || fail "attach.js: _supersedeStaleMenus helper missing — respawn cleanup will be a no-op"
+  grep -q "_supersedeStaleMenus(sessionId)" server/src/sessions.js \
+    && pass "sessions.js: ensureLiveSession sweeps stale menus on respawn" \
+    || fail "sessions.js: respawn no longer calls _supersedeStaleMenus — restarted agents will see ghost menu rows"
+  # Negative guard against the bug-21 regression: if anyone re-adds
+  # supersede-on-broadcast to menu.js, parallel canUseTool fires will
+  # deadlock the SDK again (see bug-21 pattern 1 / test/bug-21-
+  # parallel-permission-menus.test.js).
   grep -q "_supersedeStaleMenus" server/src/menu.js \
-    && pass "menu.js: broadcasts supersede stale menus" \
-    || fail "menu.js: broadcasts don't supersede stale menus"
+    && fail "menu.js: re-introduced supersede-on-broadcast — bug-21 parallel-tool deadlock is back" \
+    || pass "menu.js: NO supersede-on-broadcast (bug-21 pattern 1 fix preserved)"
   # Companion regression: a respawned AgentSession has a fresh
   # _pendingPermissions map; any chat row still flagged kind=menu
   # without answered/superseded refers to a canUseTool promise that
