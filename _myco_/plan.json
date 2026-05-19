@@ -1200,19 +1200,36 @@
       "id": "bug-14",
       "text": "**Problem:** Stop button does not actually stop the underlying process.\n**Expected:** Stop button invokes the Claude Code SDK call that interrupts the current task (equivalent to the `esc` keystroke).\n**Actual:** Stop button sends the literal text `'esc'` instead of the `esc` keystroke, so the underlying process keeps running.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-18T16:06:35.089Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "30f47cd2efb6",
+          "user": "claude",
+          "text": "✅ **Already fixed** in commit `1c7ae4c` — `stop: bug-14 — dedicated interrupt WS frame, no more chat-pollution path`.\n\nThe Stop button used to send the literal string `'esc'` through the chat-message path. Server-side that went through `handleChatPostfixes`, which DID call `session.interrupt()` for the `esc` keyword — but the user's text was ALSO persisted as a chat row + the interrupt note got duplicated through chat history. Reload would replay the stale `esc` row as if the user was still asking for it.\n\nFix: dedicated `{t:'interrupt'}` WS frame. Server handles it in `attach.js` (line 1007) by calling `session.interrupt()` directly + emitting a one-shot `interrupt-ack` note that's NOT persisted as user chat. Same path works for owners and viewers (the viewer attach branch was wired in the same commit at line 1214).\n\nTest: `test/stop-button-interrupt.test.js` (8 cases) — verified green against current `main` at the moment of this re-close.\n\n## Why this is being re-closed\n\nThe plan.json closure was clobbered by the MCP stale-snapshot bug the user flagged in bug-21's text (and also documented as fr-37 / fr-24): when `mcp__myco__add_plan_items` writes from a stale in-memory snapshot, it reverts any disk changes made between mycod boot and the tool call. This re-close restores the correct `done:true` state without touching code.\n\n## Followup (not addressed here)\n\nThe MCP stale-snapshot bug is the actual durable problem. Bug-14's clobber is a symptom; td-21 + bug-7 closure metadata have been clobbered the same way. Worth filing as its own bug if not already tracked under bug-21's \"Related (urgent meta-bug)\" sub-mention.",
+          "ts": "2026-05-19T08:23:33.886Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-19T08:23:33.886Z",
+            "commit": "1c7ae4c",
+            "reclose": true,
+            "reason": "plan.json closure clobbered by MCP stale-snapshot bug",
+            "testFile": "test/stop-button-interrupt.test.js"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the stop button actually send the text 'esc' instead of sending the key stroke esc, which will not actually stop the underlying process. Make sure stop button is calling the right claude code sdk to stop the cuurrent task",
         "rewritten": true
-      }
+      },
+      "doneAt": "2026-05-19T08:23:33.886Z",
+      "doneBy": "claude"
     },
     {
       "id": "bug-15",
@@ -1645,5 +1662,5 @@
       "doneBy": "claude"
     }
   ],
-  "updatedAt": "2026-05-19T07:55:35.991Z"
+  "updatedAt": "2026-05-19T08:23:33.886Z"
 }
