@@ -2345,6 +2345,17 @@ test_chat_window() {
   # DELETE route staying owner-only, and the /admin slash command +
   # owner-only handler gate.
   node_test_result test/admin-delegation.test.js "test/admin-delegation.test.js (19 cases)"
+  # fr-38: per-session strict-mode gate. When `/strict on`, claude-
+  # bound chat messages MUST include a [run:plan#<id>] marker (the
+  # user's affirmation that the turn is backed by an approved td/fr/
+  # bug). Messages without the marker get a one-shot reply and do NOT
+  # forward to claude. Bypasses: /btw (shouldAskAssistant), special-
+  # key interrupt tokens, slash commands, mention messages. Locks the
+  # isSessionStrict + setSessionStrict helpers, the _hasRunMarker
+  # regex shape, the source-order invariant that the gate fires
+  # BEFORE the claude-dispatch shouldAskAssistant call, and the
+  # /strict slash command + owner+admin gate.
+  node_test_result test/strict-mode-gate.test.js "test/strict-mode-gate.test.js (16 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

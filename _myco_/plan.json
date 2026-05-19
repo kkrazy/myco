@@ -1342,7 +1342,9 @@
       "addedAt": "2026-05-18T20:02:08.697Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
@@ -1361,12 +1363,32 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "219bb6f768dc",
+          "user": "claude",
+          "text": "✓ success · 527.8s · $14.6922 · 26↓/25455↑\n\n**fr-39 shipped as `21592ae`** ✅\n\n## Summary\n\n```mermaid\nflowchart LR\n    O[Owner] -->|\"/admin @bob\"| GRANT[addAdminToSession]\n    GRANT --> ADMINS[rec.admins:<br/>'bob']\n    ADMINS --> CHECK{isOwnerOrAdmin?}\n    BOB[Admin bob<br/>attaches via WS] --> CHECK\n    CHECK -->|yes| FULL[\"Full attach surface<br/>chat → claude routing<br/>▶ Run, share links, etc.\"]\n    CHECK -->|no| RO[readOnly viewer]\n\n    O -->|\"DELETE /sessions/sid\"| OWNER_GATE{sessionBelongsToUser?<br/>(strict rec.user === user)}\n    BOB -->|\"DELETE /sessions/sid\"| OWNER_GATE\n    OWNER_GATE -->|owner| DESTROY[session deleted]\n    OWNER_GATE -->|admin| FORBIDDEN[403<br/>owner-only]\n```\n\n## Surface changes\n\n| File | Change |\n|---|---|\n| `server/src/sessions.js` | New `rec.admins: string[]` field + 4 helpers: `getSessionAdmins…",
+          "ts": "2026-05-19T00:57:09.758Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-19T00:48:19.902Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "allow owner to assign admin which would have the same permission as the owner except deletion of the session.",
         "rewritten": true
-      }
+      },
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-19T00:57:09.758Z",
+          "startedAt": "2026-05-19T00:48:19.902Z",
+          "summary": "527.8s · 26→25455 tok",
+          "result": "**fr-39 shipped as `21592ae`** ✅\n\n## Summary\n\n```mermaid\nflowchart LR\n    O[Owner] -->|\"/admin @bob\"| GRANT[addAdminToSession]\n    GRANT --> ADMINS[rec.admins:<br/>'bob']\n    ADMINS --> CHECK{isOwnerOrAdmin?}\n    BOB[Admin bob<br/>attaches via WS] --> CHECK\n    CHECK -->|yes| FULL[\"Full attach surface<br/>chat → claude routing<br/>▶ Run, share links, etc.\"]\n    CHECK -->|no| RO[readOnly viewer]\n\n    O -->|\"DELETE /sessions/sid\"| OWNER_GATE{sessionBelongsToUser?<br/>(strict rec.user === user)}\n    BOB -->|\"DELETE /sessions/sid\"| OWNER_GATE\n    OWNER_GATE -->|owner| DESTROY[session deleted]\n    OWNER_GATE -->|admin| FORBIDDEN[403<br/>owner-only]\n```\n\n## Surface changes\n\n| File | Change |\n|---|---|\n| `server/src/sessions.js` | New `rec.admins: string[]` field + 4 helpers: `getSessionAdmins`, `isOwnerOrAdmin`, `addAdminToSession`, `removeAdminFromSession`. Idempotent + owner-grant-refusal built in. |\n| `server/src/index.js` | WS attach gate flipped `sessionBelongsToUser` → `isOwnerOrAdmin` (admins get full attach). DELETE route hardened with explicit comment that it stays owner-only via `sessionBelongsToUser`. |\n| `server/src/slashcmds.js` | New `/admin` command + `handleAdmin`. Permissive arg parsing: `@user` / `user` (grant), `-@user` / `-user` (revoke), empty (list). Owner-only gate with explanatory denial message. |\n| `test/admin-delegation.test.js` | NEW — 19 cases (14 inline behavior + 5 static guards) |\n| `test.sh` | Wired new test |\n\n## Usage\n\nIn the chat pane, as the session owner:\n\n```\n/admin @bob              → grants bob admin\n/admin @bob              → idempotent: \"@bob is already an admin — no change.\"\n/admin -@bob             → revokes\n/admin                   → lists current admins\n```\n\nAs a non-owner: `(/admin is owner-only. Session owner is @alice.)`\n\n## Tests\n\n```\ntest/admin-delegation.test.js                19 passed, 0 failed   (new)\ntest/stop-button-interrupt.test.js            8 passed, 0 failed   (sanity)\ntest/viewer-agent-events.test.js         "
+        }
+      ]
     },
     {
       "id": "fr-40",
@@ -1383,7 +1405,23 @@
         "originalText": "add repo url to the new session dialog, the session workspace will be populated with the project github/gitee url",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-16",
+      "text": "**Problem:** td/fr/bug item history is truncated after the worked-on item is finished, losing the full record of what happened.\n**Expected:** Full history/summary is saved as a comment on the item that was worked on.\n**Actual:** History is truncated post-completion, so the item retains only a partial record.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-19T00:57:23.428Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "td/fr/bug item history is truncated after finished, make sure full history/summary is saved to the item worked on as comment",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-19T00:47:32.352Z"
+  "updatedAt": "2026-05-19T00:57:34.411Z"
 }

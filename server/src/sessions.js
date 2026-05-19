@@ -437,6 +437,32 @@ function removeAdminFromSession(sessionId, user) {
   return true;
 }
 
+// fr-38: per-session "strict mode" gate. When on, claude-bound chat
+// messages MUST include a `[run:plan#<id>]` marker; messages without
+// it are blocked at the handleChatMessage boundary with an
+// explanatory reply (claude never runs, no tokens wasted). The marker
+// is the user's affirmation that this turn is backed by an approved
+// td/fr/bug. Default off. Toggle via `/strict on|off` slash command
+// (owner + admin per fr-39 inheritance).
+//
+// Data shape: rec.strictMode = boolean, persisted in
+// /data/sessions.json. Missing → false (off).
+function isSessionStrict(sessionId) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec) return false;
+  return !!rec.strictMode;
+}
+
+function setSessionStrict(sessionId, on) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec) return false;
+  const next = !!on;
+  if ((rec.strictMode || false) === next) return false;   // idempotent
+  rec.strictMode = next;
+  saveStore();
+  return true;
+}
+
 function shortId() { return crypto.randomBytes(4).toString('hex'); }
 
 function clamp(v, min, max, fallback) {
@@ -1041,6 +1067,9 @@ Object.assign(module.exports, {
   isOwnerOrAdmin,
   addAdminToSession,
   removeAdminFromSession,
+  // fr-38: per-session strict-mode gate (requires [run:plan#<id>] marker on claude-bound messages)
+  isSessionStrict,
+  setSessionStrict,
   importExistingTranscripts,
   getChatHistory,
   getChatHistoryLength,

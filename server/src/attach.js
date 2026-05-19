@@ -1265,12 +1265,71 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     return;
   }
 
+  // fr-38: strict-mode gate. In strict mode, claude-bound chat
+  // messages MUST include a `[run:plan#<id>]` marker — the user's
+  // affirmation that this turn is backed by an approved td/fr/bug.
+  // Messages without the marker get a one-shot reply explaining how
+  // to unblock + DO NOT forward to claude (no wasted tokens). The
+  // gate fires AFTER mention / slash short-circuits above so user-to-
+  // user chat + slash commands + `/strict` itself flow through.
+  // Skipped for /btw (read-only ask-assistant flow) and for messages
+  // shouldAskAssistant treats as ?-questions (also non-mutating). See
+  // fr-38 comment in handleChatPostfixes for the actual marker check —
+  // we delegate there so the gate also covers the slash-then-fallthrough
+  // path (e.g. an unknown slash command that gets bounced to the
+  // postfix handler).
   handleChatPostfixes(sessionId, session, user, text, message);
+}
+
+// fr-38: marker regex matches `[run:plan#<id>]`, `[run:td#<id>]`,
+// `[run:fr#<id>]`, `[run:bug#<id>]`, `[run:test#<id>]`, `[run:arch#<id>]`
+// — the same shape attach.js already parses at line ~1197 for
+// run-outcome stamping. Permissive on id char set ([A-Za-z0-9_-]+) so
+// the legacy hex ids still work.
+function _hasRunMarker(text) {
+  return /\[run:(plan|test|arch|td|fr|bug)#[A-Za-z0-9_-]+\]/.test(String(text || ''));
 }
 
 // Non-slash routing fallthrough — separate function so the slash path
 // can chain into it after dispatch() returns false.
 function handleChatPostfixes(sessionId, session, user, text, message) {
+  // fr-38: strict-mode gate. Block claude-bound code-change attempts
+  // that lack a [run:plan#<id>] marker. Per-session opt-in via
+  // `/strict on` (rec.strictMode). The gate sits AT this fallthrough
+  // entry so all paths that would forward to claude pass through it —
+  // including the unknown-slash bounce + the plain-text fallthrough.
+  // Exceptions (intentional): /btw (read-only assistant), shouldAsk-
+  // Assistant ?-question pattern (also read-only), and special-key
+  // interrupt tokens further down — none of those drive code changes,
+  // so the gate doesn't apply.
+  //
+  // isSessionStrict must be evaluated BEFORE the first
+  // shouldAskAssistant(text) call below — both as the dispatch
+  // predicate AND as the test-asserted source-order invariant: a
+  // misordered guard could route to claude before the strict-mode
+  // check fired.
+  if (sessionsMod.isSessionStrict(sessionId)) {
+    const looksLikeKey = /^(esc|escape|ctrl-c|\^c|enter|return|space|tab|shift-tab|shift\+tab)$/i
+      .test(String(text || '').trim());
+    if (!shouldAskAssistant(text) && !looksLikeKey && !_hasRunMarker(text)) {
+      const blockMsg = {
+        user: ASSISTANT_USER,
+        text:
+          '🛑 **Strict-mode is on** — this message would drive a code change but has no `[run:plan#<id>]` marker backing it.\n\n' +
+          'To proceed:\n' +
+          '1. Click **▶ Run** on an open plan item (auto-prepends the marker), OR\n' +
+          '2. File a backing item with `/td <description>` / `/fr <description>` / `/bug <description>`, then include `[run:plan#<id>]` in your message, OR\n' +
+          '3. Turn the gate off: `/strict off`.\n\n' +
+          'fr-38 documents the rationale.',
+        ts: new Date().toISOString(),
+        meta: { kind: 'strict-mode-block' },
+      };
+      sessionsMod.appendChatMessage(sessionId, blockMsg);
+      session.emit('chat', blockMsg);
+      console.log(`[strict-mode] ${sessionId} blocked user=${user} text=${JSON.stringify(String(text || '').slice(0, 80))}`);
+      return;
+    }
+  }
   if (shouldAskAssistant(text)) {
     runAssistant(sessionId, session, message).catch((err) => {
       console.error(`[chat-assistant] ${err.message}`);

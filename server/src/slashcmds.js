@@ -131,6 +131,12 @@ const COMMANDS = [
     handler: handleAdmin,
   },
   {
+    names: ['strict'],
+    summary: 'Toggle strict-mode gate: claude-bound chat must include [run:plan#<id>] (owner + admin).',
+    usage: '/strict on · /strict off · /strict (status)',
+    handler: handleStrict,
+  },
+  {
     names: ['help'],
     summary: 'List available chat commands',
     usage: '/help',
@@ -1072,6 +1078,50 @@ function handleAdmin(ctx) {
     ctx.reply(added
       ? `✓ @${target} is now an admin on this session. Inherits everything except delete-session + grant/revoke admin (those stay owner-only).`
       : `(@${target} is already an admin — no change.)`);
+  }
+}
+
+// fr-38: /strict on / /strict off / /strict (status). Owner + admin
+// can flip (admins inherit per fr-39). When ON, handleChatMessage
+// blocks any claude-bound chat message that lacks a [run:plan#<id>]
+// marker, with a one-shot reply explaining how to unblock.
+function handleStrict(ctx) {
+  const sessionsMod = require('./sessions');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/strict: session not found)');
+    return;
+  }
+  // Owner + admin gate. Admins inherit non-destructive controls
+  // per fr-39; strict-mode toggle isn't grant/revoke/delete so it's
+  // in-scope for admins.
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    ctx.reply(`(/strict is owner-or-admin only. Session owner is @${rec.user}.)`);
+    return;
+  }
+  const arg = String((ctx && ctx.args) || '').trim().toLowerCase();
+  if (!arg) {
+    const on = sessionsMod.isSessionStrict(ctx.sessionId);
+    ctx.reply(`Strict-mode is currently \`${on ? 'on' : 'off'}\`. ` +
+      (on
+        ? 'Claude-bound messages must include `[run:plan#<id>]` to drive code changes.'
+        : 'All chat messages forward to claude as usual. `/strict on` to gate.'));
+    return;
+  }
+  if (arg !== 'on' && arg !== 'off') {
+    ctx.reply('Usage: `/strict on` (enable gate), `/strict off` (disable), or `/strict` (status).');
+    return;
+  }
+  const wantOn = arg === 'on';
+  const changed = sessionsMod.setSessionStrict(ctx.sessionId, wantOn);
+  if (!changed) {
+    ctx.reply(`(strict-mode was already \`${wantOn ? 'on' : 'off'}\` — no change.)`);
+    return;
+  }
+  if (wantOn) {
+    ctx.reply('✓ Strict-mode is now `on`. Claude-bound chat messages must include `[run:plan#<id>]` (click ▶ Run on a plan item, or type the marker manually) to drive code changes. `/strict off` to disable.');
+  } else {
+    ctx.reply('✓ Strict-mode is now `off`. All chat messages forward to claude as usual.');
   }
 }
 
