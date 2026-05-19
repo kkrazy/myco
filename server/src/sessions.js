@@ -423,6 +423,20 @@ function addAdminToSession(sessionId, user) {
   if (rec.admins.includes(user)) return false;  // idempotent
   rec.admins.push(user);
   saveStore();
+  // bug-17 fix: kick the granted user's existing viewer WS so they
+  // reconnect — the new attach evaluates isOwnerOrAdmin against the
+  // freshly-mutated rec.admins and lands them on the owner branch
+  // instead of the viewer-readOnly branch. Without this, the user
+  // would have to manually reload the page for the grant to take
+  // effect (the symptom kkrazy reported in bug-17).
+  try {
+    const attachMod = require('./attach');
+    if (typeof attachMod._kickViewerByLogin === 'function') {
+      attachMod._kickViewerByLogin(sessionId, user);
+    }
+  } catch (err) {
+    console.error(`[bug-17-kick] addAdmin: kick failed for ${sessionId}/${user}: ${err.message}`);
+  }
   return true;
 }
 
@@ -434,6 +448,19 @@ function removeAdminFromSession(sessionId, user) {
   if (idx < 0) return false;                    // idempotent
   rec.admins.splice(idx, 1);
   saveStore();
+  // bug-17 fix: kick the revoked admin's existing owner-branch WS
+  // so they reconnect — the new attach evaluates isOwnerOrAdmin
+  // against the freshly-mutated rec.admins and lands them on the
+  // viewer-readOnly branch. Without this, a revoked admin would
+  // keep driving claude until they reload.
+  try {
+    const attachMod = require('./attach');
+    if (typeof attachMod._kickViewerByLogin === 'function') {
+      attachMod._kickViewerByLogin(sessionId, user);
+    }
+  } catch (err) {
+    console.error(`[bug-17-kick] removeAdmin: kick failed for ${sessionId}/${user}: ${err.message}`);
+  }
   return true;
 }
 

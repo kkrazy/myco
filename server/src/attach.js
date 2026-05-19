@@ -639,6 +639,35 @@ function _broadcastPresence(sessionId) {
   }
 }
 
+// bug-17 fix: kick every WS for (sessionId, login). Used by
+// sessions.addAdminToSession / removeAdminFromSession when the
+// promoted/demoted user has an existing WS — closing it forces the
+// client's reconnect logic to fire, and the new attach evaluates
+// isOwnerOrAdmin against the freshly-mutated rec.admins, landing the
+// user on the correct branch (owner vs viewer). Kicks regardless of
+// role so it covers both directions (grant: kick viewer → reconnect
+// as owner-branch; revoke: kick owner-branch → reconnect as viewer).
+// Returns the number of WSes closed (0 on missing presence / no
+// match — safe no-op).
+function _kickViewerByLogin(sessionId, login) {
+  const set = _sessionPresence.get(sessionId);
+  if (!set || !login) return 0;
+  let kicked = 0;
+  for (const info of set) {
+    if (info.login !== login) continue;
+    try {
+      if (info.ws && typeof info.ws.close === 'function') {
+        info.ws.close();
+        kicked++;
+      }
+    } catch {}
+  }
+  if (kicked > 0) {
+    console.log(`[bug-17-kick] ${sessionId} closed ${kicked} ws for login=${login} (admin grant/revoke triggered reconnect)`);
+  }
+  return kicked;
+}
+
 function attachWebSocket(session, ws, opts = {}) {
   return _attachAgentWebSocket(session, ws, opts);
 }
@@ -1440,6 +1469,12 @@ module.exports = {
   handleMenuSubmit,
   _detectMentionTarget,
   _supersedeStaleMenus,
+  // bug-17 fix: exposed so sessions.addAdminToSession +
+  // removeAdminFromSession can kick the affected user's existing WS
+  // and force a reconnect (the readOnly flag is one-shot at attach
+  // time, so rec.admins changes don't reach in-flight viewer WSes
+  // without a reconnect).
+  _kickViewerByLogin,
   // Re-export menu helpers so callers that historically grabbed them off
   // ptyMod continue to find them.
   handleSessionMenu: menuMod.handleSessionMenu,

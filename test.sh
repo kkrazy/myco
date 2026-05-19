@@ -2356,6 +2356,16 @@ test_chat_window() {
   # BEFORE the claude-dispatch shouldAskAssistant call, and the
   # /strict slash command + owner+admin gate.
   node_test_result test/strict-mode-gate.test.js "test/strict-mode-gate.test.js (16 cases)"
+  # bug-17: admin grant must propagate to already-attached WSes (the
+  # readOnly flag is one-shot at attach time, so rec.admins changes
+  # don't reach in-flight viewer connections without a reconnect).
+  # Fix: addAdminToSession + removeAdminFromSession call
+  # _kickViewerByLogin in attach.js, closing the affected user's WSes
+  # so the client reconnects + re-evaluates isOwnerOrAdmin on the
+  # new attach. ALSO locks handleAdmin's validation gates: reject
+  # ASSISTANT_USER ('claude') + reject targets not in
+  # allowed-github-users.txt (auth.isAllowed) when auth is required.
+  node_test_result test/bug-17-admin-grant-propagation.test.js "test/bug-17-admin-grant-propagation.test.js (14 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

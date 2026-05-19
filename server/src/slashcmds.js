@@ -1068,6 +1068,26 @@ function handleAdmin(ctx) {
     ctx.reply(`(@${target} is the owner — already has all privileges.)`);
     return;
   }
+  // bug-17 fix: reject the assistant user. ASSISTANT_USER ('claude')
+  // is myco's internal speaker; granting it admin is meaningless
+  // (it's not a real github login, can't authenticate) and confusing
+  // (the bot's confirmation reply could be misread). Apply on BOTH
+  // grant and revoke paths so the symmetric typo is caught.
+  if (target === ASSISTANT_USER) {
+    ctx.reply(`(/admin: cannot ${revoke ? 'revoke' : 'grant'} the assistant user (@${target}). Pick a real github login.)`);
+    return;
+  }
+  // bug-17 fix: reject targets not in the invitation allowlist. Only
+  // enforce when auth is required (isAuthRequired() === true) — in
+  // single-user dev mode there's no allowlist concept. This prevents
+  // rec.admins from accumulating logins that can never log in. Skip
+  // for the revoke path so the owner can always clean up a previously-
+  // granted but now-removed-from-allowlist user.
+  const auth = require('./auth');
+  if (!revoke && auth.isAuthRequired() && !auth.isAllowed(target)) {
+    ctx.reply(`(/admin: @${target} is not in the invitation allowlist (allowed-github-users.txt). Run \`./deploy.sh --allow-github-user ${target}\` first, then retry.)`);
+    return;
+  }
   if (revoke) {
     const removed = sessionsMod.removeAdminFromSession(ctx.sessionId, target);
     ctx.reply(removed
