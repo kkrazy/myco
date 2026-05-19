@@ -237,7 +237,18 @@ class AgentSession extends EventEmitter {
     const sdkOpts = {
       cwd: this.cwd,
       permissionMode: 'default',
-      abortSignal: this._abortController.signal,
+      // bug-14 round 2 (the 1c7ae4c WS-frame fix was correct but
+      // insufficient): the SDK's documented option is `abortController`
+      // (an AbortController instance), NOT `abortSignal` (an AbortSignal).
+      // Pre-fix we passed `abortSignal: controller.signal`, which the
+      // SDK silently ignored as an unknown field — so when
+      // session.interrupt() called controller.abort(), nothing on the
+      // SDK side was listening. The for-await loop stayed blocked
+      // inside the SDK's tool execution until the tool finished
+      // naturally (90s sleep ran to completion in the user's repro).
+      // Verified against sdk.d.ts:1155-1160: `abortController?:
+      // AbortController` is THE field name.
+      abortController: this._abortController,
       canUseTool: (toolName, input, ctx) => this._canUseTool(toolName, input, ctx),
       // Phase 6: per-session allow-list as a PreToolUse hook. Runs BEFORE
       // canUseTool so matching rules auto-approve/auto-deny without

@@ -174,5 +174,55 @@ t('static guard: viewer attach also handles t==="interrupt" (or explicitly block
     'attachViewerWebSocket must mention interrupt — either to handle it or to explicitly deny viewers');
 });
 
+// bug-14 round 2: the 1c7ae4c fix routed Stop through {t:'interrupt'}
+// correctly, but session.interrupt() had ZERO effect because
+// agent-session.js was passing the SDK option as `abortSignal:
+// controller.signal` instead of the documented field name
+// `abortController: controller`. The SDK silently ignored the unknown
+// field — interrupt() called .abort() on a controller no one listened
+// to, the for-await loop stayed blocked inside the SDK's tool execution,
+// and the user's 90-second Bash sleep ran to completion. User reported
+// this on 2026-05-19 16:25 UTC.
+//
+// Static guard locks the correct field name onto sdkOpts so a future
+// edit can't silently regress to the typo.
+
+t('bug-14 round 2: sdkOpts uses abortController (NOT abortSignal)', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'src', 'agent-session.js'), 'utf8');
+  // The Options type in the SDK (sdk.d.ts:1155-1160) declares
+  //   abortController?: AbortController;
+  // and that's the ONLY way the SDK observes our cancellation. Passing
+  // `abortSignal: controller.signal` makes interrupt() a no-op because
+  // the SDK doesn't listen on that field.
+  assert.ok(
+    /abortController:\s*this\._abortController/.test(src),
+    'sdkOpts must include `abortController: this._abortController` — without this, ' +
+    'session.interrupt() never propagates to the SDK and a running tool ' +
+    '(Bash sleep, WebFetch, subagent) runs to natural completion. ' +
+    'Field name comes from @anthropic-ai/claude-agent-sdk sdk.d.ts Options.');
+  // Negative guard: the pre-fix typo must NOT come back.
+  assert.ok(
+    !/abortSignal:\s*this\._abortController\.signal/.test(src),
+    'sdkOpts must NOT pass `abortSignal: this._abortController.signal` — that\'s ' +
+    'the bug-14 round-2 typo. The SDK ignores unknown options silently, so ' +
+    'interrupt() becomes a no-op.');
+});
+
+t('bug-14 round 2: session.interrupt() calls abortController.abort()', () => {
+  // Sanity check that interrupt() still calls .abort() on the controller
+  // — the abortController-wiring fix is only useful if interrupt() still
+  // signals on the controller. (Asserts the property that 1c7ae4c
+  // already guaranteed; reaffirming so a refactor that drops .abort()
+  // is caught alongside.)
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'src', 'agent-session.js'), 'utf8');
+  const interruptStart = src.search(/interrupt\s*\(\s*\)\s*\{/);
+  assert.ok(interruptStart > 0, 'interrupt() method must exist');
+  const body = src.slice(interruptStart, interruptStart + 600);
+  assert.ok(/this\._abortController\.abort\s*\(/.test(body),
+    'interrupt() must call this._abortController.abort() — that\'s what signals the SDK to stop');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
