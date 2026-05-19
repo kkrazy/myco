@@ -2337,6 +2337,14 @@ test_chat_window() {
   # filter application in renderArtifact, and the explicit "all done"
   # empty-state message.
   node_test_result test/plan-open-only-toggle.test.js "test/plan-open-only-toggle.test.js (9 cases)"
+  # fr-39: per-session admin delegation. Owners can /admin @user to
+  # grant admin (multi-admin supported); admins inherit everything
+  # except DELETE-session + grant/revoke admin (those stay
+  # owner-only). Locks the 4 helpers in sessions.js, the WS-attach
+  # gate flip from sessionBelongsToUser → isOwnerOrAdmin, the
+  # DELETE route staying owner-only, and the /admin slash command +
+  # owner-only handler gate.
+  node_test_result test/admin-delegation.test.js "test/admin-delegation.test.js (19 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

@@ -394,6 +394,49 @@ function sessionBelongsToUser(sessionId, user) {
   return rec.user === user;
 }
 
+// fr-39: per-session admin delegation. Owners can promote other users
+// to admin via `/admin @user` (slash command in slashcmds.js). Admins
+// inherit everything owner can do EXCEPT delete-session and grant/
+// revoke admin (those stay owner-only — see comments at the DELETE
+// route in index.js and the /admin handler in slashcmds.js).
+//
+// Data shape: rec.admins = [string login, ...] persisted in
+// /data/sessions.json. Missing field → [] (empty list).
+function getSessionAdmins(sessionId) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec) return [];
+  return Array.isArray(rec.admins) ? rec.admins.slice() : [];
+}
+
+function isOwnerOrAdmin(sessionId, user) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec || !user) return false;
+  if (rec.user === user) return true;
+  return Array.isArray(rec.admins) && rec.admins.includes(user);
+}
+
+function addAdminToSession(sessionId, user) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec || !user) return false;
+  if (rec.user === user) return false;          // owner is implicit admin; don't add a redundant entry
+  if (!Array.isArray(rec.admins)) rec.admins = [];
+  if (rec.admins.includes(user)) return false;  // idempotent
+  rec.admins.push(user);
+  saveStore();
+  return true;
+}
+
+function removeAdminFromSession(sessionId, user) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec || !user) return false;
+  if (!Array.isArray(rec.admins)) return false;
+  const idx = rec.admins.indexOf(user);
+  if (idx < 0) return false;                    // idempotent
+  rec.admins.splice(idx, 1);
+  saveStore();
+  return true;
+}
+
 function shortId() { return crypto.randomBytes(4).toString('hex'); }
 
 function clamp(v, min, max, fallback) {
@@ -993,6 +1036,11 @@ Object.assign(module.exports, {
   ensureLiveSession,
   sessionBelongsToUser,
   deleteSession,
+  // fr-39: per-session admin delegation
+  getSessionAdmins,
+  isOwnerOrAdmin,
+  addAdminToSession,
+  removeAdminFromSession,
   importExistingTranscripts,
   getChatHistory,
   getChatHistoryLength,

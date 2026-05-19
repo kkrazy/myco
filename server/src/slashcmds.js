@@ -125,6 +125,12 @@ const COMMANDS = [
     handler: handleSetPat,
   },
   {
+    names: ['admin'],
+    summary: 'Grant/revoke admin on this session (owner only). Admins inherit everything except delete + grant/revoke.',
+    usage: '/admin @user (grant) · /admin -@user (revoke) · /admin (list)',
+    handler: handleAdmin,
+  },
+  {
     names: ['help'],
     summary: 'List available chat commands',
     usage: '/help',
@@ -1002,6 +1008,71 @@ function handleClear(ctx) {
     if (session) session.emit('state-update', { kind: 'chat-clear' });
   } catch {}
   ctx.reply(`✓ cleared ${cleared} chat message${cleared === 1 ? '' : 's'}`);
+}
+
+// fr-39: /admin @user (grant), /admin -@user (revoke), /admin (list).
+// Owner-only — the gate is intentional: owner stays sovereign over
+// the trust graph; admins cannot promote other admins. Args are
+// parsed permissively (`@user`, `user`, `-@user`, `-user` all
+// accepted) so the user doesn't have to remember the exact form.
+function handleAdmin(ctx) {
+  const sessionsMod = require('./sessions');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/admin: session not found)');
+    return;
+  }
+  // Owner-only gate. ctx.user comes from the WS attach (set in
+  // attach.js's WS upgrade) and matches the same login compared by
+  // sessionBelongsToUser.
+  if (rec.user !== ctx.user) {
+    ctx.reply(`(/admin is owner-only. Session owner is @${rec.user}.)`);
+    return;
+  }
+  const arg = String((ctx && ctx.args) || '').trim();
+  // No args → list current admins (no-op informational).
+  if (!arg) {
+    const admins = sessionsMod.getSessionAdmins(ctx.sessionId);
+    if (!admins.length) {
+      ctx.reply('No admins on this session yet. `/admin @user` to grant; `/admin -@user` to revoke. Owner stays @' + rec.user + '.');
+    } else {
+      const list = admins.map((u) => '@' + u).join(', ');
+      ctx.reply(`Admins on this session: ${list}. Owner: @${rec.user}. \`/admin -@user\` to revoke.`);
+    }
+    return;
+  }
+  // Parse: leading "-" means revoke; otherwise grant. Strip optional
+  // "@" prefix from the username so `/admin @bob`, `/admin bob`,
+  // `/admin -@bob`, `/admin -bob` all work.
+  let revoke = false;
+  let target = arg;
+  if (target.startsWith('-')) {
+    revoke = true;
+    target = target.slice(1).trim();
+  }
+  if (target.startsWith('@')) target = target.slice(1).trim();
+  if (!target || !/^[A-Za-z0-9_-]+$/.test(target)) {
+    ctx.reply('Usage: `/admin @user` (grant), `/admin -@user` (revoke), or `/admin` (list).');
+    return;
+  }
+  // Can't admin the owner (redundant) and can't admin yourself if
+  // you're not the owner (the owner-only gate above already blocked
+  // that path, but be explicit for the self-grant misclick).
+  if (target === rec.user) {
+    ctx.reply(`(@${target} is the owner — already has all privileges.)`);
+    return;
+  }
+  if (revoke) {
+    const removed = sessionsMod.removeAdminFromSession(ctx.sessionId, target);
+    ctx.reply(removed
+      ? `✓ @${target} is no longer an admin on this session.`
+      : `(@${target} wasn't an admin — nothing to revoke.)`);
+  } else {
+    const added = sessionsMod.addAdminToSession(ctx.sessionId, target);
+    ctx.reply(added
+      ? `✓ @${target} is now an admin on this session. Inherits everything except delete-session + grant/revoke admin (those stay owner-only).`
+      : `(@${target} is already an admin — no change.)`);
+  }
 }
 
 function handleHelp(ctx) {

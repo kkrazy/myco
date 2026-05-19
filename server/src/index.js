@@ -5,7 +5,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const sessionsMod = require('./sessions');
-const { listSessions, spawnSession, sessionBelongsToUser, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
+const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
 const filesApi = require('./files');
 const { askAboutFile, ASSISTANT_USER } = require('./btw');
 const githubMod = require('./github');
@@ -539,8 +539,15 @@ server.on('upgrade', (req, socket, head) => {
       socket.destroy();
       return;
     }
-    if (isAuthRequired() && !sessionBelongsToUser(sessionId, user)) {
-      // Non-owner authenticated user → viewer (readOnly)
+    if (isAuthRequired() && !isOwnerOrAdmin(sessionId, user)) {
+      // fr-39: gate widened from sessionBelongsToUser → isOwnerOrAdmin.
+      // Non-owner authenticated user → viewer (readOnly) UNLESS the
+      // owner has promoted them to admin via `/admin @user` (admins
+      // live in rec.admins). Admins get the full attach surface —
+      // claude-routing, ▶ Run, share-link issuance, all the chat-
+      // pane affordances the owner has — EXCEPT delete-session and
+      // grant/revoke admin, both enforced separately below + in
+      // slashcmds.js.
       readOnly = true;
     }
   }
@@ -578,8 +585,14 @@ server.on('upgrade', (req, socket, head) => {
 
 app.delete('/sessions/:id', requireAuth, (req, res) => {
   const id = req.params.id;
+  // fr-39: delete is intentionally OWNER-ONLY — admins promoted via
+  // `/admin @user` inherit everything else, but session destruction
+  // stays with the original owner as the sole sovereign action. The
+  // gate uses sessionBelongsToUser (strict rec.user === user) and
+  // explicitly NOT isOwnerOrAdmin — that distinction is the whole
+  // point of fr-39.
   if (isAuthRequired() && !sessionBelongsToUser(id, req.user)) {
-    return res.status(403).json({ error: 'forbidden' });
+    return res.status(403).json({ error: 'forbidden', reason: 'owner-only' });
   }
   deleteSession(id);
   revokeShareTokensForSession(id);

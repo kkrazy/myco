@@ -1349,7 +1349,41 @@
         "originalText": "all code changes should be triggered by an approved td/fr/bug. No adhoc msg to claude should trigger any code/functionality change.",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-39",
+      "text": "**Problem:** Session owners have no way to delegate management responsibilities, forcing all admin actions through a single user.\n**Expected:** Owner can assign an admin role that grants the same permissions as the owner, except deletion of the session.\n**Actual:** Only the owner holds elevated permissions; no admin role exists.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-19T00:45:33.513Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "allow owner to assign admin which would have the same permission as the owner except deletion of the session.",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-40",
+      "text": "**Problem:** New session dialog has no way to specify a repo URL, so the session workspace can't be auto-populated from a project's GitHub/Gitee URL.\n**Expected:** New session dialog accepts a repo URL (GitHub/Gitee); on submit, the session workspace is populated from that URL.\n**Actual:** No repo URL field exists; workspace must be set up manually.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-19T00:47:27.166Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "add repo url to the new session dialog, the session workspace will be populated with the project github/gitee url",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-18T20:02:14.818Z"
+  "updatedAt": "2026-05-19T00:47:32.352Z"
 }
