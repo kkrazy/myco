@@ -2389,6 +2389,17 @@ test_chat_window() {
   # while > 0; SESSION_MAX_DEFER_MS = 30min hard cap so a genuinely-
   # hung tool can't indefinitely pin a session.
   node_test_result test/bug-21-keepalive-defers-while-tool-in-flight.test.js "test/bug-21-keepalive-defers-while-tool-in-flight.test.js (10 cases)"
+  # fr-43: SDK best-practice — _ensureIteration wraps query() in a
+  # retry loop. Recoverable errors (rate-limit, transient network
+  # blips like ECONNRESET / ETIMEDOUT / EAI_AGAIN / ENOTFOUND / EPIPE,
+  # 5xx-flavored upstream errors) re-spawn query() with
+  # resume=sdkSessionId after exponential backoff (1s → 4s → 16s).
+  # MAX_ATTEMPTS = 3. AbortError (user-initiated Stop) ALWAYS escapes
+  # the retry loop immediately; non-recoverable errors (auth 4xx,
+  # validation) fatal on first attempt. Emits retry_attempt events
+  # for observability + fatal {reason:'retry_exhausted', attempts:3}
+  # on cap.
+  node_test_result test/fr-43-rate-limit-retry.test.js "test/fr-43-rate-limit-retry.test.js (21 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

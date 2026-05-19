@@ -220,102 +220,186 @@ class AgentSession extends EventEmitter {
   // lives until either the user .kill()s us, .interrupt() is called, or
   // the SDK closes the stream. Multiple user messages (via .write())
   // share the same iteration via the streaming-input prompt.
+  //
+  // fr-43: wraps the SDK call in a retry loop. Recoverable errors
+  // (rate-limit, transient network blips like ECONNRESET / ETIMEDOUT)
+  // re-spawn query() with resume=sdkSessionId after exponential backoff.
+  // Cap at MAX_ATTEMPTS = 3. AbortError (user-initiated Stop) ALWAYS
+  // escapes the retry loop immediately. Non-recoverable errors (auth
+  // failures, validation) fatal on the first attempt without retry.
   async _ensureIteration() {
     if (!this.alive || this._iterating) return;
     this._iterating = true;
-    this._msgQueue = new AsyncMessageQueue();
-    this._abortController = new AbortController();
 
-    // Drain any pre-iteration writes into the fresh queue. Used by
-    // .write() when no iteration was running yet, OR by interrupt's
-    // restart path that needs to redeliver the in-flight user message.
-    if (this._pendingPrePush && this._pendingPrePush.length) {
-      for (const m of this._pendingPrePush) this._msgQueue.push(m);
-      this._pendingPrePush = null;
-    }
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [1000, 4000, 16000];
 
-    const sdkOpts = {
-      cwd: this.cwd,
-      permissionMode: 'default',
-      // bug-14 round 2 (the 1c7ae4c WS-frame fix was correct but
-      // insufficient): the SDK's documented option is `abortController`
-      // (an AbortController instance), NOT `abortSignal` (an AbortSignal).
-      // Pre-fix we passed `abortSignal: controller.signal`, which the
-      // SDK silently ignored as an unknown field — so when
-      // session.interrupt() called controller.abort(), nothing on the
-      // SDK side was listening. The for-await loop stayed blocked
-      // inside the SDK's tool execution until the tool finished
-      // naturally (90s sleep ran to completion in the user's repro).
-      // Verified against sdk.d.ts:1155-1160: `abortController?:
-      // AbortController` is THE field name.
-      abortController: this._abortController,
-      canUseTool: (toolName, input, ctx) => this._canUseTool(toolName, input, ctx),
-      // Phase 6: per-session allow-list as a PreToolUse hook. Runs BEFORE
-      // canUseTool so matching rules auto-approve/auto-deny without
-      // popping a chat-pane menu card. Falls through to canUseTool when
-      // no rule matches.
-      hooks: {
-        PreToolUse: [{
-          // matcher omitted ⇒ "all tools" — we always consult the
-          // allow-list, then fall through if no match.
-          hooks: [(input, toolUseID, ctx) => this._preToolUseHook(input, toolUseID, ctx)],
-        }],
-      },
-      // Per-session memory + project settings: redirect the SDK's
-      // auto-memory directory from the default $HOME/.claude/projects/
-      // <sanitized-cwd>/memory/ into the session's own .claude/memory/.
-      // Same for plansDirectory: ExitPlanMode plans land in the
-      // session's .claude/plans/ instead of $HOME/.claude/plans/, so
-      // each session's plan artifacts stay co-located with the
-      // session's workspace. settingSources excludes 'user' so the
-      // shared $HOME/.claude/settings.json doesn't leak across
-      // sessions; project + local remain so .claude/settings.json +
-      // .claude/settings.local.json inside the session folder still
-      // drive per-project config.
-      settings: {
-        autoMemoryEnabled: true,
-        autoMemoryDirectory: path.join(this.cwd, '.claude', 'memory'),
-        plansDirectory: path.join(this.cwd, '.claude', 'plans'),
-      },
-      settingSources: ['project', 'local'],
-      // myco's own in-process MCP server exposes server-side tools
-      // claude can call. Currently: mcp__myco__add_plan_items
-      // appends items to plan.json. Per-session so the tool
-      // handlers can scope mutations to THIS session via closure.
-      mcpServers: {
-        myco: require('./myco-mcp').createMycoMcpServer(this.sessionId),
-      },
-    };
-    if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (!this.alive) break;
+      const lastAttempt = attempt === MAX_ATTEMPTS;
 
-    let stream;
-    try {
-      stream = query({ prompt: this._msgQueue, options: sdkOpts });
-    } catch (err) {
-      this._emit({ type: 'fatal', error: String((err && err.message) || err) });
-      this._iterating = false;
-      this._msgQueue = null;
-      return;
-    }
-    this._emit({ type: 'iteration_start', resume: !!sdkOpts.resume });
+      // Fresh queue + controller per attempt — the prior attempt's
+      // controller may have been aborted; the prior queue may have
+      // been consumed by the dead stream.
+      this._msgQueue = new AsyncMessageQueue();
+      this._abortController = new AbortController();
 
-    try {
-      for await (const m of stream) {
-        if (!this.alive) break;
-        this._handleEvent(m);
+      // Drain any pre-iteration writes into the fresh queue. Used by
+      // .write() when no iteration was running yet, OR by interrupt's
+      // restart path that needs to redeliver the in-flight user message.
+      if (this._pendingPrePush && this._pendingPrePush.length) {
+        for (const m of this._pendingPrePush) this._msgQueue.push(m);
+        this._pendingPrePush = null;
       }
-    } catch (err) {
-      const isAbort = (err && (err.name === 'AbortError' || /aborted|abort/i.test(String(err.message || ''))));
+
+      const sdkOpts = {
+        cwd: this.cwd,
+        permissionMode: 'default',
+        // bug-14 round 2 (the 1c7ae4c WS-frame fix was correct but
+        // insufficient): the SDK's documented option is `abortController`
+        // (an AbortController instance), NOT `abortSignal` (an AbortSignal).
+        // Pre-fix we passed `abortSignal: controller.signal`, which the
+        // SDK silently ignored as an unknown field — so when
+        // session.interrupt() called controller.abort(), nothing on the
+        // SDK side was listening. The for-await loop stayed blocked
+        // inside the SDK's tool execution until the tool finished
+        // naturally (90s sleep ran to completion in the user's repro).
+        // Verified against sdk.d.ts:1155-1160: `abortController?:
+        // AbortController` is THE field name.
+        abortController: this._abortController,
+        canUseTool: (toolName, input, ctx) => this._canUseTool(toolName, input, ctx),
+        // Phase 6: per-session allow-list as a PreToolUse hook. Runs BEFORE
+        // canUseTool so matching rules auto-approve/auto-deny without
+        // popping a chat-pane menu card. Falls through to canUseTool when
+        // no rule matches.
+        hooks: {
+          PreToolUse: [{
+            // matcher omitted ⇒ "all tools" — we always consult the
+            // allow-list, then fall through if no match.
+            hooks: [(input, toolUseID, ctx) => this._preToolUseHook(input, toolUseID, ctx)],
+          }],
+        },
+        // Per-session memory + project settings: redirect the SDK's
+        // auto-memory directory from the default $HOME/.claude/projects/
+        // <sanitized-cwd>/memory/ into the session's own .claude/memory/.
+        // Same for plansDirectory: ExitPlanMode plans land in the
+        // session's .claude/plans/ instead of $HOME/.claude/plans/, so
+        // each session's plan artifacts stay co-located with the
+        // session's workspace. settingSources excludes 'user' so the
+        // shared $HOME/.claude/settings.json doesn't leak across
+        // sessions; project + local remain so .claude/settings.json +
+        // .claude/settings.local.json inside the session folder still
+        // drive per-project config.
+        settings: {
+          autoMemoryEnabled: true,
+          autoMemoryDirectory: path.join(this.cwd, '.claude', 'memory'),
+          plansDirectory: path.join(this.cwd, '.claude', 'plans'),
+        },
+        settingSources: ['project', 'local'],
+        // myco's own in-process MCP server exposes server-side tools
+        // claude can call. Currently: mcp__myco__add_plan_items
+        // appends items to plan.json. Per-session so the tool
+        // handlers can scope mutations to THIS session via closure.
+        mcpServers: {
+          myco: require('./myco-mcp').createMycoMcpServer(this.sessionId),
+        },
+      };
+      if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
+
+      let stream, initErr = null;
+      try {
+        stream = query({ prompt: this._msgQueue, options: sdkOpts });
+      } catch (err) {
+        initErr = err;
+      }
+
+      if (initErr) {
+        if (this._isRecoverable(initErr) && !lastAttempt) {
+          await this._emitRetryAndWait(attempt, BACKOFF_MS, initErr);
+          continue;
+        }
+        const isExhausted = lastAttempt && this._isRecoverable(initErr);
+        this._emit({
+          type: 'fatal',
+          error: String((initErr && initErr.message) || initErr),
+          ...(isExhausted ? { reason: 'retry_exhausted', attempts: attempt } : {}),
+        });
+        break;
+      }
+
+      this._emit({ type: 'iteration_start', resume: !!sdkOpts.resume, attempt });
+
+      let streamErr = null;
+      try {
+        for await (const m of stream) {
+          if (!this.alive) break;
+          this._handleEvent(m);
+        }
+      } catch (err) {
+        streamErr = err;
+      }
+
+      if (!streamErr) break;   // stream ended cleanly — done.
+
+      const isAbort = (streamErr && (streamErr.name === 'AbortError' || /aborted|abort/i.test(String(streamErr.message || ''))));
       if (isAbort) {
         this._emit({ type: 'iteration_aborted' });
-      } else {
-        this._emit({ type: 'fatal', error: String((err && err.message) || err) });
+        break;
       }
+
+      if (this._isRecoverable(streamErr) && !lastAttempt) {
+        await this._emitRetryAndWait(attempt, BACKOFF_MS, streamErr);
+        continue;
+      }
+
+      const isExhausted = lastAttempt && this._isRecoverable(streamErr);
+      this._emit({
+        type: 'fatal',
+        error: String((streamErr && streamErr.message) || streamErr),
+        ...(isExhausted ? { reason: 'retry_exhausted', attempts: attempt } : {}),
+      });
+      break;
     }
+
     this._iterating = false;
     this._msgQueue = null;
     this._abortController = null;
     if (this.alive) this.emit('idle');
+  }
+
+  // fr-43: classify an SDK error as retry-eligible. Conservative —
+  // recognises network-level transient codes (ECONNRESET, ETIMEDOUT,
+  // EAI_AGAIN, ENOTFOUND, EPIPE — both directly on `err.code` and
+  // wrapped via `err.cause.code` per Node fetch's pattern) plus a
+  // message-pattern fallback for rate-limit / 5xx-flavored / network /
+  // timeout errors that don't carry a structured code. AbortError,
+  // 4xx auth/validation errors, and model_error class failures are
+  // NOT recoverable — retrying produces the same failure.
+  _isRecoverable(err) {
+    if (!err) return false;
+    const code = err.code || (err.cause && err.cause.code);
+    const TRANSIENT_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE']);
+    if (code && TRANSIENT_CODES.has(code)) return true;
+    const msg = String((err && err.message) || '');
+    if (/rate.?limit|too many requests|\b50[234]\b|fetch failed|network|timeout/i.test(msg)) return true;
+    return false;
+  }
+
+  // fr-43: emit a retry_attempt event + sleep the backoff delay.
+  // The event is observable by attached clients so the chat pane can
+  // render "retrying (attempt 2/3)" UX in a future iteration. `attempt`
+  // is the JUST-FAILED attempt; the next attempt # is attempt+1.
+  async _emitRetryAndWait(attempt, backoffMs, err) {
+    const baseMs = backoffMs[Math.min(attempt - 1, backoffMs.length - 1)];
+    const reason = /rate.?limit/i.test(String((err && err.message) || '')) ? 'rate_limit' : 'transient_error';
+    this._emit({
+      type: 'retry_attempt',
+      attempt: attempt + 1,
+      reason,
+      retryAfterMs: baseMs,
+      error: String((err && err.message) || err).slice(0, 200),
+    });
+    await new Promise((resolve) => setTimeout(resolve, baseMs));
   }
 
   // Abort the in-flight SDK iteration. Next .write() will start a fresh
