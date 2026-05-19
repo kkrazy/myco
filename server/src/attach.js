@@ -1416,17 +1416,34 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
     return;
   }
 
-  // Bare-digit menu pick for the most recently broadcast menu. Delegate
-  // to handleMenuPick so we get BOTH effects:
+  // Bare-digit menu pick. Delegates to handleMenuPick so we get BOTH:
   //   (1) session.resolveMenuPick — unblocks the SDK's canUseTool
   //       promise so claude can proceed
   //   (2) _markMenuChatAnswered — stamps the chat row's meta.pickedN +
   //       meta.answered and emits a state-update to all clients
+  //
+  // bug-21: when multiple menus are pending (parallel tool calls), the
+  // bare digit targets the OLDEST pending menu — head of the queue.
+  // Rationale: explicit per-card button-clicks always carry their own
+  // hash and remain unambiguous, but a bare digit has no hash to
+  // disambiguate. FIFO is the least-surprising choice (resolve in the
+  // order they appeared) and matches the order the SDK is waiting on
+  // them. When 2+ are pending we also emit a chat note so the user
+  // knows their digit went to the first one, not the most recent.
   const asDigit = /^[1-9]$/.test(input) ? parseInt(input, 10) : NaN;
-  if (Number.isFinite(asDigit) && session.pendingMenu) {
-    const hash = session.pendingMenu.hash;
+  if (Number.isFinite(asDigit) && session.pendingMenus && session.pendingMenus.size > 0) {
+    const target = session.oldestPendingMenu;
+    const hash = target && target.hash;
     if (hash) {
-      console.log(`[chat→agent] ${user}: menu pick ${asDigit} (chat shorthand, hash=${hash.slice(-12)})`);
+      const totalPending = session.pendingMenus.size;
+      console.log(`[chat→agent] ${user}: menu pick ${asDigit} (chat shorthand, hash=${hash.slice(-12)}, oldestOf=${totalPending})`);
+      if (totalPending > 1) {
+        session.emit('chat', {
+          user: ASSISTANT_USER,
+          text: `(picked option ${asDigit} for the OLDEST of ${totalPending} pending menus. To target a specific menu, click its button directly — the bare-digit shortcut always picks the head of the queue.)`,
+          ts: new Date().toISOString(),
+        });
+      }
       handleMenuPick(sessionId, session, asDigit, hash);
       return;
     }

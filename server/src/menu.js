@@ -72,21 +72,18 @@ function autoRespondToMenu(sessionId, session, menu, optionN, verb, target) {
 }
 
 function broadcastMenuToChat(sessionId, session, menu, target) {
-  // Phase 2.5: before broadcasting a new menu, stamp any older
-  // unanswered menus on this session as superseded. In agent mode
-  // the SDK only fires a fresh canUseTool when the prior one has
-  // already been resolved (via session.resolveMenuPick), so any
-  // older "active" row in rec.chat must have been answered out-of-
-  // band — most commonly via the bare-digit chat shortcut that, pre-
-  // 2026-05-15, resolved the SDK promise without stamping the row.
-  // The supersede sweep keeps the modal queue and chat history from
-  // accumulating zombie picks.
-  try {
-    const attachMod = require('./attach');
-    if (typeof attachMod._supersedeStaleMenus === 'function') {
-      attachMod._supersedeStaleMenus(sessionId);
-    }
-  } catch {}
+  // bug-21: the Phase 2.5 supersede-on-broadcast sweep used to live
+  // here. Its premise was "the SDK only fires a fresh canUseTool when
+  // the prior one has already been resolved" — TRUE in serial tool-
+  // call mode, FALSE under parallel tool calls (Claude can issue N
+  // tool_use blocks in one assistant message, and the SDK fires
+  // canUseTool for each in parallel before any is resolved). Marking
+  // older menus as superseded in that scenario orphaned their resolver
+  // promises and deadlocked the SDK iteration. The supersede sweep
+  // still runs from sessions.ensureLiveSession on AgentSession respawn
+  // (those menus genuinely refer to dead resolver promises from a
+  // killed-and-restarted process); it just no longer fires whenever a
+  // new sibling menu lands in chat.
   const lines = [];
   if (target) {
     const summary = `${target.tool}(${target.input || ''})`.slice(0, 200);

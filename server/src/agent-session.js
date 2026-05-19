@@ -130,10 +130,20 @@ class AgentSession extends EventEmitter {
     // Latest model + tool list reported by system/init; useful for the
     // attach-snapshot a freshly-connecting client should see.
     this._initSnapshot = null;
-    // pendingMenu mirrors PtySession's field — set when a menu was
-    // emitted, cleared when answered. Phase 2 wires it up; for now
-    // stays null because canUseTool auto-denies.
-    this.pendingMenu = null;
+    // bug-21 fix (parallel canUseTool fires): pendingMenus is a
+    // Map<hash, menu> rather than a single slot. With parallel tool
+    // calls the SDK fires canUseTool for BOTH tools before either is
+    // resolved — a single slot would let menu B overwrite menu A
+    // and orphan A's resolver promise (SDK deadlock). The Map keeps
+    // each menu independently addressable until its specific hash is
+    // resolved via resolveMenuPick.
+    //
+    // The `pendingMenu` getter below preserves the pre-bug-21
+    // single-slot read shape (returns the most-recently-added menu)
+    // so callers that just want "the latest active menu" keep working
+    // without code changes. Bare-digit chat shortcut uses
+    // oldestPendingMenu (FIFO head-of-queue) instead.
+    this.pendingMenus = new Map();
     // Status / mode hooks for compatibility with attach-snapshot
     // plumbing. We populate _lastStatus minimally from result events.
     this._lastStatus = null;
@@ -183,6 +193,27 @@ class AgentSession extends EventEmitter {
       });
       if (opts.initialPrompt) this.write(opts.initialPrompt);
     });
+  }
+
+  // Back-compat single-slot accessor — returns the most-recently-added
+  // pending menu (Map preserves insertion order, so the last value is
+  // newest). Read-only; writes must go through pendingMenus.set / .delete.
+  // Used by slashcmds.handleDecide and any other consumer that just
+  // wants "the latest live menu" without caring about parallel siblings.
+  get pendingMenu() {
+    let last = null;
+    for (const m of this.pendingMenus.values()) last = m;
+    return last;
+  }
+
+  // FIFO head-of-queue — the OLDEST pending menu. Used by the bare-
+  // digit chat shortcut (attach.js handleChatPostfixes) when multiple
+  // menus are pending so the user's "1" / "2" / "3" reply resolves the
+  // first-asked menu rather than the most-recently-asked one. (Per-card
+  // button clicks carry their own hash and remain unambiguous.)
+  get oldestPendingMenu() {
+    for (const m of this.pendingMenus.values()) return m;
+    return null;
   }
 
   // Start (or restart, after an abort) the SDK iteration. One iteration
@@ -616,7 +647,10 @@ class AgentSession extends EventEmitter {
       subQuestionTotal: shared.questions.length,
       multi: isMulti,
     });
-    this.pendingMenu = menu;
+    // bug-21: store in Map<hash, menu> so a second canUseTool fire (from
+    // a parallel tool call) doesn't overwrite this one. resolveMenuPick /
+    // resolveMenuSubmit delete the specific hash on settle.
+    this.pendingMenus.set(subHash, menu);
     this.emit('menu', menu);
   }
 
@@ -642,7 +676,9 @@ class AgentSession extends EventEmitter {
     const pending = this._pendingPermissions.get(hash);
     if (!pending || pending.kind !== 'ask' || !pending.multi || !pending.shared) return false;
     this._pendingPermissions.delete(hash);
-    this.pendingMenu = null;
+    // bug-21: delete THIS hash from the pending-menu Map, not the whole
+    // slot — sibling parallel menus stay live.
+    this.pendingMenus.delete(hash);
     const shared = pending.shared;
     const i = pending.questionIdx;
     const q = shared.questions[i] || {};
@@ -713,7 +749,13 @@ class AgentSession extends EventEmitter {
       // stuck" incident — the chat-pane menu card was clickable, but
       // typing the digit silently queued as a user message instead of
       // resolving the canUseTool promise.
-      this.pendingMenu = menu;
+      //
+      // bug-21: Map<hash, menu> so parallel canUseTool fires don't
+      // overwrite each other. The bare-digit shortcut reads
+      // oldestPendingMenu (FIFO head-of-queue) when multiple are
+      // pending; per-card button clicks always carry the hash so they
+      // remain unambiguous regardless of pending-count.
+      this.pendingMenus.set(hash, menu);
       this.emit('menu', menu);
     });
   }
@@ -728,7 +770,9 @@ class AgentSession extends EventEmitter {
       return false;
     }
     this._pendingPermissions.delete(hash);
-    this.pendingMenu = null;
+    // bug-21: delete THIS hash only — sibling parallel menus stay live in
+    // the Map (their own resolveMenuPick will clear them individually).
+    this.pendingMenus.delete(hash);
 
     if (pending.kind === 'ask') {
       const shared = pending.shared;
@@ -794,7 +838,64 @@ class AgentSession extends EventEmitter {
       persistedRules: (reply.updatedPermissions || []).length,
     });
     pending.resolve(reply);
+    // bug-21: when "Allow always" persisted a new rule (n===2 + at
+    // least one updatedPermissions entry), the rule may also match
+    // any OTHER pending permission menu's (tool, input). Auto-resolve
+    // those siblings so the user doesn't have to re-click the same
+    // decision on every parallel menu the SDK fired in this turn.
+    if (n === 2 && reply.updatedPermissions && reply.updatedPermissions.length) {
+      this._reevaluatePendingAfterAllowAlways();
+    }
     return true;
+  }
+
+  // bug-21: walk every still-pending permission menu after a fresh
+  // allow rule was saved. For each whose (toolName, matching-input)
+  // now resolves to 'allow' via permissions.decide, settle the SDK
+  // promise with {behavior:'allow'} and emit permission_resolved
+  // {auto:true, reason:'matched rule saved via sibling Allow always'}
+  // so the chat-pane sees why the card auto-cleared. AskUserQuestion
+  // sub-questions are NOT touched (pending.kind === 'ask') — they're a
+  // different surface and the user must answer each explicitly.
+  _reevaluatePendingAfterAllowAlways() {
+    let sessionsMod, permissions, rec;
+    try {
+      sessionsMod = require('./sessions');
+      permissions = require('./permissions');
+      rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
+    } catch (err) {
+      console.error(`[agent-menu] ${this.sessionId} reevaluate failed to load deps: ${err.message}`);
+      return;
+    }
+    if (!rec) return;
+    // Snapshot — we mutate _pendingPermissions inside the loop.
+    const candidates = Array.from(this._pendingPermissions.entries());
+    let autoResolved = 0;
+    for (const [siblingHash, sibling] of candidates) {
+      if (!sibling || sibling.kind !== 'permission') continue;
+      const matchingInput = _matchingInputFor(sibling.toolName, sibling.input);
+      const decision = permissions.decide(rec, sibling.toolName, matchingInput);
+      if (decision !== 'allow') continue;
+      this._pendingPermissions.delete(siblingHash);
+      this.pendingMenus.delete(siblingHash);
+      this._emit({
+        type: 'permission_resolved',
+        toolName: sibling.toolName,
+        hash: siblingHash,
+        auto: true,
+        reason: 'matched rule saved via sibling Allow always',
+        decision: 'allow-once',
+      });
+      try {
+        sibling.resolve({ behavior: 'allow', updatedInput: sibling.input });
+        autoResolved++;
+      } catch (err) {
+        console.error(`[agent-menu] ${this.sessionId} reevaluate resolve threw for ${siblingHash.slice(-12)}: ${err.message}`);
+      }
+    }
+    if (autoResolved > 0) {
+      console.log(`[agent-menu] ${this.sessionId} reevaluate auto-resolved ${autoResolved} sibling menu(s) after Allow always`);
+    }
   }
 
   _broadcastToolProgress() {

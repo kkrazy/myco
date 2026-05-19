@@ -58,19 +58,32 @@ t('attach.js: _supersedeStaleMenus stamps + emits for each unanswered menu', () 
   assert.ok(/_emitMenuStateUpdate/.test(fn[0]), 'emit per row missing');
 });
 
-t('menu.js: broadcastMenuToChat invokes _supersedeStaleMenus before the new row lands', () => {
-  // The supersede sweep must precede the appendChatMessage call so OLD
-  // rows get stamped before the NEW one shows up in the chat history
-  // (otherwise app.js sees the new row alongside still-active old rows).
+t('menu.js: broadcastMenuToChat does NOT call _supersedeStaleMenus (bug-21)', () => {
+  // bug-21 (2026-05-19) reversed the prior contract: pre-fix, this test
+  // asserted broadcastMenuToChat MUST call _supersedeStaleMenus before
+  // appendChatMessage. That assumption — "the SDK only fires a fresh
+  // canUseTool when the prior one has already been resolved" — was
+  // TRUE in serial tool-call mode and FALSE under parallel tool calls.
+  // Stamping older menus as superseded whenever a new sibling lands
+  // orphaned their resolver promises and deadlocked the SDK iteration.
+  //
+  // FIXED contract: broadcastMenuToChat must NOT call _supersedeStaleMenus.
+  // The supersede sweep still exists (and is still legitimately called
+  // from sessions.ensureLiveSession on AgentSession respawn — those
+  // menus genuinely refer to dead resolver promises from a killed
+  // process) — it's just no longer triggered on every menu broadcast.
   const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'src', 'menu.js'), 'utf8');
   const fn = src.match(/function broadcastMenuToChat[\s\S]+?\n}/);
   assert.ok(fn, 'broadcastMenuToChat not found in menu.js');
-  const supersedeIdx = fn[0].indexOf('_supersedeStaleMenus');
-  const appendIdx = fn[0].indexOf('appendChatMessage');
-  assert.ok(supersedeIdx > 0, 'supersede call missing from broadcastMenuToChat');
-  assert.ok(appendIdx > 0, 'appendChatMessage missing from broadcastMenuToChat');
-  assert.ok(supersedeIdx < appendIdx,
-    'supersede must run before appendChatMessage so old rows are stamped first');
+  const supersedeIdx = fn[0].indexOf('_supersedeStaleMenus(');
+  assert.strictEqual(supersedeIdx, -1,
+    'broadcastMenuToChat must NOT invoke _supersedeStaleMenus(...) — that ' +
+    'supersedes sibling parallel menus and was the bug-21 deadlock root cause. ' +
+    'See test/bug-21-parallel-permission-menus.test.js for the full contract.');
+  // appendChatMessage must still be called (we're still broadcasting the
+  // new row to chat — the only change is what we DON'T do before that).
+  assert.ok(fn[0].indexOf('appendChatMessage') > 0,
+    'appendChatMessage still required in broadcastMenuToChat');
 });
 
 t('attach.js: _emitMenuStateUpdate sends transcriptUuid + meta payload', () => {

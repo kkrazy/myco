@@ -2366,6 +2366,19 @@ test_chat_window() {
   # ASSISTANT_USER ('claude') + reject targets not in
   # allowed-github-users.txt (auth.isAllowed) when auth is required.
   node_test_result test/bug-17-admin-grant-propagation.test.js "test/bug-17-admin-grant-propagation.test.js (14 cases)"
+  # bug-21: parallel canUseTool fires (Claude issues two tool_use blocks
+  # in one assistant message) used to overwrite session.pendingMenu and
+  # also trip menu.js _supersedeStaleMenus, orphaning the first menu's
+  # resolver promise and deadlocking the SDK iteration. Fix moves
+  # pendingMenu single-slot → pendingMenus Map<hash, menu> (with a
+  # back-compat getter that returns the most-recent), drops the
+  # supersede-on-broadcast trigger in menu.js broadcastMenuToChat, and
+  # routes the bare-digit chat shortcut through oldestPendingMenu so
+  # FIFO head-of-queue resolves first. Also adds a re-evaluate hook in
+  # resolveMenuPick so an "Allow always" rule saved on menu B
+  # retroactively auto-resolves any pending menu A whose (tool, input)
+  # now matches the rule.
+  node_test_result test/bug-21-parallel-permission-menus.test.js "test/bug-21-parallel-permission-menus.test.js (16 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
