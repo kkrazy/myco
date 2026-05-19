@@ -1586,7 +1586,18 @@
         "originalText": "analyze how claude code sdk is used in myco, compare to multica implementation and give me a report on work items to improve.",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-21",
+      "text": "**Problem:** Permission menu lost when two `permission_request` events arrive within ~2s. myco-beta (sid `myco-kkrazy-f80476dd`) was stuck for ~50min on a hanging WebFetch `canUseTool` callback after the SDK issued two parallel WebFetch calls (`toolu_017j...` at 05:57:17 and `toolu_01So...` at 05:57:19).\n\n**Expected:** Both pending permission requests render to the user; resolving one does not silently discard the other; `rec.permissionMenu` queues multiple concurrent menus keyed by `toolUseID`.\n\n**Actual:** User resolved the SECOND via `allow-always`; the FIRST stayed pending forever. State desync: SDK process alive blocked on `canUseTool`, while `rec.pendingMenu` and `rec.permissionMenu` both `null` in `/data/sessions.json`. Three queued user prompts (06:27, 06:43, 06:45) never got processed.\n\n**Root cause (suspected):** `rec.permissionMenu` is a single slot — the second arriving `permission_request` overwrites the first instead of queueing.\n\n**Fix:** Change `rec.permissionMenu` to a `Map<toolUseID, menu>`, broadcast all pending menus to clients, resolve each independently. Also re-evaluate any pending `permission_request`s against newly-saved `allow-always` rules so a broad-scope rule auto-resolves earlier matching requests.\n\n**Context:** Evidence in `/wks/kkrazy/myco-kkrazy-f80476dd/_myco_/events.jsonl` seq 3107–3110. Found while debugging stuck-session report against mycobeta.\n\n**Related (urgent meta-bug):** `mcp__myco__add_plan_items` MCP tool writes back from a stale in-memory snapshot of `_myco_/plan.json`, clobbering any disk changes made between mycod boot and the tool call. Reproduced just now: an `add_plan_items` call after a `git pull` reverted bug-7's rewrite, td-21's rewrite, td-28's recent comment, and deleted fr-41 entirely. Workaround: edit `plan.json` directly when in-flight pulls or external edits have happened.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-19T06:53:30.002Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-19T05:21:34.683Z"
+  "updatedAt": "2026-05-19T07:00:00.000Z"
 }
