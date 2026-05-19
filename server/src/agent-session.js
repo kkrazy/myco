@@ -29,6 +29,33 @@ const { query } = require('@anthropic-ai/claude-agent-sdk');
 // turn ⇒ 5000 events ≈ 1000 turns of history.
 const MAX_EVENTS = 5000;
 
+// fr-45: hardcoded allowlist of SDK Options field names — used by
+// _validateSdkOpts to catch silent-typo bugs like the bug-14 round 2
+// `abortSignal: …` → should be `abortController: …`. The SDK
+// silently drops unknown keys, so without this check a typo can sit
+// undetected indefinitely. Extracted from
+// @anthropic-ai/claude-agent-sdk/sdk.d.ts at the version pinned in
+// server/package.json (61 fields as of sdk@0.3.142). Keep in sync
+// across SDK minor-version bumps — the test/fr-45-sdkopts-lint
+// regression checks the 9 myco-used keys are present.
+const SDK_OPTIONS_ALLOWLIST = new Set([
+  'abortController', 'additionalDirectories', 'agent', 'agents',
+  'allowedTools', 'canUseTool', 'continue', 'cwd', 'disallowedTools',
+  'toolAliases', 'tools', 'env', 'executable', 'executableArgs',
+  'extraArgs', 'fallbackModel', 'enableFileCheckpointing', 'toolConfig',
+  'forkSession', 'betas', 'hooks', 'onElicitation', 'persistSession',
+  'sessionStore', 'sessionStoreFlush', 'loadTimeoutMs', 'includeHookEvents',
+  'includePartialMessages', 'forwardSubagentText', 'thinking', 'effort',
+  'maxThinkingTokens', 'maxTurns', 'maxBudgetUsd', 'taskBudget',
+  'mcpServers', 'model', 'outputFormat', 'pathToClaudeCodeExecutable',
+  'permissionMode', 'planModeInstructions', 'allowDangerouslySkipPermissions',
+  'permissionPromptToolName', 'plugins', 'promptSuggestions',
+  'agentProgressSummaries', 'resume', 'sessionId', 'resumeSessionAt',
+  'sandbox', 'settings', 'managedSettings', 'settingSources', 'skills',
+  'debug', 'debugFile', 'stderr', 'strictMcpConfig', 'systemPrompt',
+  'title', 'spawnClaudeCodeProcess',
+]);
+
 // Disk file cap for events.jsonl. When the file grows past this
 // (checked every ~100 appends), the file is rewritten in-place
 // with only the last MAX_EVENTS lines. ~2 KB avg per event ⇒
@@ -306,6 +333,13 @@ class AgentSession extends EventEmitter {
       };
       if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
 
+      // fr-45: lint sdkOpts keys against the SDK's documented Options
+      // type. Logs (does not throw) on unknown keys — silent-typo
+      // bugs like the bug-14 `abortSignal` vs `abortController`
+      // mistake become visible in [sdkOpts] log lines + the
+      // test/fr-45-sdkopts-lint regression catches them pre-deploy.
+      this._validateSdkOpts(sdkOpts);
+
       let stream, initErr = null;
       try {
         stream = query({ prompt: this._msgQueue, options: sdkOpts });
@@ -314,6 +348,36 @@ class AgentSession extends EventEmitter {
       }
 
       if (initErr) {
+        // fr-44: resume-failure fallback. If the SDK rejected our
+        // resume=sdkSessionId because the upstream conversation is
+        // gone (container restart wiped $HOME/.claude/projects/,
+        // sessionId corrupted on disk, transcript file deleted under
+        // us), clear sdkSessionId + retry once with a fresh session.
+        // The `!!sdkOpts.resume` clause is itself the one-shot guard:
+        // after clearing, the next iteration's `sdkOpts.resume = …`
+        // line skips (this.sdkSessionId is null), so this branch
+        // self-disables and we won't infinite-loop on repeated
+        // resume-failure-flavored errors.
+        if (this._isResumeFailure(initErr) && !!sdkOpts.resume) {
+          const prev = this.sdkSessionId;
+          this._emit({ type: 'resume_failed', prevSdkSessionId: prev, error: String((initErr && initErr.message) || initErr).slice(0, 200) });
+          this.sdkSessionId = null;
+          try {
+            const sessionsMod = require('./sessions');
+            const rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
+            if (rec) {
+              rec.sdkSessionId = null;
+              sessionsMod.saveStore();
+            }
+          } catch (err) {
+            console.error(`[agent-session] resume-fallback failed to clear rec.sdkSessionId: ${err.message}`);
+          }
+          // Don't count this against MAX_ATTEMPTS — the resume-failure
+          // fallback is a free retry. Decrement the loop counter so
+          // the next iteration is logically still attempt 1.
+          attempt--;
+          continue;
+        }
         if (this._isRecoverable(initErr) && !lastAttempt) {
           await this._emitRetryAndWait(attempt, BACKOFF_MS, initErr);
           continue;
@@ -365,6 +429,40 @@ class AgentSession extends EventEmitter {
     this._msgQueue = null;
     this._abortController = null;
     if (this.alive) this.emit('idle');
+  }
+
+  // fr-45: validate sdkOpts keys against the SDK_OPTIONS_ALLOWLIST.
+  // Catches silent-typo bugs like bug-14 round 2 (`abortSignal` vs
+  // `abortController`) — the SDK silently drops unknown keys, so
+  // without this gate a typo lives until a user notices missing
+  // behavior in production. Logs via console.error (loud enough to
+  // catch in /loop scans + the `_myco_/logs/` capture) on every fire.
+  // Does NOT throw — we'd rather have the SDK call proceed (with
+  // some feature subtly broken) than crash the iteration outright.
+  // The regression test surfaces typos pre-deploy.
+  _validateSdkOpts(opts) {
+    if (!opts || typeof opts !== 'object') return { ok: true, unknown: [] };
+    const unknown = [];
+    for (const k of Object.keys(opts)) {
+      if (!SDK_OPTIONS_ALLOWLIST.has(k)) unknown.push(k);
+    }
+    if (unknown.length > 0) {
+      console.error(`[sdkOpts] ${this.sessionId} UNKNOWN options (likely typos — SDK will silently drop these): ${unknown.join(', ')}`);
+    }
+    return { ok: unknown.length === 0, unknown };
+  }
+
+  // fr-44: classify an SDK error as "the resume= sessionId we passed
+  // is no longer valid upstream." Conservative pattern set covering
+  // the documented + observed phrases. The exact SDK wording isn't
+  // formally specified, so new phrases observed in production should
+  // be added here. When this returns true on the FIRST attempt with
+  // sdkOpts.resume set, _ensureIteration clears sdkSessionId + retries
+  // once with a fresh conversation (multica's resolveSessionID pattern).
+  _isResumeFailure(err) {
+    if (!err) return false;
+    const msg = String((err && err.message) || '');
+    return /session not found|invalid session.?id|could not load conversation|conversation not found|no such session|session expired/i.test(msg);
   }
 
   // fr-43: classify an SDK error as retry-eligible. Conservative —

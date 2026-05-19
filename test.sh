@@ -2400,6 +2400,29 @@ test_chat_window() {
   # for observability + fatal {reason:'retry_exhausted', attempts:3}
   # on cap.
   node_test_result test/fr-43-rate-limit-retry.test.js "test/fr-43-rate-limit-retry.test.js (21 cases)"
+  # fr-44: SDK best-practice — resume-failure fallback. When the SDK
+  # rejects resume=sdkSessionId because the upstream conversation is
+  # gone (container restart wiped $HOME/.claude/projects/, sessionId
+  # corrupted on disk, transcript file deleted under us), the initial
+  # query() throws → pre-fix fatal → AgentSession dead. Post-fix:
+  # _isResumeFailure(err) detects the error class, the init-err branch
+  # clears this.sdkSessionId + rec.sdkSessionId (via saveStore),
+  # emits resume_failed, and continues the retry loop without
+  # incrementing the attempt counter — next attempt has no resume=
+  # set so query() spawns a fresh SDK conversation. Multica
+  # precedent: daemon/wakeup.go resolveSessionID().
+  node_test_result test/fr-44-resume-failure-fallback.test.js "test/fr-44-resume-failure-fallback.test.js (16 cases)"
+  # fr-45: SDK best-practice — sdkOpts validator. Hardcoded allowlist
+  # of 61 SDK Options field names extracted from sdk.d.ts. Validator
+  # runs at the top of every _ensureIteration attempt, logs via
+  # console.error on unknown keys. Catches the next bug-14 round 2
+  # (silent abortSignal vs abortController typo) before it ships:
+  # SDK silently drops unknown keys, so without this gate a typo
+  # lives until a user notices missing behavior in production. The
+  # test pins the 9 myco-used keys' presence + asserts abortSignal
+  # is NOT on the list (negative guard against a careless refactor
+  # adding it back).
+  node_test_result test/fr-45-sdkopts-lint.test.js "test/fr-45-sdkopts-lint.test.js (13 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
