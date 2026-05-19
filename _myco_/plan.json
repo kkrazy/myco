@@ -1453,7 +1453,43 @@
         "originalText": "askuserquestion pop up should appear to the user started the operation and make sure its broadcasted to all devices the user logged in. Otherwise it will block other users working on the same session.",
         "rewritten": true
       }
+    },
+    {
+      "id": "td-28",
+      "text": "Add remote execution & debug environment",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-19T03:04:52.667Z",
+      "addedBy": "ryan-blues",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "8447f7c91db7",
+          "user": "ryan-blues",
+          "text": "There are use case where the program need to run on remote machine instead of local. Such as when only target machine has needed GPU devices installed. So the workflow is write code on local machine and sync to remote server for execution and debug. This feature will collect information about remote machine, generate ssh private key and ask user to add it to remote host. collect information about where to install the code, how to install, how to run the program. Then instruct claude code to use the remote envrionment when needed.",
+          "ts": "2026-05-19T03:11:01.322Z"
+        }
+      ]
+    },
+    {
+      "id": "bug-19",
+      "text": "**Problem:** When a new message is denied by permission (e.g. read-only mode), the message content is dropped and not shown anywhere, making it unrecoverable.\n**Expected:** Display the user's message in the discussion panel, then respond with the permission-denied result.\n**Actual:** Request is denied for read-only and the message content is never rendered in the discussion panel, so the user cannot recover what they typed.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-19T03:07:04.337Z",
+      "addedBy": "ryan-blues",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "when add new message but denied by permission, such as add a new feature. The context of the new feature is not displayed in the discussion panel. and the request is denied for read only. But the content is not shown anywhere so unable to recover. Should display the message in discussion panel and then response with denied.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-19T02:11:22.396Z"
+  "updatedAt": "2026-05-19T03:07:10.489Z"
 }
