@@ -389,7 +389,7 @@
     },
     {
       "id": "bug-7",
-      "text": "**Problem:** Chrome batch rows in the chat pane render duplicated — the same `▸ × N ✓ result · M bytes` summary appears multiple times at the same timestamp.\n\n**Expected:** Each chrome batch shows exactly once per agent-event sequence. Duplicates dedup at the wire (server-side via `?afterSeq=N` catch-up) with a client-side render backstop in `_appendChatMessageDom` for any escapees.\n\n**Actual:** The same row appears 5+ times in a row, e.g.:\n```\n16:06:43 ▸ × 10 ✓ result · 3671 bytes\n16:06:43 ▸ × 10 ✓ result · 3671 bytes\n16:06:43 ▸ × 10 ✓ result · 3671 bytes\n16:06:43 ▸ × 10 ✓ result · 3671 bytes\n16:06:43 ▸ × 10 ✓ result · 3671 bytes\n```",
+      "text": "fix duolicate entries in the chat pane like the following: 16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes",
       "layer": "Bug",
       "done": false,
       "addedAt": "2026-05-16T08:35:18.181Z",
@@ -431,14 +431,7 @@
           "summary": "519.9s · 28→25761 tok",
           "result": "Pushed `75b5858..5b8287b` to `origin/main`.\n\n## bug-7 round 2 — root cause + three-layer fix\n\n**Why round 1 (`7cb8ed5`) wasn't enough.** It wiped the cards before re-rendering on each agent-replay frame, which handles the *cross-reconnect* doubling case. But your re-dispatch shows three identical `▸ × 10 ✓ result · 3671 bytes` batches stacked **from a single agent-replay frame** — the wipe ran exactly once, and the N copies all arrived in that one payload. That means `session.buffer` itself is carrying duplicates.\n\n**Suspected upstream:** container restart → `_hydrateBufferFromDisk` loads the events.jsonl tail (MAX_EVENTS=5000) → SDK `query({ resume: sdkSessionId })` re-walks the conversation tail → our `_handleEvent` re-emits those messages → `_emit` pushes to `this.buffer` AND appends to events.jsonl AGAIN. Now the buffer (and disk) carry recent events twice; the chrome-batch adjacency rule turns it into stacked-batch render.\n\n**Three layers of defense shipped (`5b8287b`):**\n\n| Layer | Where | What |\n|---|---|---|\n| Primary | `attach._attachAgentWebSocket` | JSON-stringify dedup of `session.buffer` before shipping the agent-replay frame. Two legit events always carry different `ts` (set by `_emit`'s `new Date().toISOString()` wrap), so this only catches byte-identical dups. Logs dropped count: `[agent-replay] <sid> dedup dropped N duplicate event(s) …`. |\n| Defense in depth | `_handleAgentFrame` agent-replay branch | Matching client-side dedup pre-loop. Belt-and-braces for any future server change. |\n| Pre-existing | `_handleAgentFrame` wipe (from `7cb8ed5`) | Still handles the cross-reconnect doubling case. |\n\n**Tests:** new `test/agent-replay-dedup.test.js` (7 cases) — 30-identical-`tool_result` reproducer, ts-differing legit case, order preservation, non-serializable safety, source-grep guards. All 20 node tests pass.\n\n**Root cause not patched here.** Once `5b8287b` is live, the `[agent-replay] … dedup dropped N` log line will tell us *which sessions* are hitti"
         }
-      ],
-      "meta": {
-        "rewriteRequested": "long",
-        "rewritten": true,
-        "originalText": "fix duolicate entries in the chat pane like the following: 16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes\n16:06:43\n▸\n× 10\n✓ result · 3671 bytes",
-        "rewrittenBy": "claude",
-        "rewrittenAt": "2026-05-19T04:58:07.256Z"
-      }
+      ]
     },
     {
       "id": "fr-3",
@@ -960,7 +953,7 @@
     },
     {
       "id": "td-21",
-      "text": "**Problem:** No team-shared policy on which tools should auto-allow, queue-for-review, or auto-deny. AI trust today is scattered across per-session `permissions.js` entries — inconsistent across teammates, no rationale documented, no review cadence.\n\n**Expected:** A single `_myco_/policy/ai-allowed-tools.md` documents the per-tool tier + rationale + quarterly review. Server enforces against this file (via fr-16) instead of each session re-deriving its own rules.\n\n**Starting tiers:**\n\n| Tier | Tools |\n|---|---|\n| **Allow** | `Read`, `Glob`, `Grep`, `WebFetch` (docs), `Bash` read-only (`git status`, `ls`, `cat`) |\n| **Queue → promote per-path after observation** | `Edit`, `Write` on source files |\n| **Queue** | `Bash` mutating: `git push`, `npm install`, `rm`, `docker` |\n| **Deny** | Anything touching prod creds, deploy keys, customer DBs |\n\n**Done when:** policy file lands at `_myco_/policy/ai-allowed-tools.md` + quarterly review on calendar + fr-16 server enforcement gates against this file (until fr-16 ships, this is documentation only).\n\n**Depends on:** fr-16 (review queue + trust ladder feature).\n\n**Source:** `_myco_/research/ai-team-collaboration.md` §5.1 — \"Calibrate AI trust per tool, not per session.\"",
+      "text": "**Problem:** Define + document the per-tool AI trust ladder for this team\n\n**Practice change** + light artifact. Source: §5.1 (\"Calibrate AI trust per tool, not per session\").\n\n**What:** New file `_myco_/policy/ai-allowed-tools.md` documenting per-tool tier (allow / queue-for-review / deny) and the rationale. Reviewed quarterly.\n\n**Starting heuristic:**\n- `Read`, `Glob`, `Grep`, `WebFetch` (docs) → allow\n- `Bash` (read-only commands like `git status`, `ls`, `cat`) → allow\n- `Edit`, `Write` on source files → queue at first, promote to allow per-path after observation\n- `Bash` (mutating: `git push`, `npm install`, `rm`, `docker`) → queue\n- Anything touching prod creds, deploy keys, customer DBs → deny\n\n**Depends on:** fr-16 (review queue + trust ladder feature). Without fr-16 the file is documentation only; with fr-16 it becomes the actual policy the server enforces.",
       "layer": "Todo",
       "done": false,
       "addedAt": "2026-05-17T14:47:49.246Z",
@@ -970,12 +963,7 @@
       "comments": [],
       "meta": {
         "researchDoc": "_myco_/research/ai-team-collaboration.md",
-        "researchSection": "5 (humans + workflows adapt)",
-        "rewriteRequested": "long",
-        "rewritten": true,
-        "originalText": "**Problem:** Define + document the per-tool AI trust ladder for this team\n\n**Practice change** + light artifact. Source: §5.1 (\"Calibrate AI trust per tool, not per session\").\n\n**What:** New file `_myco_/policy/ai-allowed-tools.md` documenting per-tool tier (allow / queue-for-review / deny) and the rationale. Reviewed quarterly.\n\n**Starting heuristic:**\n- `Read`, `Glob`, `Grep`, `WebFetch` (docs) → allow\n- `Bash` (read-only commands like `git status`, `ls`, `cat`) → allow\n- `Edit`, `Write` on source files → queue at first, promote to allow per-path after observation\n- `Bash` (mutating: `git push`, `npm install`, `rm`, `docker`) → queue\n- Anything touching prod creds, deploy keys, customer DBs → deny\n\n**Depends on:** fr-16 (review queue + trust ladder feature). Without fr-16 the file is documentation only; with fr-16 it becomes the actual policy the server enforces.",
-        "rewrittenBy": "claude",
-        "rewrittenAt": "2026-05-19T05:10:51.714Z"
+        "researchSection": "5 (humans + workflows adapt)"
       }
     },
     {
@@ -1483,12 +1471,6 @@
           "user": "ryan-blues",
           "text": "There are use case where the program need to run on remote machine instead of local. Such as when only target machine has needed GPU devices installed. So the workflow is write code on local machine and sync to remote server for execution and debug. This feature will collect information about remote machine, generate ssh private key and ask user to add it to remote host. collect information about where to install the code, how to install, how to run the program. Then instruct claude code to use the remote envrionment when needed.",
           "ts": "2026-05-19T03:11:01.322Z"
-        },
-        {
-          "id": "659b725442a2",
-          "user": "ryan-blues",
-          "text": "refactor the overall problem description and requirements of this TODO",
-          "ts": "2026-05-19T03:24:28.955Z"
         }
       ]
     },
@@ -1509,84 +1491,27 @@
       }
     },
     {
-      "id": "fr-41",
-      "text": "**Problem:** Comment handling is passive — the agent appends to the list without reading or acting on them.\n**Expected:** Read incoming comments, take action when one requests it (e.g. td-28's 2nd comment), and post replies to answer questions or clarify understanding.\n**Actual:** Comments are only appended to the list; no parsing, no action, no participation in discussion.\n**Context:** Reference case: td-28, 2nd comment requests an action.",
-      "layer": "Feature",
-      "done": false,
-      "addedAt": "2026-05-19T03:37:35.279Z",
-      "addedBy": "ryan-blues",
-      "source": "user",
-      "voters": [],
-      "comments": [],
-      "meta": {
-        "rewriteRequested": "long",
-        "originalText": "The current code doesn't handle comments, it just adds to the list. enhance it to read the messages and take action when needed. such as the td-28, the 2nd comments is asking you to take actions. Also you can participate in the discussion by adding comments to answer questions or clarify understanding.",
-        "rewritten": true
-      }
-    },
-    {
       "id": "bug-20",
-      "text": "**Problem:** When multiple projects are checked out in the same session, plan.json lookup is inconsistent across projects.\n**Expected:** Look into all checked-out projects for plan.json and consistently use the same one.\n**Actual:** Resolution is ambiguous when more than one project is present, so different lookups may pick different files (or none).\n**Context:** Propose a strategy for managing plan.json ownership/selection when multiple projects are checked out in one session.",
+      "text": "Permission menu lost when two permission_requests arrive within ~2s — myco-beta (sid myco-kkrazy-f80476dd) was stuck for ~50min on a hanging WebFetch canUseTool callback after the SDK issued two parallel WebFetch calls (toolu_017j... at 05:57:17 + toolu_01So... at 05:57:19). User resolved the SECOND via allow-always; the FIRST stayed pending forever. State desync: SDK process alive blocked on canUseTool, rec.pendingMenu/permissionMenu both null in /data/sessions.json. Three queued user prompts (06:27, 06:43, 06:45) never got processed. Root cause likely: rec.permissionMenu is a single slot — second arriving permission_request overwrites the first instead of queueing. Fix: change rec.permissionMenu to a Map keyed by toolUseID, broadcast all pending menus to clients, resolve each independently. Evidence in /wks/kkrazy/myco-kkrazy-f80476dd/_myco_/events.jsonl seq 3107-3110. Also re-evaluate any pending permission_requests against newly-saved allow-always rules so a broad-scope rule auto-resolves earlier matching requests.",
       "layer": "Bug",
       "done": false,
-      "addedAt": "2026-05-19T03:46:53.136Z",
-      "addedBy": "kkrazy",
+      "addedAt": "2026-05-19T06:53:30.002Z",
+      "addedBy": "claude",
       "source": "user",
       "voters": [],
-      "comments": [],
-      "meta": {
-        "rewriteRequested": "long",
-        "originalText": "when there are multiple projects checked out in the same session, should look into all projects for the plan.json and always use the same one. Propose a way to manage this when multiple projects are checked out.",
-        "rewritten": true
-      }
+      "comments": []
     },
     {
-      "id": "fr-42",
-      "text": "**Problem:** Todo/feature management lacks an autonomous loop to prioritize, implement, and ship items end-to-end with user gating.\n\n**Expected:** A background or cron task periodically reviews the todo/feature list, picks the highest-value item, implements it to e2e-working state, generates a summary report (what was implemented, how to use it, extra value added), and surfaces the report + PR for user review. Merge to master only after user acceptance.\n\n**Actual:** No background/cron worker exists; todos are not auto-prioritized or auto-implemented, and there is no generated summary or user-gated merge flow.",
-      "layer": "Feature",
+      "id": "bug-21",
+      "text": "Permission menu lost when two permission_requests arrive within ~2s — myco-beta (sid myco-kkrazy-f80476dd) was stuck for ~50min on a hanging WebFetch canUseTool callback after the SDK issued two parallel WebFetch calls (toolu_017j... at 05:57:17 + toolu_01So... at 05:57:19). User resolved the SECOND via allow-always; the FIRST stayed pending forever. State desync: SDK process alive blocked on canUseTool, rec.pendingMenu/permissionMenu both null in /data/sessions.json. Three queued user prompts (06:27, 06:43, 06:45) never got processed. Root cause likely: rec.permissionMenu is a single slot — second arriving permission_request overwrites the first instead of queueing. Fix: change rec.permissionMenu to a Map keyed by toolUseID, broadcast all pending menus to clients, resolve each independently. Evidence in /wks/kkrazy/myco-kkrazy-f80476dd/_myco_/events.jsonl seq 3107-3110. Also re-evaluate any pending permission_requests against newly-saved allow-always rules so a broad-scope rule auto-resolves earlier matching requests.",
+      "layer": "Bug",
       "done": false,
-      "addedAt": "2026-05-19T04:45:21.938Z",
-      "addedBy": "ryan-blues",
+      "addedAt": "2026-05-19T06:58:59.915Z",
+      "addedBy": "claude",
       "source": "user",
       "voters": [],
-      "comments": [],
-      "meta": {
-        "rewriteRequested": "long",
-        "originalText": "for the todo and feature management, should start a background or cron task to review them pick the most important or valued one to implement. After e2e working, generate a summary include what has been implemented, how to use it, what extra values it added. And ask use to review the report and pr. Commit to master branch until accepted by user.",
-        "rewritten": true
-      }
-    },
-    {
-      "id": "td-29",
-      "text": "**Problem:** Claude Code SDK usage in myco may lag behind the multica implementation, but the gaps aren't catalogued.\n**Expected:** A written report comparing myco's Claude Code SDK integration to multica's, with a prioritized list of work items to bring myco up to par.\n**Actual:** No such analysis exists; differences and improvement opportunities are unknown.\n**Context:** Cross-repo comparison between `myco` and `multica`; deliverable is a report, not code changes.",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-19T04:51:50.787Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [
-        "kkrazy"
-      ],
-      "comments": [
-        {
-          "id": "324af8961e35",
-          "user": "claude",
-          "text": "🔍 **Analysis** — myco vs multica Claude Code SDK integration (no code shipped — report only per request)\n\n## 1. Top-line caveat — apples-to-oranges\n\nThese two systems use **fundamentally different integration strategies** with Claude Code:\n\n| | myco | multica |\n|---|---|---|\n| Library | `@anthropic-ai/claude-agent-sdk` (Node, in-process) | None — execs the `claude` CLI as a subprocess |\n| Process model | One Node process owns N `query()` async-iterators | Daemon spawns one `claude --output-format stream-json` subprocess per task |\n| Agent support | Claude only | Claude, Codex, Copilot, Cursor, Gemini, Hermes, Kimi, Kiro, OpenClaw, OpenCode, Pi |\n| Language | JS (~900 lines `agent-session.js`) | Go (`server/pkg/agent/*.go` — one file per CLI behind a `Backend` interface) |\n| Permission style | In-process callback (`canUseTool` + `PreToolUse` hook), interactive chat-pane menus | `--permission-mode bypassPermissions` (autonomous), no interactive prompts |\n| MCP | SDK `createSdkMcpServer` (in-process) | `--mcp-config <path>` to external JSON config |\n| Session resume | `sdkOpts.resume = sdkSessionId` | `--resume <sessionID>` CLI flag |\n\n**Implication:** many multica patterns (multi-agent backend abstraction, CLI subprocess management, stderr tail buffers, idle watchdog) don't transfer because myco lives inside the SDK's process. Conversely, myco's structured-event richness + interactive permission UX would be hard for multica to match because they only see the CLI's stream-json output.\n\nThe genuinely portable patterns are: process death detection, the per-task usage counter, the multi-backend `Provider` taxonomy (if myco ever adds Codex/Cursor), and the bounded stderr-tail buffer.\n\n## 2. Capability-by-capability comparison\n\n| Capability | myco today | multica | Gap / opportunity | Pri+Eff |\n|---|---|---|---|---|\n| **Session lifecycle / resume** | `sdkSessionId` persisted on `rec.sdkSessionId` (sessions.js:312); first `system/init` event captures it (agent-session.js:300-318); `_ensureIteration` passes `sdkOpts.resume = sdkSessionId` (agent-session.js:247). Hydrates event buffer from `_myco_/events.jsonl` on respawn. | Daemon stores `PriorSessionID` on Task; passes `--resume <id>`; on resume failure, `resolveSessionID()` clears the id and the daemon **retries with a fresh session**. | myco assumes resume always works; if the SDK errors on a stale `sdkSessionId` it surfaces as `fatal`. **Add fallback: catch resume-failure error, clear `sdkSessionId`, retry once with fresh session.** | P1 / S |\n| **Tool permissions** | Two-stage: `PreToolUse` hook checks per-session allow/deny list; falls through to `canUseTool` which renders a chat-pane menu. MCP `mcp__myco__*` auto-allowed. | `--permission-mode bypassPermissions` — autonomous, no prompts. Squad-level approval gating happens server-side before the CLI is even spawned. | myco's interactive ladder is **richer than multica's**. Real gap: no trust-ladder beyond per-pattern allow/deny. fr-38's strict-mode is the analogue of multica's server-side gate. | P2 / S |\n| **Custom tools / MCP** | One in-process SDK MCP server per session (`createSdkMcpServer`, myco-mcp.js:118). Only one tool: `mcp__myco__add_plan_items`. | External MCP via `--mcp-config <jsonPath>`. Out-of-process. | myco's approach is **dramatically lower-latency** + easier to author (Zod schema). Missing: more tools — `mcp__myco__update_plan_item_status`, `mcp__myco__add_comment`, `mcp__myco__search_plan`, `mcp__myco__post_run_summary`. Each replaces an \"ask claude to call Edit on plan.json\" workaround. | P1 / M |\n| **Streaming events** | SDK events flattened into myco-controlled shape (agent-session.js:299-429): `session_ready`, `iteration_start`, `system_init`, `assistant_text`, `tool_use`, `tool_result`, `turn_result`, `rate_limit`, `permission_request`, etc. Each stamped with monotonic `seq`. | Internal `MessageType` enum (MessageText, MessageThinking, MessageToolUse, MessageToolResult, MessageStatus, MessageError, MessageLog). | myco already has a **better-defined typed envelope**. Actual gap: **fr-33 (parts model)** — tool results still monolithic. Also: `unknown_event` is passthrough — new SDK event types silently fall into the catch-all. | P2 / S |\n| **Multi-user / concurrency** | One AgentSession per session-id; sessions share the same Node process. Concurrency hazard documented in fr-35. | Each task = separate `agent.New()` Backend, separate subprocess. **Hard isolation by OS process boundary.** Daemon limits via `MULTICA_TASK_SLOT`. | myco's shared-process model **wins on latency + memory** but loses on isolation. Genuine gap: **no concurrency cap.** A user spamming `/run` could spawn N parallel SDK iterations and bury the rate-limit. Add a max-concurrent-iterations gate. fr-35's SessionContext refactor is the structural fix. | P1 / M |\n| **Memory / project context** | Per-session `.claude/memory/` via `settings.autoMemoryDirectory`; `settingSources: ['project','local']` excludes shared user tier. `injectBestPracticesIntoClaudeMd` seeds template on spawn + respawn. | No CLAUDE.md detail in README; relies on `--append-system-prompt` + skills system. | myco's per-session memory **wins clearly.** Gap: memory propagation when the template changes (fr-37 filed). Also: a way to share memory across sibling sessions of same user. | P2 / M |\n| **Subagents / delegation** | Implicitly available — the SDK's Task tool works inside the iteration; no special myco wiring. fr-36 (recipes) would be the structured layer above it. | \"Squads\" — leader agent routes work to other agents. Architectural multi-agent coordination at the server-task level. | myco has **no first-class subagent surface** — no \"spawn a subagent + bring the summary back to chat.\" Subagent summaries appear in transcript jsonl but are not surfaced in the chat pane. Add an `assistant_text` variant for subagent results. | P2 / S |\n| **Error recovery** | Single try/catch around `for await (m of stream)` (agent-session.js:260). AbortError → `iteration_aborted`; everything else → `fatal`. **No retry on transient errors.** | Daemon has idle-watchdog, bounded stderr tail, retry-on-resume-failure. `withAgentStderr` enriches errors with last-N-lines of stderr for diagnosis. | Two real gaps: (a) **no auto-retry on `rate_limit_event`** (currently just emitted); (b) **no stderr tail equivalent** — when the SDK throws, the error message is `String(err.message)` only. Wrap iteration in retry-with-backoff for rate-limit + network. Capture last-N events into the fatal payload. | P1 / S |\n| **Observability** | Console logs prefixed `[agent-hook]`, `[agent-menu]`, etc. `logCapture.js` rolling 5000-line buffer exposed via `GET /logs`. | Daemon has `metrics` package (separate from `events`/`logger`); `analytics` package for usage events. `health.go` exposes `/health` with uptime + active task count. | myco's marker-prefix discipline is good but ad-hoc. Gap: **no per-session metrics endpoint.** Add `GET /sessions/:id/metrics` returning `{turns, toolCalls, errors, lastRateLimit, avgTurnMs}`. Source data already in `turn_result` events. | P2 / M |\n| **Cost tracking** | `turn_result` event carries `usage`, `totalCostUsd`, `durationMs`, `numTurns` (agent-session.js:412). Surfaced as an event but **not aggregated into session-level totals** anywhere queryable. | `TaskUsageEntry` type (per-model token usage); `map[string]TokenUsage` handler signatures — per-task accumulator. | Gap: **myco never accumulates `totalCostUsd` per session.** A user can't see \"this session has cost \\$4.20 across 47 turns.\" Trivial to add: maintain `rec.usage = {totalUsd, totalTokens, byModel}`, increment on each `turn_result`, surface in attach snapshot. | P1 / S |\n\n## 3. Prioritized work items (potential `fr-*` candidates)\n\n1. **fr-N: Resume-failure fallback for stale `sdkSessionId`.** Catch the SDK error class on resume, clear `rec.sdkSessionId`, retry once with fresh session, emit a `resume_failed` event. **Files:** `agent-session.js` `_ensureIteration` try/catch (lines 250-272). **P1 / S (~½ day).**\n2. **fr-N: Per-session cost + usage rollup.** Maintain `rec.usage = {totalUsd, totalTokens:{input,output,cache}, byModel:{}, turnCount}`. Increment on every `turn_result`. Add to `getSessionRecord` payload + render in chat-pane header. **P1 / S (~1 day).**\n3. **fr-N: Expand the in-process MCP toolbox.** Add `mcp__myco__update_plan_item_status`, `mcp__myco__add_comment`, `mcp__myco__post_run_summary`, `mcp__myco__search_plan`. Each replaces an \"ask claude to call Edit on plan.json\" anti-pattern. **P1 / M (~1.5 days).**\n4. **fr-N: Rate-limit + transient-error retry.** Wrap `for await (m of stream)` with retry-on-rate-limit (read `m.retry_after`); back off, re-spawn `query()` with `resume=`. Cap at 3 retries. **P1 / S (~½ day).**\n5. **fr-N: Per-session concurrency cap.** Gate `_ensureIteration` behind a global semaphore (configurable, default 8). When at cap, queue or emit `iteration_queued` event. **P1 / M (~1 day).**\n6. **fr-N: Stderr-equivalent diagnostic tail in `fatal` events.** Capture the last 20 emitted events into `fatal.recentEvents` (parallel to multica's `agentStderrTailBytes`). **P2 / S (~½ day).**\n7. **fr-N: Subagent result surfacing.** When the SDK emits an `assistant_text` from a Task-tool subagent, tag it with `meta.subagent:true` so the chat pane can render it distinctly. **P2 / S (~1 day).**\n\n## 4. Things multica does that **wouldn't** make sense for myco\n\n- **Multi-CLI backend abstraction (`Backend` interface across 11 agents).** myco is intentionally Claude-only; the SDK gives much better fidelity than CLI scraping.\n- **`--permission-mode bypassPermissions`.** myco's interactive trust-ladder is a *feature*, not a bug.\n- **External `--mcp-config` JSON.** In-process MCP via `createSdkMcpServer` is strictly better — lower latency, type-safe via Zod, no subprocess management.\n- **Daemon-on-your-machine + server-in-cloud split.** myco runs both in one container; multica's split is necessary because their daemon shells out to local CLIs.\n- **Squads / leader agents.** myco's per-session admin model + `/run` mechanism already covers the surface differently.\n- **PostgreSQL + pgvector + sqlc.** myco's flat-file `sessions.json` + `events.jsonl` is appropriate for its scale; a DB migration is tracked in fr-32 (event-store refactor).\n\n## 5. What myco does **better** than multica\n\n- **Lower latency tool round-trips.** In-process MCP + in-process `canUseTool` callback skip the JSON-over-stdout-then-parse round-trip multica pays per tool call.\n- **Richer permission UX.** Multica's `bypassPermissions` is all-or-nothing; myco's `Allow once / Allow always / Deny` trio + per-session deny list + chat-pane menu cards is genuinely better collaborative UX.\n- **First-class chat persistence contract.** myco's `meta.seq` monotonic ordering + 3-tier byte-budget windowing + `afterSeq` catch-up is more sophisticated than anything visible in multica's events package.\n- **Reattach-with-replay.** myco's `_shipAgentReplay` + `events.jsonl` hydrate lets a fresh browser tab on a different device see exactly what every other attached client sees, byte-for-byte. multica's docs say nothing about cross-device session attach.\n- **In-process MCP authoring ergonomics.** myco-mcp.js:117-150 is ~30 lines to add a new tool; multica's external MCP requires authoring + deploying + path-configuring a separate process.\n- **Per-session memory + settings sandbox.** `settings.autoMemoryDirectory` + `settingSources: ['project','local']` keeps user-tier `$HOME/.claude/settings.json` from leaking across sessions.\n\n---\n\n**Key files cited:** `server/src/agent-session.js` (SDK wiring), `server/src/myco-mcp.js` (in-process MCP server), `server/src/permissions.js` (allow/deny matcher), `server/src/menu.js` (menu → chat broadcast), `server/src/sessions.js` (spawn + resume + memory migration), `server/src/attach.js` (WS attach + replay shippers), `server/package.json` (`@anthropic-ai/claude-agent-sdk@^0.3.142`).\n\n**Multica references:** `github.com/multica-ai/multica` — `server/pkg/agent/{agent,claude,codex,gemini,cursor}.go`, `server/internal/daemon/{daemon,wakeup,health,types}.go`, README.\n\n**Next step (not done in this analysis pass):** file the 7 prioritized items as discrete `fr-N` plan entries so they show up in the Plan tab for prioritization + voting.",
-          "ts": "2026-05-19T05:21:34.683Z",
-          "meta": {
-            "kind": "analysis",
-            "analyzedBy": "claude",
-            "analyzedAt": "2026-05-19T05:21:34.683Z",
-            "fixShipped": false
-          }
-        }
-      ],
-      "meta": {
-        "rewriteRequested": "long",
-        "originalText": "analyze how claude code sdk is used in myco, compare to multica implementation and give me a report on work items to improve.",
-        "rewritten": true
-      }
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-19T05:21:34.683Z"
+  "updatedAt": "2026-05-19T06:58:59.915Z"
 }
