@@ -1279,6 +1279,8 @@ function handleQStatus(ctx) {
 function handleQCancel(ctx) {
   if (!_requireQueueAuth(ctx)) return;
   const runQueue = require('./runQueue');
+  const artifactsMod = require('./artifacts');
+  const attachMod = require('./attach');
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
   if (!rec) { ctx.reply('(/qcancel: session not found)'); return; }
   const id = String((ctx && ctx.args) || '').trim();
@@ -1309,6 +1311,32 @@ function handleQCancel(ctx) {
     ctx.session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
   }
   ctx.reply(`✓ Cancelled \`${id}\` in the run-queue.`);
+  // fr-51: dispatch the next pending entry so the queue actually
+  // ADVANCES after the cancel. Pre-fix /qcancel removed the (stuck)
+  // running head and stopped — leaving every pending entry behind it
+  // idle indefinitely. User had to follow up with /qresume just to
+  // get the queue moving again, which surprised everyone. Now the
+  // cancel auto-advances: same dispatcher block handleQResume already
+  // uses (peekNextPending → markRunning → handleChatMessage with
+  // buildArtifactRunText). Respects rec.runQueuePaused — peekNextPending
+  // returns null when paused, so this branch is a no-op there.
+  const next = runQueue.peekNextPending(rec);
+  if (next && ctx.session) {
+    const planArtifact = rec.artifacts && rec.artifacts.plan;
+    const nextItem = planArtifact && Array.isArray(planArtifact.items)
+      && planArtifact.items.find((it) => it && it.id === next.itemId);
+    if (nextItem) {
+      try {
+        runQueue.markRunning(rec, next.itemId);
+        sessionsMod.saveStore();
+        ctx.session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+        attachMod.handleChatMessage(ctx.sessionId, ctx.session, ctx.user,
+          artifactsMod.buildArtifactRunText(next.type, nextItem, ctx.user));
+      } catch (err) {
+        console.error(`[runQueue] /qcancel auto-advance failed: ${err.message}`);
+      }
+    }
+  }
 }
 
 function handleQClear(ctx) {

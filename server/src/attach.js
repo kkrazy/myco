@@ -139,8 +139,6 @@ function _registerExternalSession(sessionId, session) {
     // clears after the outcome is stamped.
     session.on('agent-event', (ev) => {
       if (!ev) return;
-      const active = session._activeRunItem;
-      if (!active) return;
       // fr-48 bugfix: queue must see iteration_aborted + fatal as
       // terminal events too — not just turn_result. Pre-fix, a user-
       // initiated Stop (iteration_aborted) or fr-43 retry-exhausted
@@ -152,6 +150,33 @@ function _registerExternalSession(sessionId, session) {
       // continue or /qcancel bug-X to drop the failed head).
       const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
       if (!terminalTypes.has(ev.type)) return;
+      // fr-51 fallback (belt-and-braces): if session._activeRunItem is
+      // null/undefined when a terminal event arrives but the queue
+      // clearly has a running entry, use THAT as the source of truth.
+      // Pre-fix the early-return on !active left the queue stuck
+      // forever in cases the original report shows (live repro:
+      // bug-13 dispatched via the queue, turn_result subtype=success
+      // fired, _activeRunItem was null when the listener ran → queue
+      // entry stayed `running` indefinitely, 5 pending items blocked).
+      // The fallback covers every scenario where _activeRunItem can be
+      // lost — session re-instantiation by the 5-min reaper, a race
+      // with another clear, or a dispatch path that bypassed the
+      // marker regex. The [runQueue-diag] log line captures every
+      // fallback occurrence so the underlying staleness can still be
+      // root-caused in a follow-up pass without leaving the queue
+      // broken in the meantime.
+      let active = session._activeRunItem;
+      if (!active || !active.itemId) {
+        const rec = sessionsMod.getSessionRecord(sessionId);
+        const runningEntry = rec && Array.isArray(rec.runQueue)
+          && rec.runQueue.find((e) => e && e.status === 'running');
+        if (runningEntry) {
+          active = { itemId: runningEntry.itemId, startedAt: runningEntry.startedAt || null };
+          console.log(`[runQueue-diag] ${sessionId} ${ev.type} — _activeRunItem was null; falling back to queue's running entry ${runningEntry.itemId} (fr-51 belt-and-braces)`);
+        } else {
+          return; // truly nothing to advance
+        }
+      }
       if (ev.type === 'turn_result') {
         try {
           _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);

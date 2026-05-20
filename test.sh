@@ -2511,6 +2511,20 @@ test_chat_window() {
   # iteration_aborted/fatal was correct but USELESS without this:
   # _activeRunItem must be set to begin with.
   node_test_result test/fr-48-dispatch-marker.test.js "test/fr-48-dispatch-marker.test.js (4 cases)"
+  # fr-51 (run-queue stall): two failure modes that left the queue
+  # stuck on bug-13's dispatch in session myco-kkrazy-f80476dd —
+  #  (1) handleQCancel removed the running head but never called
+  #      peekNextPending / markRunning / buildArtifactRunText, so the
+  #      queue had to be /qresume'd manually before any pending
+  #      entry could dispatch. Now /qcancel auto-advances.
+  #  (2) the agent-event listener short-circuited if
+  #      session._activeRunItem was null/undefined, even when the
+  #      queue clearly had a `running` entry waiting to be marked
+  #      finished. Added belt-and-braces fallback: use the queue's
+  #      running entry as the source of truth. [runQueue-diag] log
+  #      fires on every fallback so the underlying _activeRunItem
+  #      staleness can be root-caused in follow-up.
+  node_test_result test/fr-51-queue-advance.test.js "test/fr-51-queue-advance.test.js (9 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
