@@ -1828,18 +1828,34 @@
       "id": "fr-48",
       "text": "**Problem:** No way to queue multiple fr/td/bug items for myco to work through sequentially; users must hand-feed them one at a time.\n**Expected:** Users can add fr/td/bug items to a queue and myco picks them up one by one; the chat pane shows the queue with per-task status.\n**Actual:** Only single-item execution is supported and the chat pane has no queue/status view.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-20T01:02:57.088Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "4d30710835d1",
+          "user": "claude",
+          "text": "✅ **Shipped** in commit `af45609` — per-session plan-item run-queue with sequential auto-dispatch, persistent chat-pane chip strip, and 5 slash commands.\n\n**Note on the earlier `done:true` state:** fr-48 was previously marked done with a `ranAt` timestamp but zero comments and no implementation — likely the recurring MCP stale-snapshot bug or an accidental Done click. This is the real closure.\n\n## Why this matters\n\nWalking away from myco wasn't possible before: every fr/td/bug item needed file → ▶ Run → wait → file next → ▶ Run → wait. fr-48 enables a \"queue 5 items and come back when they're done\" workflow.\n\n## New module: `server/src/runQueue.js`\n\nPure functional state mutation, no I/O. 9 exports. Data shape on the rec:\n\n```js\nrec.runQueue = [{ itemId, type, status, addedAt, addedBy, startedAt?, finishedAt? }]\nrec.runQueuePaused = boolean\n```\n\nStatus transitions: `pending → running → success | failed | cancelled`. Failure auto-pauses the queue; `peekNextPending` returns null until `resumeQueue`. Re-adding an itemId that previously finished is ALLOWED (re-runs are common). Re-adding a pending/running itemId throws.\n\n## Server\n\n**4 HTTP routes in `artifacts.js`**, all gated on `isOwnerOrAdmin`:\n\n| Route | What |\n|---|---|\n| `POST /sessions/:id/queue/add {itemId,type}` | Append + kick if idle |\n| `DELETE /sessions/:id/queue/:itemId` | Remove pending entry |\n| `POST /sessions/:id/queue/clear` | Drop all pending |\n| `POST /sessions/:id/queue/resume` | Unpause + dispatch next |\n\nAll persist + broadcast `state-update {kind:'runQueue'}`.\n\n**5 slash commands in `slashcmds.js`:**\n\n```\n/queue fr-43 [fr-44 ...]   — add items\n/qstatus                   — print queue\n/qcancel fr-43             — remove pending\n/qclear                    — drop all pending\n/qresume                   — unpause + dispatch next\n```\n\nAll owner+admin gated via `_requireQueueAuth`. `/queue` and `/qresume` ALSO kick dispatch if the queue head would be the next pending entry (same logic as the HTTP `/queue/add` route).\n\n**`attach.js` turn_result auto-advance hook:** `_registerExternalSession`'s existing turn_result listener now also calls `_advanceRunQueue`. If the just-finished item is the queue's running head, mark its outcome and dispatch the next pending entry via the same `handleChatMessage` + `buildArtifactRunText` path the manual ▶ Run button uses. On failure: pause + emit a chat note explaining `/qresume` to continue. Manual ▶ Run clicks (not from queue) silently no-op the hook.\n\n## Client (`app.js` + `styles.css`)\n\n- **Per-item ⊤ Queue button** on each plan item card next to ▶ Run. Gated on `!state.readOnly && !it.done`. POST /queue/add on click.\n- **Persistent chip strip** pinned to the top of the chat pane (`#runqueue-strip`). One chip per queue entry with glyph + itemId + status class (running gets a green tint, failed red, success faded, cancelled strike-through). Click chip → `location.hash` jumps to the plan item card. × cancel button on pending entries. Resume/Clear buttons appear when paused/has-pending. Strip hides when queue is empty.\n- **`state-update {kind:'runQueue'}` handler** caches the latest state into `state.runQueue` + re-renders the strip.\n\n## Test coverage (`test/fr-48-run-queue.test.js`, 22 cases)\n\n- 14 in-test behavior tests against the real `runQueue` module (loaded via `require` — tests the actual production logic, not a re-implementation): add/remove/clear, dedupe rejection, re-add after terminal, refuse-to-remove-running, FIFO peek, paused = null peek, status transitions, failure auto-pauses + resume restores.\n- 8 static-grep guards anchoring all 4 queue routes + isOwnerOrAdmin gating, 5 slash commands + handler functions, attach.js turn_result hook references `runQueue`, app.js renders `artifact-item-queue` button + calls POST /queue/add + handles `state-update {kind:'runQueue'}`.\n\n## Verification\n\nRegression sweep: **292/292 tests pass** across fr-48 + 20 adjacent suites (all fr-43/44/45/46, bug-21 patterns 1+2, bug-17, state-update, admin/strict/chat/persist/replay, all plan-* suites).\n\n## Followups documented for later (not in this commit)\n\n1. **Manual /qpause command** — currently the only way to pause is via failure-auto-pause. A user-initiated `/qpause` (or pause button on the chip strip) would let you halt a queue mid-flight without canceling everything.\n2. **dependsOn auto-queue** — when adding an item whose `dependsOn` chain has unmet prereqs, optionally auto-queue the prereqs first so the head item is dispatched only after they finish. Currently you have to hand-queue each prereq.\n3. **Queue position drag-reorder in UI** — pending entries are FIFO based on add-order. A drag-reorder affordance in the chip strip would let users re-prioritize without /qcancel + re-add.\n4. **Per-user queues vs per-session queue** — fr-48 ships per-session. If multi-user sessions get heavy and people queue against each other, per-user-scoped queues might matter. Worth observing first.",
+          "ts": "2026-05-20T01:50:58.209Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-20T01:50:58.209Z",
+            "commit": "af45609",
+            "testFile": "test/fr-48-run-queue.test.js"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "allow adding fr/td/bug to a queue and myco will continue to work on them one by one. The chat pane should enhanced to show the queue with task status",
         "rewritten": true
-      }
+      },
+      "ranAt": "2026-05-20T01:18:17.119Z",
+      "doneAt": "2026-05-20T01:50:58.209Z",
+      "doneBy": "claude"
     }
   ],
-  "updatedAt": "2026-05-20T01:12:12.600Z"
+  "updatedAt": "2026-05-20T01:50:58.209Z"
 }
