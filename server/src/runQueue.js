@@ -53,19 +53,18 @@ function addToQueue(rec, itemId, type, addedBy) {
   return entry;
 }
 
-// Remove an entry by itemId. Refuses to remove a running entry (the
-// SDK iteration is in flight — the user should interrupt instead).
-// Returns true on success, false if the itemId wasn't found in a
-// removable state. Splices the entry out of the queue — drop, not
-// mark-as-cancelled. (Terminal `cancelled` status is reserved for
-// auto-cancel paths like _advanceRunQueue when the underlying plan
-// item was deleted out from under us — the user wants /qcancel to
-// be a clean removal, not a noisy audit row.)
-function removeFromQueue(rec, itemId) {
+// Remove an entry by itemId. Default behavior refuses to remove a
+// running entry (the SDK iteration may be in flight — the user
+// should interrupt instead). Pass `{force:true}` to override — useful
+// for stuck-running recovery when the SDK has actually been idle for
+// a while but the queue state never got a terminal turn_result /
+// iteration_aborted / fatal event to mark the entry done.
+// Returns true on removal, false if itemId wasn't found.
+function removeFromQueue(rec, itemId, opts = {}) {
   _ensureQueueFields(rec);
   const runningIdx = rec.runQueue.findIndex((e) => e.itemId === itemId && e.status === 'running');
-  if (runningIdx !== -1) {
-    throw new Error(`itemId ${itemId} is running — cannot remove (interrupt the SDK iteration instead)`);
+  if (runningIdx !== -1 && !opts.force) {
+    throw new Error(`itemId ${itemId} is running — cannot remove (interrupt the SDK iteration instead, or pass {force:true} for stuck-state recovery)`);
   }
   const idx = rec.runQueue.findIndex((e) => e.itemId === itemId);
   if (idx === -1) return false;

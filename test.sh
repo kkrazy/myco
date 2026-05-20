@@ -2458,6 +2458,12 @@ test_chat_window() {
   # silently no-op'd under require-cycle conditions and left the chip
   # strip stale after /qcancel (user-reported regression).
   node_test_result test/fr-48-qslash-broadcast.test.js "test/fr-48-qslash-broadcast.test.js (6 cases)"
+  # fr-48 bugfix: queue must see iteration_aborted + fatal as terminal
+  # events too (not just turn_result), or a Stop-button interrupt /
+  # rate-limit-retry-exhaust leaves the running entry stuck forever.
+  # ALSO: runQueue.removeFromQueue accepts {force:true} so /qcancel
+  # can recover a stuck running entry. User-reported regression.
+  node_test_result test/fr-48-stuck-running-recovery.test.js "test/fr-48-stuck-running-recovery.test.js (6 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

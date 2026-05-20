@@ -138,17 +138,38 @@ function _registerExternalSession(sessionId, session) {
     // see the linked status. One run per turn — _activeRunItem
     // clears after the outcome is stamped.
     session.on('agent-event', (ev) => {
-      if (!ev || ev.type !== 'turn_result') return;
+      if (!ev) return;
       const active = session._activeRunItem;
       if (!active) return;
-      try {
-        _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
-      } catch (err) {
-        console.error('[plan-run] stamp outcome failed:', err.message);
+      // fr-48 bugfix: queue must see iteration_aborted + fatal as
+      // terminal events too — not just turn_result. Pre-fix, a user-
+      // initiated Stop (iteration_aborted) or fr-43 retry-exhausted
+      // failure (fatal) left the queue's running entry stuck in
+      // 'running' forever, blocking pending entries from advancing.
+      // _advanceRunQueue's success-check evaluates subtype==='success'
+      // which is false for both abort and fatal, so the entry gets
+      // marked failed + queue auto-pauses (user can /qresume to
+      // continue or /qcancel bug-X to drop the failed head).
+      const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
+      if (!terminalTypes.has(ev.type)) return;
+      if (ev.type === 'turn_result') {
+        try {
+          _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
+        } catch (err) {
+          console.error('[plan-run] stamp outcome failed:', err.message);
+        }
+      } else {
+        // For abort/fatal, stamp a brief synthetic "aborted"/"error"
+        // run record so the plan item's chip strip reflects the
+        // outcome even when the queue is what fired the terminal.
+        const synthStatus = ev.type === 'iteration_aborted' ? 'aborted' : 'error';
+        try {
+          _stampPlanItemStatus(sessionId, active.itemId, synthStatus,
+            ev.type === 'iteration_aborted' ? 'interrupted by Stop' : (ev.error || 'fatal'));
+        } catch (err) {
+          console.error('[plan-run] stamp status (' + ev.type + ') failed:', err.message);
+        }
       }
-      // fr-48: queue auto-advance. If the just-finished item is the
-      // head of the run-queue, mark its outcome + dispatch the next
-      // pending entry (or pause on failure).
       try {
         _advanceRunQueue(sessionId, session, active.itemId, ev);
       } catch (err) {

@@ -1280,9 +1280,17 @@ function handleQCancel(ctx) {
   if (!rec) { ctx.reply('(/qcancel: session not found)'); return; }
   const id = String((ctx && ctx.args) || '').trim();
   if (!id) { ctx.reply('Usage: `/qcancel <itemId>`'); return; }
+  // fr-48 stuck-running recovery: /qcancel passes {force:true} so a
+  // stuck running entry (queue thinks it's running but the SDK is
+  // idle — happens when the iteration aborted/fatal'd before the
+  // listener fix landed) can be cleared from chat. The user explicitly
+  // typed /qcancel, so consenting-adults — if the SDK actually IS
+  // working on the item, removing it from the queue just means we
+  // won't auto-advance to the next pending entry (the in-flight tool
+  // calls still complete naturally).
   let removed;
   try {
-    removed = runQueue.removeFromQueue(rec, id);
+    removed = runQueue.removeFromQueue(rec, id, { force: true });
   } catch (err) {
     ctx.reply(`⚠ ${err.message}`);
     return;
