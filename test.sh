@@ -2525,6 +2525,12 @@ test_chat_window() {
   #      fires on every fallback so the underlying _activeRunItem
   #      staleness can be root-caused in follow-up.
   node_test_result test/fr-51-queue-advance.test.js "test/fr-51-queue-advance.test.js (9 cases)"
+  # bug-12: re-entering a session via the back icon (#btn-expand)
+  # used to leave the chat pane hidden on mobile — setSidebar(false)
+  # on back-icon-tap cascades into setChatPane(false), and openSession's
+  # re-tap early-return only re-collapsed the sidebar without restoring
+  # the chat pane. Now setChatPane(true) is wired into the re-tap branch.
+  node_test_result test/bug-12-reentry-restores-chatpane.test.js "test/bug-12-reentry-restores-chatpane.test.js (4 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

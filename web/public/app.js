@@ -1151,7 +1151,19 @@ function _buildAttachQuery(isShared) {
 function openSession(id, opts = {}) {
   // Re-tap of the same session: reconnect if WS is dead, otherwise just bring into view.
   if (state.activeId === id && state.ws && state.ws.readyState === WebSocket.OPEN) {
-    if (window.innerWidth <= 900) setSidebar(true);
+    if (window.innerWidth <= 900) {
+      setSidebar(true);
+      // bug-12: restore the chat pane on re-entry. The user typically
+      // gets here by tapping the back icon (#btn-expand) to see the
+      // session list, then tapping the same session card. The back-icon
+      // tap fired setSidebar(false) which on mobile cascades to
+      // setChatPane(false) — leaving state.chatPaneVisible=false. Pre-
+      // fix the re-tap branch only collapsed the sidebar; the chat pane
+      // stayed hidden so the user landed on a blank session with the
+      // chat input effectively deactivated. Calling setChatPane(true)
+      // here re-shows the pane (it's a no-op when already visible).
+      setChatPane(true);
+    }
     return;
   }
 

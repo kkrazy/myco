@@ -1159,19 +1159,31 @@
       "id": "bug-12",
       "text": "**Problem:** Re-entering a session via the back icon leaves the chat window deactivated, blocking user input.\n**Expected:** The chat window should always be active when viewing a session.\n**Actual:** Clicking the icon to return to the session card and then reopening the same session deactivates the chat window.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-17T16:39:55.804Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "rs-f54f90142274",
+          "user": "claude",
+          "text": "**Fixed.** Mobile flow that produced the symptom:\n\n1. User in session's chat → `state.chatPaneVisible = true`\n2. Taps back icon `#btn-expand` → `setSidebar(false)` fires; on mobile (≤900px) line at `app.js:1348` cascades: `if (!collapsed && window.innerWidth <= 900) setChatPane(false)` → chat pane hidden\n3. Taps the SAME session card → `openSession()` hits the re-tap early-return at `app.js:1153-1156` because `state.activeId === id` and the WS is still open\n4. **Pre-fix:** the early-return only called `setSidebar(true)` to collapse the now-open sidebar — it never restored the chat pane. Result: neither sidebar nor chat visible, input effectively deactivated.\n\n**Fix** (`web/public/app.js openSession` re-tap branch): added `setChatPane(true)` immediately after `setSidebar(true)`. No-op when the pane is already visible (idempotent); restores the pane in the back-icon-then-re-tap path.\n\n**Regression test**: `test/bug-12-reentry-restores-chatpane.test.js` — 4 cases (3 static-grep guards on the re-tap branch + setChatPane polarity contract + 1 end-to-end behavior simulation of the mobile flow with fake state). Wired into `test.sh` right after the fr-51 entry. Full sweep: 50/50 individual test files green; `test.sh` itself bails on the known-environmental BusyBox `grep -P` issue at `test_cache_busters` (unrelated).\n\n**Awaiting deploy** — fix is in commit <see git log>. Live myco is pre-fix; verify on prod after the next `./deploy.sh`.",
+          "ts": "2026-05-20T21:23:26.138Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "click the icon to go back to session card and then go back to the same session would case the chat window be disactivated. The chat window should be always active",
         "rewritten": true
-      }
+      },
+      "doneAt": "2026-05-20T21:23:26.138Z",
+      "doneBy": "claude"
     },
     {
       "id": "fr-23",
@@ -2087,42 +2099,37 @@
     {
       "id": "fr-51",
       "text": "**Problem:** Queue stalls because an item that reports finished is never marked finished, so the queue doesn't advance to the next item.\n**Expected:** When an item reports finished, mark it finished and move to the next item.\n**Actual:** Item reports finished but stays unmarked; queue does not progress.",
-      "layer": "Bug",
+      "layer": "Feature",
       "done": false,
       "addedAt": "2026-05-20T20:16:14.347Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [
-        {
-          "id": "rs-e97fc1d70c8b",
-          "user": "claude",
-          "text": "**Live reproduction in session `myco-kkrazy-f80476dd` — bug-13 queue entry stuck.**\n\nThe queue entry for `bug-13` is sitting in status `running` with NO `finishedAt`, even though the turn completed successfully ~20 minutes ago. Five pending items are blocked behind it.\n\n### Live queue state (from `/data/sessions.json` at 2026-05-20T20:21:40.597Z)\n\n- `fr-47` — **success** · added 2026-05-20T08:57:56.785Z, started 2026-05-20T08:57:56.803Z → 2026-05-20T09:04:22.102Z\n- `bug-19` — **success** · added 2026-05-20T09:57:20.418Z, started 2026-05-20T09:57:20.442Z → 2026-05-20T10:00:48.612Z\n- `bug-15` — **success** · added 2026-05-20T19:54:18.825Z, started 2026-05-20T19:54:18.846Z → 2026-05-20T20:01:55.883Z\n- `bug-13` — **running** · added 2026-05-20T19:54:52.784Z, started 2026-05-20T20:01:55.914Z  (running for 1185s with NO finishedAt)\n- `bug-12` — **pending** · added 2026-05-20T19:55:54.915Z\n- `bug-11` — **pending** · added 2026-05-20T20:00:03.712Z\n- `bug-8` — **pending** · added 2026-05-20T20:05:09.785Z\n- `fr-50` — **pending** · added 2026-05-20T20:07:03.529Z\n- `fr-49` — **pending** · added 2026-05-20T20:07:46.688Z\n\n### Turn timeline for the bug-13 dispatch (from `_myco_/events.jsonl`)\n\n- **seq #5917** `turn_start` at `2026-05-20T20:01:56.002Z` — prompt begins `[run:plan#bug-13] [📋 Plan item · submitted by @kkrazy]\n**Problem:** Chrome batch messages are only visible…`\n- Turn ran 9 `tool_use` / `tool_result` pairs (git log, file reads, regression test, AskUserQuestion, plan.json closure, git commit + push)\n- **seq #6005** `turn_result` at `2026-05-20T20:05:34.483Z` · `subtype: \"success\"`\n- Elapsed: `startedAt` (20:01:55.914) → `turn_result` (20:05:34.483) = ~3m38s. Queue still shows `running` ~16 minutes after success.\n- `rec._activeRunItem` is currently `null` (sessions.json snapshot above)\n\n### Code path the queue advance SHOULD have taken\n\nPer `server/src/attach.js:140-178` the `agent-event` listener attached in `_registerExternalSession` runs on every event with these gates:\n\n1. `active = session._activeRunItem` — short-circuits if `null` (line 143)\n2. `terminalTypes` includes `turn_result`, `iteration_aborted`, `fatal` (line 153) — `turn_result` matched ✓\n3. Calls `_stampPlanItemRunOutcome(...)` then `_advanceRunQueue(...)` then clears `session._activeRunItem = null` (line 178)\n\n`_advanceRunQueue` (line 301) requires the running entry to be findable (`status === 'running'` ✓) and then calls `runQueue.markFinished(rec, finishedItemId, success)`. On success it advances; on failure it pauses with a `runQueue-paused` chat message.\n\n### Most likely failure mode\n\n`session._activeRunItem` was `null` at the moment `turn_result` fired, so the listener early-returned at line 143 — `markFinished` never ran. Three sub-hypotheses to test:\n\n1. **The marker prefix was missing from the dispatched text.** `artifacts.js buildArtifactRunText` prepends `[run:plan#bug-13] ` only when `item && item.id` is truthy. The chat-pane prompt at `#5917` DID include the marker, so this is unlikely to be the cause for THIS dispatch — but check whether the queue-dispatch path goes through `handleChatMessage` (which sets `_activeRunItem` via the regex at attach.js:1408) or some other entry point that bypasses the regex.\n2. **`_activeRunItem` was cleared early by a non-terminal event.** Audit: does any code path set `session._activeRunItem = null` before the terminal event arrives? (e.g. an `interrupt` ack, an `agent-init`, a different listener that fires on EVERY event)\n3. **The listener wasn't attached when the event fired.** `_registerExternalSession` is called once per session creation. If the session was re-instantiated (5-min reaper kill + revive) between dispatch and turn_result, the new session instance wouldn't have the listener — or would have a fresh `_activeRunItem === undefined`. Check for kill/revive between 20:01 and 20:05.\n\n### Suggested instrumentation to land first (low-risk, ~20 lines)\n\nAdd `console.log('[runQueue-diag]', sessionId, evType, activeId)` in the `agent-event` listener BEFORE the `if (!active) return` short-circuit so the next stall has a paper trail. Also log on every `session._activeRunItem = …` assignment.\n\n### Workaround in the meantime\n\nOwner can `/qcancel bug-13` (force-removes the stuck running head) followed by `/qresume` to dispatch the next pending entry (bug-12 here). Both commands exist as of fr-48.",
-          "ts": "2026-05-20T20:21:40.597Z",
-          "meta": {
-            "kind": "investigation",
-            "source": "session-events.jsonl + sessions.json"
-          }
-        },
-        {
-          "id": "rs-886ece6a9b94",
-          "user": "claude",
-          "text": "**Second bug found: `/qcancel` doesn't dispatch the next pending entry.**\n\nReproduced live in this same session immediately after the prior investigation comment.\n\n### Reproduction timeline (chat trace from `rec.chat`)\n\n| time | user | event |\n|---|---|---|\n| 20:23:57.529 | kkrazy | typed `/qcancel bug-13` |\n| 20:23:57.575 | claude (server) | replied `✓ Cancelled bug-13 in the run-queue.` (46ms ack) |\n| 20:23:57.575 — present | — | **no further chat traffic from the queue** — no `▶ dispatching bug-12`, no `⏸ run-queue paused`, nothing |\n\n### Live queue state right after `/qcancel` (at 2026-05-20T20:28:28.271Z)\n\n`paused: false`, `_activeRunItem: undefined`\n\n- `fr-47` — **success** · added 2026-05-20T08:57:56.785Z, started 2026-05-20T08:57:56.803Z, finished 2026-05-20T09:04:22.102Z\n- `bug-19` — **success** · added 2026-05-20T09:57:20.418Z, started 2026-05-20T09:57:20.442Z, finished 2026-05-20T10:00:48.612Z\n- `bug-15` — **success** · added 2026-05-20T19:54:18.825Z, started 2026-05-20T19:54:18.846Z, finished 2026-05-20T20:01:55.883Z\n- `bug-12` — **pending** · added 2026-05-20T19:55:54.915Z\n- `bug-11` — **pending** · added 2026-05-20T20:00:03.712Z\n- `bug-8` — **pending** · added 2026-05-20T20:05:09.785Z\n- `fr-50` — **pending** · added 2026-05-20T20:07:03.529Z\n- `fr-49` — **pending** · added 2026-05-20T20:07:46.688Z\n\nbug-13 is gone (the cancel did splice it out), but `bug-12` and the 4 entries behind it are still `pending`. Queue is permanently idle until the user either types something with a `[run:plan#...]` marker or runs `/qresume` (which would dispatch the next pending).\n\n### Root cause: `handleQCancel` does not call any dispatch site\n\n`server/src/slashcmds.js:1279-1312` (`handleQCancel`):\n\n```js\nfunction handleQCancel(ctx) {\n  // ... auth + arg-parse ...\n  removed = runQueue.removeFromQueue(rec, id, { force: true });   // ← splices entry\n  if (!removed) { ctx.reply(`(no queued entry for \\`${id}\\`)`); return; }\n  sessionsMod.saveStore();\n  ctx.session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });\n  ctx.reply(`✓ Cancelled \\`${id}\\` in the run-queue.`);\n  // ← function returns here — NO peekNextPending, NO markRunning, NO buildArtifactRunText\n}\n```\n\nCompare `handleQResume` (lines 1327-1361) which DOES dispatch the next pending: `resumeQueue` → `peekNextPending` → `markRunning(next.itemId)` → `attachMod.handleChatMessage(buildArtifactRunText(next.type, item, ctx.user))`. The same 4-line block is the missing dispatcher in `handleQCancel`.\n\n### All dispatch sites (verified by grep)\n\n5 places call `markRunning` + `buildArtifactRunText`:\n- `slashcmds.js:1233` — `handleQueue` (initial dispatch from `/queue` command)\n- `slashcmds.js:1340` — `handleQResume`\n- `artifacts.js:508` — `_enqueueAndKickIfIdle` (unified dispatch entry from POST /queue/add and ▶ Run button)\n- `artifacts.js:914` — quorum-trigger dispatch\n- `attach.js:323` — `_advanceRunQueue` (post-`turn_result` auto-advance)\n\n**None of them are invoked from `handleQCancel` or the DELETE /queue/:itemId HTTP route.** Removing a running entry takes the queue off the only auto-advance code path (`_advanceRunQueue` requires a `status==='running'` entry to find — and we just removed it).\n\n### Suggested fix (small, surgical)\n\nIn `handleQCancel`, after the `ctx.reply('✓ Cancelled ...')`, mirror the trailing block from `handleQResume`:\n\n```js\n// If the queue isn't paused and has a pending entry, dispatch it\n// so the user doesn't have to follow up with /qresume just because\n// they cancelled a stuck head.\nconst next = runQueue.peekNextPending(rec);\nif (next && ctx.session) {\n  const planArtifact = rec.artifacts && rec.artifacts.plan;\n  const nextItem = planArtifact && planArtifact.items.find((it) => it && it.id === next.itemId);\n  if (nextItem) {\n    try {\n      runQueue.markRunning(rec, next.itemId);\n      sessionsMod.saveStore();\n      ctx.session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });\n      attachMod.handleChatMessage(ctx.sessionId, ctx.session, ctx.user,\n        artifactsMod.buildArtifactRunText(next.type, nextItem, ctx.user));\n    } catch (err) {\n      console.error(`[runQueue] /qcancel auto-advance failed: ${err.message}`);\n    }\n  }\n}\n```\n\nSame gap likely exists in the `DELETE /queue/:itemId` HTTP route in `artifacts.js` — should be audited together.\n\n### Regression test to write before the fix\n\n`test/fr-51-qcancel-advances-next.test.js` — assert that calling `handleQCancel` on a queue with `[running, pending, pending]` results in `[pending→running, pending]` + a `handleChatMessage` call with the buildArtifactRunText payload for the second entry. Mock `ctx.session` as an EventEmitter; assert the dispatched chat carries the `[run:plan#<id>]` marker.\n\n### Combined with the earlier finding\n\nfr-51 now has TWO failure modes:\n1. **Auto-advance never fires after `turn_result`** (the original report) — `_activeRunItem` was `null`/`undefined` so the agent-event listener short-circuited; queue stayed `running`.\n2. **`/qcancel` doesn't trigger next entry** (this finding) — the manual workaround for #1 doesn't actually advance either, so the queue is doubly stuck.\n\nFix #2 first (smaller, surgical, gives users a working escape hatch). Fix #1 with the proposed `[runQueue-diag]` instrumentation to capture WHY `_activeRunItem` was null.",
-          "ts": "2026-05-20T20:28:28.271Z",
-          "meta": {
-            "kind": "investigation",
-            "source": "live qcancel repro in session myco-kkrazy-f80476dd"
-          }
-        }
-      ],
+      "comments": [],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "queue item reported finished but never marked as finished and not moving to next item.",
-        "rewritten": true,
-        "convertedFromLayer": "Feature",
-        "convertedAt": "2026-05-20T20:21:40.597Z"
+        "rewritten": true
       }
+    },
+    {
+      "id": "fr-52",
+      "text": "**Goal:** Spike a second backend for `AgentSession` driven by OpenAI's [Agents SDK](https://github.com/openai/openai-agents-js) so myco isn't single-vendor.\n\n**Motivation:**\n- Vendor diversification — Anthropic outage / rate-limit / pricing change degrades every session today. A switchable backend lets the user fall back per-session.\n- Direct benchmark on cost, latency, tool-call quality, permission UX with the same prompt + tools.\n- Future-proofing — know the porting effort NOW, not under pressure.\n\n**Approach (spike, not full migration):**\n1. Abstract `AgentSession` (`server/src/agent-session.js`) so SDK-specific bits (`query()` loop, `canUseTool`, `PreToolUse` hook, tool_use/tool_result event shapes) live behind an adapter interface. Anthropic implementation becomes one adapter; Agents SDK is the second.\n2. Map Anthropic primitives onto Agents SDK: `query()` → `Runner.run()`, `canUseTool` → tool-call interception via guardrails/pre-tool hooks, MCP tool registration → Agents SDK tool defs, streaming events → its `stream()` API.\n3. End-to-end PoC: spawn with `--provider=openai-agents`, run one turn including a Bash tool call that triggers a permission menu, lands tool_result, finishes turn_result.\n\n**Success criteria:**\n- New session with Agents-SDK adapter completes a 3-tool-call turn end-to-end\n- Chrome batch + assistant text render identically for both backends (no UI fork)\n- Short write-up in `_myco_/architecture.md`: porting effort (lines / dev-days), feature gaps, recommended next step\n\n**Out of scope:** full feature parity (fr-43 retry / fr-44 resume-fallback / fr-45 SDK-options lint are Anthropic-specific), production rollout, cost dashboard.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-20T20:44:58.759Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "165beb4b9381",
+          "user": "kkrazy",
+          "text": "Myco should become the manager of the agents, distill the strength of each agent, and decide which agents should be engaged in a task, consult the opinion of different agents and come up with a plan. Myco is the multi-agent manager",
+          "ts": "2026-05-20T20:53:45.281Z"
+        }
+      ]
     }
   ],
-  "updatedAt": "2026-05-20T20:28:28.271Z"
+  "updatedAt": "2026-05-20T21:23:26.138Z"
 }
