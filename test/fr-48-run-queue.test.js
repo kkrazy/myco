@@ -254,16 +254,21 @@ t('attach.js turn_result hook calls runQueue auto-advance', () => {
     'attach.js must reference runQueue or _advanceQueue from the turn_result listener');
 });
 
-t('app.js renders per-item ⊤ Queue button gated on !state.readOnly', () => {
-  // The new per-item Queue affordance lives in the artifact-item-actions
-  // row alongside the existing Run + Edit buttons.
-  assert.match(PROD_APP, /artifact-item-queue/,
-    'app.js must render an artifact-item-queue button class on item cards');
+t('app.js does NOT render the redundant ⊤ Queue button (▶ Run is the queue entry)', () => {
+  // Post-unification (commit 606f14c) the ▶ Implement/Fix/Do button
+  // calls /queue/add — same path as the ⊤ Queue button. Per user
+  // direction the redundant ⊤ Queue button was pruned. The class
+  // must NOT appear in the source.
+  assert.ok(!/artifact-item-queue/.test(PROD_APP),
+    'app.js must NOT render artifact-item-queue button — ▶ Run is the unified queue entry');
 });
 
-t('app.js calls POST /queue/add from the per-item Queue button handler', () => {
+t('app.js calls POST /queue/add from the ▶ Run button (unified dispatch path)', () => {
+  // onArtifactItemRun (the ▶ Implement/Fix/Do handler) POSTs to
+  // /queue/add. Confirms the queue dispatch flows through this single
+  // entry point.
   assert.match(PROD_APP, /\/queue\/add[\s\S]{0,400}?method:\s*['"`]POST['"`]/,
-    'app.js must POST /sessions/.../queue/add from the per-item Queue handler');
+    'app.js must POST /sessions/.../queue/add from onArtifactItemRun (the unified Run button handler)');
 });
 
 t('app.js handles state-update kind="runQueue"', () => {

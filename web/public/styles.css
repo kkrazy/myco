@@ -1958,21 +1958,9 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   cursor: pointer;
 }
 
-/* fr-48: per-item ⊤ Queue button + persistent queue chip strip. */
-.artifact-item-queue {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.artifact-item-queue:hover {
-  color: var(--accent, #4caf50);
-  border-color: var(--accent, #4caf50);
-}
-/* Persistent chip strip — pinned at the top of the chat pane. */
+/* fr-48: persistent queue chip strip — pinned at the top of the
+ * chat pane. (The redundant ⊤ Queue per-item button was removed
+ * after the unified-dispatch refactor — ▶ Run now POSTs /queue/add.) */
 .runqueue-strip {
   display: flex;
   align-items: center;

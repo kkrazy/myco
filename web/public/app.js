@@ -5135,26 +5135,6 @@ function _renderRunQueueStrip() {
   if (clearEl) clearEl.addEventListener('click', onArtifactQueueClear);
 }
 
-// fr-48: per-item ⊤ Queue button handler.
-async function onArtifactItemQueue(type, itemId) {
-  const sid = state.activeId;
-  if (!sid || !itemId) return;
-  try {
-    const res = await authedFetch(
-      `/sessions/${encodeURIComponent(sid)}/queue/add`,
-      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, type }) }
-    );
-    if (!res || !res.ok) {
-      const errData = res ? await res.json().catch(() => ({})) : {};
-      console.error('[fr-48] queue add failed:', res && res.status, errData.error);
-      return;
-    }
-    // state-update will arrive via WS; strip re-renders from that.
-  } catch (err) {
-    console.error('[fr-48] queue add threw:', err);
-  }
-}
-
 async function onArtifactQueueCancel(itemId) {
   const sid = state.activeId;
   if (!sid || !itemId) return;
@@ -6335,12 +6315,13 @@ function renderArtifact(type, artifact) {
     const editBtn = (!state.readOnly && supportsVoting)
       ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit">✎</button>`
       : '';
-    // fr-48: per-item ⊤ Queue button. Adds the item to the
-    // sequential run-queue; auto-dispatches when the head finishes.
-    // Owner+admin only (gated on !state.readOnly).
-    const queueBtn = (!state.readOnly && supportsVoting && !it.done)
-      ? `<button class="artifact-item-queue" data-id="${escHtml(it.id)}" title="Add to run-queue — auto-dispatches sequentially" aria-label="Queue">⊤ Queue</button>`
-      : '';
+    // fr-48: per-item ⊤ Queue button was pruned after the unified
+    // dispatch refactor (commit 606f14c) made the ▶ Run button itself
+    // POST to /queue/add. Both buttons were functionally identical;
+    // ▶ Run carries the layer-aware label (Implement/Fix/Do) which is
+    // more semantic than a generic "Queue" verb. The queue chip strip
+    // at the top of the chat pane remains the always-visible queue
+    // status surface.
     const actionsRow = `<div class="artifact-item-actions">
         ${mergedBadge}
         ${depsChip}
@@ -6348,7 +6329,6 @@ function renderArtifact(type, artifact) {
         ${itemEditedBadge}
         ${voteBlock}
         ${runBtn}
-        ${queueBtn}
         ${editBtn}
         <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
       </div>`;
@@ -6421,10 +6401,7 @@ function renderArtifact(type, artifact) {
   body.querySelectorAll('.artifact-item-edit').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactItemEdit(type, btn.dataset.id));
   });
-  // fr-48: per-item ⊤ Queue button → POST /queue/add.
-  body.querySelectorAll('.artifact-item-queue').forEach((btn) => {
-    btn.addEventListener('click', () => onArtifactItemQueue(type, btn.dataset.id));
-  });
+  // fr-48 cleanup: redundant ⊤ Queue button removed (▶ Run unifies).
   body.querySelectorAll('.artifact-comment-edit').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactCommentEdit(type, btn.dataset.id, btn.dataset.cid));
   });
