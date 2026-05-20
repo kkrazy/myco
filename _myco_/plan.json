@@ -269,7 +269,7 @@
       "id": "bug-6",
       "text": "/clear cmd clear the message in memory in the chat pane only, a refresh of the site picks up everything again.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-15T00:14:08.187Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -338,6 +338,12 @@
           "user": "kkrazy",
           "text": "Maybe having up to 8 subagents to avoid resource constrain",
           "ts": "2026-05-18T19:28:46.877Z"
+        },
+        {
+          "id": "9fc3d744fcab",
+          "user": "kkrazy",
+          "text": "for plan items submitted to the task queue, should determine the complexity and decide whether to launch a subagent for the purpose",
+          "ts": "2026-05-20T09:36:51.175Z"
         }
       ]
     },
@@ -795,7 +801,7 @@
       "id": "fr-13",
       "text": "**Problem:** Mobile chat keeps the full message history in memory, causing memory pressure on constrained devices.\n**Expected:** On mobile only, retain just the last 25 messages in memory; older messages are swapped out and reloaded on scroll-up.\n**Actual:** All messages remain resident in memory regardless of platform.\n**Context:** Mobile-only behavior — desktop chat must remain unchanged.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T21:06:56.469Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -1047,8 +1053,17 @@
       "addedAt": "2026-05-17T14:47:49.246Z",
       "addedBy": "claude",
       "source": "research",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "0fce9f4ba17c",
+          "user": "kkrazy",
+          "text": "add a metrics icon beside the test/plan/arch/file for this",
+          "ts": "2026-05-20T09:34:04.313Z"
+        }
+      ],
       "meta": {
         "researchDoc": "_myco_/research/ai-team-collaboration.md",
         "researchSection": "5 (humans + workflows adapt)"
@@ -1078,7 +1093,14 @@
       "addedBy": "claude",
       "source": "research",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "251bc3e6de74",
+          "user": "kkrazy",
+          "text": "should there be a way to display the architecture decisions in the architecture view?",
+          "ts": "2026-05-20T09:44:19.010Z"
+        }
+      ],
       "meta": {
         "researchDoc": "_myco_/research/ai-team-collaboration.md",
         "researchSection": "5 (humans + workflows adapt)"
@@ -1159,17 +1181,6 @@
       "done": false,
       "addedAt": "2026-05-17T17:25:04.890Z",
       "addedBy": "claude",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "td-26",
-      "text": "show info",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-18T01:32:40.552Z",
-      "addedBy": "ryan-blues",
       "source": "user",
       "voters": [],
       "comments": []
@@ -1306,7 +1317,14 @@
       "addedBy": "claude",
       "source": "user",
       "voters": [],
-      "comments": []
+      "comments": [
+        {
+          "id": "468c9c88a299",
+          "user": "kkrazy",
+          "text": "please verify if this is still aproblem",
+          "ts": "2026-05-20T09:55:19.702Z"
+        }
+      ]
     },
     {
       "id": "fr-27",
@@ -1528,7 +1546,14 @@
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "a08ee18312c7",
+          "user": "kkrazy",
+          "text": "verify if this is fixed already.",
+          "ts": "2026-05-20T09:55:59.047Z"
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "adding an admin didn't work, after adding labxnow, labxnow still can't send message to claude, which is only allowed by admin/owner. log: /admin claude09:41 AM\n✓ is now an admin on this session. Inherits everything except delete-session + grant/revoke admin (those stay owner-only). claude09:41 AM\n(read-only viewer — claude-routing is owner-only. You can @<user> to discuss, or use /td <text>, /fr <text>, /bug <text> to add plan items.)",
@@ -1543,7 +1568,9 @@
       "addedAt": "2026-05-19T02:11:16.149Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
@@ -1581,17 +1608,47 @@
       "id": "bug-19",
       "text": "**Problem:** When a new message is denied by permission (e.g. read-only mode), the message content is dropped and not shown anywhere, making it unrecoverable.\n**Expected:** Display the user's message in the discussion panel, then respond with the permission-denied result.\n**Actual:** Request is denied for read-only and the message content is never rendered in the discussion panel, so the user cannot recover what they typed.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-19T03:07:04.337Z",
       "addedBy": "ryan-blues",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "7ab7e10a97a7",
+          "user": "kkrazy",
+          "text": "any message not successfully accepted by the chat pane should be preserved",
+          "ts": "2026-05-20T09:54:13.117Z"
+        },
+        {
+          "id": "ae2625e27787",
+          "user": "claude",
+          "text": "✅ **Fixed** in commit `80cf0ca` — read-only viewer's typed message is now preserved as a `meta.kind:'denied'` chat row before the denial reply.\n\n## Root cause\n\n`server/src/attach.js handleChatMessage` — the read-only guard at the top:\n\n```js\nif (readOnly && user !== ASSISTANT_USER) {\n  // ...check guest-allowed slash commands + mentions...\n  if (!guestOK) {\n    // emit ONLY the denial reply, return\n    sessionsMod.appendChatMessage(sessionId, denyMsg);\n    session.emit('chat', denyMsg);\n    return;        // ← user's text NEVER reaches the persist at line 1398\n  }\n}\n```\n\nThe user's typed text was silently dropped — not in `rec.chat`, not on disk, not visible to any other attached client. The viewer had no record of what they tried to send.\n\n## Fix\n\nIn the deny branch, BEFORE emitting the denial reply, also append + broadcast the user's message tagged `meta.kind:'denied'` + `meta.reason:'read-only viewer'`:\n\n```js\nconst userMsg = {\n  user, text, ts: new Date().toISOString(),\n  meta: { kind: 'denied', reason: 'read-only viewer' },\n};\nsessionsMod.appendChatMessage(sessionId, userMsg);\nsession.emit('chat', userMsg);\n// ...then the denial reply...\n```\n\nThe chat pane now shows:\n\n```\nkkrazy: try sending a message claude    [meta.kind:denied]\nclaude: (read-only viewer — claude-routing is owner-only. …)\n```\n\n## What this satisfies\n\n✓ The denied message persists in `rec.chat` per the cross-device persistence contract\n✓ Other attached clients receive the chat event (live broadcast)\n✓ The viewer can copy-paste their text out, edit it, retry through a permitted path\n✓ Per the user's clarification: \"any message not successfully accepted by the chat pane should be preserved\"\n\n## What's NOT in this commit (separate concerns)\n\n- **Client-side styling for `meta.kind:'denied'`** — the data is now reachable; a muted / strikethrough / \"denied\" badge in app.js would be visual polish. Worth a tiny follow-up if you want it visually distinct from accepted messages.\n- **Strict-mode case** — that path was already correct. `handleChatPostfixes` runs AFTER `appendChatMessage` at line 1398, so strict-mode-blocked text is already preserved. No change needed.\n\n## Test coverage (`test/bug-19-readonly-preserves-user-text.test.js`, 5 cases)\n\n- Read-only block exists in `handleChatMessage`\n- `appendChatMessage` called ≥ 2 times in the block (user text + denial)\n- Persisted user message tagged `meta.kind:'denied'`\n- Source order: denied user-message append comes BEFORE the denial reply (chronological chat order preserved)\n- Negative guard: first `appendChatMessage` comes BEFORE any `return` — prevents future regression\n\nAdjacent regression sweep: **129/129 cases** across bug-19 + 9 adjacent suites (strict-mode, admin-delegation, bug-17, chat-routing, state-update, chat-persistence-contract, fr-47, fr-49, persist-assistant-chat).",
+          "ts": "2026-05-20T10:00:28.018Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-20T10:00:28.018Z",
+            "commit": "80cf0ca",
+            "testFile": "test/bug-19-readonly-preserves-user-text.test.js"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "when add new message but denied by permission, such as add a new feature. The context of the new feature is not displayed in the discussion panel. and the request is denied for read only. But the content is not shown anywhere so unable to recover. Should display the message in discussion panel and then response with denied.",
         "rewritten": true
-      }
+      },
+      "runs": [
+        {
+          "status": "running",
+          "ts": "2026-05-20T09:57:20.467Z",
+          "summary": null
+        }
+      ],
+      "doneAt": "2026-05-20T10:00:28.018Z",
+      "doneBy": "claude"
     },
     {
       "id": "fr-41",
@@ -1914,7 +1971,53 @@
       "ranAt": "2026-05-20T01:18:17.119Z",
       "doneAt": "2026-05-20T01:50:58.209Z",
       "doneBy": "claude"
+    },
+    {
+      "id": "fr-49",
+      "text": "**Problem:** No surfaced queue of \"what to implement next\" — priorities have to be re-derived manually each session.\n**Expected:** A list of suggested next items ranked by priority and importance, refreshed periodically by myco every 2 hours.\n**Actual:** No such list exists; suggestions are ad-hoc.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-20T09:51:21.993Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "3062929e5678",
+          "user": "kkrazy",
+          "text": "the list should be persisted in plan.json and displayed via /whatsnext command in the chat pane, suggest a better shortcut for \"whatsnext\"",
+          "ts": "2026-05-20T09:52:51.413Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "add a list of items suggested to be implemented next based on priority and importance. the list should be done peoroidically by myco every 2 hours.",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-50",
+      "text": "**Problem:** Users can't edit text files (source code, markdown, JSON, etc.) in-app.\n**Expected:** Open and edit text files including source code, markdown, json, etc., with changes persisted back to disk.\n**Actual:** No editing surface exists for text files.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-20T09:59:15.384Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "0a54b3ffecf5",
+          "user": "kkrazy",
+          "text": "should avoid conflicting edits, would be great to support concurrent editing and show who is editing",
+          "ts": "2026-05-20T10:00:16.188Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "allow editing of text files including source code, markdown, json, etc.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-20T09:03:58.273Z"
+  "updatedAt": "2026-05-20T10:00:28.018Z"
 }
