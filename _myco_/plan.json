@@ -4,7 +4,7 @@
       "id": "bug-1",
       "text": "After redoply, the claude session enter resume window and unable to auto recover from it.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-12T10:07:39.716Z",
       "addedBy": "ryan-blues",
       "source": "user",
@@ -23,6 +23,19 @@
           "user": "kkrazy",
           "text": "Verify if its still a problem, close if fixed already",
           "ts": "2026-05-18T19:33:42.364Z"
+        },
+        {
+          "id": "bug1-verify-2026052006",
+          "user": "claude",
+          "text": "✓ **Verified — re-closing per kkrazy's ask.**\n\nbug-1 was originally closed by commit `96097df` (May 18) — *plan.json: close bug-1 — architecturally obsolete (Phase 9 retired PTY)* — with the explanation:\n\n> bug-1 (\"After redeploy, the claude session enter resume window and unable to auto recover from it.\") described the pre-Phase-9 PTY-era symptom where `claude --resume <id>` rendered a TUI prompt the PTY scraper couldn't reliably auto-dismiss.\n> \n> Phase 9 retired the entire PTY driver. Current ensureLiveSession flow (sessions.js → agent-session.js) passes `resumeSdkSessionId` to spawnAgent → SDK's `resume: this.sdkSessionId` reads the JSONL transcript directly. NO TUI prompt anywhere in the path; no auto-dismiss needed.\n\nThat close was subsequently **reverted by the live myco server's in-memory plan.json persistence race** (the same bug bug-16 calls out — file edits get overwritten when the running server flushes its in-memory copy after a mutation). The May 18 claude run-summary in this thread's prior comment explicitly warns about this durability problem.\n\n**Current verification (now, 2026-05-20):**\n- `grep -nE \"resume window|auto.?recover\" server/src/*.js` → no matches. The pre-Phase-9 TUI-resume surface is gone from the codebase.\n- `fr-44` (resume-failure fallback, commit `193e73d`) added a second layer of protection: on SDK resume error, the stale `sdkSessionId` is cleared and the iteration retries once with a fresh session — so even an edge-case resume failure recovers automatically instead of getting stuck.\n- The two together — no PTY surface + SDK auto-retry — mean the bug-1 symptom (\"need manual intervention to continue\") cannot occur in the current code path.\n\n**Action:** flipping `done: true` again. The fix lives in `96097df` + `193e73d`; this commit is paperwork to make the closed status persist in git.",
+          "ts": "2026-05-20T06:00:00.000Z",
+          "meta": {
+            "kind": "fix-summary",
+            "verifiedBy": "claude",
+            "originalCloseCommit": "96097df",
+            "additionalProtection": "193e73d",
+            "fixShipped": true
+          }
         },
         {
           "id": "13fee91d4908",
@@ -100,7 +113,9 @@
       "addedAt": "2026-05-14T01:07:50.344Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [
         {
           "id": "2a939971da03",
