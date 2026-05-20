@@ -1358,6 +1358,7 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
       '/help', '/me', '/whoami',
       '/task', '/tasks', '/skip', '/cancel', // task-list controls
       '/allowlist',                           // read-only view of allow/deny lists
+      '/qstatus',                             // read-only run-queue inspection (fr-48)
     ]);
     const guestOK = isMention || (cmd && GUEST_ALLOWED_CMDS.has(cmd));
     if (!guestOK) {

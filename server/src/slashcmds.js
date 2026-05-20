@@ -1253,7 +1253,10 @@ function handleQueue(ctx) {
 }
 
 function handleQStatus(ctx) {
-  if (!_requireQueueAuth(ctx)) return;
+  // /qstatus is purely read-only — anyone attached to the session
+  // (including read-only guests) can inspect the queue. The mutating
+  // queue commands (/queue, /qcancel, /qclear, /qresume) still gate
+  // via _requireQueueAuth on their own handlers.
   const runQueue = require('./runQueue');
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
   if (!rec) { ctx.reply('(/qstatus: session not found)'); return; }

@@ -40,11 +40,12 @@ t('app.js declares a guest-allowed-text predicate', () => {
 });
 
 t('app.js helper mirrors the server\'s allowed slash command set', () => {
-  // Pin all 11 commands the server allows for guests so client + server
+  // Pin all commands the server allows for guests so client + server
   // can\'t drift. If the server adds /something, the client guard must
   // be updated in sync.
   for (const cmd of ['/td', '/fr', '/bug', '/help', '/me', '/whoami',
-                     '/task', '/tasks', '/skip', '/cancel', '/allowlist']) {
+                     '/task', '/tasks', '/skip', '/cancel', '/allowlist',
+                     '/qstatus']) {
     assert.ok(PROD_APP.indexOf("'" + cmd + "'") > -1 || PROD_APP.indexOf('"' + cmd + '"') > -1,
       `guest-allowed command ${cmd} must appear as a literal in app.js`);
   }
