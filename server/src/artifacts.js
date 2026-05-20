@@ -57,13 +57,25 @@ function _artifactCommentsBlock(item) {
 }
 function buildArtifactRunText(type, item, user) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
-  const header = `[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
+  // fr-48 bugfix: prepend the [run:<type>#<id>] marker. attach.js
+  // handleChatMessage parses this marker to set session._activeRunItem,
+  // which is what the agent-event listener uses to bind subsequent
+  // terminal events (turn_result / iteration_aborted / fatal) back to
+  // the queue entry. WITHOUT this marker the queue dispatch path never
+  // set _activeRunItem and queue entries stayed `running` forever —
+  // the root cause behind every "queue stuck at running" user report.
+  const runMarker = `[run:${type}#${item.id}]`;
+  const header = `${runMarker} [${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
   return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 function buildArtifactQuorumText(type, item) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
   const voters = (item.voters || []).map((v) => `@${v}`).join(', ');
-  const header = `[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
+  // fr-48 bugfix: same marker prepend as buildArtifactRunText — the
+  // quorum auto-fire goes through the same handleChatMessage path
+  // and needs _activeRunItem set so queue advance fires on completion.
+  const runMarker = `[run:${type}#${item.id}]`;
+  const header = `${runMarker} [${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
   return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 

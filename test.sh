@@ -2464,6 +2464,16 @@ test_chat_window() {
   # ALSO: runQueue.removeFromQueue accepts {force:true} so /qcancel
   # can recover a stuck running entry. User-reported regression.
   node_test_result test/fr-48-stuck-running-recovery.test.js "test/fr-48-stuck-running-recovery.test.js (6 cases)"
+  # fr-48 bugfix (ROOT CAUSE): buildArtifactRunText +
+  # buildArtifactQuorumText must prepend the [run:<type>#<id>] marker.
+  # Without it, queue dispatch went through handleChatMessage with
+  # text that didn't trigger the marker-parsing regex, so
+  # session._activeRunItem was NEVER set on queue dispatches → terminal
+  # events found null active + short-circuited → queue entries stayed
+  # 'running' forever. The 72d7117 listener fix for
+  # iteration_aborted/fatal was correct but USELESS without this:
+  # _activeRunItem must be set to begin with.
+  node_test_result test/fr-48-dispatch-marker.test.js "test/fr-48-dispatch-marker.test.js (4 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
