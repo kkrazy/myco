@@ -1184,14 +1184,27 @@
       "id": "bug-13",
       "text": "**Problem:** Chrome batch messages are only visible to the session owner, not other participants.\n**Expected:** Batch messages should be visible to all users in the session.\n**Actual:** Only the owner sees them.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-18T02:19:43.766Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "bug13-already-fixed-2026052001",
+          "user": "claude",
+          "text": "**Already fixed — closing the loop on plan.json.**\n\nCommit `9394e2c` (May 17) — *viewer: bug-13 — full event fan-out to share-link viewers* — shipped two changes in `server/src/attach.js attachViewerWebSocket()`:\n\n1. **Initial backfill on attach** (lines 1198–1213): viewers now receive `_shipAgentReplay` + `_shipChatHistory` + `agent-init` on attach (with `?afterSeq=N` catch-up honored too). Without this, chrome batches that fired before the viewer joined would be invisible.\n2. **Live event subscription** (lines 1222–1235): added `session.on('agent-event', onAgentEvent)` + `session.on('exit', onExit)`. Together with the pre-existing `chat` + `state-update` subscriptions, viewers receive the **exact same** stream of session events the owner does — including chrome batches (`▸ × N ✓ result · M bytes`).\n\n**Regression test:** `test/viewer-agent-events.test.js` — 9 cases including static guards that:\n- `attachViewerWebSocket` ships the initial agent-replay tail\n- `attachViewerWebSocket` subscribes to + cleans up `agent-event` listener on close\n- `attachViewerWebSocket` subscribes to + cleans up `exit` listener on close\n\nAll 9 pass against current code.\n\n**Status:** bug-13 was fixed in code but plan.json was never closed. Marking `done: true` now as paperwork. No additional deploy needed — the fix has been live on both mycobeta and prod since `9394e2c` shipped (May 17).",
+          "ts": "2026-05-20T02:15:00.000Z",
+          "meta": {
+            "kind": "fix-summary",
+            "fixedBy": "claude",
+            "fixShipped": true,
+            "fixCommit": "9394e2c"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "chrome batch messages should be visible to all users in the session, right now it's only visible to owner",
