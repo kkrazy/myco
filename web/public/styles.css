@@ -1958,6 +1958,70 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   cursor: pointer;
 }
 
+/* fr-48: per-item ⊤ Queue button + persistent queue chip strip. */
+.artifact-item-queue {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.artifact-item-queue:hover {
+  color: var(--accent, #4caf50);
+  border-color: var(--accent, #4caf50);
+}
+/* Persistent chip strip — pinned at the top of the chat pane. */
+.runqueue-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-soft, rgba(128, 128, 128, 0.08));
+  border-bottom: 1px solid var(--border-soft, rgba(128, 128, 128, 0.2));
+  font-size: 12px;
+}
+.runqueue-strip[hidden] { display: none; }
+.runqueue-label { font-weight: bold; color: var(--muted); margin-right: 4px; }
+.runqueue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--bg-input, rgba(128, 128, 128, 0.15));
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.25));
+  cursor: pointer;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+}
+.runqueue-chip:hover { border-color: var(--accent, #4caf50); }
+.runqueue-chip-running { background: rgba(76, 175, 80, 0.15); border-color: rgba(76, 175, 80, 0.5); }
+.runqueue-chip-success { opacity: 0.6; }
+.runqueue-chip-failed  { background: rgba(211, 47, 47, 0.15); border-color: rgba(211, 47, 47, 0.5); }
+.runqueue-chip-cancelled { opacity: 0.5; text-decoration: line-through; }
+.runqueue-paused {
+  color: #d32f2f;
+  font-weight: bold;
+  margin-left: 6px;
+}
+.runqueue-cancel,
+.runqueue-resume,
+.runqueue-clear {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.runqueue-cancel { padding: 0 4px; }
+.runqueue-resume:hover { color: var(--accent, #4caf50); border-color: var(--accent, #4caf50); }
+.runqueue-clear:hover  { color: #d32f2f; border-color: #d32f2f; }
+
 .artifact-item-delete {
   background: transparent;
   color: var(--muted);

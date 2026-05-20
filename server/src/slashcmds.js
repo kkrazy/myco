@@ -136,6 +136,38 @@ const COMMANDS = [
     usage: '/strict on · /strict off · /strict (status)',
     handler: handleStrict,
   },
+  // fr-48: per-session plan-item run-queue. Sequential auto-dispatch
+  // with auto-pause on failure. Owner+admin only.
+  {
+    names: ['queue'],
+    summary: 'Add one or more plan items (fr-N / td-N / bug-N) to the run-queue. Auto-dispatches sequentially.',
+    usage: '/queue fr-43 · /queue fr-43 bug-21 td-22',
+    handler: handleQueue,
+  },
+  {
+    names: ['qstatus'],
+    summary: 'Print the current run-queue (pending / running / done counts + per-entry status).',
+    usage: '/qstatus',
+    handler: handleQStatus,
+  },
+  {
+    names: ['qcancel'],
+    summary: 'Remove a pending plan item from the run-queue (cannot remove a currently-running entry).',
+    usage: '/qcancel fr-43',
+    handler: handleQCancel,
+  },
+  {
+    names: ['qclear'],
+    summary: 'Drop all pending entries from the run-queue (running + finished history preserved).',
+    usage: '/qclear',
+    handler: handleQClear,
+  },
+  {
+    names: ['qresume'],
+    summary: 'Unpause the run-queue (after an auto-pause from failure) and dispatch the next pending entry.',
+    usage: '/qresume',
+    handler: handleQResume,
+  },
   {
     names: ['help'],
     summary: 'List available chat commands',
@@ -1143,6 +1175,167 @@ function handleStrict(ctx) {
   } else {
     ctx.reply('✓ Strict-mode is now `off`. All chat messages forward to claude as usual.');
   }
+}
+
+// fr-48: run-queue slash commands. All owner+admin gated (mirror
+// fr-46 / fr-39 model). The HTTP routes in artifacts.js do the actual
+// state mutation; the slash commands just shape the chat-driven API
+// so /qstatus / /queue work from any attached client.
+function _requireQueueAuth(ctx) {
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+    const ownerLabel = rec ? `@${rec.user}` : '(unknown)';
+    ctx.reply(`(/queue, /qstatus, /qcancel, /qclear, /qresume are owner+admin only. Session owner is ${ownerLabel}.)`);
+    return false;
+  }
+  return true;
+}
+
+function handleQueue(ctx) {
+  if (!_requireQueueAuth(ctx)) return;
+  const runQueue = require('./runQueue');
+  const artifactsMod = require('./artifacts');
+  const attachMod = require('./attach');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/queue: session not found)'); return; }
+  const ids = String((ctx && ctx.args) || '').trim().split(/\s+/).filter(Boolean);
+  if (!ids.length) {
+    ctx.reply('Usage: `/queue <itemId> [itemId ...]` — e.g. `/queue fr-43 bug-21 td-22`. Use `/qstatus` to see the current queue.');
+    return;
+  }
+  const planArtifact = rec.artifacts && rec.artifacts.plan;
+  const items = (planArtifact && Array.isArray(planArtifact.items)) ? planArtifact.items : [];
+  const added = [];
+  const failed = [];
+  for (const id of ids) {
+    const item = items.find((it) => it && it.id === id);
+    if (!item) { failed.push(`${id} (not found)`); continue; }
+    try {
+      runQueue.addToQueue(rec, id, 'plan', ctx.user);
+      added.push(id);
+    } catch (err) {
+      failed.push(`${id} (${err.message})`);
+    }
+  }
+  sessionsMod.saveStore();
+  // Broadcast + kick the queue if this added a first pending entry
+  // and nothing is running. We mirror the /queue/add HTTP path's
+  // kick logic — see artifacts.js for the canonical implementation.
+  const session = attachMod.getSession ? attachMod.getSession(ctx.sessionId) : null;
+  if (session && typeof session.emit === 'function') {
+    session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+    const hasRunning = rec.runQueue.some((e) => e.status === 'running');
+    if (!hasRunning && !rec.runQueuePaused) {
+      const next = runQueue.peekNextPending(rec);
+      if (next) {
+        const item = items.find((it) => it && it.id === next.itemId);
+        if (item) {
+          try {
+            runQueue.markRunning(rec, next.itemId);
+            sessionsMod.saveStore();
+            session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+            attachMod.handleChatMessage(ctx.sessionId, session, ctx.user,
+              artifactsMod.buildArtifactRunText(next.type, item, ctx.user));
+          } catch (err) {
+            console.error(`[runQueue] /queue kick failed: ${err.message}`);
+          }
+        }
+      }
+    }
+  }
+  const okLine = added.length ? `✓ Queued: \`${added.join('`, `')}\`.` : '';
+  const failLine = failed.length ? `⚠ Skipped: ${failed.join(', ')}.` : '';
+  ctx.reply([okLine, failLine].filter(Boolean).join(' '));
+}
+
+function handleQStatus(ctx) {
+  if (!_requireQueueAuth(ctx)) return;
+  const runQueue = require('./runQueue');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/qstatus: session not found)'); return; }
+  const state = runQueue.getQueueState(rec);
+  if (!state.entries.length) {
+    ctx.reply('Run-queue is empty. Use `/queue <itemId>` to enqueue.');
+    return;
+  }
+  const c = state.counts;
+  const header = state.paused
+    ? `⏸ **Run-queue paused** — ${c.pending} pending · ${c.running} running · ${c.success} ✓ · ${c.failed} ⚠ · ${c.cancelled} ✗`
+    : `**Run-queue** — ${c.pending} pending · ${c.running} running · ${c.success} ✓ · ${c.failed} ⚠ · ${c.cancelled} ✗`;
+  const rows = state.entries.map((e) => {
+    const glyph = ({ pending: '⏸', running: '⚙', success: '✓', failed: '⚠', cancelled: '✗' })[e.status] || '?';
+    return `  ${glyph} \`${e.itemId}\` (${e.status}) — by @${e.addedBy}`;
+  });
+  ctx.reply([header, ...rows, state.paused ? '\n_Use `/qresume` to dispatch the next pending entry._' : ''].filter(Boolean).join('\n'));
+}
+
+function handleQCancel(ctx) {
+  if (!_requireQueueAuth(ctx)) return;
+  const runQueue = require('./runQueue');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/qcancel: session not found)'); return; }
+  const id = String((ctx && ctx.args) || '').trim();
+  if (!id) { ctx.reply('Usage: `/qcancel <itemId>`'); return; }
+  let removed;
+  try {
+    removed = runQueue.removeFromQueue(rec, id);
+  } catch (err) {
+    ctx.reply(`⚠ ${err.message}`);
+    return;
+  }
+  if (!removed) { ctx.reply(`(no queued entry for \`${id}\`)`); return; }
+  sessionsMod.saveStore();
+  const attachMod = require('./attach');
+  const session = attachMod.getSession ? attachMod.getSession(ctx.sessionId) : null;
+  if (session) session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+  ctx.reply(`✓ Cancelled \`${id}\` in the run-queue.`);
+}
+
+function handleQClear(ctx) {
+  if (!_requireQueueAuth(ctx)) return;
+  const runQueue = require('./runQueue');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/qclear: session not found)'); return; }
+  const removed = runQueue.clearQueue(rec);
+  sessionsMod.saveStore();
+  const attachMod = require('./attach');
+  const session = attachMod.getSession ? attachMod.getSession(ctx.sessionId) : null;
+  if (session) session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+  ctx.reply(`✓ Cleared ${removed} pending entr${removed === 1 ? 'y' : 'ies'} from the run-queue. Running + finished history preserved.`);
+}
+
+function handleQResume(ctx) {
+  if (!_requireQueueAuth(ctx)) return;
+  const runQueue = require('./runQueue');
+  const artifactsMod = require('./artifacts');
+  const attachMod = require('./attach');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/qresume: session not found)'); return; }
+  runQueue.resumeQueue(rec);
+  sessionsMod.saveStore();
+  const session = attachMod.getSession ? attachMod.getSession(ctx.sessionId) : null;
+  if (session) session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+  const next = runQueue.peekNextPending(rec);
+  if (!next) { ctx.reply('✓ Queue unpaused — no pending entries to dispatch.'); return; }
+  const planArtifact = rec.artifacts && rec.artifacts.plan;
+  const item = planArtifact && Array.isArray(planArtifact.items)
+    && planArtifact.items.find((it) => it && it.id === next.itemId);
+  if (!item || !session) {
+    ctx.reply(`✓ Queue unpaused — next entry \`${next.itemId}\` will dispatch when session is ready.`);
+    return;
+  }
+  try {
+    runQueue.markRunning(rec, next.itemId);
+    sessionsMod.saveStore();
+    session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+    attachMod.handleChatMessage(ctx.sessionId, session, ctx.user,
+      artifactsMod.buildArtifactRunText(next.type, item, ctx.user));
+  } catch (err) {
+    console.error(`[runQueue] /qresume dispatch failed: ${err.message}`);
+    ctx.reply(`⚠ Queue unpaused but dispatch failed: ${err.message}`);
+    return;
+  }
+  ctx.reply(`✓ Queue unpaused — dispatching \`${next.itemId}\` now.`);
 }
 
 function handleHelp(ctx) {

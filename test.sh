@@ -2436,6 +2436,15 @@ test_chat_window() {
   # meta.editedAt stamped on edit; meta.originalText snapshotted on
   # FIRST edit only (so the very-first version stays recoverable).
   node_test_result test/fr-46-edit-plan-items.test.js "test/fr-46-edit-plan-items.test.js (24 cases)"
+  # fr-48: per-session plan-item run-queue. Users add fr/td/bug items
+  # via per-item ⊤ Queue button OR /queue slash; sequential auto-
+  # dispatch via turn_result hook in attach.js _registerExternalSession.
+  # Auto-pause on failure (resume via /qresume or POST /queue/resume).
+  # Owner+admin only. New module server/src/runQueue.js holds pure
+  # queue logic; routes in artifacts.js; 5 slash commands in
+  # slashcmds.js; client renders pinned chip strip at top of chat pane
+  # plus per-item button.
+  node_test_result test/fr-48-run-queue.test.js "test/fr-48-run-queue.test.js (22 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

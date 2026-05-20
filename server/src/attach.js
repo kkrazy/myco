@@ -32,6 +32,7 @@ const menuMod = require('./menu');
 const slashcmds = require('./slashcmds');
 const transcriptMod = require('./transcript');
 const authMod = require('./auth');
+const runQueue = require('./runQueue');
 // Late-bound: requiring artifacts.js at module load time pulled
 // extractor.js into the partial-load window of the
 // sessions.js ↔ attach.js cycle. extractor.js destructures
@@ -144,6 +145,14 @@ function _registerExternalSession(sessionId, session) {
         _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
       } catch (err) {
         console.error('[plan-run] stamp outcome failed:', err.message);
+      }
+      // fr-48: queue auto-advance. If the just-finished item is the
+      // head of the run-queue, mark its outcome + dispatch the next
+      // pending entry (or pause on failure).
+      try {
+        _advanceRunQueue(sessionId, session, active.itemId, ev);
+      } catch (err) {
+        console.error('[runQueue] auto-advance failed:', err.message);
       }
       session._activeRunItem = null;
     });
@@ -260,6 +269,60 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
   }
+}
+
+// fr-48: queue auto-advance. Called from the turn_result agent-event
+// listener after _stampPlanItemRunOutcome. If the finished item was
+// the head of the run-queue, mark it success/failed and dispatch the
+// next pending entry (or pause on failure). Silently no-ops when the
+// finished item wasn't queued (manual ▶ Run click — leaves the queue
+// alone).
+function _advanceRunQueue(sessionId, session, finishedItemId, turnResultEv) {
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  if (!rec || !Array.isArray(rec.runQueue) || !rec.runQueue.length) return;
+  // Only care if the just-finished item is the head of our queue's
+  // running entry — manual ▶ Run clicks don't enter the queue.
+  const runningEntry = rec.runQueue.find((e) => e.itemId === finishedItemId && e.status === 'running');
+  if (!runningEntry) return;
+  const success = !!(turnResultEv && (turnResultEv.subtype === 'success' || (turnResultEv.raw && turnResultEv.raw.subtype === 'success')));
+  runQueue.markFinished(rec, finishedItemId, success);
+  sessionsMod.saveStore();
+  session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+  if (!success) {
+    console.log(`[runQueue] ${sessionId} ${finishedItemId} failed — queue auto-paused. Use /qresume or POST /queue/resume to continue.`);
+    session.emit('chat', {
+      user: ASSISTANT_USER,
+      text: `⏸ run-queue paused — \`${finishedItemId}\` did not finish successfully. Use \`/qresume\` to dispatch the next pending item.`,
+      ts: new Date().toISOString(),
+      meta: { kind: 'runQueue-paused' },
+    });
+    return;
+  }
+  // Advance to next pending.
+  const next = runQueue.peekNextPending(rec);
+  if (!next) {
+    console.log(`[runQueue] ${sessionId} drained — last item ${finishedItemId} done, no pending follow-ups`);
+    return;
+  }
+  // Load the item from the artifact + dispatch.
+  const planArtifact = rec.artifacts && rec.artifacts.plan;
+  const item = planArtifact && Array.isArray(planArtifact.items)
+    && planArtifact.items.find((it) => it && it.id === next.itemId);
+  if (!item) {
+    console.error(`[runQueue] ${sessionId} next item ${next.itemId} no longer exists in plan.json — auto-cancelling`);
+    runQueue.removeFromQueue(rec, next.itemId);
+    sessionsMod.saveStore();
+    session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+    // Recurse to try the one after next.
+    return _advanceRunQueue(sessionId, session, finishedItemId, turnResultEv);
+  }
+  runQueue.markRunning(rec, next.itemId);
+  sessionsMod.saveStore();
+  session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
+  const artifactsMod = require('./artifacts');
+  const dispatchText = artifactsMod.buildArtifactRunText(next.type, item, runningEntry.addedBy || 'queue');
+  console.log(`[runQueue] ${sessionId} auto-dispatching ${next.itemId} (next of ${rec.runQueue.length} entries)`);
+  handleChatMessage(sessionId, session, runningEntry.addedBy || 'queue', dispatchText);
 }
 
 function killSession(sessionId) {

@@ -5066,6 +5066,133 @@ function _applyStateUpdate(msg) {
     clearChat();
     return;
   }
+  if (msg.kind === 'runQueue') {
+    // fr-48: run-queue state changed (entry added/removed/transitioned).
+    // Cache the latest state + re-render the persistent queue chip
+    // strip at the top of the chat pane.
+    state.runQueue = msg.state || { entries: [], paused: false, counts: {} };
+    _renderRunQueueStrip();
+    return;
+  }
+}
+
+// fr-48: persistent chip strip showing the run-queue at the top of
+// the chat pane. Hidden when the queue is empty. Each chip carries
+// the item id + status glyph; click → scroll to item in Plan tab.
+// Cancel × on pending entries; the strip itself is read-only for
+// viewers (the buttons just won't render).
+function _renderRunQueueStrip() {
+  const q = state.runQueue || null;
+  const host = document.getElementById('runqueue-strip')
+    || (() => {
+      const div = document.createElement('div');
+      div.id = 'runqueue-strip';
+      div.className = 'runqueue-strip';
+      const chatPane = document.getElementById('chatpane');
+      const messages = document.getElementById('chat-messages');
+      if (chatPane && messages) chatPane.insertBefore(div, messages);
+      return div;
+    })();
+  if (!q || !Array.isArray(q.entries) || !q.entries.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+  const pausedBadge = q.paused ? '<span class="runqueue-paused">⏸ paused</span>' : '';
+  const chips = q.entries.map((e) => {
+    const glyph = ({ pending: '⏸', running: '⚙', success: '✓', failed: '⚠', cancelled: '✗' })[e.status] || '?';
+    const cancelable = !state.readOnly && e.status === 'pending';
+    const cancelBtn = cancelable
+      ? ` <button class="runqueue-cancel" data-id="${escHtml(e.itemId)}" title="Remove ${escHtml(e.itemId)} from queue" aria-label="Cancel">×</button>`
+      : '';
+    return `<span class="runqueue-chip runqueue-chip-${escHtml(e.status)}" data-id="${escHtml(e.itemId)}" title="${escHtml(e.status)} · added by @${escHtml(e.addedBy || '?')}">${glyph} ${escHtml(e.itemId)}${cancelBtn}</span>`;
+  }).join('');
+  const resumeBtn = (!state.readOnly && q.paused)
+    ? ' <button class="runqueue-resume" title="Unpause queue + dispatch next pending">▶ Resume</button>'
+    : '';
+  const clearBtn = (!state.readOnly && q.counts && q.counts.pending > 0)
+    ? ' <button class="runqueue-clear" title="Drop all pending entries">Clear pending</button>'
+    : '';
+  host.innerHTML = `<span class="runqueue-label">Queue:</span> ${chips} ${pausedBadge} ${resumeBtn} ${clearBtn}`;
+  host.querySelectorAll('.runqueue-chip').forEach((chip) => {
+    chip.addEventListener('click', (ev) => {
+      // Clicks on the × button don't navigate.
+      if (ev.target && ev.target.classList.contains('runqueue-cancel')) return;
+      const id = chip.dataset.id;
+      if (id) location.hash = '#' + id;
+    });
+  });
+  host.querySelectorAll('.runqueue-cancel').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      onArtifactQueueCancel(btn.dataset.id);
+    });
+  });
+  const resumeEl = host.querySelector('.runqueue-resume');
+  if (resumeEl) resumeEl.addEventListener('click', onArtifactQueueResume);
+  const clearEl = host.querySelector('.runqueue-clear');
+  if (clearEl) clearEl.addEventListener('click', onArtifactQueueClear);
+}
+
+// fr-48: per-item ⊤ Queue button handler.
+async function onArtifactItemQueue(type, itemId) {
+  const sid = state.activeId;
+  if (!sid || !itemId) return;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/add`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId, type }) }
+    );
+    if (!res || !res.ok) {
+      const errData = res ? await res.json().catch(() => ({})) : {};
+      console.error('[fr-48] queue add failed:', res && res.status, errData.error);
+      return;
+    }
+    // state-update will arrive via WS; strip re-renders from that.
+  } catch (err) {
+    console.error('[fr-48] queue add threw:', err);
+  }
+}
+
+async function onArtifactQueueCancel(itemId) {
+  const sid = state.activeId;
+  if (!sid || !itemId) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/${encodeURIComponent(itemId)}`,
+      { method: 'DELETE' }
+    );
+  } catch (err) {
+    console.error('[fr-48] queue cancel threw:', err);
+  }
+}
+
+async function onArtifactQueueClear() {
+  const sid = state.activeId;
+  if (!sid) return;
+  if (!confirm('Drop all pending entries from the run-queue? Running + finished entries are kept.')) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/clear`,
+      { method: 'POST' }
+    );
+  } catch (err) {
+    console.error('[fr-48] queue clear threw:', err);
+  }
+}
+
+async function onArtifactQueueResume() {
+  const sid = state.activeId;
+  if (!sid) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/resume`,
+      { method: 'POST' }
+    );
+  } catch (err) {
+    console.error('[fr-48] queue resume threw:', err);
+  }
 }
 
 // Find a menu chat row by transcriptUuid (preferred) or menu-hash
@@ -6208,6 +6335,12 @@ function renderArtifact(type, artifact) {
     const editBtn = (!state.readOnly && supportsVoting)
       ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit">✎</button>`
       : '';
+    // fr-48: per-item ⊤ Queue button. Adds the item to the
+    // sequential run-queue; auto-dispatches when the head finishes.
+    // Owner+admin only (gated on !state.readOnly).
+    const queueBtn = (!state.readOnly && supportsVoting && !it.done)
+      ? `<button class="artifact-item-queue" data-id="${escHtml(it.id)}" title="Add to run-queue — auto-dispatches sequentially" aria-label="Queue">⊤ Queue</button>`
+      : '';
     const actionsRow = `<div class="artifact-item-actions">
         ${mergedBadge}
         ${depsChip}
@@ -6215,6 +6348,7 @@ function renderArtifact(type, artifact) {
         ${itemEditedBadge}
         ${voteBlock}
         ${runBtn}
+        ${queueBtn}
         ${editBtn}
         <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
       </div>`;
@@ -6286,6 +6420,10 @@ function renderArtifact(type, artifact) {
   // matching nodes in that case).
   body.querySelectorAll('.artifact-item-edit').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactItemEdit(type, btn.dataset.id));
+  });
+  // fr-48: per-item ⊤ Queue button → POST /queue/add.
+  body.querySelectorAll('.artifact-item-queue').forEach((btn) => {
+    btn.addEventListener('click', () => onArtifactItemQueue(type, btn.dataset.id));
   });
   body.querySelectorAll('.artifact-comment-edit').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactCommentEdit(type, btn.dataset.id, btn.dataset.cid));

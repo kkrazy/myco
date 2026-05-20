@@ -16,6 +16,7 @@ const path = require('path');
 
 const { extractArtifact } = require('./extractor');
 const { saveStore, isOwnerOrAdmin } = require('./sessions');
+const runQueue = require('./runQueue');
 
 const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
 
@@ -746,6 +747,134 @@ function register(app, deps) {
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
     broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({ ok: true, comment, item });
+  });
+
+  // fr-48: run-queue routes. Per-session queue of plan items for
+  // sequential auto-dispatch. Auth: owner+admin only (mirrors fr-46 /
+  // fr-39). Auto-advance lives in attach.js's turn_result hook —
+  // these routes just mutate state + broadcast.
+  function broadcastRunQueue(sessionId, rec) {
+    const session = getPtySession(sessionId);
+    if (!session) return;
+    session.emit('state-update', {
+      kind: 'runQueue',
+      state: runQueue.getQueueState(rec),
+    });
+  }
+
+  // POST /queue/add — append a plan item to the queue. If the queue
+  // is otherwise idle (no running entry, not paused), AND this is the
+  // first pending entry, immediately dispatch it via the existing
+  // [run:plan#<id>] marker path. This makes /queue fr-43 behave like
+  // /run-then-watch from the user's POV.
+  app.post('/sessions/:id/queue/add', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const itemId = String((req.body && req.body.itemId) || '').trim();
+    const type = String((req.body && req.body.type) || 'plan');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    let entry;
+    try {
+      entry = runQueue.addToQueue(ctx.rec, itemId, type, user);
+    } catch (err) {
+      return res.status(409).json({ error: err.message });
+    }
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    // Kick the queue if idle. The attach.js turn_result hook handles
+    // post-first auto-advance; we trigger the FIRST dispatch here.
+    const hasRunning = ctx.rec.runQueue.some((e) => e.status === 'running');
+    if (!hasRunning && !ctx.rec.runQueuePaused) {
+      const session = getPtySession(ctx.id);
+      if (session) {
+        try {
+          runQueue.markRunning(ctx.rec, itemId);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+          handleChatMessage(ctx.id, session, user, buildArtifactRunText(type, item, user));
+        } catch (err) {
+          console.error(`[runQueue] initial dispatch failed: ${err.message}`);
+        }
+      }
+    }
+    res.json({ ok: true, entry, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // DELETE /queue/:itemId — remove a pending entry (or drop a terminal
+  // entry from history). Throws 409 if the entry is currently running.
+  app.delete('/sessions/:id/queue/:itemId', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    let removed;
+    try {
+      removed = runQueue.removeFromQueue(ctx.rec, itemId);
+    } catch (err) {
+      return res.status(409).json({ error: err.message });
+    }
+    if (!removed) return res.status(404).json({ error: 'no such queue entry' });
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/clear — drop every pending entry. Running + terminal
+  // entries are preserved.
+  app.post('/sessions/:id/queue/clear', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const removed = runQueue.clearQueue(ctx.rec);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, removed, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/resume — unpause the queue (after a failure auto-pause
+  // OR an explicit /qpause). If a pending entry exists, dispatch it
+  // immediately (same kick-on-resume logic as the initial add path).
+  app.post('/sessions/:id/queue/resume', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    runQueue.resumeQueue(ctx.rec);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    const next = runQueue.peekNextPending(ctx.rec);
+    if (next) {
+      const item = findItem(ctx.rec, next.type, next.itemId);
+      const session = getPtySession(ctx.id);
+      if (item && session) {
+        try {
+          runQueue.markRunning(ctx.rec, next.itemId);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+          handleChatMessage(ctx.id, session, user, buildArtifactRunText(next.type, item, user));
+        } catch (err) {
+          console.error(`[runQueue] resume-dispatch failed: ${err.message}`);
+        }
+      }
+    }
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
   });
 }
 
