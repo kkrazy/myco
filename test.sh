@@ -2444,6 +2444,11 @@ test_chat_window() {
   # (POST /artifact/mark with done=1 / done=0). Negative guard that
   # the close handler does NOT route through /artifact/run.
   node_test_result test/fr-47-close-open-affordance.test.js "test/fr-47-close-open-affordance.test.js (6 cases)"
+  # show-creator chip: each plan-item card surfaces "by @<addedBy>"
+  # next to the id chip. Hover-title shows the addedAt timestamp.
+  # Guards on it.addedBy being truthy so legacy items (filed before
+  # the field was tracked) render with no chip (no "@undefined").
+  node_test_result test/fr-49-show-creator.test.js "test/fr-49-show-creator.test.js (4 cases)"
   # fr-48: per-session plan-item run-queue. Users add fr/td/bug items
   # via per-item ⊤ Queue button OR /queue slash; sequential auto-
   # dispatch via turn_result hook in attach.js _registerExternalSession.

@@ -1808,6 +1808,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-color: var(--accent-warm, #d97706);
 }
 .artifact-item-text { flex: 1; word-break: break-word; min-width: 0; }
+/* Creator chip — small muted "by @user" next to the id chip in the
+ * top row. Hover-title carries the addedAt timestamp. */
+.artifact-item-by {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 /* Markdown rendered inside a plan/test item — paragraphs, lists,
    headings, code, blockquotes, mermaid all need block-level layout. */
 .artifact-item-text.artifact-md > :first-child { margin-top: 0; }

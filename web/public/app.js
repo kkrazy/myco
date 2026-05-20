@@ -6247,6 +6247,13 @@ function renderArtifact(type, artifact) {
     const idChip = it.id
       ? `<code class="artifact-item-id" data-deep-link-id="${escHtml(it.id)}" role="button" tabindex="0" title="Click to copy a deep link to this item">${escHtml(it.id)}</code>`
       : '';
+    // Creator chip: small muted "by @user" next to the id chip.
+    // Hover-title carries the full addedAt timestamp for provenance.
+    // Guards on it.addedBy being truthy so legacy items (filed before
+    // the field was tracked) render cleanly with no chip.
+    const byChip = it.addedBy
+      ? `<span class="artifact-item-by" title="filed by @${escHtml(it.addedBy)} at ${escHtml(it.addedAt || 'unknown')}">· by @${escHtml(it.addedBy)}</span>`
+      : '';
     const mergedFrom = Array.isArray(it.mergedFrom) ? it.mergedFrom : [];
     const mergedBadge = mergedFrom.length
       ? `<span class="artifact-item-merged" title="merged from: ${escHtml(mergedFrom.join(', '))}">⤴ merged from ${mergedFrom.length}</span>`
@@ -6363,6 +6370,7 @@ function renderArtifact(type, artifact) {
     return `<li class="${cls}" ${liId} data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
         ${idChip}
+        ${byChip}
         <div class="artifact-item-text artifact-md">${renderMd(it.text || '')}</div>
       </div>
       ${actionsRow}
