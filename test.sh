@@ -30,7 +30,10 @@ die()     { FAIL=$((FAIL+1)); echo "  ✗ FATAL: $1"; exit 1; }
 section() { printf "\n── %s ──\n" "$*"; }
 
 free_port() {
-  python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()"
+  # Node-based port discovery (was python3, but python3 isn't always
+  # installed on lean containers — Alpine without `apk add python3`).
+  # Node is already a hard dep for the suite, so this is more portable.
+  node -e "const s = require('net').createServer(); s.listen(0, () => { console.log(s.address().port); s.close(); });"
 }
 
 # Some checks need a host-side node binary (`node -e "require(...)"`). The
