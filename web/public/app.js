@@ -1152,6 +1152,14 @@ function openSession(id, opts = {}) {
   // Re-tap of the same session: reconnect if WS is dead, otherwise just bring into view.
   if (state.activeId === id && state.ws && state.ws.readyState === WebSocket.OPEN) {
     if (window.innerWidth <= 900) setSidebar(true);
+    // bug-12: when the user hit the back icon (btn-expand) earlier the
+    // mobile branch of setSidebar(false) ran setChatPane(false), so the
+    // chat pane is now hidden. Re-tapping the same session must re-show
+    // it — without this call we'd leave the user staring at whatever
+    // they navigated to last (plan/files/etc.) with no way to type into
+    // chat. Calling on desktop too is harmless: setChatPane(true) is a
+    // no-op when the pane is already visible.
+    setChatPane(true);
     return;
   }
 
