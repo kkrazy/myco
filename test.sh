@@ -1846,8 +1846,10 @@ test_chat_window() {
   if have_node; then
     node -e "
       const a = require('./server/src/artifacts');
-      // Manual run — submitter is a real user.
+      // Manual run — submitter is a real user + item has id (fr-48
+      // requires id for the [run:<type>#<id>] marker prefix).
       const t1 = a.buildArtifactRunText('plan', {
+        id: 'fr-43',
         text: 'Wire up the /v2/orders cursor pager',
         comments: [
           { user: 'alice', text: 'don\\'t forget the limit clamp' },
@@ -1855,24 +1857,32 @@ test_chat_window() {
         ],
       }, 'kkrazy');
       if (t1.startsWith('@myco ')) throw new Error('manual-run text must NOT start with @myco prefix (removed) — got: ' + JSON.stringify(t1));
-      if (!/^\[📋 Plan item · submitted by @kkrazy\]/.test(t1)) throw new Error('manual-run title missing type+submitter on first line — got: ' + JSON.stringify(t1));
+      // fr-48 root-cause fix: must START with the [run:plan#fr-43] marker.
+      if (!/^\[run:plan#fr-43\]\s+\[📋 Plan item · submitted by @kkrazy\]/.test(t1)) throw new Error('manual-run text missing the [run:plan#<id>] marker prefix (fr-48 contract) or type+submitter header — got: ' + JSON.stringify(t1));
       if (!t1.includes('Wire up the /v2/orders cursor pager')) throw new Error('manual-run text missing body');
       if (!t1.includes('- @alice: don\\'t forget the limit clamp')) throw new Error('manual-run text missing alice comment');
       if (!t1.includes('- @bob: tenant scoping at query time, please')) throw new Error('manual-run text missing bob comment');
-      // Test artifact uses the 🧪 glyph.
-      const t2 = a.buildArtifactRunText('test', { text: 'k6 load run at 100 RPS', comments: [] }, 'kkrazy');
-      if (!/^\[🧪 Test item · submitted by @kkrazy\]/.test(t2)) throw new Error('test title wrong glyph/label: ' + JSON.stringify(t2));
+      // Test artifact uses the 🧪 glyph + carries the test marker.
+      const t2 = a.buildArtifactRunText('test', { id: 'test-1', text: 'k6 load run at 100 RPS', comments: [] }, 'kkrazy');
+      if (!/^\[run:test#test-1\]\s+\[🧪 Test item · submitted by @kkrazy\]/.test(t2)) throw new Error('test title wrong glyph/label or missing marker: ' + JSON.stringify(t2));
       if (t2.includes('Comments:')) throw new Error('empty comments must NOT render a Comments: block');
+      // Defensive: items without id render WITHOUT the marker prefix
+      // (legacy/synthetic call sites — protects against [run:plan#undefined]).
+      const t2b = a.buildArtifactRunText('plan', { text: 'no id item', comments: [] }, 'kkrazy');
+      if (/\[run:plan#undefined\]/.test(t2b)) throw new Error('items without id must NOT produce [run:plan#undefined] — got: ' + JSON.stringify(t2b));
+      if (!/^\[📋 Plan item · submitted by @kkrazy\]/.test(t2b)) throw new Error('id-less item must still produce a recognisable header — got: ' + JSON.stringify(t2b));
       // Quorum dispatch.
       const t3 = a.buildArtifactQuorumText('plan', {
+        id: 'fr-9',
         text: 'Ship the feature',
         voters: ['alice', 'bob', 'charlie'],
         comments: [{ user: 'alice', text: 'rolling out behind a flag' }],
       });
       if (t3.startsWith('@myco ')) throw new Error('quorum text must NOT start with @myco prefix (removed) — got: ' + JSON.stringify(t3));
+      if (!/^\[run:plan#fr-9\]/.test(t3)) throw new Error('quorum text missing the [run:plan#<id>] marker prefix (fr-48 contract) — got: ' + JSON.stringify(t3));
       if (!/quorum reached \\(3 voters: @alice, @bob, @charlie\\)/.test(t3)) throw new Error('quorum title missing voter list: ' + JSON.stringify(t3));
       if (!t3.includes('- @alice: rolling out behind a flag')) throw new Error('quorum text missing comment');
-    " && pass "artifact run/quorum dispatch text carries type+submitter+comments (no @myco prefix)" \
+    " && pass "artifact run/quorum dispatch text carries [run:<type>#<id>] marker + type+submitter+comments" \
       || fail "artifact buildArtifactRunText / buildArtifactQuorumText shape wrong"
   fi
   grep -q "onArtifactVote"        web/public/app.js && pass "onArtifactVote handler"        || fail "onArtifactVote handler"

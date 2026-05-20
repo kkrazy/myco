@@ -38,6 +38,15 @@ caught the original problem.
   an LLM to interpret or set up.
 - A single test failure prints a clear assertion message naming WHAT
   was expected vs WHAT was observed.
+- **Run the FULL test suite before every commit — not cherry-picked
+  adjacent files.** Per-file `node test/foo.test.js` (or
+  `pytest tests/foo_test.py`) sweeps are NOT a substitute for the
+  project's whole-suite entrypoint (`./test.sh`, `make test`, `pytest`,
+  `cargo test`). The whole-suite run catches static-check drift, cross-
+  module contract changes, and environment-level failures that
+  cherry-picked sweeps miss. If the entrypoint aborts early on a
+  host-config issue (missing binary, busybox vs GNU tools), fix the
+  host or the script — don't skip the suite.
 
 ## 3. Generated scripts must be runnable by a human
 

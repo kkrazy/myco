@@ -58,7 +58,7 @@
 
 ## Pre-Commit
 
-1. **Always run `./test.sh` before committing.** Fix any failures before proceeding with the commit.
+1. **ALWAYS run the FULL `./test.sh` before committing — not cherry-picked adjacent tests.** Running 5–10 "obviously affected" suites individually is NOT a substitute. The full script catches static-check drift (e.g. an old `test.sh` block pinning a shape your refactor changed) that per-file `node test/foo.test.js` runs will MISS. Fix every failure (or confirm it's purely environmental, like missing `docker` on the agent sandbox) before proceeding. If `./test.sh` aborts early on the host (busybox grep, missing python3, etc.), fix the host OR the script first — don't skip the suite.
 
 2. **Every new feature must come with a test.** When you add a behaviour to `server/`, `web/public/`, the Dockerfile, or any deploy/runtime path, also add a check to `./test.sh` that would have caught the bug if the feature regressed. Static-only behaviour can usually be a `grep` or a `node -e` check; runtime behaviour belongs in the persistence/server-smoke section that runs the real container. Aim for the smallest test that fails meaningfully if the feature breaks. Bug fixes also count as features — write the regression test before (or alongside) the fix so it red-green-flips.
 
