@@ -1876,6 +1876,19 @@
             "commit": "af45609",
             "testFile": "test/fr-48-run-queue.test.js"
           }
+        },
+        {
+          "id": "c565320eddb5",
+          "user": "claude",
+          "text": "🔧 **Follow-up:** dispatch unified through the queue in commit `606f14c`.\n\nPer user feedback: \"Clicking fix/do/implement should add to the queue; claude should always get the task from the queue.\"\n\nPre-unification fr-48 had TWO dispatch paths — the ▶ Run button bypassed the queue (composed `[run:plan#<id>]` marker into chat input and auto-submitted), while only the ⊤ Queue button + slash commands used the queue. Meant clicking Run while items were pending would jump the queue.\n\n## What changed\n\n- New shared helper `_enqueueAndKickIfIdle(ctx, type, itemId, user, opts)` in `artifacts.js` — the single dispatch path. Adds to queue + kicks the head if idle.\n- **▶ Run button** (`onArtifactItemRun` in app.js) now POSTs `/queue/add` (was: chat-input marker auto-submit).\n- **POST /artifact/run server route** now enqueues via the helper (was: direct `handleChatMessage`). Response shape preserved + adds `{queued:true, kicked:bool}` fields. Auth tightened to require `isOwnerOrAdmin` (was: viewer-tier preamble).\n- **`autoFireIfQuorum`** (vote auto-execute at threshold) now enqueues via the helper, passing the quorum-flavored chat text as `opts.text` so the \"voted by @X, @Y\" social context still surfaces.\n\nTest `test/fr-48-unified-dispatch.test.js` (4 cases) anchors the contract. Regression sweep: 296/296 across fr-48 + fr-48-unified + 20 adjacent suites.\n\nThe ⊤ Queue button on each item card is now functionally redundant with ▶ Run — both POST `/queue/add`. Left in place for explicit-intent discoverability; flag if you want it pruned.",
+          "ts": "2026-05-20T02:16:50.694Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-20T02:16:50.694Z",
+            "commit": "606f14c",
+            "testFile": "test/fr-48-unified-dispatch.test.js",
+            "note": "dispatch unification follow-up"
+          }
         }
       ],
       "meta": {
@@ -1888,5 +1901,5 @@
       "doneBy": "claude"
     }
   ],
-  "updatedAt": "2026-05-20T01:50:58.209Z"
+  "updatedAt": "2026-05-20T02:16:50.694Z"
 }
