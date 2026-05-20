@@ -6247,12 +6247,14 @@ function renderArtifact(type, artifact) {
     const idChip = it.id
       ? `<code class="artifact-item-id" data-deep-link-id="${escHtml(it.id)}" role="button" tabindex="0" title="Click to copy a deep link to this item">${escHtml(it.id)}</code>`
       : '';
-    // Creator chip: small muted "by @user" next to the id chip.
-    // Hover-title carries the full addedAt timestamp for provenance.
-    // Guards on it.addedBy being truthy so legacy items (filed before
-    // the field was tracked) render cleanly with no chip.
-    const byChip = it.addedBy
-      ? `<span class="artifact-item-by" title="filed by @${escHtml(it.addedBy)} at ${escHtml(it.addedAt || 'unknown')}">· by @${escHtml(it.addedBy)}</span>`
+    // Creator line: small muted "filed by @user · <ts>" rendered on
+    // its own row BELOW the body text. Doesn\'t compete with the body
+    // for horizontal space in the flex top row. Hover-title carries
+    // the raw addedAt timestamp for full provenance. Guards on
+    // it.addedBy being truthy so legacy items (filed before the field
+    // was tracked) render with no line at all.
+    const byLine = it.addedBy
+      ? `<div class="artifact-item-by" title="filed by @${escHtml(it.addedBy)} at ${escHtml(it.addedAt || 'unknown')}">filed by @${escHtml(it.addedBy)}${it.addedAt ? ' · ' + escHtml(formatChatTs(it.addedAt) || it.addedAt) : ''}</div>`
       : '';
     const mergedFrom = Array.isArray(it.mergedFrom) ? it.mergedFrom : [];
     const mergedBadge = mergedFrom.length
@@ -6370,9 +6372,9 @@ function renderArtifact(type, artifact) {
     return `<li class="${cls}" ${liId} data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
         ${idChip}
-        ${byChip}
         <div class="artifact-item-text artifact-md">${renderMd(it.text || '')}</div>
       </div>
+      ${byLine}
       ${actionsRow}
       ${commentsBlock}
     </li>`;

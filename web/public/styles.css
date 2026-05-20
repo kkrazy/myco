@@ -1808,14 +1808,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-color: var(--accent-warm, #d97706);
 }
 .artifact-item-text { flex: 1; word-break: break-word; min-width: 0; }
-/* Creator chip — small muted "by @user" next to the id chip in the
- * top row. Hover-title carries the addedAt timestamp. */
+/* Creator line — small muted "filed by @user · <ts>" on its own row
+ * BELOW the body text. Doesn\'t compete with body for horizontal
+ * space. Hover-title carries the raw addedAt timestamp. */
 .artifact-item-by {
   font-size: 11px;
   color: var(--muted);
   font-style: italic;
-  white-space: nowrap;
-  flex-shrink: 0;
+  margin: 4px 0 2px 0;
+  padding-left: 2px;
 }
 /* Markdown rendered inside a plan/test item — paragraphs, lists,
    headings, code, blockquotes, mermaid all need block-level layout. */
