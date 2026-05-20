@@ -2471,21 +2471,6 @@ test_chat_window() {
   # github.js back-compat shim's user-level setToken path so the OAuth
   # callback keeps working.
   node_test_result test/gitee-host-dispatch.test.js "test/gitee-host-dispatch.test.js (31 cases)"
-  # bug-12: re-entering a session via the back-icon (btn-expand → setSidebar(false)
-  # → on mobile, setChatPane(false)) must re-show the chat pane when the
-  # user taps the same session card. openSession's early-return branch
-  # used to handle only the sidebar (setSidebar(true)); the missing
-  # setChatPane(true) left the user staring at whatever they'd
-  # navigated to last (plan/files/etc.) with no way to type into chat.
-  node_test_result test/bug-12-reentry-rehows-chat.test.js "test/bug-12-reentry-rehows-chat.test.js (4 cases)"
-  # Belt-and-braces static guard: the early-return branch of
-  # openSession() must contain setChatPane(true). If anyone deletes
-  # the line during a refactor this red-flips immediately.
-  awk '/^function openSession/,/^}$/' web/public/app.js \
-    | awk '/if \(state\.activeId === id && state\.ws/,/return;/' \
-    | grep -q "setChatPane(true)" \
-    && pass "app.js: openSession early-return re-shows chat pane (bug-12)" \
-    || fail "app.js: openSession early-return missing setChatPane(true) — bug-12 will recur"
   # 2026-05-17 chat persistence + cross-device + ordering contract.
   # Locks the four pillars documented in CLAUDE.md → "Chat persistence
   # & cross-device consistency": (1) every device sees identical

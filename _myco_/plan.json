@@ -53,9 +53,7 @@
       "addedAt": "2026-05-14T00:36:10.992Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [
-        "kkrazy"
-      ],
+      "voters": [],
       "comments": [
         {
           "id": "bafc4f67a6d1",
@@ -102,9 +100,7 @@
       "addedAt": "2026-05-14T01:07:50.344Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [
-        "kkrazy"
-      ],
+      "voters": [],
       "comments": [
         {
           "id": "2a939971da03",
@@ -1091,26 +1087,12 @@
       "id": "bug-12",
       "text": "**Problem:** Re-entering a session via the back icon leaves the chat window deactivated, blocking user input.\n**Expected:** The chat window should always be active when viewing a session.\n**Actual:** Clicking the icon to return to the session card and then reopening the same session deactivates the chat window.",
       "layer": "Bug",
-      "done": true,
+      "done": false,
       "addedAt": "2026-05-17T16:39:55.804Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [
-        "kkrazy"
-      ],
-      "comments": [
-        {
-          "id": "bug12-fix-2026052001",
-          "user": "claude",
-          "text": "**Root cause** — `openSession()` (web/public/app.js:1151) has an early-return path for re-tapping the SAME session with a still-live WS:\n\n```js\nif (state.activeId === id && state.ws && state.ws.readyState === WebSocket.OPEN) {\n  if (window.innerWidth <= 900) setSidebar(true);\n  return;   // ← never calls setChatPane(true)\n}\n```\n\nMeanwhile, the back-icon (`btn-expand` → `setSidebar(false)`) on mobile calls `setChatPane(false)` because the sidebar and chat pane are mutually-exclusive overlays on screens ≤900px. Net effect: back-icon → chat hidden, then re-tap → no re-show, user stranded on plan/files/etc. view with no way back to chat.\n\n**Fix** — added one line: `setChatPane(true);` inside the early-return block, with a bug-12 comment so the next refactor knows why. On desktop the call is a no-op when the pane is already visible.\n\n**Tests** — `test/bug-12-reentry-rehows-chat.test.js` (4 cases) + a static-grep guard in test.sh's openSession check. Both pass against the fix and would red-flip if anyone removed the setChatPane(true) line.\n\n**Diff:** web/public/app.js +9 / -1 (function `openSession`).",
-          "ts": "2026-05-20T01:25:00.000Z",
-          "meta": {
-            "kind": "fix-summary",
-            "fixedBy": "claude",
-            "fixShipped": false
-          }
-        }
-      ],
+      "voters": [],
+      "comments": [],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "click the icon to go back to session card and then go back to the same session would case the chat window be disactivated. The chat window should be always active",
