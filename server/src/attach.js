@@ -1361,6 +1361,24 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     ]);
     const guestOK = isMention || (cmd && GUEST_ALLOWED_CMDS.has(cmd));
     if (!guestOK) {
+      // bug-19: preserve the user's typed text. Pre-fix the read-only
+      // block emitted ONLY the denial reply and returned, silently
+      // dropping the typed message — the viewer had no way to recover
+      // what they tried to send. Now we append + broadcast the user's
+      // message tagged meta.kind='denied' BEFORE the denial reply, so:
+      //   * the chat record keeps every input (per the cross-device
+      //     persistence contract in CLAUDE.md)
+      //   * other attached clients see what the viewer tried to send
+      //   * the client can visually mark denied messages (muted /
+      //     strikethrough) so the user can copy their text out
+      const userMsg = {
+        user,
+        text,
+        ts: new Date().toISOString(),
+        meta: { kind: 'denied', reason: 'read-only viewer' },
+      };
+      sessionsMod.appendChatMessage(sessionId, userMsg);
+      session.emit('chat', userMsg);
       const denyMsg = {
         user: ASSISTANT_USER,
         text: '(read-only viewer — claude-routing is owner-only. You can `@<user>` to discuss, or use `/td <text>`, `/fr <text>`, `/bug <text>` to add plan items.)',
@@ -1368,7 +1386,7 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
       };
       sessionsMod.appendChatMessage(sessionId, denyMsg);
       session.emit('chat', denyMsg);
-      console.log(`[chat-readonly] ${sessionId} ${user}: blocked '${text.slice(0,40)}…' (not mention/whitelisted slash)`);
+      console.log(`[chat-readonly] ${sessionId} ${user}: blocked '${text.slice(0,40)}…' (preserved as meta.kind=denied)`);
       return;
     }
   }

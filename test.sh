@@ -2449,6 +2449,13 @@ test_chat_window() {
   # Guards on it.addedBy being truthy so legacy items (filed before
   # the field was tracked) render with no chip (no "@undefined").
   node_test_result test/fr-49-show-creator.test.js "test/fr-49-show-creator.test.js (4 cases)"
+  # bug-19: read-only viewer's typed message was silently dropped —
+  # handleChatMessage's readOnly + !guest-OK block emitted only the
+  # denial reply and returned BEFORE the user text was persisted.
+  # Fix: persist + broadcast the user text tagged meta.kind='denied'
+  # FIRST, then the denial reply. The user can recover what they typed
+  # from chat history; other attached clients see what was tried.
+  node_test_result test/bug-19-readonly-preserves-user-text.test.js "test/bug-19-readonly-preserves-user-text.test.js (5 cases)"
   # fr-48: per-session plan-item run-queue. Users add fr/td/bug items
   # via per-item ⊤ Queue button OR /queue slash; sequential auto-
   # dispatch via turn_result hook in attach.js _registerExternalSession.
