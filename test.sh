@@ -2531,6 +2531,16 @@ test_chat_window() {
   # re-tap early-return only re-collapsed the sidebar without restoring
   # the chat pane. Now setChatPane(true) is wired into the re-tap branch.
   node_test_result test/bug-12-reentry-restores-chatpane.test.js "test/bug-12-reentry-restores-chatpane.test.js (4 cases)"
+  # fr-50: in-app file editor (CodeMirror 6) with optimistic-mtime
+  # conflict prevention. Swaps the existing textarea-based editor for
+  # a CM6 surface (vendored bundle at web/public/vendor/codemirror.bundle.js
+  # built via `npm run build:editor`). Adds a proper 409 conflict modal
+  # (Reload / Force overwrite / Cancel) replacing the old alert() on
+  # ERR_MTIME_CONFLICT. Textarea fallback retained so a vendor bundle
+  # hiccup doesn't take editing offline. Server route smoke verifies
+  # the existing files.js writeFile mtime gate still rejects stale
+  # writes with ERR_MTIME_CONFLICT → HTTP 409.
+  node_test_result test/fr-50-file-editor.test.js "test/fr-50-file-editor.test.js (17 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

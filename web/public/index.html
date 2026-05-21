@@ -301,6 +301,35 @@
     </div>
   </div>
 
+  <!-- fr-50: file-edit conflict modal. Shown when a Save (PUT /file)
+       comes back with 409 ERR_MTIME_CONFLICT — the file changed on
+       disk since the user opened it (another collaborator, a claude
+       Bash tool edit, etc.). Three choices preserve user agency:
+       Reload (lose your edits), Force overwrite (clobber the disk
+       version with your edits), Cancel (stay in edit mode, do
+       nothing). Body shows the bytes-different summary so the user
+       has context on what they'd be clobbering. -->
+  <div id="file-conflict-modal" hidden>
+    <div id="file-conflict-dialog">
+      <h2>⚠ File changed on disk</h2>
+      <p id="file-conflict-body">
+        <code id="file-conflict-path">…</code> was modified on disk after
+        you opened it. Saving now would overwrite those external changes.
+      </p>
+      <div id="file-conflict-actions">
+        <button id="file-conflict-reload" title="Discard your edits + load the current disk version">
+          ↻ Reload from disk
+        </button>
+        <button id="file-conflict-force" title="Save anyway, overwriting the external changes">
+          ⚠ Force overwrite
+        </button>
+        <button id="file-conflict-cancel" title="Close this dialog, stay in edit mode">
+          ✕ Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- log panel -->
   <div id="log-panel" hidden>
     <div id="log-panel-header">
@@ -343,6 +372,10 @@
   <script src="/vendor/marked/marked.umd.js"></script>
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/mermaid.min.js"></script>
+  <!-- fr-50: CodeMirror 6 bundle for the in-app file editor.
+       Built from tools/codemirror-entry.mjs via `npm run build:editor`.
+       Exposes window.MycoCM with { createEditor, EditorView, ... }. -->
+  <script src="/vendor/codemirror.bundle.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
   <script src="app.js?v=223"></script>
 </body>

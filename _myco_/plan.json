@@ -2081,7 +2081,7 @@
       "id": "fr-50",
       "text": "**Problem:** Users can't edit text files (source code, markdown, JSON, etc.) in-app.\n**Expected:** Open and edit text files including source code, markdown, json, etc., with changes persisted back to disk.\n**Actual:** No editing surface exists for text files.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-20T09:59:15.384Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2094,13 +2094,24 @@
           "user": "kkrazy",
           "text": "should avoid conflicting edits, would be great to support concurrent editing and show who is editing",
           "ts": "2026-05-20T10:00:16.188Z"
+        },
+        {
+          "id": "rs-6e349f50619f",
+          "user": "claude",
+          "text": "**Phase A shipped** — CodeMirror 6 editor + mtime conflict modal.\n\n### What landed\n\n| Surface | Change |\n|---|---|\n| `web/public/index.html` | + `<script src=\"/vendor/codemirror.bundle.js\">` + `#file-conflict-modal` scaffold |\n| `web/public/app.js` | `_enterFileEditMode` now uses CM6 (textarea fallback retained); new `_currentEditedContent`, `_showFileConflictModal`, `_reloadFileFromDisk`, `_hideFileConflictModal` helpers; 409 branch in `_saveFileEdit`; force-overwrite re-stats mtime before retry |\n| `web/public/styles.css` | `.files-edit-cm` host + `#file-conflict-modal` styling (mirrors spawn-modal language) |\n| `web/public/vendor/codemirror.bundle.js` | **NEW** vendored bundle (582 KB minified) — built from `tools/codemirror-entry.mjs` via `npm run build:editor` |\n| `tools/codemirror-entry.mjs` | **NEW** esbuild entry — imports CM6 packages (state/view/commands/language/search + 6 language modes: js/json/md/html/css/python + oneDark theme), exposes `window.MycoCM.{createEditor, EditorView, EditorState, languageForPath}` |\n| `package.json` | + esbuild + codemirror v6 packages as devDeps + `build:editor` script |\n| `test/fr-50-file-editor.test.js` | **NEW** — 17 cases (bundle scaffolding, editor wiring, conflict modal, server route smoke, package.json contract) |\n| `test.sh` | wired the new test right after bug-12 |\n\n### Discoverability note\n\nA textarea-based editor (`#files-edit` ✎ button + `_enterFileEditMode`/`_saveFileEdit`/`_exitFileEditMode`) already existed before this fix — the ✎ button is in the files-view-header alongside Copy + Wrap. It was small + only visible after opening a file in the file tree, which is likely why fr-50 was filed as \"no editing surface exists.\" Phase A makes it dramatically more capable (CM6: syntax highlighting + line numbers + search + fold + bracket-matching + history + indent-on-input) so the existing affordance is now obviously an editor.\n\n### Conflict prevention (the user's main concern)\n\nThe server side was ALREADY built for it — `writeFile` in `server/src/files.js` requires `expectedMtimeMs` and throws `ERR_MTIME_CONFLICT` (mapped to HTTP 409) when disk mtime drifts. Phase A wires the client side properly:\n\n1. `GET /file` response includes `mtimeMs` → client stamps it on `state.files.viewing.mtimeMs`\n2. `PUT /file/edit` body always carries `expectedMtimeMs`\n3. On 409 the new modal opens with three resolution choices:\n   - **↻ Reload from disk** — discards edits, re-fetches the disk version (use when the on-disk changes are what you want)\n   - **⚠ Force overwrite** — re-stats the file to get the fresh mtime, then PUTs with the user's edits (clobbers the external changes)\n   - **✕ Cancel** — closes the dialog, stays in edit mode with edits intact so the user can copy them out\n\nThe modal preserves user bytes either way — no path silently loses work.\n\n### Phase B (filed as follow-up, NOT in this commit)\n\nThe user's \"show who is editing\" comment is presence broadcasting — emit `presence.editing: <relPath>` when a user enters edit mode, render a chip in the file viewer header showing other concurrent editors. Self-contained next commit; doesn't gate on this one.\n\n### Test sweep\n\n`test/fr-50-file-editor.test.js` — **17/17 green** in isolation AND in the full sweep. All 51 `test/*.test.js` files passed individually; `./test.sh` itself bails only on the known-environmental BusyBox `grep -P` issue at `test_cache_busters` (unrelated, no regression).\n\n**If you don't see editing on prod after deploy:** make sure `./deploy.sh` actually copies `web/public/vendor/codemirror.bundle.js` into the container — the Dockerfile should pick it up via the existing `web/public` glob, but worth a quick check.",
+          "ts": "2026-05-21T00:02:09.798Z",
+          "meta": {
+            "kind": "run-summary"
+          }
         }
       ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "allow editing of text files including source code, markdown, json, etc.",
         "rewritten": true
-      }
+      },
+      "doneAt": "2026-05-21T00:02:09.798Z",
+      "doneBy": "claude"
     },
     {
       "id": "bug-22",
@@ -2153,5 +2164,5 @@
       ]
     }
   ],
-  "updatedAt": "2026-05-20T23:27:08.379Z"
+  "updatedAt": "2026-05-21T00:02:09.798Z"
 }

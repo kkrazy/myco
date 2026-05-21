@@ -7145,8 +7145,20 @@ function bindFilesUi() {
   document.getElementById('files-wrap-toggle')?.addEventListener('click', toggleWrap);
   document.getElementById('files-tree-collapse')?.addEventListener('click', _toggleFilesTreeCollapsed);
   document.getElementById('files-edit')?.addEventListener('click', _enterFileEditMode);
-  document.getElementById('files-edit-save')?.addEventListener('click', _saveFileEdit);
+  document.getElementById('files-edit-save')?.addEventListener('click', () => _saveFileEdit());
   document.getElementById('files-edit-cancel')?.addEventListener('click', _exitFileEditMode);
+  // fr-50: file-conflict modal wiring. Modal opens on 409
+  // ERR_MTIME_CONFLICT from /file/edit; the three buttons resolve
+  // the conflict (reload / force overwrite / cancel).
+  document.getElementById('file-conflict-reload')?.addEventListener('click', () => {
+    _hideFileConflictModal();
+    _reloadFileFromDisk();
+  });
+  document.getElementById('file-conflict-force')?.addEventListener('click', () => {
+    _hideFileConflictModal();
+    _saveFileEdit({ force: true });
+  });
+  document.getElementById('file-conflict-cancel')?.addEventListener('click', _hideFileConflictModal);
 
   // Selection-driven action bar wiring
   document.querySelectorAll('#files-action-bar .files-action-btn').forEach((b) => {
@@ -7554,10 +7566,21 @@ function _toggleFilesTreeCollapsed() {
   }
 }
 
-// Owner-only inline file edit. Swaps the rendered body for a
-// <textarea> containing the raw file content. Save POSTs to
-// /sessions/:id/file/edit (owner-gated server-side); Cancel
-// restores the rendered view.
+// fr-50: Owner-only inline file edit, CodeMirror 6 surface. Swaps the
+// rendered body for a CodeMirror editor (syntax highlighting + line
+// numbers + search). Falls back to a plain <textarea> if the CM6
+// bundle (window.MycoCM) failed to load — the fallback is byte-
+// identical to the pre-fr-50 behavior so a vendor bundle hiccup
+// doesn't take editing offline. Save POSTs to /sessions/:id/file/edit
+// (owner-gated server-side); on 409 ERR_MTIME_CONFLICT we open the
+// conflict modal instead of alert()ing the raw error. Cancel restores
+// the rendered view.
+//
+// Track on state.files.viewing:
+//   editing      — flag for "edit mode active"
+//   editOriginal — content at entry (for no-op short-circuit)
+//   cmView       — CM6 EditorView instance (so _saveFileEdit can read
+//                  the current doc, and _exitFileEditMode can destroy)
 function _enterFileEditMode() {
   const v = state.files.viewing;
   if (!v || !v.content || v.binary) return;
@@ -7566,6 +7589,40 @@ function _enterFileEditMode() {
   if (!body) return;
   v.editing = true;
   v.editOriginal = v.content;
+  body.innerHTML = '';
+
+  // CodeMirror 6 path (preferred). MycoCM.createEditor returns an
+  // EditorView whose state.doc.toString() is the live content.
+  if (window.MycoCM && typeof window.MycoCM.createEditor === 'function') {
+    const host = document.createElement('div');
+    host.id = 'files-edit-cm';
+    host.className = 'files-edit-cm';
+    body.appendChild(host);
+    try {
+      v.cmView = window.MycoCM.createEditor({
+        parent: host,
+        doc: v.content,
+        path: v.path,
+        // Cmd/Ctrl+S submit + Esc cancel handled at the host level
+        // (CM6 swallows keys via its keymap; we listen on the wrapper
+        // so they fire even when focus is inside the editor).
+      });
+      // Refresh header buttons (show Save/Cancel, hide Edit).
+      renderViewerHeader(v.path);
+      // Cmd/Ctrl+S → save. Esc → cancel. Attached to the host (capture
+      // phase) so CM6's own keymap can't swallow them silently.
+      host.addEventListener('keydown', _handleFileEditKeyDown, true);
+      // Focus the editor so the user can type immediately.
+      v.cmView.focus();
+      return;
+    } catch (err) {
+      console.error('[fr-50] CM6 init failed, falling back to textarea:', err);
+      // Fall through to textarea path so editing still works.
+      v.cmView = null;
+    }
+  }
+
+  // Fallback: textarea path. Identical to pre-fr-50 behavior.
   const ta = document.createElement('textarea');
   ta.id = 'files-edit-textarea';
   ta.className = 'files-edit-textarea';
@@ -7574,11 +7631,8 @@ function _enterFileEditMode() {
   ta.autocomplete = 'off';
   ta.autocapitalize = 'off';
   ta.setAttribute('autocorrect', 'off');
-  body.innerHTML = '';
   body.appendChild(ta);
-  // Refresh header buttons (show Save/Cancel, hide Edit).
   renderViewerHeader(v.path);
-  // Tab inserts a real tab in the textarea instead of moving focus.
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Tab') {
       e.preventDefault();
@@ -7587,12 +7641,10 @@ function _enterFileEditMode() {
       ta.value = ta.value.slice(0, start) + '  ' + ta.value.slice(end);
       ta.selectionStart = ta.selectionEnd = start + 2;
     }
-    // Cmd/Ctrl-S → save.
     if ((e.key === 's' || e.key === 'S') && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       _saveFileEdit();
     }
-    // Esc → cancel.
     if (e.key === 'Escape') {
       e.preventDefault();
       _exitFileEditMode();
@@ -7601,23 +7653,58 @@ function _enterFileEditMode() {
   ta.focus();
 }
 
+// Shared keydown handler for the CM6 edit host — Cmd/Ctrl+S to save,
+// Esc to cancel. Separate function so we can also detach it on exit.
+function _handleFileEditKeyDown(e) {
+  if ((e.key === 's' || e.key === 'S') && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    e.stopPropagation();
+    _saveFileEdit();
+    return;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    _exitFileEditMode();
+  }
+}
+
 function _exitFileEditMode() {
   const v = state.files.viewing;
   if (!v || !v.editing) return;
   v.editing = false;
   delete v.editOriginal;
+  // Destroy the CM6 view so its listeners + DOM are released. The
+  // body innerHTML='' inside renderFileViewerWithCards would orphan
+  // the editor otherwise.
+  if (v.cmView && typeof v.cmView.destroy === 'function') {
+    try { v.cmView.destroy(); } catch {}
+  }
+  v.cmView = null;
   // Re-render the body from v.content (might have been updated by save).
   renderFileViewerWithCards(v.content, v.path, v.cards || []);
   renderViewerHeader(v.path);
 }
 
-async function _saveFileEdit() {
+// Read the current editor content. CM6 path reads from v.cmView's
+// EditorState; textarea fallback reads the input value. Returns null
+// if neither surface is present (the save path skips when null).
+function _currentEditedContent() {
+  const v = state.files.viewing;
+  if (!v) return null;
+  if (v.cmView && v.cmView.state && v.cmView.state.doc) {
+    return v.cmView.state.doc.toString();
+  }
+  const ta = document.getElementById('files-edit-textarea');
+  return ta ? ta.value : null;
+}
+
+async function _saveFileEdit({ force = false } = {}) {
   const v = state.files.viewing;
   if (!v || !v.editing) return;
-  const ta = document.getElementById('files-edit-textarea');
-  if (!ta) return;
-  const newContent = ta.value;
-  if (newContent === v.editOriginal) {
+  const newContent = _currentEditedContent();
+  if (newContent == null) return;
+  if (newContent === v.editOriginal && !force) {
     // No-op save — just exit edit mode.
     _exitFileEditMode();
     return;
@@ -7630,11 +7717,31 @@ async function _saveFileEdit() {
     saveBtn.textContent = '… saving';
   }
   try {
+    // fr-50: when force=true (user picked "Force overwrite" in the
+    // conflict modal) we fetch the current disk mtime first so the
+    // server's expectedMtimeMs check passes. Without this re-stat
+    // the PUT would just 409 again.
+    let expectedMtimeMs = v.mtimeMs;
+    if (force) {
+      const probe = await authedFetch(`/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(v.path)}`);
+      if (probe.ok) {
+        const pbody = await probe.json().catch(() => ({}));
+        if (typeof pbody.mtimeMs === 'number') expectedMtimeMs = pbody.mtimeMs;
+      }
+    }
     const res = await authedFetch(`/sessions/${encodeURIComponent(id)}/file/edit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: v.path, content: newContent, expectedMtimeMs: v.mtimeMs }),
+      body: JSON.stringify({ path: v.path, content: newContent, expectedMtimeMs }),
     });
+    if (res.status === 409) {
+      // fr-50: ERR_MTIME_CONFLICT — file changed on disk since open.
+      // Surface the proper conflict modal instead of a generic alert,
+      // so the user can choose reload-from-disk vs. force-overwrite
+      // vs. stay-in-edit. Bytes preserved in the editor either way.
+      _showFileConflictModal(v.path);
+      return;
+    }
     if (!res.ok) {
       let body = {};
       try { body = await res.json(); } catch {}
@@ -7654,6 +7761,50 @@ async function _saveFileEdit() {
       saveBtn.textContent = '💾 Save';
     }
   }
+}
+
+// fr-50: conflict modal — three user choices when the server returns
+// 409 ERR_MTIME_CONFLICT on save. Reload: discard edits, re-fetch
+// disk version. Force: re-stat to get fresh mtime, then save (next
+// PUT body uses the new expectedMtimeMs). Cancel: close modal, stay
+// in edit mode with bytes intact so the user can copy them out.
+function _showFileConflictModal(relPath) {
+  const modal = document.getElementById('file-conflict-modal');
+  if (!modal) {
+    // HTML scaffolding missing — fall back to a confirm dialog so the
+    // user still has SOMETHING to act on.
+    if (confirm(`${relPath} changed on disk. OK = force overwrite, Cancel = reload from disk.`)) {
+      _saveFileEdit({ force: true });
+    } else {
+      _reloadFileFromDisk();
+    }
+    return;
+  }
+  const pathEl = document.getElementById('file-conflict-path');
+  if (pathEl) pathEl.textContent = relPath;
+  modal.hidden = false;
+}
+
+function _hideFileConflictModal() {
+  const modal = document.getElementById('file-conflict-modal');
+  if (modal) modal.hidden = true;
+}
+
+async function _reloadFileFromDisk() {
+  const v = state.files.viewing;
+  if (!v) return;
+  const id = state.activeId;
+  if (!id) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(v.path)}`);
+  if (!res.ok) {
+    alert(`Reload failed: ${res.status}`);
+    return;
+  }
+  const body = await res.json();
+  v.content = body.content;
+  v.mtimeMs = body.mtimeMs;
+  v.size = body.size;
+  _exitFileEditMode();
 }
 
 function showFileViewerMessage(msg) {
