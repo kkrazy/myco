@@ -1,62 +1,52 @@
-# Mycelium — Architecture
+# myco — Architecture
 
-## Project Purpose
+## Thesis
 
-**Mycelium exists so a user — solo or in a small team — can stay on top of a software project at a glance.** Specifically:
+**myco is the shared work surface where humans and autonomous agents collaborate on the same project, in real time, across devices, with full audit trail.**
 
-1. **Know what's already implemented.** Plan items marked `done` with auto-generated run-summary comments cite the commit + file:line that landed each feature, so "did we ship X?" is answerable from the Plan tab without grepping git or pinging anyone.
-2. **See what's in progress right now.** Running Claude sessions surface their live activity (tool calls, assistant text, permission menus) in the chat pane; plan items dispatched via `▶ Run` carry a `running` status chip until the agent's `turn_result` closes them out. The Plan tab + status badges are the single source of truth for "what's happening this minute."
-3. **See what's coming next.** Pending plan items (`/td`, `/fr`, `/bug`, plus extractor-suggested items from the running session transcript) live in the same tab, grouped by layer (Frontend / Backend / etc.) and ranked by votes. The Plan tab is the de-facto product backlog.
-4. **Continue to surface problems + suggestions.** Claude is a participant in the discussion pane, not just a tool to dispatch to: the side-channel assistant (`/btw`), the `/fr!` `/td!` `/bug!` LLM rewriter (issue-format clarification), the run-summary comments (post-execution findings), and the architecture-tab extractor all act as a running review — flagging risks, suggesting better approaches, and rewording vague items into actionable issues.
+Three concrete properties drive every design choice:
 
-The combination — live agent + persistent plan + chat-as-team-channel — means the project's state is always one tab away, and every dispatched run lands its findings back on the originating item so the trail is auditable. The same loop pulls double duty for solo developers (a co-pilot that remembers what you said yesterday) and small teams (a shared steering surface where `@all` broadcast pings and per-item votes coordinate the next move).
-
-```mermaid
-flowchart LR
-    subgraph User["User (solo or team)"]
-        Browse["Browser / Phone / VS Code"]
-    end
-    subgraph Myco["Mycelium server"]
-        Plan["Plan / Arch / Test artifacts<br/>(_myco_/*.json)"]
-        Chat["Discussion pane<br/>(rec.chat)"]
-        Agent["Claude Agent SDK<br/>(events.jsonl)"]
-    end
-    subgraph Cloud["Anthropic"]
-        Claude["claude — drives work,<br/>reviews, rewrites, suggests"]
-    end
-
-    Browse -->|"/fr /td /bug, ▶ Run, vote, comment"| Plan
-    Browse -->|"chat, @user, @all"| Chat
-    Plan -->|"[run:plan#fr-N] dispatch"| Agent
-    Agent <-->|"streaming-input + agent-event"| Claude
-    Agent -->|"turn_result → run-summary comment"| Plan
-    Agent -->|"assistant_text, tool_use, menus"| Chat
-    Chat -->|"shouldAskAssistant(/btw)"| Claude
-```
-
-## Overview
-
-myco (codename: Mycelium) is a web UI to monitor, control, and discuss Claude Code sessions running locally on the same host as the server. Mobile-first, with a custom keyboard tuned for Claude Code's interaction patterns.
+1. **Many agents and many humans, one project**. A project is hosted by myco; humans + agents attach to it. Multiple agent sessions can run in parallel against the same workspace. Multiple humans can attach to the same session (owner, admin, read-only viewers). Coordination is via shared backlog, shared chat, and shared presence — not via "who's currently at the terminal."
+2. **Plan items are the work primitive**. Every piece of work — a user-reported bug, a feature request, a refactor todo, an agent-suggested improvement — is filed as a plan item with votes, comments, run history, and a Run button. The plan IS the project's running state. Everything else (agent sessions, chat, file edits) is in service of advancing items on it.
+3. **State moves with the code**. The plan, the architecture notes, the agent's per-item run-summaries — all live in a git-tracked `_myco_/` directory inside the project root. `git clone` is the entire onboarding step. New teammates inherit complete project memory; collaborators on another laptop see the same backlog.
 
 ```mermaid
-graph LR
-    Phone["Browser (phone)"]
-    Laptop["Browser (laptop)"]
-    VSCode["VS Code Remote-SSH"]
-    CLI["myco attach (terminal)"]
-    Server["mycod (Node.js)"]
-    Pty["pty: claude --resume"]
-    Helper["pty: claude -p (chat)"]
-
-    Phone <-->|HTTPS / WSS| Server
-    Laptop <-->|HTTPS / WSS| Server
-    VSCode -.opens.-> CLI
-    CLI <-->|WSS| Server
-    Server <-->|node-pty| Pty
-    Server -.spawns on chat ?.-> Helper
+flowchart TB
+    subgraph Humans["Humans"]
+        Owner["Owner"]
+        Admin["Admin"]
+        Guest["Read-only viewer<br/>(share link)"]
+    end
+    subgraph Agents["Agents"]
+        A1["Agent session 1"]
+        A2["Agent session 2"]
+        A3["Agent session 3"]
+    end
+    subgraph Surface["Shared work surface (myco)"]
+        Plan["Plan<br/>(_myco_/plan.json)"]
+        Chat["Chat per session<br/>(rec.chat)"]
+        Files["File explorer + editor"]
+        Queue["Run-queue<br/>(rec.runQueue)"]
+        Next["/next priority list<br/>(plan.whatsNext)"]
+    end
+    Owner -->|"file /td /fr /bug, vote, comment, edit, run, /next, /queue"| Plan
+    Owner -->|"steer, @mention, /btw"| Chat
+    Owner -->|"edit"| Files
+    Admin --> Plan
+    Admin --> Chat
+    Admin --> Files
+    Guest -->|"vote, comment, @mention, /qstatus, /next"| Plan
+    Guest --> Chat
+    A1 -->|"tool calls, assistant text"| Chat
+    A1 -->|"run-summary on turn_result"| Plan
+    A1 --> Files
+    A2 --> Chat
+    A2 --> Plan
+    A3 --> Chat
+    A3 --> Plan
+    Plan -->|"[run:plan#fr-N] dispatch"| Queue
+    Queue -->|"sequential dispatch to head session"| A1
 ```
-
-A single mycod process owns the pty for each running `claude` session. Multiple viewers (phone, laptop, VS Code via the bundled CLI) attach to the same pty over WebSocket; bytes are fanned out to every connected viewer.
 
 ---
 
@@ -64,296 +54,308 @@ A single mycod process owns the pty for each running `claude` session. Multiple 
 
 ### Server (`server/`)
 
-A single Node.js process. No external services, no SSH, no database — state is a JSON file.
+A single Node process. No external services required at runtime — state is plain JSON files. Caddy in front for TLS + HTTP/2.
 
-| File | Lines | Responsibility |
-|------|------:|---------------|
-| `src/index.js` | 308 | Express + ws bootstrap; HTTP/HTTPS listen, route handlers, WS upgrade auth |
-| `src/sessions.js` | 439 | Session store (`~/.myco/store.json`), spawn/list/delete, transcript import, chat history |
-| `src/pty.js` | 216 | `PtySession` wrapper around node-pty; WS attach handler; chat broadcast; `/btw` trigger |
-| `src/auth.js` | 90 | Bearer-token auth (`MYCO_TOKEN` / `MYCO_TOKENS`); read-only share tokens |
-| `src/btw.js` | 117 | Spawns `claude -p` for chat replies; ANSI-strip; question-detection heuristic |
-| `src/summarizer.js` | 164 | Background watcher that calls Anthropic API to title sessions from their transcripts |
-| `src/logCapture.js` | 57 | Tees `console.log`/`error` so `/logs` (HTTP + WS) can stream them to the UI |
+| File | Responsibility |
+|---|---|
+| `src/index.js` | Express + ws bootstrap, route handlers, WS upgrade auth, log capture wiring |
+| `src/sessions.js` | Session registry + chat persistence (cap 100k msgs/session, monotonic `meta.seq`) |
+| `src/agent-session.js` | The agent runtime wrapper — driven by the pluggable agent SDK (currently `@anthropic-ai/claude-agent-sdk`). Exposes `chat`, `state-update`, `agent-event`, `exit`, `idle` events. Handles permission requests, retries, resume-failure fallback, abort |
+| `src/attach.js` | WebSocket attach plane — owner + viewer paths, presence broadcast, chat handling, run-queue auto-advance hook |
+| `src/artifacts.js` | The `_myco_/` artifact mirror — plan/test/arch read+write, vote/comment/edit/run routes, run-queue HTTP routes |
+| `src/runQueue.js` | Sequential dispatch primitives (`addToQueue`, `peekNextPending`, `markRunning`, `markFinished`, pause/resume) |
+| `src/whatsnext.js` | Heuristic priority scoring + LLM rerank for `/next`. 2h refresh-on-read cache |
+| `src/slashcmds.js` | Slash-command dispatcher (`/td /fr /bug /queue /q* /admin /next /help` ...) |
+| `src/menu.js` | Permission menu state, persistence into chat, fan-out to attached clients |
+| `src/auth.js` + `src/git-tokens.js` | GitHub OAuth flow + allowlist + PAT store |
+| `src/btw.js` | Side-channel agent invocation (`runClaudeP`) — single-turn, no tools, no chat pollution. Used by `/btw`, `/fr!` rewriting, `/next` LLM rerank |
+| `src/logCapture.js` | Rolling stdout/stderr buffer for the `/logs` panel and `collect-logs.sh` poller |
 
-### Web (`web/public/`)
+### Client (`web/public/`)
 
-Static SPA — Express serves it with `Cache-Control: no-store`, so a tab refresh always picks up the latest.
+Static SPA — Express serves with `Cache-Control: no-store`, so a tab refresh always picks up the latest build.
 
-| File | Lines | Responsibility |
-|------|------:|---------------|
-| `index.html` | — | Shell: sidebar (sessions), chat pane, artifact tabs (Plan / Arch / Test), file explorer, modals |
-| `app.js` | — | State, auth, session list, WS attach, chat rendering, agent-event rendering, file explorer, share-link viewer |
-| `styles.css` | — | Mobile-first layout, dark theme, mutually-exclusive sidebar/chatpane on mobile |
-| `vendor/*` | — | Vendored dependencies: marked (markdown), highlight.js, mermaid |
+| File | Responsibility |
+|---|---|
+| `index.html` | Shell: sidebar, chat pane, chrome icon cluster (Plan / Arch / Test / Files), modals (spawn, permission, file-conflict) |
+| `app.js` | State, auth, session list, WS attach, chat rendering, agent-event rendering, file explorer + editor, slash commands client mirror |
+| `styles.css` | Mobile-first dark theme, mutually-exclusive sidebar/chat on mobile |
+| `vendor/codemirror.bundle.js` | CodeMirror 6 IIFE bundle (built from `tools/codemirror-entry.mjs` via `npm run build:editor`) |
+| `vendor/*` | Other vendored deps — marked, highlight.js, mermaid |
 
-### CLI (`cli/`)
+### Build tooling (`tools/`)
 
-| File | Lines | Responsibility |
-|------|------:|---------------|
-| `index.js` | 144 | Headless WS client over `/attach/<id>`; raw-mode stdin/stdout proxy; `Ctrl-] q` to detach |
+| File | Responsibility |
+|---|---|
+| `tools/codemirror-entry.mjs` | esbuild input — imports CM6 packages + 6 language modes + oneDark theme, exposes `window.MycoCM` |
 
-The shipped `myco` shell shim re-exports `server/node_modules` so the CLI uses the server's `ws` install.
+---
+
+## The agent backend is pluggable
+
+`AgentSession` (`server/src/agent-session.js`) is the integration boundary. Its public surface — the events it emits, the methods it exposes — is the contract that the rest of the server talks to. Behind that contract is a single concrete implementation today, with a second filed as `fr-52`:
+
+| Adapter | Status | Notes |
+|---|---|---|
+| Anthropic agent SDK (`@anthropic-ai/claude-agent-sdk`) | Active | In-process `query()` loop, `canUseTool` callback, `PreToolUse` hook for permissions, MCP tool servers |
+| OpenAI Agents SDK (`@openai/agents`) | Planned (`fr-52`) | `Runner.run()` + guardrails/pre-tool hooks for permissions. PoC scope, not full feature parity |
+
+The integration contract is intentionally narrow so adding a third backend in the future is a self-contained adapter, not a fork.
 
 ---
 
 ## State
 
-### `~/.myco/store.json`
+### Container-level (per host)
 
-The single source of truth. Shape:
+```
+$MYCO_STATE_DIR/
+├── sessions.json            ← session registry: roles, chat history, run-queue
+├── auth-sessions.json       ← minted myco session tokens (30-day sliding TTL)
+├── git-tokens.json          ← OAuth + per-repo PAT store
+├── allowed-github-users.txt ← invitation allowlist
+├── .env                     ← MYCO_GH_CLIENT_ID / SECRET / PUBLIC_ORIGIN
+├── Caddyfile                ← reverse proxy + TLS termination
+├── home/                    ← agent SDK config (auth credentials)
+└── wks/<user>/<session>/    ← per-session workspace bind-mount
+```
 
-```json
+### Per-session workspace
+
+```
+/wks/<user>/<session>/<project>/
+├── .git/                    ← marks this dir as the project root
+├── <source>…
+├── CLAUDE.md                ← agent-facing convention pack (auto-templated)
+├── .claude/
+│   ├── settings.json        ← per-project agent settings
+│   ├── settings.local.json  ← persisted "Allow always" picks
+│   └── memory/              ← agent auto-memory (session-scoped)
+└── _myco_/                  ← team-visible project memory (git-tracked)
+    ├── plan.json            ← items + voters + comments + runs + whatsNext cache
+    ├── architecture.md
+    ├── bash-elapsed.json    ← rolling slow-command samples for runtime hygiene
+    └── README.md
+```
+
+**Why `_myco_/` is checked in.** Without it, every fresh clone or new teammate starts with no project memory — they re-discover slow commands, re-vote on done items, re-ask the same architectural questions. With it, the team operates on shared ground truth and onboarding is `git clone`.
+
+The directory is a first-class artifact: every plan mutation persists immediately to both `sessions.json` (the running cache) and the on-disk file. A teammate who pulls the repo and opens the Plan tab in their own myco session sees the same backlog the original author left behind, without a state-export step.
+
+---
+
+## Roles + permissions
+
+Every WebSocket attach is classified into one of three roles. The role determines what the chat input is allowed to forward to the agent.
+
+| Role | How acquired | Can drive agent | Can mutate plan | Can edit files | Server enforcement |
+|---|---|---|---|---|---|
+| Owner | Spawned the session | ✓ | ✓ | ✓ | `rec.user === reqUser` |
+| Admin | `/admin <login>` by owner | ✓ | ✓ | ✓ | `rec.admins.includes(reqUser)` |
+| Read-only viewer | Share-link OR not in session's allow-list | — | partial (file plan items, vote, comment, `@mention`) | — | `attachViewerWebSocket` filters inbound, `handleChatMessage` whitelists guest commands |
+
+**Client-side mirror**: the Send button auto-disables when the typed text wouldn't pass the server's guest whitelist. The two whitelists (server: `attach.js GUEST_ALLOWED_CMDS`, client: `app.js _GUEST_ALLOWED_CMDS`) MUST stay in sync; the bug-19 regression test pins this contract.
+
+Presence is broadcast on every attach/detach: every client receives the role-tagged user roster so the header chip cluster reflects "who's here right now."
+
+---
+
+## Plan items as the work primitive
+
+Every piece of work — bug, feature, todo — is a plan item. The item is the unit of:
+
+- **Discussion** (comments thread, with edit + delete for owner/admin)
+- **Voting** (each unique voter adds priority weight to `/next`)
+- **Dispatch** (`▶ Run` button or `/queue <id>` enqueues to the run-queue)
+- **Audit trail** (run-summaries posted back as `meta.kind: 'run-summary'` comments)
+- **State** (`done` flag with `Close` / `Reopen` button; creator chip; per-layer label)
+
+**Item shape:**
+
+```jsonc
 {
-  "sessions": {
-    "myco-kkrazy-abcd1234": {
-      "id": "myco-kkrazy-abcd1234",
-      "user": "kkrazy",
-      "cwd": "myco",
-      "absCwd": "/home/kkrazy/myco",
-      "claudeSessionId": "9f1a...",
-      "createdAt": "2026-05-07T08:00:00.000Z",
-      "aiSummary": "Wiring TLS for myco.labxnow.ai",
-      "summaryGeneratedAt": "2026-05-07T08:30:00.000Z",
-      "chat": [{ "user": "kkrazy", "text": "hi", "ts": "..." }, ...]
-    }
-  },
-  "shareTokens": { "<tok>": { "sessionId": "...", "expiresAt": ..., "issuedBy": "..." } },
-  "dismissed": [ /* cwds the user told us not to auto-import */ ]
+  "id": "bug-13",
+  "text": "**Problem:** Chrome batch messages are only visible to the session owner...",
+  "layer": "Bug",                          // Bug | Feature | Todo
+  "done": false,
+  "addedAt": "2026-05-18T16:31:08.834Z",
+  "addedBy": "kkrazy",
+  "voters": ["kkrazy", "ryan-blues"],
+  "comments": [
+    { "id": "...", "user": "kkrazy", "text": "still seeing this", "ts": "..." },
+    { "id": "...", "user": "claude", "text": "✓ success · 2m18s · ...",
+      "ts": "...", "meta": { "kind": "run-summary" } }
+  ],
+  "runs": [
+    { "status": "success", "ts": "...", "startedAt": "...", "summary": "2m18s · 1.2k tok" }
+  ],
+  "meta": { "rewriteRequested": "long", "originalText": "...", "rewritten": true }
 }
 ```
 
-`claudeSessionId` is the cached id of the *first* transcript jsonl observed after spawn; at attach time, `ensureLiveSession` ignores it and resumes whichever jsonl is newest in `~/.claude/projects/<encoded-cwd>/`. That makes `/clear` and `/resume` survive a server restart.
+### Dispatch flow
 
-### `~/.claude/projects/<encoded-cwd>/*.jsonl`
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant Q as Run-queue
+    participant A as Agent session
+    participant P as plan.json
 
-Owned by Claude Code, not us. We poll mtimes here to derive `last_activity` and `status` (active / recent / stale / idle), to find the resume target, and to import sessions that exist in Claude's history but aren't yet in our store.
-
-### `<wks>/<user>/<session>/<project>/_myco_/` — portable artifact mirror
-
-The plan / test / architecture artifacts (`rec.artifacts.plan`, `rec.artifacts.test`, `rec.artifacts.arch`) are **always mirrored to a `_myco_/` directory inside the project root**, where the project root is the directory that contains `.git/`. This is the single, canonical location — the artifact code does not write or read these files anywhere else.
-
+    U->>Q: ▶ Run / /queue bug-13
+    Q->>Q: addToQueue, markRunning(head)
+    Q->>A: handleChatMessage([run:plan#bug-13] <item text>)
+    A->>A: handleChatMessage parses marker → session._activeRunItem
+    A->>A: runs the turn (tool calls, claude text, permission menus)
+    A->>P: turn_result agent-event → _stampPlanItemRunOutcome
+    A->>P: post run-summary comment
+    A->>Q: _advanceRunQueue: markFinished(bug-13, success) + dispatch next
+    Q->>A: handleChatMessage([run:plan#bug-12]...)
 ```
-<wks>/<user>/<session>/<project>/
-├── .git/                     ← marks this dir as the project root
-├── <source>…
-└── _myco_/
-    ├── plan.json             ← items + comments + voters + done state
-    ├── test.json             ← items + comments + done state (no votes)
-    ├── architecture.md       ← long-form arch markdown
-    └── README.md             ← written once explaining the dir (preserved if user-edited)
-```
 
-**Why a directory committed alongside source.** The state that lives in `store.json` (`MYCO_STATE_DIR/sessions.json`) is *session*-scoped — tied to one user's myco instance. The `_myco_/` mirror is *project*-scoped: a teammate clones the repo, starts a fresh myco session at the project root, and the next GET on the Plan / Test / Arch tab reads the on-disk files and renders the same items + comments the original author left behind. No session-state migration step, no manual export. **Commit the dir, push it, and it travels with the source.**
-
-**Project-root resolution** — done in `server/src/artifacts.js` via `findProjectRoot(rec)`:
-
-1. If `session.absCwd/.git/` exists → project root = `session.absCwd` (the session points directly at a checkout).
-2. Else, the *first* immediate subdirectory of `session.absCwd` that contains `.git/` (alphabetical for determinism when multiple repos coexist) → project root = that subdir (the session points at a workspace ABOVE the checkout, matching the literal `<wks>/<user>/<session>/<project>` path pattern).
-3. Else → no project; the artifact code skips the file mirror entirely. Heavy / hidden directories (`node_modules`, `dist`, `.cache`, `.next`, etc.) are skipped during the scan so a stray `.git/` inside a dependency can't impersonate a project.
-
-**Read / write contract**:
-
-- **Read priority on GET `/sessions/:id/artifact`**: `<project>/_myco_/<type>.<ext>` first; if absent, the legacy root-level `<project>/architecture.md` (for arch only); else fall back to `rec.artifacts[type]` from `store.json`. When the file wins, its content is mirrored back into `rec.artifacts[type]` so other code paths see a consistent shape.
-- **Write on every mutation** (`refresh` / `run` / `mark` / `vote` / `comment` / `item delete`): `persistArtifact(rec, type, artifact)` saves `store.json` *and* writes the canonical file under `<project>/_myco_/`. `README.md` is written once on first use and never overwritten (so a hand-customised README survives).
-- **Backfill on first read**: if the file is absent but `rec.artifacts[type]` already has content (e.g. a pre-`_myco_/` session that never mutated since the deploy), the GET handler eagerly writes the file so the directory materialises in the file explorer immediately and the user can `git add _myco_/` without first triggering a mutation.
-
-**File format**:
-
-- `plan.json` / `test.json` — pretty-printed JSON, trailing newline:
-
-  ```json
-  {
-    "items": [
-      {
-        "id": "695feda01a0a",
-        "text": "After redeploy, the claude session enters resume window and …",
-        "layer": "Bug",
-        "done": false,
-        "addedAt": "2026-05-12T10:07:39.717Z",
-        "addedBy": "kkrazy",
-        "source": "user",
-        "voters": [],
-        "comments": [{ "id": "...", "user": "...", "text": "...", "ts": "..." }]
-      }
-    ],
-    "updatedAt": "2026-05-14T03:43:13.099Z"
-  }
-  ```
-
-- `architecture.md` — plain markdown body.
+The `[run:plan#<id>]` marker is the binding contract — `handleChatMessage` parses it to set `session._activeRunItem`, the post-turn-result hook reads it back to mark the queue entry finished. A belt-and-braces fallback (added in fr-51) re-derives the active id from the queue's `running` entry if `_activeRunItem` is unexpectedly null, with a `[runQueue-diag]` log line so the underlying staleness can be root-caused later.
 
 ---
 
-## API
+## Run-queue
+
+Per-session FIFO with auto-pause on failure. Lives at `rec.runQueue`. Entries are `{ itemId, type, status, addedAt, startedAt, finishedAt, addedBy }`.
+
+**Status transitions:** `pending → running → (success | failed | aborted)`. On `failed`/`aborted` the queue auto-pauses (`rec.runQueuePaused = true`) and broadcasts a chat note prompting `/qresume`. On `success`, `_advanceRunQueue` picks the next pending and re-dispatches.
+
+**Five dispatch sites** all funnel through `peekNextPending` + `markRunning` + `handleChatMessage(buildArtifactRunText(...))`:
+1. `/queue <id>` slash command (initial kick when queue is idle)
+2. `/qresume` slash command (after auto-pause)
+3. `/qcancel <id>` (auto-advance after force-removing the running head)
+4. `POST /queue/add` HTTP route (▶ Run button kick when queue is idle)
+5. `_advanceRunQueue` agent-event hook (post-turn-result auto-advance)
+
+---
+
+## `/next` priority list
+
+`server/src/whatsnext.js` — heuristic + best-effort LLM rerank, cached 2h in `plan.whatsNext`.
+
+**Heuristic score**:
+- voters × 3.0 (each unique voter)
+- comments (capped at 5) × 1.0
+- layer bias (Bug 2.0 · Feature 1.0 · Todo 0.5)
+- fresh (<7d) +2.0 · stale (>90d) −0.5
+- last run failed/aborted −1.5
+- done items + items already in the run-queue excluded
+
+The top 20 candidates are passed to a single-turn agent call (`btw.runClaudeP`, no tools, 60s timeout) with a priority rubric. The parser rejects hallucinated ids and dedups; LLM failure falls back silently to the heuristic order so the command always returns something useful.
+
+---
+
+## Chat persistence + cross-device consistency
+
+The chat surface is the central conversational record. The contract has three pillars:
+
+1. **Server is the only source of truth** — `rec.chat` in `/data/sessions.json` + `session.buffer` + `_myco_/events.jsonl`. Every attached client renders the same state. No device-local chat storage.
+2. **All history persisted indefinitely** — every user message AND every agent reply (`_persistAssistantTextToRecChat` mirrors each `assistant_text` block). Retention cap is 100,000 messages per session (effectively unbounded). Survives container restarts, reaper kills, deploys.
+3. **Chronological order via monotonic seq** — every row carries an ISO `ts` AND a server-allocated `meta.seq` (per-session counter via `sessions.allocSeq`). Reload, replay, and live-append all sort by seq. A brief network blip triggers `?afterSeq=N` catch-up on reconnect — only the missed window streams back, not the full tail.
+
+**Regression guard**: `test/chat-persistence-contract.test.js` locks all three pillars. Touching `getChatHistory`, `appendChatMessage`, `_persistAssistantTextToRecChat`, `MAX_CHAT_MESSAGES`, or the `/chat/history` route must keep these tests green.
+
+---
+
+## File editor
+
+CodeMirror 6 vendored bundle (`web/public/vendor/codemirror.bundle.js`, built via `npm run build:editor`). Modes: js/ts/json/md/html/css/python + oneDark theme. Editor instantiated via `window.MycoCM.createEditor`.
+
+**Concurrent-edit safety** is optimistic mtime checking, not locking:
+
+- `GET /sessions/:id/file` returns `mtimeMs` in the response; client stamps it
+- `POST /sessions/:id/file/edit` requires `expectedMtimeMs`; server rejects with 409 `ERR_MTIME_CONFLICT` if disk mtime drifted
+- Client surfaces a conflict modal: **Reload from disk** (discard edits) / **Force overwrite** (re-stat + retry) / **Cancel** (preserve edits in the editor for copy-out)
+
+Bytes are never silently lost. Lock-based or CRDT-based concurrency is filed in the backlog for if/when the optimistic model proves insufficient.
+
+---
+
+## API surface
 
 ### HTTP
 
-| Method | Path                      | Description                                                                |
-|--------|---------------------------|----------------------------------------------------------------------------|
-| `GET`  | `/auth/check`             | Token check; returns `{ ok, user }` or `{ share, sessionId }` for `?s=`.   |
-| `GET`  | `/sessions`               | List sessions (filtered by user when auth is on).                          |
-| `POST` | `/sessions`               | Spawn: `{ cwd, cols?, rows? }` → `{ session_id, cwd }`. Auto-creates dir.  |
-| `DELETE` | `/sessions/:id`         | Kill the pty + remove from store. Transcript on disk is preserved.         |
-| `POST` | `/sessions/:id/share`     | Issue a read-only share token; returns `{ url, expires_at }`.              |
-| `POST` | `/sessions/:id/vscode-prep` | Drop a `.vscode/tasks.json` in the cwd that auto-runs `myco attach <id>` on folder open. |
-| `GET`  | `/workspace`              | `{ name, entries, user, vscode_host }` for the spawn modal.                |
-| `GET`  | `/logs?count=N`           | Recent server log lines.                                                   |
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/auth/check` | Auth status; `{ ok, user }` or `{ share, sessionId }` for `?s=` |
+| `GET` | `/sessions` | List sessions (filtered by user) |
+| `POST` | `/sessions` | Spawn a new session |
+| `DELETE` | `/sessions/:id` | Delete (owner only) |
+| `POST` | `/sessions/:id/share` | Mint a share-link token |
+| `GET` | `/sessions/:id/files` | List directory entries (file tree) |
+| `GET` | `/sessions/:id/file` | Read file (returns `{ content, mtimeMs, size }`) |
+| `GET` | `/sessions/:id/file/download` | Download as attachment |
+| `POST` | `/sessions/:id/file/edit` | Write file (owner only, requires `expectedMtimeMs`) |
+| `GET` | `/sessions/:id/artifact?type=plan\|test\|arch` | Read artifact |
+| `POST` | `/sessions/:id/artifact/run` | Dispatch a plan item (▶ Run button) |
+| `PATCH` | `/sessions/:id/artifact/item` | Edit item body (fr-46) |
+| `PATCH`/`DELETE` | `/sessions/:id/artifact/comment` | Edit / delete comment |
+| `POST` | `/sessions/:id/queue/add` | Enqueue an item |
+| `DELETE` | `/sessions/:id/queue/:itemId` | Remove a queue entry |
+| `POST` | `/sessions/:id/queue/clear` | Drop all pending |
+| `POST` | `/sessions/:id/queue/resume` | Unpause + dispatch next |
+| `GET` | `/auth/github/start` + `/auth/github/callback` | OAuth flow |
+| `GET` | `/logs?n=N` | Recent server log lines (bearer-gated) |
 
-### WebSocket
+### WebSocket — `/attach/:session_id`
 
-#### `/attach/:session_id` — terminal + chat
+Auth: `?token=<bearer>` for owners/admins, `?s=<share-token>` for guests. Optional `?afterSeq=N` for lossless reconnect catch-up.
 
-Auth: `?token=<bearer>` for normal users, `?s=<share-token>` for read-only viewers.
+**Server → client frames** (selected):
 
 ```
-client → server:
-  { "t": "input",  "data": "<base64 utf-8 bytes>" }
-  { "t": "resize", "cols": 80, "rows": 24 }
-  { "t": "ping" }
-  { "t": "chat",   "text": "hello" }
-
-server → client:
-  { "t": "output",       "data": "<base64 utf-8 bytes>" }
-  { "t": "exit",         "code": 0 }
-  { "t": "pong" }
-  { "t": "chat-history", "messages": [...] }   // sent once on attach
-  { "t": "chat",         "message": { user, text, ts } }
-  { "t": "error",        "message": "..." }
+{ "t": "viewer-mode", "owner": "kkrazy" }            // attach as guest
+{ "t": "chat-history", "messages": [...] }            // initial ~1 KB tail
+{ "t": "agent-replay", "events": [...] }              // initial ~16 KB tail
+{ "t": "chat", "message": { user, text, ts, meta } }
+{ "t": "agent-event", "event": { ... } }              // tool_use / tool_result / assistant_text / permission_request / turn_result
+{ "t": "state-update", "kind": "artifact" | "runQueue" | "presence", ... }
+{ "t": "presence", "users": [...] }
+{ "t": "menu", "menu": { ... } }
+{ "t": "exit", "code": 0 }
+{ "t": "pong" }
 ```
 
-The server fans `output` and `chat` to every WS attached to the same session id. Read-only (share-link) viewers get `output`, `exit`, `chat-history`, `chat`, and `pong`, but their `input` / `resize` / `chat` messages are dropped.
+**Client → server frames**:
 
-#### `/logs`
-
-Same auth, server pushes `{ t: "log", level, ts, msg }` for each captured server-side log line.
-
----
-
-## Mobile Keyboard
-
-The custom keyboard is the primary product surface on phones — the OS soft keyboard is suppressed by default (`inputmode="none"` on xterm's hidden textarea), and key chords are tap-encoded.
-
-### Byte Mappings
-
-| Button | Bytes |
-|--------|-------|
-| Esc | `\x1b` |
-| Esc-Esc (double-tap within 280ms) | `\x1b\x1b` (one frame) |
-| 1 / 2 / 3 | `1` `2` `3` |
-| Enter | `\r` |
-
-The "ABC" toggle swaps to a native `<input>` that buffers locally and ships on Enter — typing in this mode raises the OS keyboard but feels responsive (no per-keystroke RTT).
-
-### UX Rules
-
-- Each tap is its own WS frame — no debouncing.
-- Haptic feedback per tap via `navigator.vibrate(10)`.
-- Sidebar and discussion pane are **mutually exclusive on mobile** (≤900px) and both visible alongside the terminal on desktop.
-- After bare `Esc` (or `Esc-Esc`), the client briefly toggles the pty rows (rows-1 → rows over ~32ms) to force claude to repaint the full viewport — works around occasional stale-bottom-row artifacts.
-
----
-
-## Data Flow
-
-### Terminal Attach
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant S as mycod
-    participant P as pty (claude)
-
-    B->>S: WS /attach/:id?token=…
-    S->>S: ensureLiveSession(id)
-    Note over S: getSession(id) ?? spawnClaude(--resume newest jsonl)
-    S->>B: { t:output } (replay ring buffer)
-    S->>B: { t:chat-history }
-    B->>S: { t:resize, cols, rows }
-    S->>P: pty.resize(cols, rows)
-    B->>S: { t:input }
-    S->>P: pty.write
-    P-->>S: stdout
-    S-->>B: { t:output }
 ```
-
-### Discussion + `/btw`
-
-```mermaid
-sequenceDiagram
-    participant U as User WS
-    participant V as Other viewer WS
-    participant S as mycod
-    participant H as claude -p (helper)
-
-    U->>S: { t:chat, text:"is this error real?" }
-    S->>S: appendChatMessage + emit('chat')
-    S-->>U: { t:chat, message: { user, text } }
-    S-->>V: { t:chat, message: { user, text } }
-    Note over S: shouldAskAssistant(text) — text ends in '?'
-    S->>H: spawn claude -p (cwd, env: process.env)
-    Note right of H: stdin = chat history + scrollback + question
-    H-->>S: stdout (reply)
-    S->>S: appendChatMessage + emit('chat')
-    S-->>U: { t:chat, message: { user:"claude", text } }
-    S-->>V: { t:chat, message: { user:"claude", text } }
-```
-
-The chat helper inherits `process.env`, so it uses whichever auth (`ANTHROPIC_API_KEY` or `claude.ai` subscription token in `~/.claude/`) the main interactive `claude` session uses.
-
-### Session Spawn
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant S as mycod
-    participant P as pty
-
-    B->>S: POST /sessions { cwd }
-    S->>S: resolveCwd, dedupe by absCwd
-    S->>P: pty.spawn('claude', [], { cwd, env, cols, rows })
-    S->>S: store.sessions[id] = record
-    S-->>B: { session_id, cwd }
-    Note over S: poll ~/.claude/projects/<cwd>/ for first jsonl → cache claudeSessionId
+{ "t": "chat", "text": "hello" }
+{ "t": "menu-pick" | "menu-toggle" | "menu-submit", "n": N, "hash": "..." }
+{ "t": "interrupt" }
+{ "t": "ping" }
 ```
 
 ---
 
-## Best-practices template
+## Diagnostics + observability
 
-The Arch tab in the web UI auto-injects a markdown banner of generic
-engineering best practices at the top of the pane. Four conventions
-are captured (refactor opportunistically, generate runnable tests
-with each change, scripts must be human-executable without an LLM,
-reuse existing test/build/deploy scripts). The full template lives at
-`web/public/best-practices-template.md` and is fetched once by the
-client at boot and cached on `state.bpTemplate`.
+- **`/logs` endpoint** — rolling 5000-line stdout/stderr buffer from `logCapture.js`. Exposed bearer-gated; powers the in-UI log panel + `./collect-logs.sh`
+- **`collect-logs.sh`** — human/cron-runnable poller. Dedups against per-UTC-day files under `_myco_/logs/` (gitignored). Supports local mycod + mycobeta via SSH
+- **`/loop` cron** — diagnostic tick that periodically runs `collect-logs.sh` + scans for known markers (`[ws-attach]`, `[diag-resume]`, `[menu-pick]`, `[runQueue-diag]`). Posts a one-line `📡 [diag-loop]` summary to chat each tick
+- **Bracketed log markers** — every instrumented site uses a stable prefix (`[ws-attach]`, `[plan-run]`, `[runQueue]`, etc.) so filters can pick them out unambiguously
 
-- **Default**: ON. The banner is prepended whenever the Arch tab
-  renders.
-- **Toggle**: a checkbox labeled "Best practices" in the Arch
-  artifact header. Persisted per-browser in
-  `localStorage.myco_bp_enabled` (`'1'` = on, `'0'` = off).
-- **Customise per project**: replace the template by serving a
-  different `/best-practices-template.md` from the static
-  `web/public/` dir, or edit the file directly. There's no
-  per-session override yet — it's a single shared template across all
-  sessions on a given myco deployment.
-- **Also injected into each project's CLAUDE.md**: on every
-  `spawnSession` and `ensureLiveSession` (in `server/src/sessions.js`),
-  myco appends the template body into `<absCwd>/CLAUDE.md` wrapped in
-  sentinel comments — `<!-- myco-best-practices-start -->` … `<!--
-  myco-best-practices-end -->`. Idempotent (sentinel detection skips
-  repeat injection), preserves pre-existing CLAUDE.md content, and
-  preserves any hand-edits inside the block on re-spawn. This is what
-  makes claude actually follow the practices — claude auto-reads
-  CLAUDE.md at the project root on every (re)spawn, so the block lands
-  in the LLM context without the user having to reference it.
+---
 
-## Operational Notes
+## Deployment
 
-- **Auth disabled by default.** When neither `MYCO_TOKEN` nor `MYCO_TOKENS` is set, every request is user `default`. Don't expose unauthenticated mycod to the public internet.
-- **TLS in-process.** When `TLS_CERT_PATH` + `TLS_KEY_PATH` are set, mycod terminates HTTPS itself and runs an HTTP→HTTPS redirect on `:80`. The shipped `myco.service` grants `CAP_NET_BIND_SERVICE` so this works as a non-root user.
-- **One pty per session, shared by all viewers.** When a small viewport (phone) and a large one (laptop) attach the same session, the last-resize wins — claude renders for whichever client most recently sent `{ t: resize }`. Per-viewer rendering is not supported.
-- **Liveness.** Server WS-pings every 30s with a 30s grace. Browser pings on `visibilitychange → visible` / `focus` / `pageshow` and every 15s while visible — closing + reconnecting if no pong in 2s.
-- **Persistence.** All durable state lives in `MYCO_STATE_DIR/store.json` (default `~/.myco/`). The Claude transcripts under `~/.claude/projects/` are owned by Claude itself and are never written to by mycod.
+`./deploy.sh` is the contract:
+
+- Builds the Docker image locally
+- Streams it to the remote host over SSH
+- Swaps the container against a single bind-mounted state directory (`MYCO_STATE_DIR`)
+
+The state directory is the entire backup unit — tar it and you have a full restore. No named/anonymous Docker volumes; nothing in the container survives a swap except what's bind-mounted.
+
+See `## Deployment` in [CLAUDE.md](./CLAUDE.md) for the single-state-dir layout, mycobeta deploy recipe (deploy-on-host because local Docker is often unavailable), OAuth wiring, and TLS specifics.
+
+---
+
+## What's NOT in the architecture (intentionally)
+
+- **No external database**. State is plain JSON files on disk. Backup = tar; restore = untar. Concurrent writes serialize via `sessionsMod.saveStore`'s in-process mutex.
+- **No background scheduler primitive**. `/next` is refresh-on-read with a 2h TTL — no cron timer burning tokens when no one is looking.
+- **No PTY / terminal multiplexer**. Phase 9 retired all PTY-driven session code. Every session runs as an `AgentSession` driven by the agent SDK. Tool calls and permission menus come through structured SDK events, never by regex-matching rendered text. Static checks in `./test.sh` enforce the deletion.
+- **No multi-region / sharding**. Single host, single Node process. State directory mountable on a shared filesystem for HA in principle, but not the target deploy shape today.

@@ -1,131 +1,96 @@
 # myco
 
-A mobile-first web UI to monitor, control, and discuss Claude Code sessions running on your machine. Open it on your phone, laptop, or VS Code; multiple devices can attach to the same session, and you can chat with collaborators (and Claude itself) alongside the live terminal.
+**A shared work surface for software teams collaborating with autonomous agents.**
+
+myco is a mobile-first web application where multiple humans and multiple agents work on the same project at the same time — each agent runs in its own session, plan items form a shared backlog visible to everyone, and the team's `@mention` chat sits next to the agent's live tool calls. The project's running state (todos, features, bugs, run-summaries, architecture notes) lives in a git-tracked `_myco_/` directory, so when a new teammate clones the repo they inherit the team's complete project memory — no onboarding doc to read, no Slack channel to join.
+
+## What it's for
+
+Single developers running multiple agents in parallel — and small teams who want their humans + agents on the same page about what's been done, what's running right now, and what's next.
+
+| | Without myco | With myco |
+|---|---|---|
+| Where is the backlog? | Issue tracker / Notion / chat | `_myco_/plan.json` — git-tracked, votes + comments inline |
+| What's the agent doing right now? | Open the terminal it's running in | Live in the chat pane of any browser |
+| What did the agent ship for ticket X? | Search commits, ask in chat | Auto-posted `meta.kind:run-summary` comment on the item |
+| Two teammates want to drive the agent? | Take turns, screen-share | Both attach, both type, presence chips, share-link viewers |
+| Three agents tackling three different fixes? | Three terminals on three laptops | Three sessions in the sidebar; click between them |
+| Onboarding a new team member? | "Read this wiki, ping me with questions" | `git clone` — Plan tab + Arch tab populate from `_myco_/` |
 
 ## Features
 
-- **Live terminal in the browser** — xterm.js + WebSocket. WebGL renderer with a Canvas fallback. Custom keyboard bar tuned for Claude Code (`Esc`, `1/2/3`, `Enter`, double-tap-`Esc`).
-- **Session lifecycle** — list, spawn, attach, delete. Spawning checks for an existing session in that cwd; deleting kills the pty but keeps Claude's transcript on disk so you can resume in the same directory later.
-- **Resume across restarts** — server restart? On reconnect, mycod scans `~/.claude/projects/<cwd>/` and resumes the *newest* transcript, so `/clear` and `/resume` survive a restart.
-- **Multi-device** — attach the same session from phone, laptop, and the VS Code terminal at the same time. Browser tabs auto-reattach on visibility change with a ping/pong liveness probe; the page reloads back into your last-active session.
-- **Discussion pane** — collaborator chat per session, persisted to disk. Two ways to engage Claude from chat: type any message and it's forwarded to the running Claude session as a normal user turn (works for owner and read-only viewers — `@user` mentions stay in-chat, no forward), or prefix with `/btw …` to spawn a fresh `claude -p` in the session's cwd and post the reply back to the chat.
-- **Share links** — read-only, time-limited URLs to show a session to someone without giving them the auth token.
-- **VS Code integration** — a one-tap "open in VS Code" action drops a `.vscode/tasks.json` into the session's cwd that auto-runs `myco attach <id>` in a Remote-SSH terminal on folder open.
-- **Auth + TLS** — optional bearer-token auth (single-user or per-user), HTTPS with auto-redirect from `:80`, and a Let's Encrypt installer script.
-- **Server-log panel** — recent `mycod` log lines streamed to the UI. Useful when something goes sideways from a phone.
+- **Multi-session, multi-agent** — spawn an unbounded number of agent sessions per project. Each runs independently in its own workspace under `/wks/<user>/<session-id>/`. The sidebar is the parallel-work cockpit.
+- **Shared plan as work backlog** — file todos, features, and bugs with `/td`, `/fr`, `/bug`. Vote, comment, edit, run. Auto-rewrites vague reports into Problem/Expected/Actual shape on request (`/bug!`). Each `▶ Run` dispatch lands a `run-summary` comment back on the originating item when it finishes.
+- **Run-queue** — drop multiple plan items into a sequential dispatch queue. The agent works through them one at a time and posts results. Auto-pauses on failure.
+- **`/next` priority ranking** — heuristic (votes × layer-bias × recency × run-failure penalty) + LLM rerank, cached 2h. Tells the team what to tackle next without re-deriving it each session.
+- **Team chat per session** — `@user` mentions for discussion, `@all` for broadcast pings. Agents see the conversation too and respond to direct prompts. Side-channel `/btw` for one-shot questions that don't pollute the main session.
+- **Roles + presence** — owner, admin (delegated via `/admin <login>`), read-only viewer (via share link). Send-button auto-disables for inputs a guest can't send. Presence chips show who's attached.
+- **In-app text file editor** — CodeMirror 6 with syntax highlighting, search, fold, multi-cursor. Concurrent-edit safe via optimistic mtime checking — conflicts surface a Reload / Force-overwrite / Cancel modal instead of silently losing bytes.
+- **Cross-device chat persistence** — every message + every agent reply persisted indefinitely. Phone, laptop, tablet all see the same state seconds apart. Brief network blips trigger lossless `?afterSeq=N` catch-up.
+- **GitHub OAuth + invitation allowlist** — anyone with a GitHub account whose login is in the allowlist can sign in. Per-repo PATs (`/setpat <token>`) for GitHub + Gitee.
+- **Share links** — time-limited read-only URLs for showing a session to someone without giving them auth or write access.
+
+## Architecture in one breath
+
+A single Node process (`mycod`) hosts an Express server + WebSocket gateway. Each agent session is an `AgentSession` instance wrapping a pluggable agent SDK. State is plain JSON files on disk — `/data/sessions.json` for the per-host registry, `<workspace>/_myco_/` for the per-project artifacts that travel with the code. Caddy fronts it for TLS + HTTP/2.
+
+See [architecture.md](./architecture.md) for the full picture, [USER_MANUAL.md](./USER_MANUAL.md) for the day-to-day reference, and [CLAUDE.md](./CLAUDE.md) for the agent-facing convention pack.
 
 ## Requirements
 
-- **macOS or Linux** (POSIX paths, systemd recommended on Linux).
-- **Node.js 18+**.
-- **Claude Code CLI** installed and on `PATH` as `claude`.
-- *(Optional)* `ANTHROPIC_API_KEY` — only needed if you don't have a `claude.ai` subscription configured for the `claude` CLI. The discussion pane and AI session-summary feature both run via `claude -p`, which inherits whatever auth the CLI is set up with.
+- Docker (for the production deploy path).
+- Node.js 20+ + `npm` (for the local dev path + the build step that vendors CodeMirror).
+- A GitHub OAuth app (Client ID + Secret) if you want OAuth sign-in.
 
-## Install
+## Quick start (local dev)
 
 ```bash
 git clone <repo-url> myco
-cd myco/server
-npm install
+cd myco
+npm install              # installs build-time deps (esbuild, codemirror)
+npm run build:editor     # produces web/public/vendor/codemirror.bundle.js
+cd server && npm install # runtime deps
+cd ..
+PORT=3000 MYCO_STATE_DIR=$HOME/.myco node server/src/index.js
+# → open http://localhost:3000
 ```
 
-## Run (dev)
+## Production deploy
+
+The reference deploy is `./deploy.sh` — builds the Docker image, streams it to a remote host over SSH, swaps the container against a bind-mounted state directory. Everything reproducible from one command:
 
 ```bash
-# from the project root
-./mycod
+./deploy.sh                       # default host: myco.labxnow.ai
+MYCO_DEPLOY_HOST=user@host ./deploy.sh
+./deploy.sh --skip-tests          # skip the test suite gate
+./deploy.sh --dry-run             # report the plan without shipping
+./deploy.sh --set-oauth <id>:<secret>
+./deploy.sh --allow-github-user <login>
 ```
 
-Or directly:
+See the `## Deployment` section of [CLAUDE.md](./CLAUDE.md) for the single-state-dir layout, OAuth wiring, and TLS specifics.
 
-```bash
-cd server
-MYCO_WORKSPACE=$HOME/projects npm start
-```
+## Configuration (env)
 
-Without TLS, the server binds to `127.0.0.1:3000` by default (set `HOST=0.0.0.0` to expose on the LAN). Open `http://localhost:3000` (or `http://<lan-ip>:3000` from another device on the same network).
+| Variable | Default | Purpose |
+|---|---|---|
+| `MYCO_STATE_DIR` | `/home/<user>/myco-state` | Bind-mounted root for all persistent state (sessions, auth, workspaces, allowlist) |
+| `MYCO_PUBLIC_ORIGIN` | — | Public URL for OAuth callback (e.g. `https://myco.labxnow.ai`) |
+| `MYCO_GH_CLIENT_ID` / `_SECRET` | — | GitHub OAuth app credentials (set via `./deploy.sh --set-oauth`) |
+| `MYCO_DEPLOY_HOST` | `myco.labxnow.ai` | Remote host the deploy script SSHes to |
+| `PORT` | `3000` | Listen port (host side of the container) |
 
-## Run (production, HTTPS)
+## Documentation
 
-Set the TLS env vars and the server switches to HTTPS on `:443` plus an HTTP→HTTPS redirect on `:80`:
+- [USER_MANUAL.md](./USER_MANUAL.md) — day-to-day cheat sheet (slash commands, plan workflow, editor)
+- [architecture.md](./architecture.md) — design + components + data model + diagrams
+- [CLAUDE.md](./CLAUDE.md) — agent-facing conventions (working in this repo, deployment, code style)
+- `web/public/best-practices-template.md` — the engineering best-practices banner auto-injected at the top of the Arch tab + each project's `CLAUDE.md` on first session spawn
 
-```bash
-TLS_CERT_PATH=/path/to/fullchain.pem \
-TLS_KEY_PATH=/path/to/privkey.pem  \
-MYCO_TOKEN=$(openssl rand -hex 16) \
-MYCO_WORKSPACE=$HOME/projects \
-./mycod
-```
+## Status + roadmap
 
-Sample `myco.service` is included; copy to `/etc/systemd/system/`, edit paths, then `sudo systemctl enable --now myco`. The unit grants `CAP_NET_BIND_SERVICE` so it can bind `:80`/`:443` as a non-root user.
+myco is in active use. The current agent backend is the Claude Agent SDK; a second backend (OpenAI Agents SDK) is filed as `fr-52` to make the platform vendor-agnostic. Filed and tracked the same way as any other work — open the Plan tab to see what's next.
 
-The repo also includes `install-tls.sh` (one-shot Let's Encrypt issuance via `certbot --standalone`) and `install-renewal-hook.sh` (pre/deploy/post hooks so renewals copy the new cert into `.tls/` and restart `myco` automatically).
+## License
 
-## Configuration
-
-| Var                  | Default                  | Purpose                                                                      |
-|----------------------|--------------------------|------------------------------------------------------------------------------|
-| `MYCO_WORKSPACE`     | `$HOME`                  | Root for spawnable sessions; new sessions can't escape this directory.       |
-| `MYCO_STATE_DIR`     | `~/.myco`                | Where the session store lives (`store.json`).                                |
-| `MYCO_TOKEN`         | *(unset)*                | Single bearer token; everyone authenticates as user `default`.               |
-| `MYCO_TOKENS`        | *(unset)*                | Multi-user: `alice:tok1,bob:tok2`. Each user sees only their own sessions.   |
-| `MYCO_VSCODE_HOST`   | *(unset)*                | SSH host for VS Code Remote-SSH "open folder" links (e.g. `kkrazy@myhost`).  |
-| `TLS_CERT_PATH`      | *(unset)*                | Path to fullchain. If both TLS vars are set, `mycod` switches to HTTPS.      |
-| `TLS_KEY_PATH`       | *(unset)*                | Path to private key.                                                         |
-| `PORT`               | `3000` (HTTP) / `443` (TLS) | Main listen port.                                                            |
-| `HOST`               | `127.0.0.1` (HTTP) / `0.0.0.0` (TLS) | Bind address.                                                                |
-| `HTTP_REDIRECT_PORT` | `0` (HTTP) / `80` (TLS)  | Plain-HTTP listener that 301-redirects to HTTPS.                             |
-| `ANTHROPIC_API_KEY`  | *(unset)*                | Used by `summarizer.js` for AI-generated session titles. Optional.           |
-
-If neither `MYCO_TOKEN` nor `MYCO_TOKENS` is set, auth is disabled — anyone who can reach the port can spawn sessions. **Don't expose an unauthenticated mycod to the public internet.**
-
-## CLI
-
-The bundled `myco` script is a thin client over the same WebSocket the web UI uses, so you can attach to a running session from a regular shell:
-
-```bash
-./myco attach myco-default-abcd1234
-# detach: Ctrl-] then q
-```
-
-It reuses `server/node_modules` for its `ws` dependency — no separate `npm install`.
-
-## Discussion pane / chat routing / `/btw`
-
-The discussion pane is per-session and persists in the on-disk store. Other people viewing the same session see the same chat history.
-
-How chat routes:
-
-- **Any message** — forwarded to the running Claude session as a normal user turn (the AgentSession's streaming-input queue). Works from owner and read-only viewer chat alike — chat is the collaborative steering channel for the session.
-- **`@user …`** at the head — recognized as a discussion mention to a known collaborator. Stamped + persisted as chat-only; NOT forwarded to Claude.
-- **`@all …`** at the head — broadcast mention. Every viewer attached to the session gets the recipient highlight + an unread-badge bump. Useful for "stand-up in 5" / "deploying now" style team pings. Chat-only; NOT forwarded to Claude.
-- **`/td …` / `/fr …` / `/bug …`** — add a plan item (Todo / Feature / Bug). If the description is longer than ~8 words, claude rewrites it into a tight software-issue format (problem → expected vs actual → context) asynchronously; the item appears immediately and updates in place when the rewrite lands. Use the bang variants **`/td!`**, **`/fr!`**, **`/bug!`** to force the rewrite on a short item.
-- **`/btw <text>`** — spawns a fresh `claude -p` in the session's cwd, with the last ~20 chat messages and last ~40 lines of ANSI-stripped scrollback as context, and posts the reply into the chat. Doesn't touch the running session. Inherits `process.env` and the user's `~/.claude/` config, so whatever auth (API key or `claude.ai` subscription) the main session uses works here too.
-- **`/task`, `/skip N`, `/cancel N`** — task-list intervention. Forwarded to Claude as a natural-language directive (see `CLAUDE.md` task-list etiquette). The agent replies with the list / dismissal confirmation.
-
-Plain text (no `@user` prefix) reaches Claude — there's no separate "talk to claude" prefix any more. Use `@user` if you want a note to stay in chat.
-
-## Architecture
-
-See [architecture.md](./architecture.md). Two notes on what's changed since that doc:
-
-- The session backend is direct `node-pty`, not `tmux` over SSH. One mycod process owns the pty for each running session; tmux is no longer required.
-- Stage-2 hooks haven't shipped; AI summaries are generated by polling Claude's transcript files instead.
-
-## Troubleshooting
-
-**"unauthorized" loop** — check the token in the URL or in the prompt matches `MYCO_TOKEN` (or one of the entries in `MYCO_TOKENS`). After changing tokens, all open browsers need to re-enter the new one.
-
-**Sessions don't restore after `mycod` restart** — `store.json` lives in `MYCO_STATE_DIR` (default `~/.myco`). If that directory is gone, sessions are gone. The `claude` transcripts under `~/.claude/projects/<cwd>/` are still there; mycod auto-imports those at startup so you can re-attach.
-
-**Claude in the discussion pane just echoes errors** — make sure `claude` works headlessly: `claude -p "hi"` in the session's cwd should print a reply. If it asks for auth, run `claude /login` once as the systemd `User=` (e.g. `sudo -u kkrazy claude`).
-
-**`posix_spawnp failed`** — `node-pty`'s `spawn-helper` lost its executable bit during `npm install`. The `postinstall` script reapplies it; if it persists:
-
-```bash
-chmod +x server/node_modules/node-pty/prebuilds/*/spawn-helper
-```
-
-**Phone can't reach the server** — verify both devices are on the same network (or that you're using the public DNS name behind TLS), and check the firewall (macOS: System Settings → Network → Firewall → allow `node`; Linux: `ufw status`).
-
-**Browser warns about TLS** — the bundled `install-tls.sh` issues a Let's Encrypt cert. If you're using a self-signed cert during development, you'll get warnings until you swap it.
+Internal project. Reach out to the team before reusing.
