@@ -199,15 +199,6 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   color: var(--accent);
   flex: 1;
 }
-#manual-edit {
-  font-size: .82rem;
-  color: #8ab8ff;
-  text-decoration: none;
-  padding: 4px 10px;
-  border: 1px solid rgba(138, 184, 255, .25);
-  border-radius: 6px;
-}
-#manual-edit:hover { background: rgba(138, 184, 255, .08); }
 #manual-close {
   background: transparent;
   border: none;
