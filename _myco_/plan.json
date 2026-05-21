@@ -2298,7 +2298,7 @@
       "id": "fr-55",
       "text": "integrate lean-ctx to improve performance",
       "layer": "Feature",
-      "done": true,
+      "done": false,
       "addedAt": "2026-05-21T18:38:14.544Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2327,15 +2327,6 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-21T18:49:37.965Z"
           }
-        },
-        {
-          "id": "rs-6b5937178e8c",
-          "user": "claude",
-          "text": "**Shipped — Option A (sidecar MCP, opt-in tools).**\n\n### Validation results (all 5 unknowns resolved)\n\n| Unknown | Result |\n|---|---|\n| **License** | Apache-2.0 (commercially safe; verified via repo LICENSE fetch) |\n| **Network behavior at runtime** | No outbound calls observed in `lean-ctx doctor`. Binary downloaded once at Docker build time by the npm postinstall, then offline. |\n| **Memory footprint** | 10 MB current / 397 MB jemalloc cap. BM25 128 MB max, single embedding engine. Aggressive cleanup (5 min idle). |\n| **Token savings (real myco file)** | `server/src/agent-session.js` = 59,749 bytes → `ctx_read --mode map` = **256 bytes** (233× reduction); `--mode signatures` = 1,206 bytes (49× reduction). |\n| **Multi-arch** | Verified: `postinstall.js` picks `x86_64-unknown-linux-{gnu,musl}` or `aarch64-unknown-linux-{gnu,musl}` based on the build host. Works for amd64 + arm64. |\n| **Concurrent-session safety** | Deferred to post-deploy observation (can't fully validate without integration testing). `--project-root` is per-process and we spawn per-session, so isolation looks right by design. |\n\n### What landed\n\n| File | Change |\n|---|---|\n| `Dockerfile` | `npm install -g lean-ctx-bin` in runtime stage → symlink to `/usr/local/bin/lean-ctx` + smoke `--version`. Caddy install made arch-aware (`uname -m` → `amd64`/`arm64`) so image builds work on both x86 + ARM (was hardcoded amd64). |\n| `server/src/agent-session.js` | Added `'lean-ctx'` stdio MCP descriptor to `mcpServers` alongside `myco`. SDK spawns `lean-ctx mcp` per session with `CTX_PROJECT_ROOT=this.cwd` for cache scoping. |\n| `web/public/best-practices-template.md` | New top section \"## 0. Prefer ctx_* (lean-ctx) over built-in Read / Bash for context-only reads\" — auto-injects into each project's CLAUDE.md on spawn so the agent learns about the ctx_* tools. Spec: `map` for outline, `signatures` for API, `full` only when editing, `lines:N-M` for surgical reads. Built-in Edit/Write stay the right choice for writes. |\n| `.gitignore` | Added `.claude/settings.local.json` (lean-ctx writes PostToolUse hooks there; per-machine state shouldn't be tracked). |\n| `test/fr-55-lean-ctx-mcp.test.js` | 10 cases: Dockerfile install + symlink + smoke + arch-aware Caddy (4) · agent-session.js mcpServers entry + CTX_PROJECT_ROOT + myco-mcp coexistence (3) · BP template nudge content (2) · .gitignore (1). |\n| `test.sh` | Wired the new test after fr-54. |\n\n### Integration shape\n\n```mermaid\nflowchart LR\n    Agent[\"AgentSession<br/>(per session)\"]\n    MycoMCP[\"mcp__myco__*<br/>(in-process)\"]\n    LeanCTX[\"lean-ctx mcp<br/>(stdio, per session)\"]\n    Tools[\"Built-in:<br/>Read · Edit · Bash · …\"]\n    Agent --> MycoMCP\n    Agent --> LeanCTX\n    Agent --> Tools\n```\n\n### Why stdio + per-session vs HTTP daemon\n\n- `lean-ctx serve` is HTTP/SSE; `--project-root` is set once per daemon\n- Multi-session myco needs per-workspace cache scoping → would require N daemons + port mgmt\n- Stdio MCP (`lean-ctx mcp`) lets the SDK manage one process per session, scoped via `CTX_PROJECT_ROOT` env. Simpler lifecycle, correct isolation, no port collisions.\n\n### Fail-open design\n\nIf `lean-ctx` isn't on PATH (e.g. dev box without the Docker install), the SDK logs and continues — built-in Read/Bash still work. The agent loses the compression but the session doesn't break.\n\n### Post-deploy validation checklist\n\n1. `docker exec myco lean-ctx --version` returns `3.6.13`\n2. Spawn a fresh session → check the system_init event in events.jsonl for `mcp__lean-ctx__ctx_*` tools\n3. Read a large file twice with the agent — second read should be substantially faster (cache hit)\n4. Watch RSS on the container under concurrent load (3+ sessions)\n5. Check there are no `ETIMEDOUT` / `ENOTFOUND` errors → confirms lean-ctx isn't calling out\n\n### Out of scope for v1 (filed as future enhancements)\n\n- **Force-route** built-in Read/Bash through ctx (Option B). Adds coupling — defer until A proves itself.\n- **Server-side tool_result rewriting** (Option C). Hot-path risk.\n- **Per-session `lean-ctx setup`** to inject `.claude/rules/lean-ctx.md` into each project. The MCP tool descriptions already advertise the ctx_* surface; the rules file is icing.\n- **Auto-allow read-only `ctx_*` in permissions** — user can pick \"Allow always\" the first time each tool fires.\n- **`/leanctx-stats` slash command** wrapping `lean-ctx gain` so the team can see compression savings live.\n\n### Per CLAUDE.md pre-commit §1\n\nFull sweep — 59/59 individual test files green (`./test.sh` itself bails on the known BusyBox `grep -P` issue at `test_cache_busters`, unrelated).",
-          "ts": "2026-05-21T19:41:40.713Z",
-          "meta": {
-            "kind": "run-summary"
-          }
         }
       ],
       "runs": [
@@ -2346,9 +2337,7 @@
           "summary": "665.2s · 19→12493 tok",
           "result": "Both designs saved + pushed.\n\n**Two commits**:\n- `c61cd54` — fr-55 lean-ctx integration design (4 options + 5 unknowns + 7-step work plan)\n- `a6688c7` — fr-54 enhancement design (auto-detect git cwd via `findProjectRoot`)\n\n**Summary of the fr-54 enhancement findings** (full text on the item):\n\n**Problem**: `handleGit` runs git in `rec.absCwd` (workspace root), but the typical myco shape is `<wks>/<user>/<session>/<project>/.git` — so every `/git` command hits \"fatal: not a git repository.\"\n\n**Recommendation (Option A)**: reuse the existing `findProjectRoot(rec)` helper from `server/src/artifacts.js`. Same heuristic the `_myco_/` mirror + file-explorer git decorators already use → single source of truth.\n\n```js\nconst cwd = artifactsMod.findProjectRoot(rec) || rec.absCwd;\n```\n\n**Special cases**:\n- `git clone` / `git init` — force `cwd = rec.absCwd` (they CREATE a dir; running inside an existing repo is wrong)\n- Native `-C <dir>` still overrides per-call\n- Reply header surfaces the resolved subdir for transparency: `$ cd myco; git status` (only when ≠ absCwd)\n\n**4 options ranked**: A recommended (~10 LOC), B adds sticky `/git cd` preference (overkill), C does nothing (rely on `-C`), D recursive discovery (brittle).\n\n**Test plan**: `test/fr-54-git-cwd-resolution.test.js` — 8 cases (root/nested/multi-repo/none + clone/init + -C honored + reply header).\n\n**Status: design only, awaiting your pick of A/B/C/D before any code.**\n\n**You now have 38 commits ahead of last deploy.**"
         }
-      ],
-      "doneAt": "2026-05-21T19:41:40.713Z",
-      "doneBy": "claude"
+      ]
     },
     {
       "id": "bug-24",
@@ -2365,7 +2354,37 @@
         "originalText": "the queue display above the chat pane should show only some finished and some pending task. It shows all now which clutters the display",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-25",
+      "text": "**Problem:** UI renders `unknown_event` entries (with `× 2` dedupe badges) instead of properly handling unrecognized event types in the transcript stream.\n**Expected:** Unknown events are either rendered with a meaningful fallback view or filtered/logged gracefully.\n**Actual:** Raw `unknown_event` rows appear next to real entries (e.g., a Bash `scp ... && ssh ...` call), leaking internal event-type names to the user.\n**Context:** Repro payload begins `{\"ts\":\"2026-05-21T20...`; timestamps `04:00:10`; surfaces in the Bash tool-call transcript view.",
+      "layer": "Bug",
+      "done": true,
+      "addedAt": "2026-05-21T20:01:26.874Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "rs-2c382056b9b",
+          "user": "claude",
+          "text": "**Fixed.** `unknown_event` rows no longer leak into the chat pane.\n\n### Root cause\n\n`agent-session.js:669` wraps any SDK message type myco doesn't recognize as `_emit({ type: 'unknown_event', raw_type: m.type, raw: m })` — server-side passthrough so phase-2+ code can decide how to handle them, and so events.jsonl preserves the diagnostic record. Pre-fix, the client's render path fell through to:\n- `_chromeShortLabel` line 5088: `return ev.type || 'event'` → \"unknown_event\" literal in chrome batch head\n- `_chromeEventLine` line 4540: `let kind = ev.type || 'event'` + JSON dump in expanded body\n\nTwo adjacent `unknown_event` events would fold via the chrome batch (`unknown_event` was in `AGENT_CHROME_TYPES`), producing the `× 2 unknown_event` row the user reported.\n\n### Fix — surgical, two edits in app.js\n\n1. **Short-circuit at top of `_appendAgentEvent`** — `if (ev.type === 'unknown_event') { console.warn('[unknown_event]', ev.raw_type, ev.raw); return; }`. Fires BEFORE chrome routing so the event never lands in the DOM.\n2. **Removed `'unknown_event'`** from `AGENT_CHROME_TYPES` (consistency — the short-circuit makes the listing dead code). Trail-marker comment in the Set explains the omission to prevent a future \"tidy\" re-adding it.\n\n### What's preserved\n\n- **Server still emits** `unknown_event` → events.jsonl still records the diagnostic\n- **DevTools `console.warn`** with `[unknown_event]` marker keeps it visible to devs without polluting the user UI\n\n### Test\n\n`test/bug-25-unknown-event-suppress.test.js` — **7 cases**:\n- server origin still emits unknown_event (don't break diagnostics)\n- _appendAgentEvent has the short-circuit at the top (before chrome routing)\n- short-circuit returns (no fall-through)\n- console.warn surfaces it to devs\n- AGENT_CHROME_TYPES no longer lists unknown_event\n- trail-marker comment present\n- _chromeShortLabel still has the `ev.type || 'event'` fallback (documents WHY we short-circuit)\n\nWired into test.sh. Per CLAUDE.md pre-commit §1: full sweep — 61/61 individual test files green.",
+          "ts": "2026-05-21T20:13:17.079Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "handle unknow event like below properly: 04:00:10\n▸\n× 2\nunknown_event\n04:00:10\n$ Bash\n$ scp /tmp/myco-src.tgz kkrazy@myco.labxnow.ai:/tmp/myco-src.tgz && ssh kkrazy@myco.labxnow.ai 'set -e; rm -rf ~/myco-sr\n04:00:10\nunknown_event\n{\"ts\":\"2026-05-21T20",
+        "rewritten": true
+      },
+      "doneAt": "2026-05-21T20:13:17.079Z",
+      "doneBy": "claude"
     }
   ],
-  "updatedAt": "2026-05-21T19:41:40.713Z"
+  "updatedAt": "2026-05-21T20:13:17.079Z"
 }

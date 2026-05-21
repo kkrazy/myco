@@ -2598,6 +2598,12 @@ test_chat_window() {
   # chrome batch with tool_use + hook_allow. Added to
   # AGENT_DEFAULT_EXPANDED so the bubble shows expanded.
   node_test_result test/bug-23-tool-result-bubble.test.js "test/bug-23-tool-result-bubble.test.js (8 cases)"
+  # bug-25: unknown_event events (server-side passthrough for SDK
+  # message types myco doesn't recognize) used to leak into the
+  # chat pane as literal "unknown_event" rows + JSON dumps. Now
+  # _appendAgentEvent short-circuits them at the top with a
+  # console.warn (events.jsonl still records for diagnostics).
+  node_test_result test/bug-25-unknown-event-suppress.test.js "test/bug-25-unknown-event-suppress.test.js (7 cases)"
   # Sidebar user-manual link: icon button beside the "+" New-session
   # button opens an in-app modal that fetches /USER_MANUAL.md (served
   # by an explicit route since the file lives at the project root)

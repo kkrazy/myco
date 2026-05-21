@@ -4017,7 +4017,9 @@ const AGENT_CHROME_TYPES = new Set([
   'permission_request',
   'permission_resolved',
   'rate_limit',
-  'unknown_event',
+  // bug-25: unknown_event REMOVED from chrome — _appendAgentEvent
+  // short-circuits it before classification (see top-of-function
+  // block). Listing it here would be dead code.
   // bug-23: tool_result REMOVED from chrome — it now renders as a
   // claude-style message bubble (its own top-level card) rather
   // than folding into the chrome batch with tool_use + hook_allow.
@@ -4183,6 +4185,20 @@ function _localDayKey(iso) {
 }
 
 function _appendAgentEvent(ev) {
+  // bug-25: unknown_event is the server-side passthrough for SDK
+  // message types myco doesn't recognize (see agent-session.js's
+  // _handleEvent — `_emit({ type: 'unknown_event', raw_type: m.type,
+  // raw: m })`). The previous render path fell through to
+  // `ev.type || 'event'` and surfaced the literal string
+  // "unknown_event" in the chrome batch head + a JSON dump in the
+  // expanded body — leaking internal type names to the user. Skip
+  // rendering entirely; the event is still in events.jsonl for
+  // diagnostics, and a console warn() keeps it visible to devs
+  // without polluting the chat pane.
+  if (ev && ev.type === 'unknown_event') {
+    try { console.warn('[unknown_event]', ev.raw_type || '(no raw_type)', ev.raw); } catch {}
+    return;
+  }
   const pane = _ensureAgentLogPane();
   const ts = _localTs(ev.ts);
 
