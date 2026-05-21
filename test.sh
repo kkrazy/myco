@@ -2576,6 +2576,12 @@ test_chat_window() {
   # via npm postinstall) + arch-aware Caddy. Best-practices nudge
   # teaches the agent to prefer ctx_read for context-only reads.
   node_test_result test/fr-55-lean-ctx-mcp.test.js "test/fr-55-lean-ctx-mcp.test.js (10 cases)"
+  # deploy.sh post-deploy validation block: runs 5 advisory checks
+  # (lean-ctx --version + PATH + log errors + /USER_MANUAL.md HTTP
+  # + /vendor/codemirror.bundle.js HTTP) automatically after each
+  # successful deploy. Warnings only, never aborts. --skip-post-checks
+  # opts out. Static-grep guards on the function + flag + invocation.
+  node_test_result test/deploy-post-deploy-checks.test.js "test/deploy-post-deploy-checks.test.js (14 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

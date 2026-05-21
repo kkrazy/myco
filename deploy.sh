@@ -43,10 +43,15 @@ IMAGE="${MYCO_IMAGE_TAG:-myco:latest}"
 NAME="${MYCO_CONTAINER:-myco}"
 STATE_DIR="${MYCO_STATE_DIR:-/home/kkrazy/myco-state}"
 SKIP_TESTS=0
+SKIP_POST_CHECKS=0
 DRY_RUN=0
 ADD_ALLOW=""
 SET_OAUTH=""
 SET_ANTHROPIC_KEY=""
+
+# Populated by verify_deploy; consumed by post_deploy_checks so the
+# HTTP probes can hit the same domain the version-stamp probe used.
+RESOLVED_DOMAIN=""
 
 # Populated by open_ssh + build_image; consumed by later steps.
 SOCK=""
@@ -93,6 +98,7 @@ parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --skip-tests)            SKIP_TESTS=1; shift ;;
+      --skip-post-checks)      SKIP_POST_CHECKS=1; shift ;;
       --dry-run)               DRY_RUN=1; shift ;;
       --allow-github-user)     [ -n "${2:-}" ] || die "--allow-github-user requires a GitHub login"
                                ADD_ALLOW="$2"; shift 2 ;;
@@ -425,6 +431,8 @@ verify_deploy() {
   else
     domain=$(echo "$REMOTE" | sed 's/.*@//')
   fi
+  # Expose to post_deploy_checks so its HTTP probes hit the same host.
+  RESOLVED_DOMAIN="$domain"
   # Read the freshly-baked build stamp from the running container.
   # This is the SAME value the server (src/index.js indexHtml())
   # URL-encodes into the served `?v=…` token; comparing against the
@@ -457,6 +465,91 @@ verify_deploy() {
   [ "$served" = "$expected" ] \
     && ok "https://$domain/ serving app.js?v=$served (matches build.txt $expected_raw)" \
     || die "version mismatch: served '$served', container build.txt '$expected_raw' (URL-encoded '$expected') — stale container or routing layer caching?"
+}
+
+# Post-deploy validation — observability for things verify_deploy
+# doesn't cover (lean-ctx integration, auxiliary static routes).
+# Advisory only: warnings never abort the deploy (it's already
+# happened). Reports a final warning count so the operator knows
+# whether to investigate.
+#
+# Checks (cheap + automated only — soaking tests like RSS-under-load
+# or agent-actually-uses-ctx_read live in the manual playbook):
+#   1. lean-ctx binary present + version (fr-55)
+#   2. lean-ctx resolves on PATH inside the container (fr-55)
+#   3. No lean-ctx startup errors in `docker logs` (fr-55)
+#   4. /USER_MANUAL.md serves 200 (the sidebar book-icon route)
+#   5. /vendor/codemirror.bundle.js serves 200 (fr-50 editor bundle)
+#
+# Skip with --skip-post-checks for tight deploy loops where the
+# operator will run validation manually.
+post_deploy_checks() {
+  if [ "$SKIP_POST_CHECKS" = "1" ]; then
+    printf "(skipping post-deploy validation — --skip-post-checks)\n"
+    return 0
+  fi
+  step "Post-deploy validation"
+  local warnings=0
+  local domain="$RESOLVED_DOMAIN"
+
+  # ── 1. lean-ctx binary version (fr-55) ──
+  local lean_ctx_version
+  lean_ctx_version=$(remote "docker exec $NAME lean-ctx --version 2>&1" 2>/dev/null | head -1 | tr -d '\r')
+  if echo "$lean_ctx_version" | grep -qE '^lean-ctx [0-9]+\.[0-9]+'; then
+    ok "lean-ctx: $lean_ctx_version"
+  else
+    warn "lean-ctx --version failed in container — fr-55 compression layer is NOT active. Got: '${lean_ctx_version:-<empty>}'. Check Dockerfile install + npm postinstall logs."
+    warnings=$((warnings + 1))
+  fi
+
+  # ── 2. lean-ctx PATH resolution (fr-55) ──
+  local lean_ctx_path
+  lean_ctx_path=$(remote "docker exec $NAME which lean-ctx 2>/dev/null || true" 2>/dev/null | head -1 | tr -d '\r')
+  if [ -n "$lean_ctx_path" ]; then
+    ok "lean-ctx on PATH at: $lean_ctx_path"
+  else
+    warn "lean-ctx NOT on PATH inside container — the SDK's stdio MCP spawn (\`command: \"lean-ctx\"\`) will fail with ENOENT. Check the Dockerfile symlink to /usr/local/bin/lean-ctx."
+    warnings=$((warnings + 1))
+  fi
+
+  # ── 3. No lean-ctx startup errors in container logs (fr-55) ──
+  # Tail last 200 lines to scope to the current container's recent
+  # startup; older runs are bind-mounted away by the container swap.
+  local err_count
+  err_count=$(remote "docker logs --tail 200 $NAME 2>&1 | grep -iE 'lean-ctx.*(failed|error|ENOENT|ECONNREFUSED|ETIMEDOUT)' | wc -l" 2>/dev/null | tr -d ' \r\n')
+  if [ "${err_count:-0}" = "0" ]; then
+    ok "no lean-ctx errors in container logs (last 200 lines)"
+  else
+    warn "found $err_count lean-ctx error line(s) in container logs — run: docker logs --tail 200 $NAME | grep -i lean-ctx"
+    warnings=$((warnings + 1))
+  fi
+
+  # ── 4. /USER_MANUAL.md serves 200 (sidebar book icon) ──
+  local manual_status
+  manual_status=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://$domain/USER_MANUAL.md" 2>/dev/null || echo '???')
+  if [ "$manual_status" = "200" ]; then
+    ok "/USER_MANUAL.md serves 200"
+  else
+    warn "/USER_MANUAL.md returned HTTP $manual_status — the sidebar book icon will show 'Could not load the user manual'. Check the GET /USER_MANUAL.md route in server/src/index.js + Dockerfile COPY USER_MANUAL.md."
+    warnings=$((warnings + 1))
+  fi
+
+  # ── 5. /vendor/codemirror.bundle.js serves 200 (fr-50 editor) ──
+  local cm_status
+  cm_status=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$domain/vendor/codemirror.bundle.js" 2>/dev/null || echo '???')
+  if [ "$cm_status" = "200" ]; then
+    ok "/vendor/codemirror.bundle.js serves 200"
+  else
+    warn "/vendor/codemirror.bundle.js returned HTTP $cm_status — the in-app editor will fall back to textarea. Check that npm run build:editor ran + the bundle is checked in."
+    warnings=$((warnings + 1))
+  fi
+
+  printf "\n"
+  if [ "$warnings" -gt 0 ]; then
+    printf "  ! %d post-deploy warning(s). Deploy succeeded; investigate above.\n" "$warnings" >&2
+  else
+    ok "all post-deploy checks passed"
+  fi
 }
 
 # ─── main ────────────────────────────────────────────────────────────────────
@@ -498,6 +591,7 @@ main() {
   stream_image
   swap_container
   verify_deploy
+  post_deploy_checks
 
   printf "\n✓ Deployed %s to %s (state: %s)\n" "$IMAGE" "$REMOTE" "$STATE_DIR"
 }
