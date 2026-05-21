@@ -87,13 +87,6 @@ Sidebar + chat are mutually exclusive (overlay). Back icon ☰ toggles. Re-tappi
 | Queue stalls | `/qcancel <id>` to drop stuck head + auto-advance |
 | Chat input blocked (red ring) | Guest-restricted text; use `@mention` or guest-allowed slash command |
 
-## Where things live
-
-- Session registry: `/data/sessions.json` · Workspaces: `/wks/<user>/<id>/`
-- Plan / arch / test artifacts: `<workspace>/_myco_/` (**git-tracked — state moves with the code**)
-- Auth + tokens: `/data/auth-sessions.json` + `/data/git-tokens.json`
-- Allowlist: `/data/allowed-github-users.txt`
-
 ## Reporting
 
 `/bug <description>` or `/fr <description>` — lands in `_myco_/plan.json`, gets ranked by `/next`, shipped via the run-queue. The team gets indefinite shared memory of every reported problem; new teammates inherit it the moment they clone the project.
