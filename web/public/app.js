@@ -5555,6 +5555,7 @@ const _GUEST_ALLOWED_CMDS = new Set([
   '/task', '/tasks', '/skip', '/cancel', // task-list controls
   '/allowlist',                           // read-only view of allow/deny lists
   '/qstatus',                             // read-only run-queue inspection (fr-48)
+  '/whatsnext', '/next',                  // read-only priority list (fr-49)
 ]);
 function _isGuestAllowedText(text) {
   const s = String(text || '').trim();

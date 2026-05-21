@@ -2541,6 +2541,15 @@ test_chat_window() {
   # the existing files.js writeFile mtime gate still rejects stale
   # writes with ERR_MTIME_CONFLICT → HTTP 409.
   node_test_result test/fr-50-file-editor.test.js "test/fr-50-file-editor.test.js (17 cases)"
+  # fr-49: /whatsnext + /next priority list. Heuristic scoring
+  # (voters/comments/layer-bias/recency/run-failure) picks a top-20
+  # shortlist; LLM rerank (best-effort, falls back to heuristic on
+  # any failure) reorders by reading item text. Cached in
+  # plan.whatsNext with a 2-hour refresh-on-read TTL. Read-only;
+  # /whatsnext + /next are guest-allowed slash commands (mirror in
+  # both attach.js GUEST_ALLOWED_CMDS and app.js _GUEST_ALLOWED_CMDS
+  # so the Send button stays enabled for read-only viewers).
+  node_test_result test/fr-49-whatsnext.test.js "test/fr-49-whatsnext.test.js (24 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real

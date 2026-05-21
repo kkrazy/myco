@@ -168,6 +168,16 @@ const COMMANDS = [
     usage: '/qresume',
     handler: handleQResume,
   },
+  // fr-49: heuristic+LLM "what's next" priority list. Read-only;
+  // anyone attached can call it (mirrors /qstatus). Cached in
+  // plan.whatsNext with a 2-hour TTL; regenerates on read when stale
+  // (or on `--refresh` / `force` arg). Open to guests like /qstatus.
+  {
+    names: ['whatsnext', 'next'],
+    summary: 'Show the top-ranked open plan items (heuristic + LLM rerank, cached 2h). Append `force` to regenerate now.',
+    usage: '/whatsnext · /next · /next force',
+    handler: handleWhatsNext,
+  },
   {
     names: ['help'],
     summary: 'List available chat commands',
@@ -1386,6 +1396,58 @@ function handleQResume(ctx) {
     return;
   }
   ctx.reply(`✓ Queue unpaused — dispatching \`${next.itemId}\` now.`);
+}
+
+// fr-49: /whatsnext + /next. Owner-or-guest read; mutates plan.whatsNext
+// on cache miss/refresh (saveStore inside). Output format is a numbered
+// list of the top RETURN_N items with score, layer, and a one-line
+// snippet. Each line also surfaces the heuristic "reasons" so the user
+// can tell why a fr ranked above a bug (or vice versa).
+async function handleWhatsNext(ctx) {
+  const whatsnext = require('./whatsnext');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/whatsnext: session not found)'); return; }
+  const plan = rec.artifacts && rec.artifacts.plan;
+  if (!plan || !Array.isArray(plan.items) || !plan.items.length) {
+    ctx.reply('Plan is empty — nothing to rank. Add items with /td /fr /bug.');
+    return;
+  }
+  const force = /^(force|--?refresh|refresh)\b/i.test(String(ctx.args || '').trim());
+  const cwd = (ctx && ctx.absCwd) || (rec && rec.cwd) || process.cwd();
+
+  let cache;
+  try {
+    cache = await whatsnext.getCachedOrGenerate(rec, cwd, { force });
+  } catch (err) {
+    ctx.reply(`⚠ /whatsnext failed: ${err.message || err}`);
+    return;
+  }
+  sessionsMod.saveStore();
+  // Broadcast so other attached clients pick up the cached list
+  // (the plan artifact updated; UIs reading plan.whatsNext can refresh).
+  if (ctx.session && typeof ctx.session.emit === 'function') {
+    ctx.session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: plan });
+  }
+
+  if (!cache || !Array.isArray(cache.items) || cache.items.length === 0) {
+    ctx.reply('No open items to rank — everything is either done or already in the run-queue.');
+    return;
+  }
+
+  const generatedAt = cache.generatedAt;
+  const ageMin = Math.max(0, Math.round((Date.now() - Date.parse(generatedAt)) / 60000));
+  const ageNote = ageMin < 1 ? 'just now' : `${ageMin}m ago`;
+  const llmTag = cache.llmReranked ? '(LLM reranked)' : '(heuristic only — LLM rerank unavailable)';
+  const header = `**What's next** — ${cache.items.length} ranked · generated ${ageNote} ${llmTag}`;
+  const rows = cache.items.map((s, i) => {
+    const reasons = Array.isArray(s.reasons) && s.reasons.length ? ` · _${s.reasons.join(', ')}_` : '';
+    const snippet = s.snippet ? s.snippet : '';
+    return `  **${i + 1}.** \`${s.id}\` [${s.layer || '?'}] · score ${s.score}${reasons}\n     ${snippet}`;
+  });
+  const footer = force
+    ? '\n_Regenerated on demand. Cache TTL is 2h; next read after that will re-rank._'
+    : '\n_Cached 2h. Append `force` to /whatsnext or /next to regenerate now._';
+  ctx.reply([header, ...rows].join('\n') + footer);
 }
 
 function handleHelp(ctx) {

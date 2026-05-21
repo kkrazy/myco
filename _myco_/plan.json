@@ -2056,7 +2056,7 @@
       "id": "fr-49",
       "text": "**Problem:** No surfaced queue of \"what to implement next\" — priorities have to be re-derived manually each session.\n**Expected:** A list of suggested next items ranked by priority and importance, refreshed periodically by myco every 2 hours.\n**Actual:** No such list exists; suggestions are ad-hoc.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-20T09:51:21.993Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2069,13 +2069,24 @@
           "user": "kkrazy",
           "text": "the list should be persisted in plan.json and displayed via /whatsnext command in the chat pane, suggest a better shortcut for \"whatsnext\"",
           "ts": "2026-05-20T09:52:51.413Z"
+        },
+        {
+          "id": "rs-f60f09236c68",
+          "user": "claude",
+          "text": "**Shipped.** `/whatsnext` (alias **`/next`**) returns a ranked list of open plan items, cached in `plan.whatsNext` with a 2-hour refresh-on-read TTL.\n\n### Architecture\n\n```mermaid\nflowchart LR\n  call[\"/whatsnext\\nor /next\"] --> handle[\"handleWhatsNext\"]\n  handle --> getCached[\"whatsnext.getCachedOrGenerate\"]\n  getCached --> fresh{\"< 2h old?\"}\n  fresh -->|yes| reply[\"chat reply\"]\n  fresh -->|no| heur[\"computeHeuristicShortlist\\n(top 20 by score)\"]\n  heur --> llm[\"rerankWithLLM\\nvia btw.runClaudeP\"]\n  llm -->|ok| persist[\"plan.whatsNext = {items, generatedAt, llmReranked:true}\"]\n  llm -->|timeout/fail| persistH[\"plan.whatsNext = {items, generatedAt, llmReranked:false}\"]\n  persist --> reply\n  persistH --> reply\n```\n\n### Heuristic scoring (`server/src/whatsnext.js`)\n\n| Factor | Weight | Notes |\n|---|---|---|\n| Each unique voter | **+3.0** | Strongest signal of intent |\n| Each comment | +1.0 (capped at 5) | Diminishing returns so chatty items don't dominate |\n| Layer bias | Bug 2.0 · Feature 1.0 · Todo 0.5 | Bug > Feature > Todo by default |\n| Fresh (<7d) | **+2.0** | Recency boost |\n| Stale (>90d) | **−0.5** | Decay penalty |\n| Last run failed/aborted | **−1.5** | Stuck items shouldn't lead |\n| Done / in-queue | excluded | No re-suggesting completed or already-queued work |\n\nEach entry surfaces its **reasons** array (e.g. `\"2 voters (+6.0), Bug bias (+2.0), fresh <7d (+2.0)\"`) so the user can see WHY an item ranked where it did.\n\n### LLM rerank (best-effort)\n\nTop 20 heuristic candidates → `btw.runClaudeP` (in-process SDK side-channel, 60s timeout, no tools, no chat pollution) with a rubric: user-facing bugs first, then small unblock-other-work fixes, then engagement-heavy features, then cleanup. The parser:\n- accepts `1. id` / `1) id` / `- id` / bare `id` forms\n- **rejects hallucinated ids** (any id not in the input list is discarded)\n- dedups + appends omitted ids at the tail in heuristic order so nothing disappears\n\nAny LLM failure (timeout, no key, garbage reply) falls back to the heuristic order silently — `/whatsnext` always returns something useful.\n\n### Slash command (`/whatsnext` + `/next`)\n\n- Read-only — works for owners, admins, AND read-only guests (added to both `attach.js GUEST_ALLOWED_CMDS` and `app.js _GUEST_ALLOWED_CMDS` per the bug-19 send-button-gate mirror contract)\n- `/next force` (or `--refresh`) regenerates ignoring cache\n- Reply format: numbered top-10 entries with score · layer · reasons · snippet, header includes \"generated Nm ago\" + LLM-vs-heuristic tag, footer reminds about the cache TTL\n\n### Discoverability suggestion\n\nYou asked me to suggest a better shortcut — **`/next`** (4 chars, intuitive, conflict-free with the queue-namespaced /q* commands). Primary alias; `/whatsnext` is the more discoverable secondary. Both fire `handleWhatsNext`.\n\n### Test\n\n`test/fr-49-whatsnext.test.js` — **24 cases**:\n- 10 heuristic scoring cases (done-excluded, in-queue-excluded, layer bias, voter weight, comment cap, recency boost, stale penalty, run-failure penalty, limit honored, reasons surfaced)\n- 5 LLM rerank parser cases (numbered list, bare ids, hallucination rejection, dedup, surrounding chatter tolerance)\n- 3 cache TTL cases (fresh cache returned, stale regenerated, force=true bypasses)\n- 6 wiring guards (handler registered, both names, guest whitelist on server + client, defaults sanity)\n\nAll green in isolation + full `./test.sh` sweep (52/52 individual test files; `./test.sh` itself bails only on the known-environmental BusyBox `grep -P` issue at `test_cache_busters` — unrelated).\n\n### Phase B (NOT in this commit) — possible follow-ups\n\n- Surface `plan.whatsNext` in the Plan tab as a pinned \"Next up\" section so users don't have to type the command\n- Background cron refresh (currently refresh-on-read; if you want the cache always-warm, a 2h timer would do it but burns LLM tokens when no one is looking)\n- \"Why this rank?\" hover tooltip showing the reasons array in the UI",
+          "ts": "2026-05-21T00:20:52.006Z",
+          "meta": {
+            "kind": "run-summary"
+          }
         }
       ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "add a list of items suggested to be implemented next based on priority and importance. the list should be done peoroidically by myco every 2 hours.",
         "rewritten": true
-      }
+      },
+      "doneAt": "2026-05-21T00:20:52.006Z",
+      "doneBy": "claude"
     },
     {
       "id": "fr-50",
@@ -2162,7 +2173,39 @@
           "ts": "2026-05-20T20:53:45.281Z"
         }
       ]
+    },
+    {
+      "id": "td-30",
+      "text": "**Problem:** The label \"Plan - todos extracted from session\" is too long and misleads users about what the view contains.\n**Expected:** A single-word label that conveys the view shows todos, feature requests, and bugs.\n**Actual:** Header reads \"Plan - todos extracted from session\".",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-21T00:13:15.642Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "change \"Plan - todos extracted from session\" to a single word to show this view shows todo/feature request/bugs.",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-53",
+      "text": "**Problem:** AskUserQuestion permission prompts show generic titles like \"allow bash\" that don't convey what the agent is actually trying to do.\n**Expected:** Title reflects the actual action requiring the permission, e.g. \"Running tests (requires bash)\", \"Checking out code (requires git)\", \"Deploying to remote server (requires ssh)\".\n**Actual:** Title only names the tool/permission being requested, with no task context.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-21T00:20:23.951Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the ask user question title should reflect what's acutally happenning instead of just something like \"allow bash\", it should indicate something like: we are running test requiring bash, we are checking out code requiring git, we are deploying code requiring ssh to remote server, etc.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-21T00:02:09.798Z"
+  "updatedAt": "2026-05-21T00:20:52.006Z"
 }
