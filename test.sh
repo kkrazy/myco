@@ -2616,9 +2616,15 @@ test_chat_window() {
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
   # rewrites the doc and drops it.
-  grep -qF '## Project Purpose' architecture.md \
-    && pass "architecture.md: Project Purpose section present" \
-    || fail "architecture.md: Project Purpose section missing — the why-Mycelium statement is gone"
+  # Root architecture.md was rewritten to lead with "## Thesis" (the
+  # 2026-05-21 doc refresh in commit 66b9dcf). The _myco_/ mirror is
+  # the legacy/extractor copy and still uses the older "## Project
+  # Purpose" heading — eventually it'll sync to the root rewrite. Both
+  # are checked separately so each file is pinned against its current
+  # canonical shape.
+  grep -qF '## Thesis' architecture.md \
+    && pass "architecture.md: Thesis section present (post-refresh)" \
+    || fail "architecture.md: Thesis section missing — the why-myco statement is gone"
   grep -qF '## Project Purpose' _myco_/architecture.md \
     && pass "_myco_/architecture.md: Project Purpose mirror present" \
     || fail "_myco_/architecture.md: Project Purpose mirror missing — the Arch tab will fall out of sync with root"

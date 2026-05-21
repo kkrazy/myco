@@ -15,7 +15,8 @@
 // for now each .write() spawns a fresh query() with resume=sdkSessionId,
 // which is one extra RTT per turn but keeps the implementation small.
 //
-// See agent-sdk-migration-plan.md on this branch for the full phasing.
+// SDK migration is complete (Phase 9 retired the PTY driver). See
+// CLAUDE.md "Code Style §2" for the SDK-only invariant.
 
 const { EventEmitter } = require('events');
 const crypto = require('crypto');

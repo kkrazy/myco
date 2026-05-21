@@ -55,4 +55,4 @@ if ! curl -sf "http://127.0.0.1:$TEST_PORT/" -o /dev/null 2>/dev/null; then
 fi
 
 # 4. Run browser tests
-TEST_URL="http://127.0.0.1:$TEST_PORT" node tests/browser/render.test.js
+TEST_URL="http://127.0.0.1:$TEST_PORT" node test/browser/render.test.js
