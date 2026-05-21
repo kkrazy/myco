@@ -8,4 +8,9 @@ nohup.out
 .tls/
 .tls.bak.*
 .claude/scheduled_tasks.lock
+# fr-55: lean-ctx + the Claude SDK both write per-machine state
+# (Allow-always picks, lean-ctx PostToolUse hooks) into
+# .claude/settings.local.json. Keep it untracked so it doesn't
+# bleed across machines / users.
+.claude/settings.local.json
 _myco_/logs/

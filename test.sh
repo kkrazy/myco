@@ -2568,6 +2568,14 @@ test_chat_window() {
   # block. Includes a shlex-style arg splitter unit test + end-to-end
   # smoke against a real tempdir git repo.
   node_test_result test/fr-54-git-passthrough.test.js "test/fr-54-git-passthrough.test.js (17 cases)"
+  # fr-55: lean-ctx (Rust MCP sidecar that compresses file reads +
+  # shell output before they hit the LLM context — 60 KB JS file
+  # → ~250 bytes via `ctx_read --mode map`). Option A integration:
+  # stdio MCP, SDK spawns one `lean-ctx mcp` per session scoped by
+  # CTX_PROJECT_ROOT. Dockerfile: install lean-ctx-bin (multi-arch
+  # via npm postinstall) + arch-aware Caddy. Best-practices nudge
+  # teaches the agent to prefer ctx_read for context-only reads.
+  node_test_result test/fr-55-lean-ctx-mcp.test.js "test/fr-55-lean-ctx-mcp.test.js (10 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

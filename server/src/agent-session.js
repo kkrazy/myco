@@ -328,8 +328,24 @@ class AgentSession extends EventEmitter {
         // claude can call. Currently: mcp__myco__add_plan_items
         // appends items to plan.json. Per-session so the tool
         // handlers can scope mutations to THIS session via closure.
+        //
+        // fr-55: lean-ctx is a stdio MCP sidecar that compresses file
+        // reads / shell output before they hit the LLM context (default
+        // mode ~250× smaller than raw on a 60 KB JS file). The SDK
+        // spawns one `lean-ctx mcp` process per session so each gets
+        // its own cache + project-root scope. cwd=this.cwd anchors
+        // relative paths the agent passes to ctx_read. If the binary
+        // isn't on PATH (e.g. dev box without the Dockerfile install),
+        // the SDK logs and continues — built-in Read/Bash still work,
+        // so this fails OPEN, not closed.
         mcpServers: {
           myco: require('./myco-mcp').createMycoMcpServer(this.sessionId),
+          'lean-ctx': {
+            type: 'stdio',
+            command: 'lean-ctx',
+            args: ['mcp'],
+            env: { ...process.env, CTX_PROJECT_ROOT: this.cwd },
+          },
         },
       };
       if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;

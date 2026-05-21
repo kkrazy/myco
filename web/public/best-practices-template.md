@@ -4,6 +4,31 @@ These guidelines are auto-injected at the top of the Architecture pane.
 Toggle them off via the **Best practices** checkbox in the Arch tab if
 they don't apply to this project.
 
+## 0. Prefer `ctx_*` (lean-ctx) over built-in Read / Bash for context-only reads
+
+The `lean-ctx` MCP server is wired into every session and exposes
+`mcp__lean-ctx__ctx_*` tools that compress file reads + shell output
+dramatically before they hit the context (a 60 KB JS file becomes
+~250 bytes via `ctx_read --mode map`). Use them by default for
+**context-gathering** reads:
+
+- **`ctx_read <path> --mode map`** — file outline / API surface only.
+  Use when you just want to know what a file does.
+- **`ctx_read <path> --mode signatures`** — class + function signatures.
+  Use when you need to call into a file but don't need bodies.
+- **`ctx_read <path> --mode full`** — same as built-in Read. Use ONLY
+  when you're about to edit the file (full body needed for Edit).
+- **`ctx_read <path> --mode lines:N-M`** — surgical line range.
+
+For editing, the built-in `Edit` / `Write` tools are still the right
+choice (no compression on the write path; lean-ctx's edit modes are
+fallback only).
+
+For shell, `ctx_shell <cmd>` filters the noisy bits of common output
+(git, npm, cargo, etc.) before returning. Use it interchangeably
+with Bash for read-mostly invocations (`git log`, `npm test`, `cargo
+check`); use Bash when you need the raw stream verbatim.
+
 ## 1. Refactor opportunistically — high cohesion, low coupling
 
 Every change is also a chance to simplify. Look for ways to:
