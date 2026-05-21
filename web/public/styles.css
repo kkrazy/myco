@@ -958,6 +958,32 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #login-github:hover { background: #2f363d; }
 #login-github:active { transform: scale(.98); }
 #login-github svg { display: block; }
+/* GitHub OAuth disabled-for-now styling. .disabled-soon mutes the
+   button, kills the hover lift, and disables the press transform.
+   The struck-through label + the amber "Soon" badge communicate
+   "this works but isn't wired up yet — use the PAT form below." */
+#login-github.disabled-soon {
+  background: #1c2025;
+  color: #9aa4b1;
+  cursor: not-allowed;
+  opacity: .75;
+}
+#login-github.disabled-soon:hover { background: #1c2025; }
+#login-github.disabled-soon:active { transform: none; }
+#login-github.disabled-soon svg { opacity: .6; }
+#login-github .soon-badge {
+  display: inline-block;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(246, 180, 138, 0.18);
+  color: #f6b48a;
+  border: 1px solid rgba(246, 180, 138, 0.35);
+  margin-left: 2px;
+}
 .login-fineprint { color: var(--muted); font-size: .8rem; margin: 4px 0 0; line-height: 1.45; }
 .login-fineprint a { color: #8ab8ff; }
 .login-fineprint code {

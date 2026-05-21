@@ -2566,6 +2566,10 @@ test_chat_window() {
   # crowded the chrome and misled users — the view shows todos AND
   # features AND bugs, not just todos).
   node_test_result test/td-30-plan-label-single-word.test.js "test/td-30-plan-label-single-word.test.js (3 cases)"
+  # Login: "Sign in with GitHub" disabled-for-now with strikethrough +
+  # Soon badge until OAuth is wired up. Click + keyboard activation
+  # neutralized so it can't try to navigate to /auth/github/start.
+  node_test_result test/login-github-soon-badge.test.js "test/login-github-soon-badge.test.js (6 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
