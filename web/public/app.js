@@ -1114,6 +1114,7 @@ function _resetUiForNewSession(id) {
   state.permModalDismissed = false;
   state._lastPermQueueLen = 0;
   state._agentChatPaneArmed = false;         // re-arm auto-open for the next agent frame
+  state.chatUserScrolledUp = false;          // bug-26: fresh session starts at the bottom
   // Hide the modal if it was open for the previous session.
   const modal = document.getElementById('perm-modal');
   if (modal) modal.hidden = true;
@@ -1393,7 +1394,11 @@ function setChatPane(visible) {
       document.getElementById('btn-expand').hidden = false;
     }
     // List was 0-height while hidden — pin to the bottom now it has dimensions.
-    scrollChatToLatest();
+    // bug-26: clear chatUserScrolledUp + force-scroll so opening the
+    // pane always lands at the latest message, even if a previous
+    // session left the user scrolled-up.
+    state.chatUserScrolledUp = false;
+    scrollChatToLatest({ force: true });
     // Reset unread badge: opening the pane = user is looking at the
     // latest content. (Bumped by _bumpChatUnreadIfHidden whenever a
     // claude message arrives while the pane is collapsed.)
@@ -2538,9 +2543,26 @@ function clearChat() {
 // has settled. Without rAF, scrollTop=scrollHeight is a no-op when the
 // chat pane is still display:none / 0-height (initial mobile load, or
 // while a session-switch is in progress).
-function scrollChatToLatest() {
+//
+// bug-26: respect the user's scroll position — if they've scrolled UP
+// to read earlier messages, suppress the auto-scroll-to-latest so a
+// newly-arriving message doesn't yank them back to the bottom. The
+// CHAT_SCROLL_BOTTOM_THRESHOLD constant defines "near the bottom"
+// (50px is the standard browser-affordance for "user is following the
+// stream" vs "user has actively scrolled up"). Callers that genuinely
+// must scroll (user opened the pane, switched sessions, etc.) pass
+// `{ force: true }` to bypass.
+const CHAT_SCROLL_BOTTOM_THRESHOLD = 50;
+function _chatUserIsAtBottom(list) {
+  // 0-height / not-yet-laid-out lists are treated as "at bottom" so the
+  // initial render-before-display-flip path still pins to latest.
+  if (!list || list.clientHeight === 0) return true;
+  return (list.scrollHeight - list.scrollTop - list.clientHeight) < CHAT_SCROLL_BOTTOM_THRESHOLD;
+}
+function scrollChatToLatest({ force = false } = {}) {
   const list = document.getElementById('chat-messages');
   if (!list) return;
+  if (!force && state.chatUserScrolledUp) return;
   // Fire BOTH synchronously and on the next rAF. Synchronous covers
   // the case where the pane already has its final height (typical
   // for re-render after a state change); rAF covers the case where
@@ -5694,6 +5716,20 @@ function bindChatUi() {
   if (!form || !input) return;
   if (form.dataset.bound) return;
   form.dataset.bound = '1';
+
+  // bug-26: track whether the user has manually scrolled up so
+  // auto-scroll-to-latest can be suppressed. Updated on every
+  // scroll event; consumed by scrollChatToLatest. passive listener
+  // because we only read scroll positions, never preventDefault.
+  // Bound once (form.dataset.bound guards against double-bind on
+  // re-init), so the listener survives session switches.
+  const messages = document.getElementById('chat-messages');
+  if (messages && !messages.dataset.scrollBound) {
+    messages.dataset.scrollBound = '1';
+    messages.addEventListener('scroll', () => {
+      state.chatUserScrolledUp = !_chatUserIsAtBottom(messages);
+    }, { passive: true });
+  }
 
   // Auto-grow the textarea with content, up to the CSS max-height (then scroll).
   // We reset to 'auto' first so shrinking works after a backspace/clear.

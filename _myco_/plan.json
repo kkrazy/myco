@@ -2343,7 +2343,7 @@
       "id": "bug-24",
       "text": "**Problem:** Queue display above the chat pane is cluttered because it shows every task.\n**Expected:** Show only some finished and some pending tasks.\n**Actual:** Shows all tasks.",
       "layer": "Bug",
-      "done": true,
+      "done": false,
       "addedAt": "2026-05-21T19:12:20.016Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2352,12 +2352,13 @@
       ],
       "comments": [
         {
-          "id": "rs-c155d57f1827",
+          "id": "159b2ba09c8d",
           "user": "claude",
-          "text": "**Fixed.** Queue chip strip now caps at **2 finished + all running + 3 pending** with overflow indicators.\n\n### Behavior\n\nReading order matches queue chronology: finished → running → pending. For a busy queue (e.g. 5 finished + 1 running + 8 pending) the strip now shows:\n\n`Queue: [+3 earlier] [✓ f-3] [✓ f-4] [⚙ r-0] [⏸ p-0] [⏸ p-1] [⏸ p-2] [+5 more]`\n\n8 visual elements (6 real chips + 2 overflow) instead of the 14 chips it would have rendered before. `/qstatus` still surfaces the full list — nothing's lost, just hidden from the live strip.\n\n### Implementation\n\n`web/public/app.js `_renderRunQueueStrip``:\n- Two constants at the top: `RUNQUEUE_MAX_FINISHED_CHIPS = 2` · `RUNQUEUE_MAX_PENDING_CHIPS = 3`\n- Partition entries by status (`success/failed/cancelled` = finished, `running`, `pending`)\n- `finishedShown = finished.slice(-MAX_FINISHED)` — TAIL (most recent finishes matter)\n- `pendingShown = pending.slice(0, MAX_PENDING)` — HEAD (next-up matters)\n- Running entries always all-shown (usually 0 or 1)\n- Drop counts → `+N earlier` / `+N more` overflow chips with tooltip pointing at `/qstatus`\n\n`web/public/styles.css `.runqueue-overflow``: dashed border + muted color + `cursor: help` so the overflow chip reads as informational, not clickable.\n\n### Test\n\n`test/bug-24-runqueue-strip-cap.test.js` — **12 cases**:\n- 3 cap-constant guards (finished=2, pending=3, FINISHED_STATUSES set)\n- 6 partition-logic guards (partition by status, tail/head slicing, drop counts, overflow render, reading order)\n- 1 CSS guard (.runqueue-overflow visually distinct)\n- 2 simulation cases (busy: 5+1+8 → 2+1+3 + 2 overflow; small: 1+1+1 → no overflow)\n\nWired into test.sh. Subagent verified all 127 cases across the chip-strip-adjacent surface (bug-21, bug-25, fr-48 family, plan-*) stay green.",
-          "ts": "2026-05-21T22:45:31.777Z",
+          "text": "✓ success · 313.1s · $23.2192 · 24↓/14325↑\n\n**bug-24 fixed** as `bed56c6`.\n\n**Behavior change** (busy queue example — 5 finished + 1 running + 8 pending):\n\nBefore: `Queue: [✓ f-0] [✓ f-1] [✓ f-2] [⚠ f-3] [✓ f-4] [⚙ r-0] [⏸ p-0] [⏸ p-1] [⏸ p-2] [⏸ p-3] [⏸ p-4] [⏸ p-5] [⏸ p-6] [⏸ p-7]` (14 chips)\n\nAfter: `Queue: [+3 earlier] [⚠ f-3] [✓ f-4] [⚙ r-0] [⏸ p-0] [⏸ p-1] [⏸ p-2] [+5 more]` (6 real chips + 2 overflow)\n\n**Mechanics**:\n- `RUNQUEUE_MAX_FINISHED_CHIPS = 2` · `RUNQUEUE_MAX_PENDING_CHIPS = 3` — constants at top of `_renderRunQueueStrip`, easy to tune\n- Finished uses `slice(-2)` (TAIL — most recent matters); pending uses `slice(0, 3)` (HEAD — next-up matters); running is uncapped (usually 0 or 1 anyway)\n- Reading order: finished → running → pending matches the queue's chronology\n- `.runqueue-overflow` chips have dashed border + m…",
+          "ts": "2026-05-21T22:45:45.221Z",
           "meta": {
-            "kind": "run-summary"
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-21T22:40:31.923Z"
           }
         }
       ],
@@ -2368,13 +2369,13 @@
       },
       "runs": [
         {
-          "status": "running",
-          "ts": "2026-05-21T22:40:31.923Z",
-          "summary": null
+          "status": "success",
+          "ts": "2026-05-21T22:45:45.221Z",
+          "startedAt": "2026-05-21T22:40:31.923Z",
+          "summary": "313.1s · 24→14325 tok",
+          "result": "**bug-24 fixed** as `bed56c6`.\n\n**Behavior change** (busy queue example — 5 finished + 1 running + 8 pending):\n\nBefore: `Queue: [✓ f-0] [✓ f-1] [✓ f-2] [⚠ f-3] [✓ f-4] [⚙ r-0] [⏸ p-0] [⏸ p-1] [⏸ p-2] [⏸ p-3] [⏸ p-4] [⏸ p-5] [⏸ p-6] [⏸ p-7]` (14 chips)\n\nAfter: `Queue: [+3 earlier] [⚠ f-3] [✓ f-4] [⚙ r-0] [⏸ p-0] [⏸ p-1] [⏸ p-2] [+5 more]` (6 real chips + 2 overflow)\n\n**Mechanics**:\n- `RUNQUEUE_MAX_FINISHED_CHIPS = 2` · `RUNQUEUE_MAX_PENDING_CHIPS = 3` — constants at top of `_renderRunQueueStrip`, easy to tune\n- Finished uses `slice(-2)` (TAIL — most recent matters); pending uses `slice(0, 3)` (HEAD — next-up matters); running is uncapped (usually 0 or 1 anyway)\n- Reading order: finished → running → pending matches the queue's chronology\n- `.runqueue-overflow` chips have dashed border + muted color + `cursor: help` → reads as informational, not clickable\n- `/qstatus` still shows the full list — nothing's lost, just hidden from the live strip\n\n**Test**: `test/bug-24-runqueue-strip-cap.test.js` — 12 cases. Full sweep across the chip-strip-adjacent surface (bug-21, bug-25, fr-48 family, plan-*) — 127/127 green.\n\n**43 commits ahead of last deploy.**"
         }
-      ],
-      "doneAt": "2026-05-21T22:45:31.777Z",
-      "doneBy": "claude"
+      ]
     },
     {
       "id": "bug-25",
@@ -2426,18 +2427,50 @@
       "id": "bug-26",
       "text": "**Problem:** Auto-scroll-to-latest interrupts the user when they've manually scrolled up to read earlier messages.\n**Expected:** If the user has manually scrolled up, suppress auto-scroll-to-latest so they can keep reading.\n**Actual:** New messages force a scroll to the bottom regardless of the user's scroll position.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-21T22:44:13.696Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "rs-7692d9039d84",
+          "user": "claude",
+          "text": "**Fixed.** Auto-scroll-to-latest now respects the user's scroll position.\n\n### Behavior\n\n- User at bottom (or within 50px) → new messages still pin to latest, as before.\n- User scrolled up to read earlier messages → new messages **leave them in place**.\n- User scrolls back near the bottom → next message resumes auto-scroll.\n- User opens the chat pane / switches session → always lands at the latest (user-initiated event → `{ force: true }` bypass).\n\n### Implementation\n\n`web/public/app.js`:\n\n1. New constant `CHAT_SCROLL_BOTTOM_THRESHOLD = 50` (standard browser-affordance cutoff for \"user is following the stream\" vs \"user has scrolled up\").\n2. New helper `_chatUserIsAtBottom(list)` — returns true when within 50px of the bottom. 0-height list (display:none / pre-layout) returns true so initial render-before-display-flip still pins.\n3. `scrollChatToLatest({ force = false } = {})` — short-circuits when `state.chatUserScrolledUp && !force`. Default destructure so existing call sites stay compatible.\n4. Scroll listener on `#chat-messages` (passive, bind-once-guarded) sets `state.chatUserScrolledUp = !_chatUserIsAtBottom(list)` on every scroll event.\n5. `setChatPane(true)` clears `chatUserScrolledUp` BEFORE calling `scrollChatToLatest({ force: true })` — opening the pane is a user action that wants the latest view.\n6. `_resetUiForNewSession` clears `chatUserScrolledUp` so a new session starts at the bottom.\n\n### What's NOT changed (intentional)\n\n- Existing call sites (`renderChatPane` with `scrollToBottom`, etc.) keep their default-no-force behavior. The CALLER says \"I think we should scroll\"; the USER's scroll preference wins. This means even when the agent appends a new tool_result, if the user is reading older content, they're not yanked.\n- No \"↓ N new\" indicator yet — if the user finds the suppression too aggressive without one, that's a follow-up fr.\n\n### Test\n\n`test/bug-26-chat-auto-scroll-suppress.test.js` — **13 cases**:\n- 4 `scrollChatToLatest` guards (signature, short-circuit, threshold constant, helper math)\n- 4 `bindChatUi` listener guards (element, state update, passive, bind-once)\n- 2 state-reset guards (`setChatPane` clears + force-scrolls, `_resetUiForNewSession` clears)\n- 3 threshold-math simulations (near-bottom, scrolled-200px-up, 0-height)\n\nWired into test.sh. Subagent verified all 63 individual test files pass — no regressions in chat-pane tests (chat-history-window, chat-persistence-contract, chat-routing, agent-replay-dedup, persist-assistant-chat).",
+          "ts": "2026-05-21T23:22:25.633Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "dont scroll to the latest message if user already manually scroll up so that user can continue to read what they are reading",
         "rewritten": true
+      },
+      "doneAt": "2026-05-21T23:22:25.633Z",
+      "doneBy": "claude"
+    },
+    {
+      "id": "bug-27",
+      "text": "**Problem:** Switching sessions leaks the queue UI into other sessions.\n**Expected:** Each session's queue stays scoped to that session.\n**Actual:** After switching sessions, the queue from the previous session shows up on other sessions.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-21T23:09:07.607Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "when switching session, the queue show up on other sessions",
+        "rewritten": true
       }
     }
   ],
-  "updatedAt": "2026-05-21T22:45:31.777Z"
+  "updatedAt": "2026-05-21T23:22:25.633Z"
 }

@@ -2609,6 +2609,11 @@ test_chat_window() {
   # Dropped counts surface as "+N earlier" / "+N more" overflow chips;
   # /qstatus still shows the full list (no data loss).
   node_test_result test/bug-24-runqueue-strip-cap.test.js "test/bug-24-runqueue-strip-cap.test.js (12 cases)"
+  # bug-26: auto-scroll-to-latest respects the user's scroll position.
+  # If they've scrolled up to read earlier messages, new messages no
+  # longer yank them back to the bottom. Pane open + session switch
+  # bypass the guard via { force: true }.
+  node_test_result test/bug-26-chat-auto-scroll-suppress.test.js "test/bug-26-chat-auto-scroll-suppress.test.js (13 cases)"
   # Sidebar user-manual link: icon button beside the "+" New-session
   # button opens an in-app modal that fetches /USER_MANUAL.md (served
   # by an explicit route since the file lives at the project root)
