@@ -2178,17 +2178,31 @@
       "id": "td-30",
       "text": "**Problem:** The label \"Plan - todos extracted from session\" is too long and misleads users about what the view contains.\n**Expected:** A single-word label that conveys the view shows todos, feature requests, and bugs.\n**Actual:** Header reads \"Plan - todos extracted from session\".",
       "layer": "Todo",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-21T00:13:15.642Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "rs-f963ca135577",
+          "user": "claude",
+          "text": "**Shipped.** Renamed both label spots in `web/public/index.html` to just **\"Plan\"**:\n\n1. Chrome icon tooltip: `<button id=\"btn-plan\" title=\"Plan\" ...>` (was `\"Plan — todos extracted from this session\"`)\n2. Artifact view header: `<span class=\"artifact-title\">Plan</span>` (was `\"Plan — todos extracted from session\"`)\n\nPicked \"Plan\" over \"Backlog\"/\"Issues\" for consistency — the rest of myco (chrome icon `aria-label`, `plan.json` file, `/whatsnext` artifact, `[run:plan#<id>]` marker, architecture doc) already uses \"Plan\" everywhere. Zero re-onboarding cost.\n\n**Test**: `test/td-30-plan-label-single-word.test.js` — 3 cases (tooltip exact match · header exact match · defense-in-depth check that the old \"todos extracted from session\" string is fully removed from the HTML so a copy/paste regression can't sneak back in). Wired into `test.sh`.\n\nFull `./test.sh` sweep: all 54 individual test files green (`./test.sh` itself bails only on the known-environmental BusyBox `grep -P` issue at `test_cache_busters` — unrelated).",
+          "ts": "2026-05-21T02:53:43.373Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "change \"Plan - todos extracted from session\" to a single word to show this view shows todo/feature request/bugs.",
         "rewritten": true
-      }
+      },
+      "doneAt": "2026-05-21T02:53:43.373Z",
+      "doneBy": "claude"
     },
     {
       "id": "fr-53",
@@ -2205,7 +2219,23 @@
         "originalText": "the ask user question title should reflect what's acutally happenning instead of just something like \"allow bash\", it should indicate something like: we are running test requiring bash, we are checking out code requiring git, we are deploying code requiring ssh to remote server, etc.",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-23",
+      "text": "**Problem:** Chat pane fragments a single Claude turn across separate bubbles instead of grouping tool output into one \"claude\" message bubble.\n**Expected:** Tool results inside a Chrome batch (e.g. Read + result) render together inside the parent \"claude\" message bubble for that turn.\n**Actual:** The turn header, session metadata, Read tool call, hook-allow, and result body each render as their own top-level rows rather than nested inside the claude bubble.\n**Context:** Repro shown with `📖 Read USER_MANUAL.md` turn — `▶ turn`, `▶ session`, `📖 Read`, `✓ hook allow`, and `✓ result · 4132 bytes` all appear as sibling rows.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-21T02:34:46.905Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "chat pane is not showing the result in the proper bubble format. the result that is in the chrome batch should should show together in the \"claude\" message bubble. the following is what's shown right now: show me the content first\n\n10:32:06\n▸\n× 5\n✓ result · 4132 bytes\n10:32:06\n▶ turn\nshow me the content first\n10:32:06\n▶ session\nsdk=dbf05893 · model=claude-opus-4-7[1m]\n10:32:10\n📖 Read\n/wks/kkrazy/myco-kkrazy-f80476dd/myco/USER_MANUAL.md\n10:32:10\n✓ hook allow\nRead\n10:32:10\n✓ result\n4132 bytes · for=j82o6rsD\n1\t# myco — User Manual\n2\t\n3\tMobile web UI for [Claude Code](https://github.com/anthropics/claude-code) sessions. Spawn, watch, type back, share, track work.\n4\t\n5\t## Quick start\n6\t\n7\t1. Sign in with GitHub at `https://myco.labxnow.ai` (invitation-only).\n8\t2. **+ New session** in the sidebar → chat opens → type to Claude.\n9\t\n10\t## Roles\n11\t\n12\t- **Owner** — full control (you spawned it).\n13\t- **Admin** — granted via `/admin <login>`. Same as owner minus delete + admin grants.\n14\t- **Guest** (share-link / non-allowlisted) — read + `@mention` + file plan items. Send button auto-disables for blocked input.\n15\t\n16\t## Plan items — `/td` `/fr` `/bug`\n17\t\n18\t```\n19\t/td bump node in dockerfile           Todo\n20\t/fr add dark-mode toggle              Feature\n21\t/bug load-older loops past page 5     Bug\n22\t/bug! <text>                          ask Claude to rewrite into Problem/Expected/Actual\n23\t```\n24\t\n25\tEach item supports: 👍 vote · 💬 comment · ✎ edit (owner/admin) · ▶ Run (label varies: Fix/Implement/Do) · Close/Reopen. Run queues the dispatch — Claude posts a `meta.kind:run-summary` comment back when done.\n26\t\n27\t## Run queue (`/queue ...` and the chip strip)\n28\t\n29\t| Command | What |\n30\t|---|---|\n31\t| `/queue fr-43 bug-21` | Add to queue (auto-dispatches if idle) |\n32\t| `/qstatus` | Print current state (guest-allowed) |\n33\t| `/qcancel <id>` | Remove entry; auto-advances if it was the running head |\n34\t| `/qresume` | Unpause after auto-pause-on-failure |\n35\t| `/qclear` | Drop every pending |\n36\t\n37\t## What's next — `/next` (or `/whatsnext`)\n38\t\n39\tRanked list of open items: heuristic (voters ×3, comments capped at 5, Bug>Feature>Todo, fresh +2 / stale −0.5, last-run failure −1.5) + LLM rerank. Cached 2h in `plan.whatsNext`. Append `force` to regenerate now.\n40\t\n41\t## Files + editor\n42\t\n43\t📁 chrome icon → tree → click any text file. Owner/admin sees **✎ Edit** in the file viewer header. Click to open CodeMirror 6 (syntax highlight, line numbers, search, fold, oneDark). **Cmd/Ctrl+S** save · **Esc** cancel.\n44\t\n45\tOn 409 conflict (file changed on disk): modal offers **↻ Reload** / **⚠ Force overwrite** / **✕ Cancel**. Your edits are never silently lost.\n46\t\n47\t## Chat\n48\t\n49\t- Plain text → Claude. `@user` → discussion (not Claude). `/cmd` → slash command.\n50\t- **Stop button** (red square in header) — interrupts in-flight turn; type to continue.\n51\t- **Permission modal** appears when Claude wants a tool. Pick **Allow once / always / Deny**.\n52\t\n53\t## Slash commands (full)\n54\t\n55\t**Guest-allowed**: `/help` · `/me` · `/whoami` · `/td` `/fr` `/bug` · `/task` `/tasks` `/skip` `/cancel` · `/allowlist` · `/qstatus` · `/whatsnext` `/next`\n56\t\n57\t**Owner/admin only**: `/admin` · `/queue` `/qcancel` `/qclear` `/qresume` · `/btw` (side-channel Claude) · `/feature` `/bug` (open GitHub issue) · `/setpat <token>` (per-repo PAT)\n58\t\n59\t## Mobile (≤900px)\n60\t\n61\tSidebar + chat are mutually exclusive (overlay). Back icon ☰ toggles. Re-tapping the same session card restores the chat pane.\n62\t\n63\t## Troubleshooting\n64\t\n65\t| Symptom | Fix |\n66\t|---|---|\n67\t| `connecting…/reconnecting…` loop | Try incognito (clears HTTP/3 `alt-svc`); WSS is being stripped by firewall/VPN |\n68\t| \"Not invited yet\" | Ask host to add your GitHub login to `allowed-github-users.txt` |\n69\t| `/feature` \"no token\" | Sign out + in (refreshes `repo` scope) OR `/setpat <token>` |\n70\t| ✎ Edit hidden | Hard-refresh (cached `app.js`); check you're not in viewer mode |\n71\t| Queue",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-21T00:20:52.006Z"
+  "updatedAt": "2026-05-21T02:53:43.373Z"
 }

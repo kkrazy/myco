@@ -2561,6 +2561,11 @@ test_chat_window() {
   # both attach.js GUEST_ALLOWED_CMDS and app.js _GUEST_ALLOWED_CMDS
   # so the Send button stays enabled for read-only viewers).
   node_test_result test/fr-49-whatsnext.test.js "test/fr-49-whatsnext.test.js (24 cases)"
+  # td-30: Plan view header + chrome icon tooltip must be the single
+  # word "Plan" (was "Plan — todos extracted from session" which both
+  # crowded the chrome and misled users — the view shows todos AND
+  # features AND bugs, not just todos).
+  node_test_result test/td-30-plan-label-single-word.test.js "test/td-30-plan-label-single-word.test.js (3 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
