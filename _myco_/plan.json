@@ -2254,7 +2254,7 @@
       "id": "fr-54",
       "text": "**Problem:** No `/git` command exists to run git subcommands (clone, config, login, fetch, …) directly from within the tool.\n**Expected:** `/git <args>` passes through to the underlying `git` CLI and returns its output as-is.\n**Actual:** Users must shell out manually; git operations aren't available as a first-class slash command.",
       "layer": "Feature",
-      "done": true,
+      "done": false,
       "addedAt": "2026-05-21T18:13:48.020Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2263,12 +2263,13 @@
       ],
       "comments": [
         {
-          "id": "rs-5a6f2691f3de",
+          "id": "30f5de6fab16",
           "user": "claude",
-          "text": "**Shipped.** `/git <args>` runs git in the session workspace and returns its output as-is.\n\n### Spec\n\n- **Auth**: owner + admin only (matches `/queue` / `/admin` precedent). Guests get a denial reply.\n- **Passthrough**: no allowlist, no subcommand filtering. `/git status`, `/git log --oneline -10`, `/git clone https://…`, `/git fetch origin`, `/git push` — all work the same as `git <args>` in a shell.\n- **Cwd**: the session's `absCwd` (the workspace dir under `/wks/<user>/<id>/`).\n- **Safety**: `execFile` (not `exec`) so args go through argv, not shell — no injection. `GIT_TERMINAL_PROMPT=0` so git NEVER blocks on a credential prompt (it'll fail fast instead).\n- **Caps**: 60s timeout · 1 MB stdout · 16 KB stderr.\n- **Output**: markdown code-fenced block with `$ git <args>` header, stdout, stderr (if any), and an exit-code footer (`(exit 0)` / `(exit code N)` / `⚠ git timed out after 60s`).\n\n### Arg parsing\n\nTiny shlex-style splitter (`_parseShellArgs`): whitespace-split, honors double + single quotes, supports `\\\\` and `\\\"` escapes inside double quotes. Examples:\n\n- `/git commit -m \"fix: bug X\"` → `['commit', '-m', 'fix: bug X']`\n- `/git log --format=\"%h %s\" -n 3` → `['log', '--format=%h %s', '-n', '3']`\n\nPower users wanting full shell semantics can wrap with `sh -c` themselves.\n\n### Auth for private repos\n\nV1 doesn't auto-inject PATs into URLs. Use one of:\n- `/setpat <token>` first (saves a per-repo PAT for /feature, /bug — does NOT yet flow into /git clone URLs)\n- Embed PAT in URL: `/git clone https://x-access-token:<PAT>@github.com/owner/repo.git`\n- Pre-configure git credential helper at the container level\n\nA follow-up could auto-rewrite `git clone https://github.com/owner/repo` to include the stored PAT if the host matches a known token. Filed as future enhancement, not in scope.\n\n### `git config --global` caveat\n\nMutates the container's shared `$HOME`, affecting all sessions. NOT blocked (consenting adults), but the usage text flags it. Use `git config` (no `--global`) for project-scoped config.\n\n### Test\n\n`test/fr-54-git-passthrough.test.js` — **17 cases**:\n- 7 arg-splitter cases (simple split, whitespace collapse, double-quoted phrase, single-quoted phrase, backslash escape, empty input, mixed quoted/unquoted)\n- 2 registration guards (COMMANDS entry + handleGit function exists)\n- 6 handler-guard static-greps (isOwnerOrAdmin gate, cwd=rec.absCwd, execFile, timeout/maxBuffer/GIT_TERMINAL_PROMPT, usage on empty args, exit-code in reply)\n- 2 end-to-end async cases (real tempdir git repo: `git status` returns clean output; `git log` in non-repo dir surfaces stderr)\n\nWired into `test.sh`. Per CLAUDE.md pre-commit §1: full sweep — 58/58 individual test files green; `./test.sh` itself bails only on the known-environmental BusyBox `grep -P` issue (unrelated).",
-          "ts": "2026-05-21T18:26:29.698Z",
+          "text": "✓ success · 740.6s · $10.9025 · 24↓/16798↑\n\n**Shipped** as `75ab9ba`.\n\n**Try it after the next deploy**:\n\n```\n/git status\n/git log --oneline -10\n/git diff HEAD~3\n/git fetch origin\n/git commit -m \"fix: bug X\"\n/git clone https://x-access-token:<PAT>@github.com/owner/repo.git\n```\n\n**Spec highlights**:\n- **Owner + admin only** (guest gate matches the `/queue` pattern)\n- **Full passthrough** — no allowlist, no filtering\n- **execFile (not exec)** — args go through argv, zero shell-injection surface\n- **60s timeout · 1 MB stdout · 16 KB stderr · `GIT_TERMINAL_PROMPT=0`** so it fails fast instead of hanging on a credential prompt\n- **shlex-style arg parsing** — quotes, escapes, whitespace handled\n- **Output**: code-fenced block with `$ git <args>` header, stdout, stderr (if any), exit-code footer\n\n**Private repos (v1)**: use `/setpat <to…",
+          "ts": "2026-05-21T18:26:45.510Z",
           "meta": {
-            "kind": "run-summary"
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-21T18:14:24.742Z"
           }
         }
       ],
@@ -2277,9 +2278,51 @@
         "originalText": "add a git support of /git which supports clone/config/login/fetch... basically running git cmd as is",
         "rewritten": true
       },
-      "doneAt": "2026-05-21T18:26:29.698Z",
-      "doneBy": "claude"
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-21T18:26:45.510Z",
+          "startedAt": "2026-05-21T18:14:24.742Z",
+          "summary": "740.6s · 24→16798 tok",
+          "result": "**Shipped** as `75ab9ba`.\n\n**Try it after the next deploy**:\n\n```\n/git status\n/git log --oneline -10\n/git diff HEAD~3\n/git fetch origin\n/git commit -m \"fix: bug X\"\n/git clone https://x-access-token:<PAT>@github.com/owner/repo.git\n```\n\n**Spec highlights**:\n- **Owner + admin only** (guest gate matches the `/queue` pattern)\n- **Full passthrough** — no allowlist, no filtering\n- **execFile (not exec)** — args go through argv, zero shell-injection surface\n- **60s timeout · 1 MB stdout · 16 KB stderr · `GIT_TERMINAL_PROMPT=0`** so it fails fast instead of hanging on a credential prompt\n- **shlex-style arg parsing** — quotes, escapes, whitespace handled\n- **Output**: code-fenced block with `$ git <args>` header, stdout, stderr (if any), exit-code footer\n\n**Private repos (v1)**: use `/setpat <token>` (saves a per-repo PAT, used today by `/feature` and `/bug`) OR embed in URL `https://x-access-token:<PAT>@github.com/owner/repo`. Auto-rewriting clone URLs to inject stored PATs is a possible follow-up.\n\n**`git config --global` caveat**: mutates the container's shared `$HOME` and bleeds across sessions. NOT blocked — consenting adults — but the usage text flags it.\n\n**Test**: 17/17 (7 arg-splitter + 2 registration + 6 handler-guard + 2 end-to-end against a real tempdir git repo). Full sweep 58/58 green.\n\n**You now have 34 commits ahead of last deploy.**"
+        }
+      ]
+    },
+    {
+      "id": "fr-55",
+      "text": "integrate lean-ctx to improve performance",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-21T18:38:14.544Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "913d3ef255a2",
+          "user": "kkrazy",
+          "text": "https://github.com/yvgude/lean-ctx",
+          "ts": "2026-05-21T18:39:09.186Z"
+        },
+        {
+          "id": "478ce1260b85",
+          "user": "kkrazy",
+          "text": "Provide a deaign first before implement",
+          "ts": "2026-05-21T18:49:33.097Z"
+        },
+        {
+          "id": "rs-17734cec97c1",
+          "user": "claude",
+          "text": "# fr-55 — lean-ctx integration design\n\n## What lean-ctx is (verified from the repo)\n\n- **Rust MCP (Model Context Protocol) server**, CLI + daemon. v3.6.13, 2k stars, ~daily releases since launch.\n- Compresses LLM context: file reads `~2000 tok → ~13 tok` via caching, shell output `~800 → ~120` via pattern modules. Tree-sitter AST for 21 langs.\n- Exposes **62+ MCP tools** prefixed `ctx_*` (e.g. `ctx_read`, `ctx_refactor`, `ctx_agent`, `ctx_handoff`). Connects via MCP to \"Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini and 23+ other agents.\"\n- Install paths: Homebrew, npm (`lean-ctx-bin`), Cargo, AUR. Quickstart is `curl … | sh; lean-ctx setup; lean-ctx doctor; lean-ctx gain --live`.\n\n## Where it would plug into myco\n\nmyco already speaks MCP — `server/src/myco-mcp.js` is the in-process MCP server we run today. The Anthropic Agent SDK's `query()` accepts `mcpServers` config. lean-ctx is \"just another MCP server\" from the SDK's POV.\n\n```mermaid\nflowchart LR\n    Agent[\"AgentSession<br/>(@anthropic-ai/claude-agent-sdk)\"]\n    MycoMCP[\"myco-mcp.js<br/>(in-process)\"]\n    LeanCTX[\"lean-ctx serve<br/>(sidecar process)\"]\n    Tools[\"Built-in tools:<br/>Read, Edit, Bash, …\"]\n    Agent -->|MCP| MycoMCP\n    Agent -->|MCP NEW| LeanCTX\n    Agent --> Tools\n```\n\n## Four integration shapes (pick one before any code)\n\n### A — Sidecar MCP, opt-in tools  *(lowest risk, fastest to ship, RECOMMENDED for v1)*\n\n- Add lean-ctx to the Docker image via `npm install -g lean-ctx-bin` in the Dockerfile builder stage.\n- Run `lean-ctx serve` as a sibling process inside the container, started by `docker-entrypoint.sh` next to mycod.\n- Register it as a second MCP server in the Agent SDK's `mcpServers` option for every `query()` call.\n- **No changes to built-in Read/Bash.** Agent sees 62 new `ctx_*` tools alongside the existing ones. If the agent picks `ctx_read` (or we nudge it in CLAUDE.md), we get the compression. Otherwise behavior is identical to today.\n\n**Pros**: smallest blast radius. Reversible by removing the mcpServer entry. Easy A/B (run a fresh session with `lean-ctx serve` killed to compare).\n\n**Cons**: agent might keep using built-in Read out of habit; need a CLAUDE.md nudge to push it toward `ctx_*`. No guaranteed token savings — depends on the agent's tool choice.\n\n### B — Auto-route Read/Bash through lean-ctx\n\n- Same as A, plus configure the SDK's `allowedTools` to *exclude* the built-in `Read` and `Bash` tools. Agent is forced to use `ctx_read` / `ctx_shell`.\n- Always-on compression.\n\n**Pros**: guaranteed savings, no agent-behavior dependency.\n\n**Cons**: high coupling. If lean-ctx breaks (process crash, version regression), agent has no fallback for file reads. Multiple existing tests assume Read/Bash exist. fr-43 retry / fr-44 resume-failure / fr-45 SDK-opts lint all reference the built-in tools.\n\n### C — Server-side tool_result rewriting\n\n- Keep built-in Read/Bash. Intercept `tool_result` content in `agent-session.js` and pipe through `lean-ctx pack` before the SDK sees it.\n- Agent doesn't even need to know lean-ctx exists.\n\n**Pros**: zero behavior change for the agent.\n\n**Cons**: most invasive (touches `agent-session.js` hot path); risks information loss if `pack`'s compression strips something the agent actually needs; harder to debug (\"why doesn't the agent see what I see in the chat?\").\n\n### D — Full integration (per-session setup + session memory + handoff)\n\n- All of A, plus: run `lean-ctx setup` in each spawned workspace, wire CCP session memory into `_myco_/`, use `ctx_handoff` between concurrent sessions on the same project.\n\n**Pros**: maximum leverage of lean-ctx's feature surface.\n\n**Cons**: weeks of work, multiple unknowns. Defer until A proves itself.\n\n## Touchpoints if we go with A\n\n| File | Change |\n|---|---|\n| `Dockerfile` | Install `lean-ctx-bin` via npm in builder stage; copy binary to runtime stage |\n| `docker-entrypoint.sh` | Start `lean-ctx serve` as background process; supervise with the existing mycod startup |\n| `server/src/agent-session.js` | Add lean-ctx to `mcpServers` in the `query()` options. ~5 lines. |\n| `server/src/permissions.js` | Auto-allow read-only `ctx_*` tools (`ctx_read`, `ctx_signatures`, `ctx_gain`, etc.) to avoid spamming permission menus |\n| `web/public/best-practices-template.md` | Add a one-liner steering the agent: \"For file reads + shell output, prefer `ctx_*` MCP tools when available — they compress context dramatically.\" Auto-injects into project CLAUDE.md on next spawn. |\n| `_myco_/architecture.md` | Document the integration shape |\n| `test/fr-55-lean-ctx-mcp.test.js` | Verify Dockerfile installs it, entrypoint starts it, mcpServers config references it |\n\n## Unknowns to validate BEFORE coding\n\n1. **License** — is lean-ctx OSS-compatible with myco's commercial deploy? (the README doesn't mention it; need to check `LICENSE` in the repo)\n2. **Network behavior** — does `lean-ctx serve` call out to leanctx.com (analytics, license check, model API)? Container is locked down; outbound calls might break.\n3. **Memory footprint** — Rust daemon's RSS. Container is shared across sessions; if it allocates GB-scale state per project this won't scale.\n4. **Concurrent session safety** — myco can run N agent sessions in parallel against the same workspace. Does lean-ctx daemon serialize / scope properly?\n5. **Token-savings claim** — \"2000 → 13\" is a marketing number. Worth measuring on real myco workloads (e.g. read `server/src/agent-session.js` — what's the actual compression ratio?).\n\n## Success criteria for v1 (Option A)\n\n- `lean-ctx doctor` returns green in the container after deploy\n- A spawned session shows `ctx_*` tools in `system_init.tools`\n- Token meter shows measurable reduction on a controlled test (e.g. \"/git diff HEAD~5\" then ask the agent to summarize — before/after lean-ctx)\n- No regressions in `./test.sh`\n- Permission-menu noise stays manageable (i.e., auto-allow list is right)\n\n## Numbered work plan (if Option A is greenlit)\n\n1. **Verify license + ship constraints** — read `LICENSE` in the lean-ctx repo, check if network egress is needed. *verify: write up findings before any code.*\n2. **Dockerfile + entrypoint** — install lean-ctx-bin in builder; copy binary to runtime; start `lean-ctx serve` in entrypoint with supervision. *verify: `docker exec myco lean-ctx doctor` returns green.*\n3. **SDK wiring** — add lean-ctx to `mcpServers` in `agent-session.js query()` options. *verify: spawn a fresh session, check `system_init.tools` includes `ctx_*` entries.*\n4. **Permissions** — extend the auto-allow list in `permissions.js` to cover read-only `ctx_*` tools. *verify: read-only ctx tool fires without permission prompt; write tools still prompt.*\n5. **CLAUDE.md nudge** — append a one-line preference for `ctx_*` to `best-practices-template.md`. *verify: re-spawn lands the nudge in the project's CLAUDE.md.*\n6. **Test** — `test/fr-55-lean-ctx-mcp.test.js` pinning Dockerfile + entrypoint + mcpServers config + auto-allow list. *verify: full ./test.sh green.*\n7. **A/B measurement** — run a controlled workload (read a 2000-line file, summarize) with lean-ctx on/off; report token deltas in the run-summary comment.\n\n---\n\n**Status**: design only, awaiting your pick of A / B / C / D before any code change.",
+          "ts": "2026-05-21T19:02:07.587Z",
+          "meta": {
+            "kind": "design"
+          }
+        }
+      ]
     }
   ],
-  "updatedAt": "2026-05-21T18:26:29.698Z"
+  "updatedAt": "2026-05-21T19:02:07.587Z"
 }
