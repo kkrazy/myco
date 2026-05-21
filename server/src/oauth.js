@@ -10,6 +10,8 @@
 // This lets test.sh exercise the callback handler end-to-end without a real
 // OAuth round-trip or network egress from the container.
 
+const https = require('https');
+
 const SCOPES = 'read:user user:email repo';
 
 function _bypassLogin() {
@@ -42,6 +44,28 @@ function startUrl(state) {
   return `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
 
+// Helper for JSON requests via https module (works with global-agent proxy)
+function _httpsJson({ hostname, path, method, headers, body }) {
+  return new Promise((resolve, reject) => {
+    const payload = body == null ? '' : (typeof body === 'string' ? body : JSON.stringify(body));
+    const hdrs = { ...headers };
+    if (payload) hdrs['Content-Length'] = Buffer.byteLength(payload);
+    const req = https.request({ hostname, path, method, headers: hdrs, timeout: 15000 }, (res) => {
+      let chunks = '';
+      res.on('data', (d) => { chunks += d.toString(); });
+      res.on('end', () => {
+        let parsed = {};
+        try { parsed = chunks ? JSON.parse(chunks) : {}; } catch {}
+        resolve({ status: res.statusCode, body: parsed });
+      });
+    });
+    req.on('error', (err) => reject(err));
+    req.on('timeout', () => { try { req.destroy(); } catch {}; reject(new Error('timeout')); });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 async function exchangeCode(code) {
   const bypass = _bypassLogin();
   if (bypass) {
@@ -54,24 +78,29 @@ async function exchangeCode(code) {
     return { access_token: `test-token-${usableCode}`, token_type: 'bearer', scope: SCOPES };
   }
 
-  const res = await fetch('https://github.com/login/oauth/access_token', {
+  const result = await _httpsJson({
+    hostname: 'github.com',
+    path: '/login/oauth/access_token',
     method: 'POST',
     headers: {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
       'User-Agent': 'myco/1.0',
     },
-    body: JSON.stringify({
+    body: {
       client_id: process.env.MYCO_GH_CLIENT_ID,
       client_secret: process.env.MYCO_GH_CLIENT_SECRET,
       code,
       redirect_uri: callbackUrl(),
-    }),
+    },
   });
-  if (!res.ok) throw new Error(`github token exchange failed: HTTP ${res.status}`);
-  const body = await res.json();
-  if (!body.access_token) throw new Error(`github token exchange returned no access_token: ${body.error || ''}`);
-  return body;
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`github token exchange failed: HTTP ${result.status}`);
+  }
+  if (!result.body.access_token) {
+    throw new Error(`github token exchange returned no access_token: ${result.body.error || ''}`);
+  }
+  return result.body;
 }
 
 async function fetchUser(accessToken) {
@@ -89,15 +118,20 @@ async function fetchUser(accessToken) {
     };
   }
 
-  const res = await fetch('https://api.github.com/user', {
+  const result = await _httpsJson({
+    hostname: 'api.github.com',
+    path: '/user',
+    method: 'GET',
     headers: {
       'Authorization': `token ${accessToken}`,
       'Accept': 'application/vnd.github+json',
       'User-Agent': 'myco/1.0',
     },
   });
-  if (!res.ok) throw new Error(`github /user failed: HTTP ${res.status}`);
-  return res.json();
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`github /user failed: HTTP ${result.status}`);
+  }
+  return result.body;
 }
 
 module.exports = { isConfigured, startUrl, exchangeCode, fetchUser };

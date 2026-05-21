@@ -1,3 +1,6 @@
+// Bootstrap global-agent early so http/https modules auto-respect proxy env vars.
+// This must come before any other requires that might use http/https.
+require('global-agent/bootstrap');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');

@@ -313,9 +313,9 @@ class AgentSession extends EventEmitter {
         // Same for plansDirectory: ExitPlanMode plans land in the
         // session's .claude/plans/ instead of $HOME/.claude/plans/, so
         // each session's plan artifacts stay co-located with the
-        // session's workspace. settingSources excludes 'user' so the
-        // shared $HOME/.claude/settings.json doesn't leak across
-        // sessions; project + local remain so .claude/settings.json +
+        // session's workspace. settingSources includes 'user' so the
+        // SDK picks up auth credentials from $HOME/.claude/settings.json.
+        // project + local remain so .claude/settings.json +
         // .claude/settings.local.json inside the session folder still
         // drive per-project config.
         settings: {
@@ -323,7 +323,7 @@ class AgentSession extends EventEmitter {
           autoMemoryDirectory: path.join(this.cwd, '.claude', 'memory'),
           plansDirectory: path.join(this.cwd, '.claude', 'plans'),
         },
-        settingSources: ['project', 'local'],
+        settingSources: ['project', 'local', 'user'],
         // myco's own in-process MCP server exposes server-side tools
         // claude can call. Currently: mcp__myco__add_plan_items
         // appends items to plan.json. Per-session so the tool
