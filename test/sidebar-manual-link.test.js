@@ -143,6 +143,17 @@ t('server route smoke: file exists at the path the route reads', () => {
     'USER_MANUAL.md must start with the expected "# myco" heading');
 });
 
+t('Dockerfile copies USER_MANUAL.md into the image', () => {
+  // Without this COPY the file ships in dev (where __dirname/../..
+  // resolves to the source tree which already has the file) but
+  // returns 404 in prod — what the user actually hit. Pin the COPY
+  // so a future Dockerfile refactor can't silently drop it.
+  const dockerfile = fs.readFileSync(
+    path.join(__dirname, '..', 'Dockerfile'), 'utf8');
+  assert.ok(/^COPY\s+USER_MANUAL\.md\s+\.\/USER_MANUAL\.md/m.test(dockerfile),
+    'Dockerfile must contain `COPY USER_MANUAL.md ./USER_MANUAL.md` so the manual is in the prod image (not just the dev source tree)');
+});
+
 // ──────────────────────────────────────────────────────────────────────
 // CSS
 // ──────────────────────────────────────────────────────────────────────

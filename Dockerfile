@@ -21,6 +21,11 @@ COPY --from=builder /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/l
 COPY --from=builder /usr/local/bin/claude /usr/local/bin/claude
 COPY server/src ./server/src
 COPY web/public ./web/public
+# User manual served by the in-app book-icon modal. Lives at the
+# project root for git/docs visibility; copied into /app/ so the
+# server's GET /USER_MANUAL.md route can read it from inside the
+# container.
+COPY USER_MANUAL.md ./USER_MANUAL.md
 COPY Caddyfile /etc/caddy/Caddyfile
 RUN mkdir -p /app/web/public/fonts && \
     cp /usr/share/fonts/truetype/JetBrainsMonoNerdFont-Regular.ttf /app/web/public/fonts/ && \

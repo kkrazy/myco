@@ -2582,7 +2582,7 @@ test_chat_window() {
   # by an explicit route since the file lives at the project root)
   # and renders it via the existing renderMd → marked.parse path.
   # Esc + click-outside dismiss; content cached on first open.
-  node_test_result test/sidebar-manual-link.test.js "test/sidebar-manual-link.test.js (15 cases)"
+  node_test_result test/sidebar-manual-link.test.js "test/sidebar-manual-link.test.js (16 cases)"
   # fr-9: file explorer surfaces git change decorators + download
   # button. Tests the server-side listDir gitStatus enrichment
   # (modified/added/untracked/dir-aggregate paths against a real
