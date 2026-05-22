@@ -2543,7 +2543,51 @@
         "originalText": "ensure git auth via token can work with enterprise proxy",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-29",
+      "text": "**Problem:** Deleting a session doesn't refresh the plan view until another session is clicked.\n**Expected:** Deleting a session immediately clears both the chat pane and the plan view.\n**Actual:** Plan view remains stale after deletion until a session is clicked.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-22T07:46:44.710Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "delete a session wouldn't refresh plan view until we click on a session, it should leave the chat pane cleared and the plan view cleared",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "bug-30",
+      "text": "**Problem:** Behind an enterprise proxy, requests from `https://opti.labxnow.ai/` are intercepted and redirected to an HTTP proxy warning page, triggering a cross-origin frame load error.\n**Expected:** Proxy interception/redirect is detected and surfaced gracefully (clear error or fallback) without a raw same-origin policy violation.\n**Actual:** Browser throws `Unsafe attempt to load URL http://114.114.114.114:9421/proxycontrolwarn/httpwarning_3318.html?ori_url=...&uid=0 from frame with URL https://opti.labxnow.ai/. Domains, protocols and ports must match.`\n**Context:** Reproduces only behind enterprise proxies that inject `114.114.114.114:9421` interstitials over HTTP into HTTPS sessions.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-22T09:14:32.503Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "rs-a975e80a4d6e",
+          "user": "claude",
+          "text": "**Analysis (no code yet).**\n\n### What the error actually means\n\nThe browser error `Unsafe attempt to load URL http://114.114.114.114:9421/proxycontrolwarn/httpwarning_3318.html?ori_url=…&uid=0 from frame with URL https://opti.labxnow.ai/` is the browser's same-origin policy rejecting a **mixed-content cross-origin redirect**:\n\n1. A request originating from `https://opti.labxnow.ai/` (WebSocket, fetch, or sub-resource) leaves the browser\n2. Somewhere on the network path a proxy / firewall **does not let it reach our server**\n3. The proxy returns an HTTP 30x redirect (or an HTML page) pointing at `http://114.114.114.114:9421/proxycontrolwarn/…` — its \"your request was blocked\" interstitial\n4. The browser sees the redirect target uses HTTP (not HTTPS) and a different origin, blocks it, throws the security exception\n5. Our app sees the underlying connection fail; the user sees the spinner spinning\n\n**`114.114.114.114`** is 114DNS (Chinese Anycast DNS / firewall provider). The `:9421` port + `/proxycontrolwarn/httpwarningXXXX.html` path + `?ori_url=&uid=` query string is the standard 114DNS / similar carrier-grade firewall \"URL was blocked by policy\" interstitial in China. It also shows up on some enterprise firewalls in CN that use the same upstream filtering provider.\n\nThis is NOT a misconfiguration of myco. It's an upstream network policy intercepting our HTTPS connections. Equivalent to GFW behavior for blocked WebSocket endpoints.\n\n### Two distinct scenarios that produce this\n\n1. **The WebSocket connection** to `wss://opti.labxnow.ai/attach/<id>` is being intercepted — WebSocket upgrade triggers DPI which sometimes triggers the interstitial more eagerly than plain HTTPS\n2. **A sub-resource fetch** (any of: `/USER_MANUAL.md`, `/vendor/codemirror.bundle.js`, `/build.txt`, an asset, a fetch) hits the same path\n\n### Why myco surfaces this as a console error today\n\n`server/src/attach.js` `ws.addEventListener('close', …)` at app.js:1343 just shows \"Reconnecting…\" and silently retries. **No explicit `error` event handler**, no detection of \"we're not reaching our server vs. server is just slow,\" no surfacing of mixed-content/redirect interception. So:\n\n- Console gets the raw browser security exception (visible only in DevTools)\n- UI shows perpetual \"Reconnecting…\" spinner\n- User has no way to know it's a proxy issue vs server outage vs slow network\n\n### What we CAN detect from the browser side\n\nWe cannot read the body of the blocked HTTP response (browser security boundary). But we can:\n\n1. **Listen on `ws.onerror`** alongside `onclose` and capture the error event. Repeated `onerror` immediately after `onopen` attempts is a high-signal \"we're not reaching the server\" indicator.\n2. **Probe a fast-path GET** to `/build.txt` (or a tiny static asset on our own origin) on connection failure. If THAT also fails with a network error → infrastructure issue, not server. If it succeeds → server is reachable but WS upgrade is being blocked specifically (DPI signature).\n3. **window.onerror / window.addEventListener('error')** catches the mixed-content security exception. We can string-match for `114.114.114.114` or the generic shape `Unsafe attempt to load URL http://` to identify \"you are behind an interceptor.\"\n4. **Reconnect-count threshold** (e.g., 3 failed reconnects in 30s) → escalate the overlay from \"Reconnecting…\" to \"Network policy may be blocking this site.\"\n\n### Proposed UX (the actual fix)\n\n**Phase A (small, surgical, ~1 hr)** — surface the existing failure better:\n- Add `ws.addEventListener('error', …)` that logs to console with a stable marker (`[ws-error]`) so docker-side log scrapers can see it\n- Track `state.wsConsecutiveFailures` — increment on close-without-clean-open, reset on first successful message\n- When the counter hits 3 within 30s, swap the overlay from \"Reconnecting…\" to **\"Connection blocked — your network may be intercepting this site. Common causes: enterprise proxy, regional firewall, captive portal. Open DevTools console for details.\"**\n- Add `window.addEventListener('error', …)` once that pattern-matches the mixed-content + `114.114.114.114` exception. When seen, immediately swap the overlay to **\"Detected upstream firewall interception (`114.114.114.114`). The connection was redirected to a policy-warning page that the browser blocked.\"** + a link to a one-page doc explaining workarounds.\n\n**Phase B (~2 hr)** — actionable workarounds in the overlay:\n- A \"Try a different origin\" link (if a backup domain / alternate route exists)\n- A \"View raw network trace\" toggle that copies the relevant DevTools commands\n- A persistent `localStorage.myco_seen_intercept = 1` flag → on next visit, show a brief \"still behind an interceptor?\" hint instead of starting over\n\n### What we CANNOT fix from our side\n\n- Make the proxy let the traffic through (operator decision)\n- Bypass the interceptor (would require app-level VPN / different domain rotation — outside scope)\n- Read the blocked response (browser security)\n\n### Diagnostic surrogate test (no fix yet)\n\nA unit-testable surrogate: `test/bug-30-wss-failure-surfacing.test.js` would assert that when the WebSocket close handler fires repeatedly with no successful open in between, app.js shows the escalated message. Doesn't reproduce the actual network condition but pins the surfacing logic. Static-grep guards on `window.addEventListener('error', …)` + the 114.114.114.114 pattern.\n\n### Recommendation\n\nGo with **Phase A**. It's the smallest change that gives the user a clear, actionable message instead of a perpetual spinner. Phase B is polish — defer.\n\nStatus: analysis only, awaiting greenlight on Phase A.",
+          "ts": "2026-05-22T09:18:11.767Z",
+          "meta": {
+            "kind": "investigation"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "when sitting behind an enterprise proxy, I am getting errors like the following. Unsafe attempt to load URL http://114.114.114.114:9421/proxycontrolwarn/httpwarning_3318.html?ori_url=aHR0cHM6Ly9vcHRpLmxhYnhub3cuYWk=&uid=0 from frame with URL https://opti.labxnow.ai/. Domains, protocols and ports must match.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-22T06:16:18.354Z"
+  "updatedAt": "2026-05-22T09:18:11.767Z"
 }
