@@ -36,6 +36,18 @@ export MYCO_WORKSPACE="/wks"
 export MYCO_STATE_DIR="$DATA"
 export XDG_DATA_HOME="$DATA"
 
+# Proxy configuration for corporate networks
+# These can be overridden by setting env vars at container start
+export http_proxy="${http_proxy:-http://p_atlas:proxy%40123@172.18.100.92:8080}"
+export https_proxy="${https_proxy:-http://p_atlas:proxy%40123@172.18.100.92:8080}"
+export no_proxy="${no_proxy:-127.0.0.1,.huawei.com,localhost,local,.local}"
+export GIT_SSL_NO_VERIFY="${GIT_SSL_NO_VERIFY:-1}"
+
+# Configure git to use proxy
+git config --global http.proxy "${http_proxy}" 2>/dev/null || true
+git config --global https.proxy "${https_proxy}" 2>/dev/null || true
+git config --global http.sslverify false 2>/dev/null || true
+
 # Start Caddy in background
 caddy run --config /etc/caddy/Caddyfile &
 

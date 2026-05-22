@@ -1,0 +1,34 @@
+# Build from existing myco:latest to avoid pulling base image through proxy.
+# Use: docker build -f Dockerfile.local -t myco:latest .
+FROM myco:latest
+
+# Proxy support: Docker build should pass --build-arg http_proxy/https_proxy
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ENV http_proxy=$http_proxy https_proxy=$https_proxy no_proxy=$no_proxy
+
+# Install lean-ctx directly via curl (respects proxy) instead of npm install.
+# The npm package's postinstall.js uses Node https without proxy support.
+ARG LEAN_CTX_VERSION=3.6.14
+RUN ARCH=$(uname -m) && case "$ARCH" in \
+      x86_64)  RUST_ARCH=x86_64 ;; \
+      aarch64) RUST_ARCH=aarch64 ;; \
+      *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+    esac && \
+    mkdir -p /usr/local/lib/lean-ctx && \
+    curl -fsSLk "https://github.com/yvgude/lean-ctx/releases/download/v${LEAN_CTX_VERSION}/lean-ctx-${RUST_ARCH}-unknown-linux-musl.tar.gz" | \
+      tar -xz -C /usr/local/lib/lean-ctx && \
+    chmod +x /usr/local/lib/lean-ctx/lean-ctx && \
+    ln -sf /usr/local/lib/lean-ctx/lean-ctx /usr/local/bin/lean-ctx && \
+    /usr/local/bin/lean-ctx --version
+
+# Copy updated entrypoint with proxy configuration
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Refresh the build timestamp
+RUN date -u +%Y-%m-%dT%H:%M:%SZ > /app/web/public/build.txt
+
+# Restore entrypoint
+ENTRYPOINT ["/docker-entrypoint.sh"]

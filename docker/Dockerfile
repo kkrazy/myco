@@ -1,12 +1,27 @@
 # --- Build stage: install npm deps + claude ---
 FROM node:20-alpine AS builder
 WORKDIR /build
+# Proxy support: Docker build should pass --build-arg http_proxy/https_proxy
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ENV http_proxy=$http_proxy https_proxy=$https_proxy no_proxy=$no_proxy
 COPY server/package.json server/package-lock.json* ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm config set proxy "$http_proxy" && \
+    npm config set https-proxy "$https_proxy" && \
+    npm config set strict-ssl false && \
+    npm ci --omit=dev --ignore-scripts && \
+    npm cache clean --force
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
 
 # --- Runtime stage ---
 FROM node:20-alpine
+
+# Proxy support: Docker build should pass --build-arg http_proxy/https_proxy
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ENV http_proxy=$http_proxy https_proxy=$https_proxy no_proxy=$no_proxy
 
 RUN apk add --no-cache bash git openssh ca-certificates curl nss-tools && \
     # Caddy: pick the right arch automatically so the image builds for
@@ -17,19 +32,27 @@ RUN apk add --no-cache bash git openssh ca-certificates curl nss-tools && \
       aarch64) CADDY_ARCH=arm64 ;; \
       *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
     esac && \
-    curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=$CADDY_ARCH" -o /usr/bin/caddy && \
+    curl -fsSLk "https://caddyserver.com/api/download?os=linux&arch=$CADDY_ARCH" -o /usr/bin/caddy && \
     chmod +x /usr/bin/caddy && \
     mkdir -p /usr/share/fonts/truetype && \
-    curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.3.0/JetBrainsMono.tar.xz" | tar -xJ -C /usr/share/fonts/truetype
+    curl -fsSLk "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.3.0/JetBrainsMono.tar.xz" | tar -xJ -C /usr/share/fonts/truetype
 
 # fr-55: install lean-ctx (MCP server that compresses file reads /
-# shell output before they hit the LLM context). The npm wrapper's
-# postinstall.js auto-picks the right binary for the build arch
-# (x86_64 or aarch64 × musl/gnu), so this works for both amd64 and
-# arm64 builds without extra glue. Symlink into /usr/local/bin so
-# the Anthropic Agent SDK can spawn it via stdio MCP at query time.
-RUN npm install -g lean-ctx-bin && \
-    ln -sf "$(npm root -g)/lean-ctx-bin/bin/lean-ctx" /usr/local/bin/lean-ctx && \
+# shell output before they hit the LLM context). Download directly
+# from GitHub releases using curl (respects http_proxy env vars)
+# instead of npm install (which fails behind proxies because the
+# postinstall.js uses Node's https module without proxy support).
+ARG LEAN_CTX_VERSION=3.6.14
+RUN ARCH=$(uname -m) && case "$ARCH" in \
+      x86_64)  RUST_ARCH=x86_64 ;; \
+      aarch64) RUST_ARCH=aarch64 ;; \
+      *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+    esac && \
+    mkdir -p /usr/local/lib/lean-ctx && \
+    curl -fsSLk "https://github.com/yvgude/lean-ctx/releases/download/v${LEAN_CTX_VERSION}/lean-ctx-${RUST_ARCH}-unknown-linux-musl.tar.gz" | \
+      tar -xz -C /usr/local/lib/lean-ctx && \
+    chmod +x /usr/local/lib/lean-ctx/lean-ctx && \
+    ln -sf /usr/local/lib/lean-ctx/lean-ctx /usr/local/bin/lean-ctx && \
     /usr/local/bin/lean-ctx --version
 
 WORKDIR /app
