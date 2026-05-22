@@ -2427,7 +2427,7 @@
       "id": "bug-26",
       "text": "**Problem:** Auto-scroll-to-latest interrupts the user when they've manually scrolled up to read earlier messages.\n**Expected:** If the user has manually scrolled up, suppress auto-scroll-to-latest so they can keep reading.\n**Actual:** New messages force a scroll to the bottom regardless of the user's scroll position.",
       "layer": "Bug",
-      "done": true,
+      "done": false,
       "addedAt": "2026-05-21T22:44:13.696Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2436,12 +2436,13 @@
       ],
       "comments": [
         {
-          "id": "rs-7692d9039d84",
+          "id": "5c5e0813b44b",
           "user": "claude",
-          "text": "**Fixed.** Auto-scroll-to-latest now respects the user's scroll position.\n\n### Behavior\n\n- User at bottom (or within 50px) → new messages still pin to latest, as before.\n- User scrolled up to read earlier messages → new messages **leave them in place**.\n- User scrolls back near the bottom → next message resumes auto-scroll.\n- User opens the chat pane / switches session → always lands at the latest (user-initiated event → `{ force: true }` bypass).\n\n### Implementation\n\n`web/public/app.js`:\n\n1. New constant `CHAT_SCROLL_BOTTOM_THRESHOLD = 50` (standard browser-affordance cutoff for \"user is following the stream\" vs \"user has scrolled up\").\n2. New helper `_chatUserIsAtBottom(list)` — returns true when within 50px of the bottom. 0-height list (display:none / pre-layout) returns true so initial render-before-display-flip still pins.\n3. `scrollChatToLatest({ force = false } = {})` — short-circuits when `state.chatUserScrolledUp && !force`. Default destructure so existing call sites stay compatible.\n4. Scroll listener on `#chat-messages` (passive, bind-once-guarded) sets `state.chatUserScrolledUp = !_chatUserIsAtBottom(list)` on every scroll event.\n5. `setChatPane(true)` clears `chatUserScrolledUp` BEFORE calling `scrollChatToLatest({ force: true })` — opening the pane is a user action that wants the latest view.\n6. `_resetUiForNewSession` clears `chatUserScrolledUp` so a new session starts at the bottom.\n\n### What's NOT changed (intentional)\n\n- Existing call sites (`renderChatPane` with `scrollToBottom`, etc.) keep their default-no-force behavior. The CALLER says \"I think we should scroll\"; the USER's scroll preference wins. This means even when the agent appends a new tool_result, if the user is reading older content, they're not yanked.\n- No \"↓ N new\" indicator yet — if the user finds the suppression too aggressive without one, that's a follow-up fr.\n\n### Test\n\n`test/bug-26-chat-auto-scroll-suppress.test.js` — **13 cases**:\n- 4 `scrollChatToLatest` guards (signature, short-circuit, threshold constant, helper math)\n- 4 `bindChatUi` listener guards (element, state update, passive, bind-once)\n- 2 state-reset guards (`setChatPane` clears + force-scrolls, `_resetUiForNewSession` clears)\n- 3 threshold-math simulations (near-bottom, scrolled-200px-up, 0-height)\n\nWired into test.sh. Subagent verified all 63 individual test files pass — no regressions in chat-pane tests (chat-history-window, chat-persistence-contract, chat-routing, agent-replay-dedup, persist-assistant-chat).",
-          "ts": "2026-05-21T23:22:25.633Z",
+          "text": "✓ success · 778.2s · $32.7322 · 30↓/17425↑\n\n**bug-26 fixed** as `c907d62`.\n\n**Behavior**:\n- User at bottom (within 50px) → new messages still pin to latest, as before\n- User scrolled up to read earlier messages → new messages **leave them in place**\n- User scrolls back near the bottom → next message resumes auto-scroll naturally\n- User opens chat pane / switches session → always lands at latest (`{ force: true }`)\n\n**Mechanics** (`app.js`):\n- `CHAT_SCROLL_BOTTOM_THRESHOLD = 50` (standard browser-affordance cutoff)\n- `_chatUserIsAtBottom(list)` — 0-height list returns true so initial render-before-display-flip still pins\n- `scrollChatToLatest({ force = false } = {})` — short-circuits when `state.chatUserScrolledUp && !force`. Default destructure keeps every existing call site compatible\n- Passive `scroll` listener on `#chat-messag…",
+          "ts": "2026-05-21T23:22:40.118Z",
           "meta": {
-            "kind": "run-summary"
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-21T23:09:41.715Z"
           }
         }
       ],
@@ -2450,14 +2451,21 @@
         "originalText": "dont scroll to the latest message if user already manually scroll up so that user can continue to read what they are reading",
         "rewritten": true
       },
-      "doneAt": "2026-05-21T23:22:25.633Z",
-      "doneBy": "claude"
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-21T23:22:40.118Z",
+          "startedAt": "2026-05-21T23:09:41.715Z",
+          "summary": "778.2s · 30→17425 tok",
+          "result": "**bug-26 fixed** as `c907d62`.\n\n**Behavior**:\n- User at bottom (within 50px) → new messages still pin to latest, as before\n- User scrolled up to read earlier messages → new messages **leave them in place**\n- User scrolls back near the bottom → next message resumes auto-scroll naturally\n- User opens chat pane / switches session → always lands at latest (`{ force: true }`)\n\n**Mechanics** (`app.js`):\n- `CHAT_SCROLL_BOTTOM_THRESHOLD = 50` (standard browser-affordance cutoff)\n- `_chatUserIsAtBottom(list)` — 0-height list returns true so initial render-before-display-flip still pins\n- `scrollChatToLatest({ force = false } = {})` — short-circuits when `state.chatUserScrolledUp && !force`. Default destructure keeps every existing call site compatible\n- Passive `scroll` listener on `#chat-messages` (bind-once-guarded) updates the flag\n- `setChatPane(true)` + `_resetUiForNewSession` clear the flag\n\n**Caller-intent-vs-user-preference**: existing `renderChatPane(scrollToBottom=true)` callers opt INTO a scroll. Now those calls respect the user's scroll preference — the user wins. Force-bypass is only for events the user directly triggered (open pane, switch session).\n\n**Test**: `test/bug-26-chat-auto-scroll-suppress.test.js` — 13 cases. Full sweep 63/63 green across all chat-pane tests.\n\n**44 commits ahead of last deploy.** Once deployed, you can scroll up to re-read with confidence — the chat won't yank you back."
+        }
+      ]
     },
     {
       "id": "bug-27",
       "text": "**Problem:** Switching sessions leaks the queue UI into other sessions.\n**Expected:** Each session's queue stays scoped to that session.\n**Actual:** After switching sessions, the queue from the previous session shows up on other sessions.",
       "layer": "Bug",
-      "done": true,
+      "done": false,
       "addedAt": "2026-05-21T23:09:07.607Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2466,12 +2474,13 @@
       ],
       "comments": [
         {
-          "id": "rs-75c3a2ded33b",
+          "id": "b3b85334a0b2",
           "user": "claude",
-          "text": "**Fixed.** Queue chip strip now scoped per-session.\n\n### Root cause\n\n`state.runQueue` is a single global. It was only mutated by incoming `state-update` WS frames (server-side broadcast). `_resetUiForNewSession` cleared a dozen UI states but never touched runQueue — so the previous session's chips sat in the DOM until the new session's first queue mutation. AND `_sendAttachSnapshot` shipped artifacts + claude-status + mode + tool-progress on attach, but NOT runQueue — so an idle queue on the new session would never repopulate after a switch.\n\n### Two-sided fix (belt-and-braces)\n\n**1. Client** (`web/public/app.js` `_resetUiForNewSession`):\n\n```js\nstate.runQueue = null;\ntry { _renderRunQueueStrip(); } catch {}\n```\n\nThe strip's null/empty guard hides + clears `innerHTML` on `!q || !Array.isArray(q.entries) || !q.entries.length` — so the chips disappear immediately on switch.\n\n**2. Server** (`server/src/attach.js` `_sendAttachSnapshot`):\n\n```js\ntry {\n  const state = runQueue.getQueueState(rec);\n  ws.send(JSON.stringify({ t: 'state-update', kind: 'runQueue', state }));\n} catch (err) { console.error(...); }\n```\n\nShips the new session's queue state on attach — parallel to the existing `artifacts-init` push. Wrapped in try/catch so a getQueueState throw can't abort the rest of the snapshot.\n\n### Why both sides\n\n- Client-only fix would leave the strip BLANK after switching back to a session with an active queue, until the next mutation. Bad UX for idle queues.\n- Server-only fix would still show stale data briefly between session switch and the WS frame arriving (typically <100 ms but real on slow networks).\n- Both together: strip is correct on the FIRST frame, every switch.\n\n### Test\n\n`test/bug-27-queue-session-scope.test.js` — **7 cases**:\n- 2 client guards (`_resetUiForNewSession` clears runQueue + re-renders strip)\n- 4 server guards (`_sendAttachSnapshot` ships kind:runQueue, uses getQueueState, try/catch wrapped, import present)\n- 1 renderer-contract guard (`_renderRunQueueStrip` handles null/empty gracefully — pins the precondition the client-side clear relies on)\n\nWired into test.sh. Subagent verified all 64 individual test files pass; no regressions in attach-flow neighbors (bug-12, bug-19-*, fr-48-*, plan-cache-session-isolation, viewer-agent-events).",
-          "ts": "2026-05-21T23:40:46.930Z",
+          "text": "✓ success · 1104.3s · $40.4718 · 21↓/10932↑\n\n**bug-27 fixed** as `6561681`. Two-sided fix:\n\n**Root cause**: `state.runQueue` is a single global. `_resetUiForNewSession` cleared a dozen UI states but never touched runQueue → previous session's chips stayed in DOM until next mutation. Plus `_sendAttachSnapshot` shipped artifacts/claude-status/mode/tool-progress on attach but NOT runQueue → idle queue on the new session would never repopulate after switching back.\n\n**Client** (`web/public/app.js _resetUiForNewSession`):\n```js\nstate.runQueue = null;\ntry { _renderRunQueueStrip(); } catch {}\n```\nStrip hides immediately via its existing null/empty guard.\n\n**Server** (`server/src/attach.js _sendAttachSnapshot`): ships `{ t: 'state-update', kind: 'runQueue', state: runQueue.getQueueState(rec) }` on attach, parallel to `artifacts-init`. Try…",
+          "ts": "2026-05-21T23:41:04.607Z",
           "meta": {
-            "kind": "run-summary"
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-21T23:22:40.191Z"
           }
         }
       ],
@@ -2480,9 +2489,61 @@
         "originalText": "when switching session, the queue show up on other sessions",
         "rewritten": true
       },
-      "doneAt": "2026-05-21T23:40:46.930Z",
-      "doneBy": "claude"
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-21T23:41:04.607Z",
+          "startedAt": "2026-05-21T23:22:40.191Z",
+          "summary": "1104.3s · 21→10932 tok",
+          "result": "**bug-27 fixed** as `6561681`. Two-sided fix:\n\n**Root cause**: `state.runQueue` is a single global. `_resetUiForNewSession` cleared a dozen UI states but never touched runQueue → previous session's chips stayed in DOM until next mutation. Plus `_sendAttachSnapshot` shipped artifacts/claude-status/mode/tool-progress on attach but NOT runQueue → idle queue on the new session would never repopulate after switching back.\n\n**Client** (`web/public/app.js _resetUiForNewSession`):\n```js\nstate.runQueue = null;\ntry { _renderRunQueueStrip(); } catch {}\n```\nStrip hides immediately via its existing null/empty guard.\n\n**Server** (`server/src/attach.js _sendAttachSnapshot`): ships `{ t: 'state-update', kind: 'runQueue', state: runQueue.getQueueState(rec) }` on attach, parallel to `artifacts-init`. Try/catch wrapped so getQueueState can't abort the snapshot.\n\n**Why both sides**:\n- Client-only → strip stays BLANK when switching back to an active-queue session (until next mutation). Bad UX for idle queues.\n- Server-only → still flashes stale data briefly between session switch and WS frame arrival.\n- Together → strip correct on the FIRST frame, every switch.\n\n**Test**: `test/bug-27-queue-session-scope.test.js` — 7 cases (client clear + re-render, server kind:runQueue + getQueueState + try/catch + import, renderer null/empty guard). Full sweep 64/64 green.\n\n**45 commits ahead of last deploy.**"
+        }
+      ]
+    },
+    {
+      "id": "fr-57",
+      "text": "**Goal:** Integrate [Serena MCP](https://github.com/oraios/serena) for LSP-backed semantic code tools (`find_symbol`, `find_referencing_symbols`, `replace_symbol_body`, `rename`, `safe_delete`, ...). Complements lean-ctx (compresses reads); Serena does symbol-level navigation + editing.\n\n**Spec (verified):** Python 3.13+ MCP server, `uv tool install -p 3.13 serena-agent@latest`. stdio (default) or HTTP. LSP backend supports 40+ languages (free, OSS); JetBrains backend skipped (paid). MIT, 24.5k stars, v1.5.1. MCP prefix: `mcp__serena__*`.\n\n**Approach — Option A** (mirrors fr-55 lean-ctx pattern):\n1. Dockerfile: install `uv` + `serena-agent` in builder. Multi-arch (uv ships amd64+arm64).\n2. `agent-session.js` mcpServers: register `serena` as a 3rd stdio MCP next to `myco` + `lean-ctx`. Command: `serena`, args: `['start-mcp-server', '--project', this.cwd]`.\n3. `best-practices-template.md` nudge: prefer `mcp__serena__find_symbol` / `replace_symbol_body` over grep+Edit for symbol-level ops (LSP-aware refs + renames).\n4. Test: `test/fr-XX-serena-mcp.test.js`.\n\n**5 unknowns to validate BEFORE code:**\n1. Image bloat (Python 3.13 + uv + LSPs could add 500 MB+).\n2. Per-session LSP indexing time (5–30s first run).\n3. Memory at scale (LSP servers eat 500MB–1GB each).\n4. Which LSPs pre-bake (TS/Py/JS) vs lazy.\n5. Tool overlap with lean-ctx — CLAUDE.md needs precedence rule (Serena=symbols, lean-ctx=reads, native=writes).\n\n**Out of scope v1:** JetBrains backend, force-routing Edit/Write, hybrid Serena+lean-ctx orchestration.\n\n**Reference:** parallel to fr-55. Same Validate-First + sidecar-stdio playbook.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-22T00:04:01.507Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "bug-28",
+      "text": "**Problem:** Git auth via token fails behind an enterprise proxy.\n**Expected:** Token-based git auth succeeds when traffic is routed through an enterprise proxy.\n**Actual:** Auth flow does not work in enterprise proxy environments.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-22T06:07:09.156Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "063f3a19f7aa",
+          "user": "kkrazy",
+          "text": "the bug is happening when myco is running in a container on a host behind enterprise proxy, which might cause TLS to fail.",
+          "ts": "2026-05-22T06:13:39.001Z"
+        },
+        {
+          "id": "rs-8747b29bd6ed",
+          "user": "claude",
+          "text": "**Investigation + design — no code yet.**\n\n### Root cause\n\nEnterprise proxies typically MITM HTTPS (re-sign with corporate CA). Inside the container, none of the outbound TLS callers trust that corp CA, so every TLS handshake fails with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` (or the proxy returns 502/407).\n\n### All affected surfaces in myco today\n\n| Surface | File:line | TLS path | Proxy env? |\n|---|---|---|---|\n| Anthropic API (side-channel `/btw`, `/fr!` rewrite, `/next` rerank) | `server/src/anthropic.js:27` | `https.request` default agent | none |\n| GitHub/Gitee issue create (`/feature`, `/bug`) | `server/src/git-hosts.js:62` | `https.request` default agent | none |\n| GitHub OAuth + user fetch | `server/src/oauth.js:57, 92` | `fetch()` default agent | none |\n| `/git` slash command | `server/src/slashcmds.js handleGit` (child_process) | git's own TLS path | none |\n| Agent SDK's Bash tool when it runs `git clone` | (Anthropic SDK spawns shell) | git's own | none |\n| Anthropic Agent SDK itself (api.anthropic.com) | inside the SDK | Node fetch | none |\n| lean-ctx `mcp` (if it ever calls out) | inside lean-ctx | Rust reqwest | none |\n\n**Dockerfile state**: installs Alpine's stock `ca-certificates` (Mozilla CAs only). Zero proxy handling. Zero `NODE_EXTRA_CA_CERTS`. Zero custom-CA bind mount.\n\n### What needs to land\n\n**1. CA trust** — install corp CA into container's trust store at start, AND set `NODE_EXTRA_CA_CERTS` (Node ignores /etc/ssl/certs by default).\n\n**2. Proxy env forwarding** — `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` set in container env, inherited by every child process (Node, git, lean-ctx, future Serena, etc.).\n\n**3. Git config (optional, belt-and-braces)** — `git config --global http.sslCAInfo /path/to/corp.pem` so git also explicitly trusts the corp CA (some setups need this in addition to system trust store).\n\n### Two options\n\n**Option A — Bind-mount + env (RECOMMENDED, ~3 hr)**:\n- Operator drops corp CAs at `$MYCO_STATE_DIR/extra-ca-certs/*.pem` (already-bind-mounted to /data inside container)\n- `.env` in state dir gets `MYCO_HTTPS_PROXY=http://proxy.corp:8080` etc.\n- `docker-entrypoint.sh`:\n  1. `cp /data/extra-ca-certs/*.pem /usr/local/share/ca-certificates/ && update-ca-certificates` if any present\n  2. Export `NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt`\n  3. Export `HTTPS_PROXY=$MYCO_HTTPS_PROXY` etc. from .env so child processes inherit\n  4. `git config --global http.sslCAInfo /etc/ssl/certs/ca-certificates.crt`\n- `deploy.sh` post-deploy checks add: warn if state dir has extra-ca-certs/ but `NODE_EXTRA_CA_CERTS` isn't set in the running container\n- Docs in CLAUDE.md Deployment section\n\n**Option B — Full config UX (~1 day)**:\n- All of A, plus slash commands: `/proxy-set <url>` / `/proxy-clear` / `/cert-add <pem>` to mutate the state-dir config from chat. Persisted in .env.\n- `/qstatus`-style `/netstatus` to report current proxy/CA state.\n\n### Validation BEFORE coding (need from you)\n\n1. **Does the corp proxy require auth?** (`http://user:pass@proxy:8080`) — affects whether we need to mask the URL in logs\n2. **What CA format does the corp ship?** (single .pem, multiple .pem, DER, PFX) — DER/PFX need conversion\n3. **Does TLS-interception apply to ALL hosts or some?** `NO_PROXY` whitelist for github/anthropic might matter\n4. **Container needs internet to install lean-ctx-bin + serena (postinstall downloads)** — does the proxy allow GitHub releases? If not, we need to pre-stage binaries in the image\n5. **Is this for myco prod (myco.labxnow.ai), mycobeta, OR a third-party deploy of myco in someone else's corp env?** Affects whether we keep proxy support opt-in (third-party) or default-on (corp env is normal)\n\n### Recommendation\n\nOption A. Document the CA mount + env-var contract; ship plumbing only. Concrete proxy URL/CA bundle stays per-deployment. `deploy.sh` post-deploy validation flags misconfig.\n\nStatus: investigation only; awaiting answers to the 5 validation questions before any code lands.",
+          "ts": "2026-05-22T06:16:18.354Z",
+          "meta": {
+            "kind": "investigation"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "ensure git auth via token can work with enterprise proxy",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-21T23:40:46.930Z"
+  "updatedAt": "2026-05-22T06:16:18.354Z"
 }
