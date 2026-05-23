@@ -3053,7 +3053,11 @@ run_server_smoke() {
 
 test_docker_build() {
   section "Docker build"
-  docker build -t myco-test . --quiet 2>&1 && pass "Docker build" || fail "Docker build"
+  # td-34: Dockerfile moved under docker/. The build context stays
+  # at the repo root (.) so the COPY paths inside the Dockerfile
+  # (server/, web/public/, USER_MANUAL.md, etc.) still resolve;
+  # only the Dockerfile location itself needs -f.
+  docker build -t myco-test -f docker/Dockerfile . --quiet 2>&1 && pass "Docker build" || fail "Docker build"
 }
 
 # ─── persistence: claude config / auth / sessions across restart + redeploy ──
