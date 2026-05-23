@@ -21,7 +21,7 @@ function t(name, fn) {
 }
 
 const DEPLOY = fs.readFileSync(
-  path.join(__dirname, '..', 'deploy.sh'), 'utf8');
+  path.join(__dirname, '..', 'scripts', 'deploy.sh'), 'utf8');
 
 console.log('── deploy.sh: post-deploy validation hooks ──');
 

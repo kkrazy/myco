@@ -63,7 +63,7 @@ t('Dockerfile COPY references docker/docker-entrypoint.sh (relative to build con
 });
 
 t('deploy.sh uses -f docker/Dockerfile when building', () => {
-  const dep = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
+  const dep = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy.sh'), 'utf8');
   assert.ok(/docker build [^\n]*-f docker\/Dockerfile/.test(dep),
     'deploy.sh must invoke `docker build ... -f docker/Dockerfile .` so the moved Dockerfile is found');
 });

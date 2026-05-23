@@ -17,14 +17,14 @@
 #   $MYCO_STATE_DIR/.env                       MYCO_GH_CLIENT_ID, MYCO_GH_CLIENT_SECRET, MYCO_PUBLIC_ORIGIN
 #
 # Usage:
-#   ./deploy.sh                                # full deploy (test → build → ship → swap → verify)
-#   ./deploy.sh --skip-tests                   # skip the pre-flight smoke test
-#   ./deploy.sh --dry-run                      # plan only; no image transfer or swap
-#   ./deploy.sh --allow-github-user <login>    # add a GitHub login to the allowlist (no build/ship)
-#   ./deploy.sh --set-oauth <id>:<secret>      # write OAuth client_id/secret into .env (no build/ship)
-#   ./deploy.sh --set-anthropic-key sk-ant-…   # write ANTHROPIC_API_KEY into .env + restart (no build/ship)
+#   ./scripts/deploy.sh                                # full deploy (test → build → ship → swap → verify)
+#   ./scripts/deploy.sh --skip-tests                   # skip the pre-flight smoke test
+#   ./scripts/deploy.sh --dry-run                      # plan only; no image transfer or swap
+#   ./scripts/deploy.sh --allow-github-user <login>    # add a GitHub login to the allowlist (no build/ship)
+#   ./scripts/deploy.sh --set-oauth <id>:<secret>      # write OAuth client_id/secret into .env (no build/ship)
+#   ./scripts/deploy.sh --set-anthropic-key sk-ant-…   # write ANTHROPIC_API_KEY into .env + restart (no build/ship)
 #   MYCO_DEPLOY_HOST=user@host \
-#   MYCO_STATE_DIR=/path/on/remote ./deploy.sh
+#   MYCO_STATE_DIR=/path/on/remote ./scripts/deploy.sh
 #
 # Local mode: when MYCO_DEPLOY_HOST points at loopback (e.g.
 # `user@localhost`, `localhost`, `*@127.0.0.1`), the script skips
@@ -32,10 +32,18 @@
 # step locally (bash + cp + local docker daemon). Use this when
 # you're on the target host itself and don't have ssh-to-self
 # configured.
-#   MYCO_DEPLOY_HOST=kkrazy@localhost ./deploy.sh
+#   MYCO_DEPLOY_HOST=kkrazy@localhost ./scripts/deploy.sh
 #   # optional override for the verify-step curl target:
-#   MYCO_VERIFY_DOMAIN=myco.labxnow.ai MYCO_DEPLOY_HOST=kkrazy@localhost ./deploy.sh
+#   MYCO_VERIFY_DOMAIN=myco.labxnow.ai MYCO_DEPLOY_HOST=kkrazy@localhost ./scripts/deploy.sh
 set -euo pipefail
+
+# Anchor cwd to the repo root regardless of where the caller invoked
+# us from. After the td-33 move into scripts/, this script's own
+# directory is scripts/ but every relative path inside (Dockerfile,
+# ./test/test.sh, server/, web/, etc.) is relative to the repo root.
+# The double-cd-then-pwd pattern is robust against $0 being relative
+# (e.g. `./scripts/deploy.sh`) vs absolute.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/.."
 
 # ─── config ──────────────────────────────────────────────────────────────────
 REMOTE="${MYCO_DEPLOY_HOST:-kkrazy@myco.labxnow.ai}"
@@ -138,7 +146,7 @@ build_image() {
 open_ssh() {
   # Local-mode short-circuit: when REMOTE is loopback, skip the
   # SSH multiplexer entirely and just verify docker is reachable
-  # on this host. This is what running `./deploy.sh` FROM the
+  # on this host. This is what running `./scripts/deploy.sh` FROM the
   # target host wants — no need for ssh-to-self (which prod
   # doesn't have configured anyway).
   case "$REMOTE" in
@@ -177,7 +185,7 @@ ensure_allowlist_seed() {
     else
       cat > \"\$AL\" <<'EOF'
 # GitHub logins allowed to sign in to myco. One per line. '#' starts a comment.
-# Add more with:  ./deploy.sh --allow-github-user <login>
+# Add more with:  ./scripts/deploy.sh --allow-github-user <login>
 EOF
       echo created
     fi
@@ -204,7 +212,7 @@ warn_if_oauth_unset() {
   ")
   if [ -n "$(echo "$missing" | tr -d ' ')" ]; then
     warn "OAuth not configured (missing in .env: $missing)"
-    warn "  Set with: ./deploy.sh --set-oauth <client_id>:<client_secret>"
+    warn "  Set with: ./scripts/deploy.sh --set-oauth <client_id>:<client_secret>"
     warn "  And ensure MYCO_PUBLIC_ORIGIN=https://<your-host> is in $STATE_DIR/.env"
   else
     ok "OAuth env vars present in .env"
@@ -281,7 +289,7 @@ REMOTE_SH
     unchanged) ok ".env: already has matching client_id/client_secret" ;;
     *)         die "set_oauth_in_env: unexpected result '$result'" ;;
   esac
-  warn "OAuth env changes only take effect after the container is restarted (re-run ./deploy.sh)"
+  warn "OAuth env changes only take effect after the container is restarted (re-run ./scripts/deploy.sh)"
 }
 
 # Write ANTHROPIC_API_KEY to the state-dir .env and restart the container so
@@ -322,7 +330,7 @@ REMOTE_SH
     remote "docker restart '$NAME' >/dev/null"
     ok "container restarted"
   else
-    warn "container '$NAME' not running — start it with: ./deploy.sh"
+    warn "container '$NAME' not running — start it with: ./scripts/deploy.sh"
   fi
 }
 

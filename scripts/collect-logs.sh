@@ -19,14 +19,19 @@
 # phase 1.
 #
 # Usage:
-#   ./collect-logs.sh                       # both sources, defaults
-#   ./collect-logs.sh --skip-mycobeta       # local only
-#   ./collect-logs.sh --skip-local          # mycobeta only
-#   ./collect-logs.sh --mycobeta-since 24h  # override --since for mycobeta
+#   ./scripts/collect-logs.sh                       # both sources, defaults
+#   ./scripts/collect-logs.sh --skip-mycobeta       # local only
+#   ./scripts/collect-logs.sh --skip-local          # mycobeta only
+#   ./scripts/collect-logs.sh --mycobeta-since 24h  # override --since for mycobeta
 
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Anchor to the repo root (one level above scripts/) so _myco_/logs
+# resolves correctly post-td-33 (when this script lived at the repo
+# root, $(dirname $0) was already the repo root — after the move into
+# scripts/ we add a `/..`). The double-cd-then-pwd is robust against
+# $0 being relative vs absolute.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 LOGS_DIR="${DIR}/_myco_/logs"
 
 PORT="${MYCO_PORT:-3000}"

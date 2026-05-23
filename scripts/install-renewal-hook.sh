@@ -5,7 +5,7 @@
 #   - post hook: start myco again (runs even if renewal fails)
 # Run with sudo.
 #
-# Usage:  sudo ./install-renewal-hook.sh
+# Usage:  sudo ./scripts/install-renewal-hook.sh
 
 set -euo pipefail
 

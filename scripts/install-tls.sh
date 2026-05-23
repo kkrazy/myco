@@ -2,8 +2,8 @@
 # Issue a Let's Encrypt cert for myco.labxnow.ai and install it into
 # /home/kkrazy/myco/.tls/. Run with sudo.
 #
-# Usage:  sudo EMAIL=you@example.com ./install-tls.sh
-#    or:  sudo ./install-tls.sh you@example.com
+# Usage:  sudo EMAIL=you@example.com ./scripts/install-tls.sh
+#    or:  sudo ./scripts/install-tls.sh you@example.com
 
 set -euo pipefail
 

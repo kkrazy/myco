@@ -74,8 +74,9 @@ t('test/test-browser.sh anchors CWD to repo root', () => {
     'test/test-browser.sh must cd one level above its own location so `node server/src/index.js` + `node test/browser/render.test.js` resolve from repo root');
 });
 
-t('deploy.sh invokes ./test/test.sh (not ./test.sh)', () => {
-  const dep = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
+t('scripts/deploy.sh invokes ./test/test.sh (not ./test.sh)', () => {
+  // After td-33, deploy.sh lives at scripts/deploy.sh.
+  const dep = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy.sh'), 'utf8');
   assert.ok(/^\s*\.\/test\/test\.sh\s*$/m.test(dep),
     'deploy.sh must invoke `./test/test.sh` (post-td-32 path) as its pre-flight test step');
   // And the legacy path must NOT appear as a live invocation. (A grep

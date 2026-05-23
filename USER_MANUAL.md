@@ -121,7 +121,7 @@ Sidebar + chat are mutually exclusive (overlay). Back icon ☰ toggles. Re-tappi
 | ✎ Edit hidden | Hard-refresh (cached `app.js`); confirm you're not in viewer mode |
 | Queue stalls | `/qcancel <id>` to drop the stuck head + auto-advance |
 | Chat input blocked (red ring) | Guest-restricted text — use `@mention` or a guest-allowed slash command |
-| `/git` returns "no such command" on prod | Pre-fr-54 deploy. Wait for the next `./deploy.sh` |
+| `/git` returns "no such command" on prod | Pre-fr-54 deploy. Wait for the next `./scripts/deploy.sh` |
 
 ## Reporting
 

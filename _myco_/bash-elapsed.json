@@ -9,7 +9,7 @@
       "note": "Approximate — based on observed mycobeta deploy-time test runs across this session"
     },
     {
-      "cmd": "./deploy.sh",
+      "cmd": "./scripts/deploy.sh",
       "elapsedMs": 95000,
       "ts": "2026-05-17T00:00:00Z",
       "note": "On-host recipe via MYCO_DEPLOY_HOST=kkrazy@localhost; includes test.sh + docker build + container swap + verify_deploy probe"
@@ -75,9 +75,9 @@
       "reason": "Full pre-commit suite (path is ./test/test.sh post-td-32; legacy ./test.sh kept in regex so older bash-elapsed.json samples still match). Always delegate when invoked outside a deploy.sh context."
     },
     {
-      "pattern": "^\\./deploy\\.sh\\b",
+      "pattern": "^\\./(scripts/)?deploy\\.sh\\b",
       "p95Ms": 120000,
-      "reason": "End-to-end deploy: tests + build + swap + verify. Always delegate."
+      "reason": "End-to-end deploy: tests + build + swap + verify. Path is ./scripts/deploy.sh post-td-33; legacy ./deploy.sh kept in regex so older bash-elapsed.json samples still match. Always delegate."
     },
     {
       "pattern": "^docker build\\b",

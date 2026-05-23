@@ -57,15 +57,15 @@ PORT=3000 MYCO_STATE_DIR=$HOME/.myco node server/src/index.js
 
 ## Production deploy
 
-The reference deploy is `./deploy.sh` — builds the Docker image, streams it to a remote host over SSH, swaps the container against a bind-mounted state directory. Everything reproducible from one command:
+The reference deploy is `./scripts/deploy.sh` — builds the Docker image, streams it to a remote host over SSH, swaps the container against a bind-mounted state directory. Everything reproducible from one command:
 
 ```bash
-./deploy.sh                       # default host: myco.labxnow.ai
-MYCO_DEPLOY_HOST=user@host ./deploy.sh
-./deploy.sh --skip-tests          # skip the test suite gate
-./deploy.sh --dry-run             # report the plan without shipping
-./deploy.sh --set-oauth <id>:<secret>
-./deploy.sh --allow-github-user <login>
+./scripts/deploy.sh                       # default host: myco.labxnow.ai
+MYCO_DEPLOY_HOST=user@host ./scripts/deploy.sh
+./scripts/deploy.sh --skip-tests          # skip the test suite gate
+./scripts/deploy.sh --dry-run             # report the plan without shipping
+./scripts/deploy.sh --set-oauth <id>:<secret>
+./scripts/deploy.sh --allow-github-user <login>
 ```
 
 See the `## Deployment` section of [CLAUDE.md](./CLAUDE.md) for the single-state-dir layout, OAuth wiring, and TLS specifics.
@@ -76,7 +76,7 @@ See the `## Deployment` section of [CLAUDE.md](./CLAUDE.md) for the single-state
 |---|---|---|
 | `MYCO_STATE_DIR` | `/home/<user>/myco-state` | Bind-mounted root for all persistent state (sessions, auth, workspaces, allowlist) |
 | `MYCO_PUBLIC_ORIGIN` | — | Public URL for OAuth callback (e.g. `https://myco.labxnow.ai`) |
-| `MYCO_GH_CLIENT_ID` / `_SECRET` | — | GitHub OAuth app credentials (set via `./deploy.sh --set-oauth`) |
+| `MYCO_GH_CLIENT_ID` / `_SECRET` | — | GitHub OAuth app credentials (set via `./scripts/deploy.sh --set-oauth`) |
 | `MYCO_DEPLOY_HOST` | `myco.labxnow.ai` | Remote host the deploy script SSHes to |
 | `PORT` | `3000` | Listen port (host side of the container) |
 

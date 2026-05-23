@@ -332,16 +332,16 @@ Auth: `?token=<bearer>` for owners/admins, `?s=<share-token>` for guests. Option
 
 ## Diagnostics + observability
 
-- **`/logs` endpoint** — rolling 5000-line stdout/stderr buffer from `logCapture.js`. Exposed bearer-gated; powers the in-UI log panel + `./collect-logs.sh`
-- **`collect-logs.sh`** — human/cron-runnable poller. Dedups against per-UTC-day files under `_myco_/logs/` (gitignored). Supports local mycod + mycobeta via SSH
-- **`/loop` cron** — diagnostic tick that periodically runs `collect-logs.sh` + scans for known markers (`[ws-attach]`, `[diag-resume]`, `[menu-pick]`, `[runQueue-diag]`). Posts a one-line `📡 [diag-loop]` summary to chat each tick
+- **`/logs` endpoint** — rolling 5000-line stdout/stderr buffer from `logCapture.js`. Exposed bearer-gated; powers the in-UI log panel + `./scripts/collect-logs.sh`
+- **`scripts/collect-logs.sh`** — human/cron-runnable poller. Dedups against per-UTC-day files under `_myco_/logs/` (gitignored). Supports local mycod + mycobeta via SSH
+- **`/loop` cron** — diagnostic tick that periodically runs `scripts/collect-logs.sh` + scans for known markers (`[ws-attach]`, `[diag-resume]`, `[menu-pick]`, `[runQueue-diag]`). Posts a one-line `📡 [diag-loop]` summary to chat each tick
 - **Bracketed log markers** — every instrumented site uses a stable prefix (`[ws-attach]`, `[plan-run]`, `[runQueue]`, etc.) so filters can pick them out unambiguously
 
 ---
 
 ## Deployment
 
-`./deploy.sh` is the contract:
+`./scripts/deploy.sh` is the contract:
 
 - Builds the Docker image locally
 - Streams it to the remote host over SSH

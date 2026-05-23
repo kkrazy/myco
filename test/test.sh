@@ -1483,19 +1483,19 @@ test_file_explorer_static() {
 }
 
 # Replaces the old test_deploy_add_token. The MYCO_TOKENS bearer-token system
-# is gone; deploy.sh now manages the GitHub OAuth allowlist via
+# is gone; scripts/deploy.sh now manages the GitHub OAuth allowlist via
 # --allow-github-user and OAuth client credentials via --set-oauth.
 test_deploy_oauth_flags() {
-  grep -q '^allow_github_user()'   deploy.sh && pass "deploy.sh: allow_github_user()"          || fail "deploy.sh: allow_github_user()"
-  grep -q '^set_oauth_in_env()'    deploy.sh && pass "deploy.sh: set_oauth_in_env()"           || fail "deploy.sh: set_oauth_in_env()"
-  grep -q '^ensure_allowlist_seed()' deploy.sh && pass "deploy.sh: ensure_allowlist_seed()"   || fail "deploy.sh: ensure_allowlist_seed()"
-  grep -q '^warn_if_oauth_unset()' deploy.sh && pass "deploy.sh: warn_if_oauth_unset()"        || fail "deploy.sh: warn_if_oauth_unset()"
-  grep -q -- '--allow-github-user)' deploy.sh && pass "deploy.sh: --allow-github-user parsed"  || fail "deploy.sh: --allow-github-user parsed"
-  grep -q -- '--set-oauth)'         deploy.sh && pass "deploy.sh: --set-oauth parsed"          || fail "deploy.sh: --set-oauth parsed"
+  grep -q '^allow_github_user()'   scripts/deploy.sh && pass "deploy.sh: allow_github_user()"          || fail "deploy.sh: allow_github_user()"
+  grep -q '^set_oauth_in_env()'    scripts/deploy.sh && pass "deploy.sh: set_oauth_in_env()"           || fail "deploy.sh: set_oauth_in_env()"
+  grep -q '^ensure_allowlist_seed()' scripts/deploy.sh && pass "deploy.sh: ensure_allowlist_seed()"   || fail "deploy.sh: ensure_allowlist_seed()"
+  grep -q '^warn_if_oauth_unset()' scripts/deploy.sh && pass "deploy.sh: warn_if_oauth_unset()"        || fail "deploy.sh: warn_if_oauth_unset()"
+  grep -q -- '--allow-github-user)' scripts/deploy.sh && pass "deploy.sh: --allow-github-user parsed"  || fail "deploy.sh: --allow-github-user parsed"
+  grep -q -- '--set-oauth)'         scripts/deploy.sh && pass "deploy.sh: --set-oauth parsed"          || fail "deploy.sh: --set-oauth parsed"
   # Regression: the token-based flags must NOT come back without an explicit
   # design decision — we removed --add-token entirely.
-  ! grep -qE -- '--add-token' deploy.sh && pass "deploy.sh: --add-token removed"               || fail "deploy.sh: --add-token still referenced"
-  ! grep -q 'MYCO_TOKENS' deploy.sh     && pass "deploy.sh: MYCO_TOKENS removed"               || fail "deploy.sh: MYCO_TOKENS still referenced"
+  ! grep -qE -- '--add-token' scripts/deploy.sh && pass "deploy.sh: --add-token removed"               || fail "deploy.sh: --add-token still referenced"
+  ! grep -q 'MYCO_TOKENS' scripts/deploy.sh     && pass "deploy.sh: MYCO_TOKENS removed"               || fail "deploy.sh: MYCO_TOKENS still referenced"
   # Regression (2026-05-16): verify_deploy used to grep `app.js?v=\d+` on
   # both source + served HTML, which broke once the server started
   # rewriting `?v=` to the URL-encoded build.txt timestamp (e.g.
@@ -1504,13 +1504,13 @@ test_deploy_oauth_flags() {
   # on every otherwise-successful deploy. The fix compares the served
   # value against the freshly-baked build.txt pulled out of the running
   # container; the regex now matches the full encoded value.
-  grep -qF 'docker exec $NAME cat /app/web/public/build.txt' deploy.sh \
+  grep -qF 'docker exec $NAME cat /app/web/public/build.txt' scripts/deploy.sh \
     && pass "deploy.sh: verify_deploy compares against container build.txt" \
     || fail "deploy.sh: verify_deploy still grepping the source ?v= placeholder — will misreport after every deploy"
-  grep -qF '\K[^"' deploy.sh \
+  grep -qF '\K[^"' scripts/deploy.sh \
     && pass "deploy.sh: verify regex captures the full encoded version (not just \\d+)" \
     || fail "deploy.sh: verify regex still uses the greedy \\d+ — will capture year prefix only"
-  if grep -qF 'grep -oP '"'"'app\.js\?v=\K\d+'"'"' web/public/index.html' deploy.sh; then
+  if grep -qF 'grep -oP '"'"'app\.js\?v=\K\d+'"'"' web/public/index.html' scripts/deploy.sh; then
     fail "deploy.sh: stale source-vs-served verify_deploy regex is back"
   else
     pass "deploy.sh: no source-vs-served regex regression"
@@ -1522,7 +1522,7 @@ test_deploy_oauth_flags() {
   # retry could fire. The `|| true` tail keeps the loop alive — when
   # this guard red-flips, future deploys will silently exit 1 again
   # even with the URL-encoded comparison in place.
-  grep -qF '| head -1 || true)' deploy.sh \
+  grep -qF '| head -1 || true)' scripts/deploy.sh \
     && pass "deploy.sh: verify retry survives transient empty curl results (|| true tail)" \
     || fail "deploy.sh: verify retry will abort under pipefail when grep doesn't match — need '|| true' tail on served= assignment"
   # Regression (2026-05-16 follow-up): verify_deploy used to default to
@@ -1531,13 +1531,13 @@ test_deploy_oauth_flags() {
   # MYCO_VERIFY_DOMAIN= retry on every deploy. Auto-derive the verify
   # domain from MYCO_PUBLIC_ORIGIN (preferred) or Caddyfile's first
   # virtual-host header (fallback) so the recipe is one-step again.
-  grep -q '^_derive_verify_domain()' deploy.sh \
+  grep -q '^_derive_verify_domain()' scripts/deploy.sh \
     && pass "deploy.sh: _derive_verify_domain helper present" \
     || fail "deploy.sh: _derive_verify_domain helper missing — IS_LOCAL=1 verify will default to localhost and 421 under Caddy"
-  grep -qF 'MYCO_PUBLIC_ORIGIN=' deploy.sh \
+  grep -qF 'MYCO_PUBLIC_ORIGIN=' scripts/deploy.sh \
     && pass "deploy.sh: verify domain reads MYCO_PUBLIC_ORIGIN from .env" \
     || fail "deploy.sh: verify domain lookup missing MYCO_PUBLIC_ORIGIN — primary source not consulted"
-  grep -qF 'STATE_DIR/Caddyfile' deploy.sh \
+  grep -qF 'STATE_DIR/Caddyfile' scripts/deploy.sh \
     && pass "deploy.sh: verify domain fallback consults Caddyfile" \
     || fail "deploy.sh: verify domain fallback missing Caddyfile lookup — recovery path gone"
 }
@@ -2588,7 +2588,7 @@ test_chat_window() {
   # via npm postinstall) + arch-aware Caddy. Best-practices nudge
   # teaches the agent to prefer ctx_read for context-only reads.
   node_test_result test/fr-55-lean-ctx-mcp.test.js "test/fr-55-lean-ctx-mcp.test.js (10 cases)"
-  # deploy.sh post-deploy validation block: runs 5 advisory checks
+  # scripts/deploy.sh post-deploy validation block: runs 5 advisory checks
   # (lean-ctx --version + PATH + log errors + /USER_MANUAL.md HTTP
   # + /vendor/codemirror.bundle.js HTTP) automatically after each
   # successful deploy. Warnings only, never aborts. --skip-post-checks
@@ -2634,7 +2634,7 @@ test_chat_window() {
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-
-  # relative path, deploy.sh's `docker build` uses -f docker/Dockerfile,
+  # relative path, scripts/deploy.sh's `docker build` uses -f docker/Dockerfile,
   # and .dockerignore stays at the build-context root (Docker CLI only
   # honors it there).
   node_test_result test/td-31-docker-folder.test.js "test/td-31-docker-folder.test.js (8 cases)"
@@ -2642,9 +2642,16 @@ test_chat_window() {
   # .test.js files they run. Pins the new locations, the absence of
   # the root-level originals, the cwd-anchor `cd "$(dirname "$0")/.."`
   # in both scripts (so relative-path checks resolve from repo root),
-  # deploy.sh's updated invocation, and the CLAUDE.md pre-commit rule's
+  # scripts/deploy.sh's updated invocation, and the CLAUDE.md pre-commit rule's
   # updated path.
   node_test_result test/td-32-test-scripts-folder.test.js "test/td-32-test-scripts-folder.test.js (8 cases)"
+  # td-33: deploy.sh + collect-logs.sh + install-tls.sh + install-
+  # renewal-hook.sh consolidated under scripts/. Legacy non-Docker
+  # server-launch trio (start.sh, myco.service, mycod) deleted because
+  # the only documented + tested deploy recipe is Docker via
+  # ./scripts/deploy.sh. The user-facing `myco` CLI launcher stays at
+  # the repo root because server/src/index.js MYCO_BIN points there.
+  node_test_result test/td-33-scripts-folder.test.js "test/td-33-scripts-folder.test.js (16 cases)"
   # Sidebar user-manual link: icon button beside the "+" New-session
   # button opens an in-app modal that fetches /USER_MANUAL.md (served
   # by an explicit route since the file lives at the project root)
