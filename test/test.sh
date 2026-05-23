@@ -2703,7 +2703,7 @@ test_chat_window() {
   # null-safety, the byline call site, behavior simulation on fixed
   # ISO inputs, and a negative guard that the wider formatChatTs use
   # wasn't accidentally swept (scope-creep tripwire).
-  node_test_result test/bug-34-plan-item-create-time-shows-date.test.js "test/bug-34-plan-item-create-time-shows-date.test.js (9 cases)"
+  node_test_result test/bug-34-plan-item-create-time-shows-date.test.js "test/bug-34-plan-item-create-time-shows-date.test.js (10 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-

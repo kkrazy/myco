@@ -159,11 +159,38 @@ t('chat-bubble timestamps still use formatChatTs (intentional scope guard)', () 
   // The renderChatMessage path that builds chat bubble ts must keep
   // formatChatTs — those are same-day inside a session, time-only is
   // the right shape.
-  const callers = (APP.match(/formatChatTs\s*\(/g) || []).length;
-  // Pre-bug-34: 5 calls. Post-fix: -1 (the plan-item byline) = 4.
-  // We allow >=3 to keep some slack for future call-site additions.
-  assert.ok(callers >= 3,
-    'formatChatTs is still used for chat bubbles + (intentionally) comment + Updated banner timestamps. Found only ' + callers + ' calls — looks like an over-broad refactor that swept past the bug-34 scope.');
+  //
+  // bug-34 was re-dispatched after the first-pass close-comment
+  // (which scoped the fix to ONLY the plan-item byline + noted
+  // comments + Updated banners as scoped-out follow-ups). The
+  // re-dispatch swept those four artifact-pane sites into the bug-34
+  // fix too. After the second pass, the ONLY remaining caller of
+  // the time-only formatChatTs should be the chat-bubble renderer
+  // (renderChatMessage around line 3457). Anchor that exact context.
+  const chatBubbleCallSite = APP.match(/const\s+ts\s*=\s*m\.ts\s*\?\s*formatChatTs\s*\(\s*m\.ts\s*\)/);
+  assert.ok(chatBubbleCallSite,
+    'renderChatMessage must still call formatChatTs(m.ts) for chat bubble timestamps — that\'s the one site where time-only is intentional (same-day live session)');
+});
+
+t('no formatChatTs callers remain inside artifact-pane render paths (bug-34 v2 scope)', () => {
+  // After the bug-34 second pass, NO formatChatTs call should remain
+  // inside artifact rendering (Plan / Arch / Test pane content). The
+  // four artifact-pane sites (byline, comment ts, two Updated banners)
+  // all switched to formatChatTsWithDate. A future addition that
+  // accidentally re-uses formatChatTs inside renderArtifact / its
+  // helpers would re-introduce the ambiguity.
+  const renderArtifactStart = APP.search(/function\s+renderArtifact\s*\(/);
+  assert.ok(renderArtifactStart > -1, 'renderArtifact must exist');
+  // Grab a generous window — renderArtifact + its inline helpers
+  // span ~400 lines. Walk forward until the next top-level function
+  // definition.
+  const rest = APP.slice(renderArtifactStart);
+  const end = rest.slice(1).search(/\nfunction\s+[A-Za-z_]/);
+  const renderArtifactBody = end === -1 ? rest : rest.slice(0, end + 1);
+  // The body MUST NOT contain `formatChatTs(` (we want only
+  // formatChatTsWithDate calls here).
+  assert.ok(!/\bformatChatTs\s*\(/.test(renderArtifactBody),
+    'renderArtifact body must NOT call formatChatTs (time-only) — every artifact-pane timestamp must go through formatChatTsWithDate so the date is always visible. Found a call site in renderArtifact body.');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

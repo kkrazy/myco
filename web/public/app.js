@@ -3606,19 +3606,24 @@ function formatChatTs(iso) {
   } catch { return ''; }
 }
 
-// bug-34: plan-item create-time variant that includes the date. The
-// time-only formatChatTs above is fine for chat bubbles (typically
-// today's session) but plan items can be days / weeks / months old —
-// "filed by @user · 14:32" is genuinely ambiguous when you can't
-// tell which day. Locale-formatted "MMM D, YYYY, HH:MM" keeps the
-// row compact while disambiguating fully.
+// bug-34: variant that includes the date. The time-only formatChatTs
+// above is fine for chat bubbles (typically today's session) but
+// artifact-pane content can be days / weeks / months old —
+// "filed by @user · 14:32" or "Updated 14:32" is genuinely ambiguous
+// when you can't tell which day. Locale-formatted "MMM D, YYYY,
+// HH:MM" keeps the row compact while disambiguating fully.
 //
-// NOTE: only wired into the plan-item byline (renderItem in
-// renderArtifact). The adjacent plan-item comment timestamps + the
-// artifact "Updated" banner still use the time-only formatChatTs;
-// scope-limited per the bug-34 report. If the same ambiguity bites
-// for comments / updated banners, file a follow-up and switch those
-// sites too.
+// First-pass scope was just the plan-item byline. bug-34 was
+// re-dispatched (the same ambiguity bites comments + Updated banners,
+// even though they were originally noted as out-of-scope follow-ups),
+// so this is now wired into FOUR sites in renderArtifact:
+//   1. Plan-item byline                                  (renderItem)
+//   2. Plan-item comment timestamps                      (renderItem)
+//   3. Arch tab "Updated <ts>" banner                    (arch branch)
+//   4. Plan / test tab "Updated <ts>" banner             (items branch)
+// Chat-bubble timestamps (renderChatMessage line ~3457) intentionally
+// still use formatChatTs — those are same-day inside a live session
+// and the time-only display is the right shape there.
 function formatChatTsWithDate(iso) {
   // Defensive: null / undefined / empty resolve to "" rather than
   // `new Date(null)`'s default-to-epoch behavior (would render
@@ -6461,7 +6466,7 @@ function renderArtifact(type, artifact) {
       ? `<div class="artifact-md">${renderMd ? renderMd(md) : escHtml(md)}</div>`
       : '<div class="artifact-empty">No per-project architecture notes yet. Click <strong>Refresh</strong> to extract them from the session.</div>';
     const updated = artifact && artifact.updatedAt
-      ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>`
+      ? `<div class="artifact-updated">Updated ${escHtml(formatChatTsWithDate(artifact.updatedAt) || artifact.updatedAt)}</div>`
       : '';
     body.innerHTML = bpHtml + userMd + updated;
     // Render any ```mermaid fences inside the arch markdown.
@@ -6559,7 +6564,7 @@ function renderArtifact(type, artifact) {
             return `
             <div class="artifact-comment" data-cid="${escHtml(c.id)}">
               <span class="comment-user">${escHtml(c.user || '?')}</span>
-              <span class="comment-ts">${escHtml(formatChatTs(c.ts) || '')}</span>
+              <span class="comment-ts">${escHtml(formatChatTsWithDate(c.ts) || '')}</span>
               ${editedBadge}
               ${commentActions}
               <div class="comment-body">${renderMd(c.text || '')}</div>
@@ -6743,7 +6748,7 @@ function renderArtifact(type, artifact) {
     bodyHtml = `<ul class="artifact-items">${displayItems.map(renderItem).join('')}</ul>`;
   }
   body.innerHTML = bodyHtml +
-    (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTs(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
+    (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTsWithDate(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
   // After the items' markdown is in place, sweep for mermaid fences
   // so any ```mermaid blocks inside an item's text become SVG.
   // marked emits them as <pre><code class="language-mermaid">; this

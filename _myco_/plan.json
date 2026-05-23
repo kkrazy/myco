@@ -2852,6 +2852,15 @@
           "meta": {
             "kind": "run-summary"
           }
+        },
+        {
+          "id": "rs-7fa69c0d296d",
+          "user": "claude",
+          "text": "**Second pass — extended scope.**\n\nMy first close noted: \"If the same ambiguity bites for comments / Updated banners, file a follow-up and switch those sites too.\" You re-dispatched bug-34 instead of filing a follow-up — taking that as the signal to extend the fix to every artifact-pane timestamp.\n\n### Three more sites switched to formatChatTsWithDate\n| Site | Was | Now |\n|---|---|---|\n| Plan-item comment ts (line ~6562) | `formatChatTs(c.ts)` | `formatChatTsWithDate(c.ts)` |\n| Arch tab \"Updated XXX\" banner (line ~6464) | `formatChatTs(artifact.updatedAt)` | `formatChatTsWithDate(artifact.updatedAt)` |\n| Plan/Test tab \"Updated XXX\" banner (line ~6746) | `formatChatTs(artifact.updatedAt)` | `formatChatTsWithDate(artifact.updatedAt)` |\n\nPlus the plan-item byline already switched in the first pass. **Four total** artifact-pane timestamps now show date + time. Only `formatChatTs` (time-only) caller left in app.js is the chat-bubble renderer (`renderChatMessage` line ~3457) — that's intentional, chat bubbles are same-day inside a live session and time-only is the right shape.\n\n### Test update\n`test/bug-34-plan-item-create-time-shows-date.test.js` now 10 cases (was 9):\n\n- Old scope-tripwire (\"`formatChatTs` callers ≥3\") replaced with a stricter \"renderArtifact body must NOT call formatChatTs at all\" guard. The latter trips immediately if any future addition tries to use the time-only formatter inside artifact rendering.\n- New positive guard pins the exact `renderChatMessage` chat-bubble call site as the intentional exception.\n\n10/10 ✓ direct. Red-flipped against partial-fix code (1/10 fails when the renderArtifact body still has any `formatChatTs(` call).\n\n### Helper comment refreshed\nThe doc comment on `formatChatTsWithDate` now lists all four wired sites + names the chat-bubble call as the intentional exception, so the next reviewer doesn't have to grep to understand the scope.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/app.js change.\n\nStatus: closed (second time).",
+          "ts": "2026-05-23T09:08:41.135Z",
+          "meta": {
+            "kind": "run-summary"
+          }
         }
       ],
       "meta": {
@@ -2860,7 +2869,7 @@
         "rewritten": true
       },
       "status": "closed",
-      "closedAt": "2026-05-23T04:52:01.457Z"
+      "closedAt": "2026-05-23T09:08:41.135Z"
     },
     {
       "id": "fr-60",
@@ -2879,5 +2888,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-23T05:21:03.039Z"
+  "updatedAt": "2026-05-23T09:08:41.135Z"
 }
