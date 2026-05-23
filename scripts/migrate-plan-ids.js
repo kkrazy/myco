@@ -17,11 +17,11 @@
 //     - Mirror the rewritten artifact to <absCwd>/_myco_/plan.json
 //       (same path the live server uses).
 //
-// Usage:
-//   ./migrate-plan-ids.js                     # default state dir = /data
-//   MYCO_STATE_DIR=/path/to/state ./migrate-plan-ids.js
-//   ./migrate-plan-ids.js --dry-run           # report only, no writes
-//   ./migrate-plan-ids.js --session <id>      # limit to one session
+// Usage (run from repo root):
+//   ./scripts/migrate-plan-ids.js                     # default state dir = /data
+//   MYCO_STATE_DIR=/path/to/state ./scripts/migrate-plan-ids.js
+//   ./scripts/migrate-plan-ids.js --dry-run           # report only, no writes
+//   ./scripts/migrate-plan-ids.js --session <id>      # limit to one session
 //
 // Run on each host that has a state dir (locally + mycobeta).
 
@@ -40,7 +40,7 @@ while (argv.length) {
   if (a === '--dry-run') dryRun = true;
   else if (a === '--session') onlySession = argv.shift();
   else if (a === '-h' || a === '--help') {
-    process.stdout.write(`Usage: ./migrate-plan-ids.js [--dry-run] [--session <id>]\n\n`);
+    process.stdout.write(`Usage: ./scripts/migrate-plan-ids.js [--dry-run] [--session <id>]\n\n`);
     process.stdout.write(`Default state dir: $MYCO_STATE_DIR or /data\n`);
     process.exit(0);
   }

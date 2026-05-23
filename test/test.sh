@@ -818,9 +818,12 @@ test_best_practices_template() {
   node_test_result test/dedupe-context.test.js "test/dedupe-context.test.js (5 cases)"
   # One-shot migration: rewrites pre-ca9bcf1 hex-id plan items to
   # fr-N/td-N/bug-N (addedAt order). Idempotent.
-  [ -x migrate-plan-ids.js ] \
-    && pass "migrate-plan-ids.js present + executable" \
-    || fail "migrate-plan-ids.js present + executable"
+  [ -x scripts/migrate-plan-ids.js ] \
+    && pass "scripts/migrate-plan-ids.js present + executable" \
+    || fail "scripts/migrate-plan-ids.js present + executable"
+  [ ! -e migrate-plan-ids.js ] \
+    && pass "migrate-plan-ids.js moved out of repo root (lives under scripts/)" \
+    || fail "migrate-plan-ids.js moved out of repo root (lives under scripts/)"
   node_test_result test/migrate-plan-ids.test.js "test/migrate-plan-ids.test.js (4 cases)"
   node_test_result test/chat-routing.test.js "test/chat-routing.test.js (7 cases)"
 }

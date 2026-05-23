@@ -14,7 +14,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const SCRIPT = path.resolve(__dirname, '..', 'migrate-plan-ids.js');
+const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'migrate-plan-ids.js');
 
 let passed = 0, failed = 0;
 function t(name, fn) {
