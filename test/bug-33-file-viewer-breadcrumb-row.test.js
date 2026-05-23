@@ -93,14 +93,28 @@ t('CSS: #files-view-header is flex-column (stacks the two rows)', () => {
     '#files-view-header must declare flex-direction: column so the two rows stack vertically');
 });
 
-t('CSS: .files-view-header-nav keeps the 92px right padding (clears floating chrome)', () => {
-  // The right-padding-92 was preserved on the nav row (where the
-  // breadcrumb tail would otherwise disappear behind the floating
-  // #btn-files + #btn-chat chrome buttons).
+t('CSS: .files-view-header-nav pushes breadcrumb BELOW the floating chrome cluster', () => {
+  // bug-33 second pass: the chrome cluster has FIVE position:fixed
+  // buttons (Plan / Arch / Test / Files / Chat) totaling ~210px wide.
+  // The first-pass 92px right-padding only cleared 2 of them (Files
+  // + Chat); the other 3 (Plan/Arch/Test) still overlapped the
+  // breadcrumb (user re-filed the bug). The fix pushes the nav row
+  // BELOW the chrome row entirely via a top padding equal to
+  // safe-area-inset-top + ~50px (chrome top 10 + 32px button +
+  // small buffer). No right padding needed — breadcrumb gets the
+  // full pane width.
   const navBlock = CSS.match(/\.files-view-header-nav\s*\{[\s\S]*?\}/);
   assert.ok(navBlock, '.files-view-header-nav rule must exist');
-  assert.ok(/padding:\s*8px\s+92px/.test(navBlock[0]),
-    '.files-view-header-nav must keep the 92px right padding to clear the floating chrome buttons (#btn-files + #btn-chat)');
+  // Must clear the chrome from ABOVE (top padding ≥ ~42px to clear
+  // the chrome button bottom edge; we use ~50 with a buffer). We
+  // anchor on env(safe-area-inset-top) so iPhone-notch deploys also
+  // get pushed correctly.
+  assert.ok(/padding:\s*calc\(\s*env\(safe-area-inset-top[^)]*\)\s*\+\s*(?:4[5-9]|[5-9][0-9])px\s*\)/.test(navBlock[0]),
+    '.files-view-header-nav must have a top padding of `calc(env(safe-area-inset-top, 0px) + ≥45px)` so the breadcrumb sits BELOW the floating chrome cluster — first-pass right-padding-only fix didn\'t clear the 3 leftmost chrome buttons (Plan/Arch/Test)');
+  // Defensive: must NOT still carry the dead 92px right-padding from
+  // the first-pass fix. That value pinned the wrong layout.
+  assert.ok(!/padding:\s*8px\s+92px/.test(navBlock[0]),
+    '.files-view-header-nav must NOT still carry the dead 92px right-padding from the first-pass bug-33 fix — the new layout pushes from above, not from the side');
 });
 
 t('CSS: .files-view-header-actions defaults to display:none + :has auto-show', () => {

@@ -3540,12 +3540,18 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
 }
 .files-view-header-nav {
-  /* Right-padding 92px clears the floating #btn-files + #btn-chat
-     chrome (32+8+32+10+10) so the breadcrumb tail doesn't disappear
-     under them. min-height matches the original #files-view-header
-     line so external layouts that measured against --pane-header-h
-     keep their sizing. */
-  padding: 8px 92px 8px 12px;
+  /* bug-33 (second pass): the floating chrome cluster has FIVE
+     `position: fixed; top: 10px` buttons (Plan / Arch / Test /
+     Files / Chat) totaling ~210px wide. The first pass kept a 92px
+     right-padding — enough to clear only the 2 rightmost (Files +
+     Chat); the 3 additional buttons (Plan/Arch/Test) still overlapped
+     the breadcrumb. Per the user's "Breadcrumb sits on its own
+     dedicated row, separate from the icons", push the nav row BELOW
+     the chrome cluster entirely instead of squeezing it sideways.
+     Top padding = safe-area inset (notch) + 50px (chrome top 10 +
+     32px button + 8px buffer below the chrome row). No right padding
+     needed — breadcrumb gets the full pane width on its own row. */
+  padding: calc(env(safe-area-inset-top, 0px) + 50px) 12px 8px 12px;
   min-height: var(--pane-header-h);
 }
 .files-view-header-actions {

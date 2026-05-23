@@ -2794,6 +2794,25 @@
           "meta": {
             "kind": "run-summary"
           }
+        },
+        {
+          "id": "76de37d53e4f",
+          "user": "kkrazy",
+          "text": "Still cluttered with the plan,test,arch,file icons",
+          "ts": "2026-05-23T05:02:03.806Z",
+          "meta": {
+            "editedBy": "kkrazy",
+            "editedAt": "2026-05-23T05:02:44.279Z"
+          }
+        },
+        {
+          "id": "rs-5fa88ce15af7",
+          "user": "claude",
+          "text": "**Reopened + fixed (second pass).**\n\n### What the first pass missed\nFirst-pass fix split the in-viewer Edit/Save/Cancel/Wrap/Copy buttons into their own second row. But it **preserved the 92px right-padding** on the nav row — which only clears 2 chrome buttons (Files + Chat). The chrome cluster actually has FIVE `position: fixed; top: 10px` buttons (Plan / Arch / Test / Files / Chat) totaling ~210px wide. The 3 additional buttons (Plan / Arch / Test) still overlapped the breadcrumb — exactly the clutter you re-reported.\n\n### Second-pass fix\nPush the nav row BELOW the chrome cluster instead of squeezing it sideways. New CSS on `.files-view-header-nav`:\n\n```css\npadding: calc(env(safe-area-inset-top, 0px) + 50px) 12px 8px 12px;\n```\n\n- Top padding ≈ chrome bottom edge (`safe-area-inset-top` + 10px chrome-top + 32px button + 8px buffer) so the breadcrumb starts cleanly below the chrome row.\n- No more 92px right padding — breadcrumb gets the FULL pane width on its dedicated row.\n- iPhone-notch friendly via `env(safe-area-inset-top, 0px)`.\n\nNow the layout is:\n\n```\n                                          [📁] [📋] [🏛] [🧪] [💬]  ← chrome cluster\n                                          (floating, position: fixed,\n                                           top: 10px, all 5 buttons)\n[← back]  path/to/some/file.js                                       ← nav row (below chrome)\n                                              [✎ Edit] [📋 Copy]      ← actions row\nfile content …\n```\n\n### Test update\n`test/bug-33-file-viewer-breadcrumb-row.test.js` — the old guard pinning the 92px right-padding was replaced with a guard pinning the new top-padding-clears-chrome shape. Also a negative guard that the dead 92px-right-padding is NOT still in the CSS (would re-introduce the half-fix).\n\n9/9 ✓ direct. Red-flipped against pre-fix CSS — 1/9 failed without the new padding, confirming the test catches the regression. Adjacent file-viewer tests stay green: fr-50-edit-button-visible 5/5 ✓, fr-50-file-editor 17/17 ✓.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/styles.css change — no server rebuild needed.\n\nStatus: closed (re-closed this time correctly).",
+          "ts": "2026-05-23T05:05:58.473Z",
+          "meta": {
+            "kind": "run-summary"
+          }
         }
       ],
       "meta": {
@@ -2802,7 +2821,7 @@
         "rewritten": true
       },
       "status": "closed",
-      "closedAt": "2026-05-23T04:47:56.005Z"
+      "closedAt": "2026-05-23T05:05:58.473Z"
     },
     {
       "id": "bug-34",
@@ -2851,5 +2870,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-23T04:52:01.457Z"
+  "updatedAt": "2026-05-23T05:05:58.473Z"
 }
