@@ -44,7 +44,7 @@ COPY web/public ./web/public
 # server's GET /USER_MANUAL.md route can read it from inside the
 # container.
 COPY USER_MANUAL.md ./USER_MANUAL.md
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY docker/Caddyfile /etc/caddy/Caddyfile
 RUN mkdir -p /app/web/public/fonts && \
     cp /usr/share/fonts/truetype/JetBrainsMonoNerdFont-Regular.ttf /app/web/public/fonts/ && \
     cp /usr/share/fonts/truetype/JetBrainsMonoNerdFont-Bold.ttf /app/web/public/fonts/ 2>/dev/null; true

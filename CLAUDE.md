@@ -79,7 +79,7 @@
      $MYCO_STATE_DIR/Caddyfile → /etc/caddy/Caddyfile  (read-only)
      ```
    - No named or anonymous Docker volumes — everything is reachable from the host. Backup = tar the state dir; restore = untar and `docker run`.
-   - The Caddyfile lives in the state dir too — `deploy.sh` seeds it from `/home/kkrazy/myco/Caddyfile` (remote) or the project tree (local) on first deploy.
+   - The Caddyfile lives in the state dir too — `deploy.sh` seeds it from `/home/kkrazy/myco/Caddyfile` (remote, historical) or the project tree (local — `docker/Caddyfile`) on first deploy.
 
 4. **Auth: GitHub OAuth + invitation allowlist.**
    - Required env in `$STATE_DIR/.env`: `MYCO_GH_CLIENT_ID`, `MYCO_GH_CLIENT_SECRET`, `MYCO_PUBLIC_ORIGIN` (e.g. `https://myco.labxnow.ai`). Set with `./scripts/deploy.sh --set-oauth <id>:<secret>`.

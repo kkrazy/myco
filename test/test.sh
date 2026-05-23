@@ -2652,6 +2652,12 @@ test_chat_window() {
   # ./scripts/deploy.sh. The user-facing `myco` CLI launcher stays at
   # the repo root because server/src/index.js MYCO_BIN points there.
   node_test_result test/td-33-scripts-folder.test.js "test/td-33-scripts-folder.test.js (16 cases)"
+  # td-34: Caddyfile moved into docker/ alongside Dockerfile +
+  # docker-entrypoint.sh (its primary build-time consumer). Pins the
+  # new location, the absence of the root-level original, the Dockerfile
+  # COPY's new path, deploy.sh's updated scp source, and the preserved
+  # content (myco.labxnow.ai virtual host + reverse_proxy target).
+  node_test_result test/td-34-caddyfile-docker.test.js "test/td-34-caddyfile-docker.test.js (5 cases)"
   # Sidebar user-manual link: icon button beside the "+" New-session
   # button opens an in-app modal that fetches /USER_MANUAL.md (served
   # by an explicit route since the file lives at the project root)

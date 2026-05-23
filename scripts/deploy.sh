@@ -340,8 +340,8 @@ seed_caddyfile() {
     remote "cp /home/kkrazy/myco/Caddyfile '$STATE_DIR/Caddyfile'"
     ok "Caddyfile seeded from /home/kkrazy/myco/Caddyfile"
   else
-    remote_scp Caddyfile "$REMOTE:$STATE_DIR/Caddyfile"
-    ok "Caddyfile uploaded from project tree"
+    remote_scp docker/Caddyfile "$REMOTE:$STATE_DIR/Caddyfile"
+    ok "Caddyfile uploaded from project tree (docker/Caddyfile)"
   fi
 }
 
