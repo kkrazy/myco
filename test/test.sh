@@ -2379,6 +2379,16 @@ test_chat_window() {
   # filter application in renderArtifact, and the explicit "all done"
   # empty-state message.
   node_test_result test/plan-open-only-toggle.test.js "test/plan-open-only-toggle.test.js (9 cases)"
+  # fr-56: Plan-tab type-filter chips (Bug / Feature / Todo) + fuzz-
+  # search input. Type chips persist across reload
+  # (localStorage.myco_plan_type_filter, default all-enabled); search
+  # is state-only (resets on reload), 150ms debounced, case-insensitive
+  # substring across item id + text + body. Intersects with the
+  # existing "Open only" toggle. Static guards on HTML + CSS + app.js
+  # bindings, plus inline behavior simulation of _filterPlanItems so
+  # the substring/type/done/intersect semantics are pinned without a
+  # browser.
+  node_test_result test/fr-56-plan-filter-search.test.js "test/fr-56-plan-filter-search.test.js (20 cases)"
   # fr-39: per-session admin delegation. Owners can /admin @user to
   # grant admin (multi-admin supported); admins inherit everything
   # except DELETE-session + grant/revoke admin (those stay

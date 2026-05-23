@@ -6406,15 +6406,26 @@ function renderArtifact(type, artifact) {
   }
   // plan / test → checkbox list. Plan items also get vote button + comment thread.
   const items = (artifact && Array.isArray(artifact.items)) ? artifact.items : [];
-  // Plan tab: "Open only" toggle filters out done items so the list
-  // surfaces only what still needs work. Default OFF (show all) so
-  // the behavior is opt-in + preserves prior expectations. Persisted
-  // per-browser in localStorage.myco_plan_open_only. Test items don't
-  // have a done-vs-open distinction in the same sense, so the filter
-  // is plan-only.
+  // Plan tab filters (Plan only — Test tab is a flat unfiltered list):
+  //   1. "Open only" toggle (bug-15)  — localStorage.myco_plan_open_only.
+  //      Drops .done items via items.filter((it) => !it.done).
+  //   2. Type-chip filter (fr-56)     — localStorage.myco_plan_type_filter.
+  //      Drops items whose .layer isn't in the enabled chip set.
+  //   3. Fuzz-search input (fr-56)    — state.planSearchQuery (not persisted).
+  //      Case-insensitive substring across item id + text + body.
+  // Two-phase application: openOnly first (preserves bug-15's filter
+  // shape + empty-state message verbatim), then type+search via
+  // _filterPlanItems on the open-only result. This keeps the bug-15
+  // contract verbatim while layering fr-56 on top.
   const planOpenOnly = type === 'plan'
     && (localStorage.getItem('myco_plan_open_only') || '0') === '1';
-  const displayItems = planOpenOnly ? items.filter((it) => !it.done) : items;
+  const openOnlyItems = planOpenOnly ? items.filter((it) => !it.done) : items;
+  const planTypes = type === 'plan' ? _readPlanTypeFilter() : null;
+  const planSearch = type === 'plan' ? (state.planSearchQuery || '') : '';
+  const fr56Active = type === 'plan' && ((planTypes && planTypes.length < 3) || !!planSearch);
+  const displayItems = fr56Active
+    ? _filterPlanItems(openOnlyItems, { types: planTypes, search: planSearch })
+    : openOnlyItems;
   if (!items.length) {
     body.innerHTML = '<div class="artifact-empty">Nothing extracted. The recent session activity may not contain todos.</div>';
     // Re-attach preservedCallout (no flicker rule applies on the empty
@@ -6424,9 +6435,22 @@ function renderArtifact(type, artifact) {
     return;
   }
   if (!displayItems.length) {
-    // Filter is active and everything is done — explicit message so
-    // the user understands the list isn't empty, just filtered.
-    body.innerHTML = `<div class="artifact-empty">All ${items.length} item(s) are done. Uncheck <strong>Open only</strong> to see them.</div>`;
+    // Empty-state message preference:
+    //   - openOnly is the ONLY active filter → bug-15's verbatim message
+    //     ("All N item(s) are done. Uncheck Open only to see them.")
+    //   - fr-56 filters are active (with or without openOnly) → fr-56
+    //     dynamic message naming the active filter(s) so the user
+    //     knows which one to relax.
+    if (planOpenOnly && !fr56Active) {
+      body.innerHTML = `<div class="artifact-empty">All ${items.length} item(s) are done. Uncheck <strong>Open only</strong> to see them.</div>`;
+    } else {
+      const why = [];
+      if (planOpenOnly) why.push('<strong>Open only</strong>');
+      if (planTypes && planTypes.length < 3) why.push('<strong>type filter</strong>');
+      if (planSearch) why.push(`<strong>search "${escHtml(planSearch)}"</strong>`);
+      const whyText = why.length ? ` after applying ${why.join(' + ')}` : '';
+      body.innerHTML = `<div class="artifact-empty">No items match${whyText}. ${items.length} total item(s) in the plan.</div>`;
+    }
     if (preservedCallout) body.insertBefore(preservedCallout, body.firstChild);
     return;
   }
@@ -8821,6 +8845,8 @@ document.addEventListener('DOMContentLoaded', () => {
   bootstrap();
   bindBestPracticesToggle();
   bindPlanOpenOnlyToggle();
+  bindPlanTypeFilters();
+  bindPlanSearch();
 });
 
 // Plan tab "Open only" toggle. Default OFF (show all items) so the
@@ -8841,6 +8867,95 @@ function bindPlanOpenOnlyToggle() {
       && state.artifacts.byType
       && state.artifacts.byType.plan;
     if (cached) renderArtifact('plan', cached);
+  });
+}
+
+// fr-56: Plan-tab type-filter chips (Bug / Feature / Todo). Default
+// ALL enabled (show everything) so the behavior is opt-in. Persisted
+// per-browser in localStorage.myco_plan_type_filter (JSON array of
+// layer names, e.g. ["Bug","Feature"]). The 3 chips' DOM ids are pinned
+// (plan-filter-bug/feature/todo); each <label> carries data-type with
+// the canonical layer value. _readPlanTypeFilter reads the persisted
+// set OR defaults to all three. The fr-56 regression test pins the
+// chip DOM + filter semantics.
+const PLAN_TYPE_FILTER_KEY = 'myco_plan_type_filter';
+const PLAN_ALL_TYPES = ['Bug', 'Feature', 'Todo'];
+function _readPlanTypeFilter() {
+  try {
+    const raw = localStorage.getItem(PLAN_TYPE_FILTER_KEY);
+    if (!raw) return PLAN_ALL_TYPES.slice();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return PLAN_ALL_TYPES.slice();
+    // Keep only known layers — guards against forward-incompat values.
+    return parsed.filter((t) => PLAN_ALL_TYPES.includes(t));
+  } catch { return PLAN_ALL_TYPES.slice(); }
+}
+function bindPlanTypeFilters() {
+  const chips = [
+    { id: 'plan-filter-bug',     type: 'Bug' },
+    { id: 'plan-filter-feature', type: 'Feature' },
+    { id: 'plan-filter-todo',    type: 'Todo' },
+  ];
+  const persisted = new Set(_readPlanTypeFilter());
+  chips.forEach(({ id, type }) => {
+    const cb = document.getElementById(id);
+    if (!cb) return;
+    cb.checked = persisted.has(type);
+    cb.addEventListener('change', () => {
+      const next = new Set();
+      chips.forEach(({ id: iid, type: itype }) => {
+        const c = document.getElementById(iid);
+        if (c && c.checked) next.add(itype);
+      });
+      localStorage.setItem(PLAN_TYPE_FILTER_KEY, JSON.stringify([...next]));
+      const cached = state.artifacts && state.artifacts.byType && state.artifacts.byType.plan;
+      if (cached) renderArtifact('plan', cached);
+    });
+  });
+}
+
+// fr-56: Plan-tab fuzz-search input. Case-insensitive substring across
+// item id + text + body. Debounced 150ms so each keystroke doesn't
+// re-render. Query lives in state.planSearchQuery (NOT persisted —
+// resets on reload; type filters DO persist, so the reload defaults
+// to a useful state without trapping the user behind stale terms).
+function bindPlanSearch() {
+  const input = document.getElementById('plan-search');
+  if (!input) return;
+  input.value = state.planSearchQuery || '';
+  let timer = null;
+  input.addEventListener('input', () => {
+    state.planSearchQuery = input.value;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      const cached = state.artifacts && state.artifacts.byType && state.artifacts.byType.plan;
+      if (cached) renderArtifact('plan', cached);
+    }, 150);
+  });
+}
+
+// fr-56: pure filter function shared by renderArtifact('plan', ...).
+// Top-level so the regression test can simulate the same semantics
+// inline (no jsdom needed). Three independent filters, ANDed:
+//   - openOnly: drop done items
+//   - types: keep only items whose .layer is in the allowed set
+//     (null = no filter; empty array = filter out everything)
+//   - search: case-insensitive substring across id + text + body
+function _filterPlanItems(items, opts) {
+  const { openOnly, types, search } = (opts || {});
+  const typeSet = Array.isArray(types) ? new Set(types) : null;
+  const q = String(search || '').trim().toLowerCase();
+  return (items || []).filter((it) => {
+    if (!it) return false;
+    if (openOnly && it.done) return false;
+    if (typeSet && it.layer && !typeSet.has(it.layer)) return false;
+    // Items without a `layer` (forward-compat or extractor edge cases)
+    // pass the type filter — better to surface than to hide.
+    if (q) {
+      const hay = ((it.id || '') + ' ' + (it.text || '') + ' ' + (it.body || '')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
   });
 }
 

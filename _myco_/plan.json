@@ -2461,12 +2461,24 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "rs-7315059883e3",
+          "user": "claude",
+          "text": "**Done — type filter + fuzz search shipped on the Plan tab.**\n\n### What landed\n\nSecond row under the Plan header — three pill-shaped chips + a search input:\n\n```\n[Plan]                              [☐ Open only] [↻ Refresh]\n[🐞 Bug] [✨ Feature] [✅ Todo]   [🔍 Search plan items…              ]\n```\n\n### Behavior\n\n| Filter | Source | Persisted? | Default |\n|---|---|---|---|\n| Open only (bug-15, pre-existing) | localStorage.`myco_plan_open_only` | yes | OFF |\n| Type chips (Bug / Feature / Todo) | localStorage.`myco_plan_type_filter` | yes | ALL ENABLED |\n| Search (substring, case-insensitive) | `state.planSearchQuery` | **no** (fresh each reload) | empty |\n\nAll three intersect (AND). Search hits item `id` + `text` + `body`. 150ms debounce — fast feel without thrashing the renderer.\n\n### Why these specific defaults\n- Type chips default-on so the change is invisible to users who don't engage with it (matches the bug-15 opt-in pattern).\n- Search not-persisted because reloading into a stale query is hostile; the user is unlikely to want yesterday's typed query waiting for them. Type filters DO persist because they're a deliberate scope choice the user expects to stick.\n\n### Implementation shape\n- `web/public/index.html` — added `#plan-filter-row` subheader with the chips + `#plan-search` input.\n- `web/public/styles.css` — `.artifact-subheader`, `.plan-type-chip` (uses `:has(input:checked)` for active state, no JS sync needed), `.plan-search-input`, plus a mobile breakpoint that gives the search input its own line on ≤600px.\n- `web/public/app.js` — added `_filterPlanItems(items, {openOnly, types, search})` as a TOP-LEVEL function (so the test can mirror its semantics), plus `_readPlanTypeFilter()`, `bindPlanTypeFilters()`, `bindPlanSearch()`. Modified `renderArtifact('plan', …)` to do a two-phase filter — openOnly first (preserves bug-15's `items.filter((it) => !it.done)` shape + verbatim empty-state message), then type+search via `_filterPlanItems` on top.\n\n### Test\n`test/fr-56-plan-filter-search.test.js` — 20 cases:\n- HTML scaffolding (subheader + 3 chips + search input present, chips default-checked, search has aria-label + type=\"search\")\n- CSS (subheader / chip / input rules + mobile breakpoint)\n- app.js bindings (boot wiring, localStorage key, debounce, state-not-localStorage for search)\n- 9 behavior cases on a re-implemented filter function (no-op, openOnly, single type, multi-type, empty-types-array, search casing, intersect, layer-less items pass through, key destructure)\n\n20/20 ✓ direct. The existing `test/plan-open-only-toggle.test.js` (bug-15, 9 cases) was preserved verbatim by structuring renderArtifact as a two-phase filter that keeps the `items.filter((it) => !it.done)` shape and the \"All N item(s) are done. Uncheck Open only…\" empty-state message when openOnly is the only active filter — both 9/9 ✓.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1, same as the td-31..td-34 + fr-51 commits).\n\n### Takes effect immediately on browser reload\nNo server-side changes — pure web/public/ + test. Operators don't need to redeploy; next page load (and a normal `./scripts/deploy.sh` push to ship the assets) is enough.\n\nStatus: closed.",
+          "ts": "2026-05-23T04:14:06.100Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "add filter by type for plan item at the top of the view with a fuzz search",
         "rewritten": true
-      }
+      },
+      "status": "closed",
+      "closedAt": "2026-05-23T04:14:06.100Z"
     },
     {
       "id": "bug-26",
@@ -2746,14 +2758,50 @@
       "addedAt": "2026-05-23T04:01:34.197Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the file viewer path breadscrum cluttered with the icons on the top, it should be in its own row",
         "rewritten": true
       }
+    },
+    {
+      "id": "bug-34",
+      "text": "**Problem:** Plan item view's create time is ambiguous because it only shows time-of-day.\n**Expected:** Create time displays the date (and time).\n**Actual:** Only the time of day is shown, with no date.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-23T04:07:46.638Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the plan item view create time should show date, not just time of the dat",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-60",
+      "text": "**Problem:** Queued plan items still pause mid-run for user input, breaking the autopilot expectation.\n**Expected:** When submitting a plan item to the queue, gather all clarifying questions up front, then execute to completion without further interaction.\n**Actual:** Execution stops partway to ask questions that could have been asked at submission time.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-23T04:11:51.799Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "for plan items added to the queue, it should try to run to its completion without user interaction. Should ask up front question when submitting to the queue and then go into autopilot mode",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-23T04:02:11.510Z"
+  "updatedAt": "2026-05-23T04:14:06.100Z"
 }

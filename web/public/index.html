@@ -186,6 +186,29 @@
           </label>
           <button class="artifact-refresh" data-type="plan" title="Re-extract from the latest session activity">↻ Refresh</button>
         </div>
+        <!-- fr-56: type filter + fuzz search row. Chips persist across
+             reloads (localStorage.myco_plan_type_filter); search resets
+             on reload (fresh slate). Intersected with the Open only
+             toggle above by _filterPlanItems. -->
+        <div class="artifact-subheader" id="plan-filter-row">
+          <div class="plan-type-filters" role="group" aria-label="Filter plan items by type">
+            <label class="plan-type-chip" data-type="Bug" title="Show / hide Bug items">
+              <input type="checkbox" id="plan-filter-bug" checked />
+              <span>🐞 Bug</span>
+            </label>
+            <label class="plan-type-chip" data-type="Feature" title="Show / hide Feature items">
+              <input type="checkbox" id="plan-filter-feature" checked />
+              <span>✨ Feature</span>
+            </label>
+            <label class="plan-type-chip" data-type="Todo" title="Show / hide Todo items">
+              <input type="checkbox" id="plan-filter-todo" checked />
+              <span>✅ Todo</span>
+            </label>
+          </div>
+          <input type="search" id="plan-search" class="plan-search-input"
+                 placeholder="Search plan items…" autocomplete="off"
+                 aria-label="Search plan items by text or id" />
+        </div>
         <div class="artifact-body" id="artifact-body-plan">
           <div class="artifact-empty">No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo's box (or hit ▶ Run) to dispatch it to Claude — findings land as a comment on the item.</div>
         </div>

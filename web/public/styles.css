@@ -1757,6 +1757,74 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .artifact-toggle-bp input { accent-color: var(--accent); cursor: pointer; }
 .artifact-toggle-bp:hover { color: var(--text); }
+
+/* fr-56: Plan tab type-filter chips + fuzz-search row. Second row
+   directly under the Plan header so the type-chip + search affordances
+   don't crowd the title / Open-only / Refresh controls. Wraps on
+   narrow screens via flex-wrap. */
+.artifact-subheader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 8px 14px;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,.08));
+  flex-wrap: wrap;
+}
+.plan-type-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.plan-type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  background: rgba(255,255,255,.03);
+  font-size: .76rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.plan-type-chip:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+.plan-type-chip input { display: none; }
+/* Active state: when the checkbox is checked, chip lights up. Uses
+   :has() for clean state-on-label styling without JS sync. */
+.plan-type-chip:has(input:checked) {
+  background: rgba(80, 120, 200, .18);
+  color: var(--text);
+  border-color: rgba(80, 120, 200, .45);
+}
+/* fr-56 search input: takes remaining flex room on the row, monospace-
+   light styling consistent with the rest of the artifact chrome. */
+.plan-search-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 5px 10px;
+  font-size: .82rem;
+  font-family: inherit;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 4px;
+  color: var(--text);
+}
+.plan-search-input::placeholder { color: var(--muted); }
+.plan-search-input:focus {
+  outline: none;
+  border-color: rgba(80, 120, 200, .55);
+  background: rgba(255,255,255,.06);
+}
+/* Mobile: stack the chips on their own line above the search input
+   so neither gets squeezed. */
+@media (max-width: 600px) {
+  .artifact-subheader { gap: 8px; }
+  .plan-search-input { flex-basis: 100%; }
+}
+
 /* Best-practices banner injected at the top of the Arch body when the
    toggle is on. Distinct background to signal it's a template, not
    per-project content. */
