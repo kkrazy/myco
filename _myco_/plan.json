@@ -2815,12 +2815,24 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "rs-4b9638210efd",
+          "user": "claude",
+          "text": "**Fix shipped.**\n\n### What changed\nPlan-item byline was `formatChatTs(it.addedAt)` — `toLocaleTimeString` returns only HH:MM. Fine for chat bubbles in a same-day session but ambiguous for plan items days/weeks/months old: two items filed at \"14:32\" on different days looked identical.\n\nNew helper `formatChatTsWithDate(iso)` uses `toLocaleString` with `year + month + day + hour + minute` options. Example output:\n\n```\nfiled by @kkrazy · May 23, 2026, 14:32\n```\n\nWired into the plan-item byline at `renderArtifact > renderItem` (around line 6568 of `web/public/app.js`). The hover title still shows the raw ISO for precise inspection.\n\n### Scope\n**Only the plan-item byline.** Three other call sites still use the time-only `formatChatTs`:\n- Chat-bubble timestamps (same-day usage, time-only is the right shape)\n- Plan-item COMMENT timestamps (different visual context, not in bug-34 report)\n- Artifact \"Updated\" banner timestamps (different visual context, not in bug-34 report)\n\nIf the same ambiguity bites for comments or \"Updated\" banners, file a follow-up and switch those sites too. Per CLAUDE.md §8.4 surgical-edits discipline.\n\n### Null-safety\n`new Date(null)` resolves to epoch (Jan 1, 1970) — a clear failure mode for a \"filed at\" line. The new helper short-circuits on `null` / `undefined` / `''` and returns `''` so the byline cleanly omits the timestamp instead of showing 1970.\n\n### Test\n`test/bug-34-plan-item-create-time-shows-date.test.js` — 9 cases:\n- Static: helper exists, uses `toLocaleString` (not `toLocaleTimeString`), requires year+month+day+hour+minute options, is null-safe\n- Static: plan-item byline calls the new helper; negative guard that the OLD `formatChatTs(it.addedAt)` call is gone\n- Behavior simulation on fixed ISO inputs: valid → contains year + HH:MM + month, null/undefined/\"\" → \"\", invalid → \"\", **bug-34 repro**: two items same time-of-day different days produce DIFFERENT strings\n- Scope tripwire: `formatChatTs` still has ≥3 call sites (chat bubbles + comments + Updated banner) so the fix didn't accidentally sweep beyond the bug-34 scope\n\n9/9 ✓ direct. **Red-flipped against pre-fix code (4/9 failed via git stash)** — confirms the test catches the regression.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1, same as every commit since td-31).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure `web/public/app.js` change — no server rebuild required.\n\nStatus: closed.",
+          "ts": "2026-05-23T04:52:01.457Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the plan item view create time should show date, not just time of the dat",
         "rewritten": true
-      }
+      },
+      "status": "closed",
+      "closedAt": "2026-05-23T04:52:01.457Z"
     },
     {
       "id": "fr-60",
@@ -2839,5 +2851,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-23T04:47:56.005Z"
+  "updatedAt": "2026-05-23T04:52:01.457Z"
 }

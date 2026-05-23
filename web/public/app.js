@@ -3606,6 +3606,34 @@ function formatChatTs(iso) {
   } catch { return ''; }
 }
 
+// bug-34: plan-item create-time variant that includes the date. The
+// time-only formatChatTs above is fine for chat bubbles (typically
+// today's session) but plan items can be days / weeks / months old —
+// "filed by @user · 14:32" is genuinely ambiguous when you can't
+// tell which day. Locale-formatted "MMM D, YYYY, HH:MM" keeps the
+// row compact while disambiguating fully.
+//
+// NOTE: only wired into the plan-item byline (renderItem in
+// renderArtifact). The adjacent plan-item comment timestamps + the
+// artifact "Updated" banner still use the time-only formatChatTs;
+// scope-limited per the bug-34 report. If the same ambiguity bites
+// for comments / updated banners, file a follow-up and switch those
+// sites too.
+function formatChatTsWithDate(iso) {
+  // Defensive: null / undefined / empty resolve to "" rather than
+  // `new Date(null)`'s default-to-epoch behavior (would render
+  // "Jan 1, 1970" — a clear failure mode for a "filed at" line).
+  if (iso === null || iso === undefined || iso === '') return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString([], {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch { return ''; }
+}
+
 // Chat-only flow for messages forwarded to claude.
 //
 // When the user sends a chat message, all of claude's response stream
@@ -6565,7 +6593,7 @@ function renderArtifact(type, artifact) {
     // it.addedBy being truthy so legacy items (filed before the field
     // was tracked) render with no line at all.
     const byLine = it.addedBy
-      ? `<div class="artifact-item-by" title="filed by @${escHtml(it.addedBy)} at ${escHtml(it.addedAt || 'unknown')}">filed by @${escHtml(it.addedBy)}${it.addedAt ? ' · ' + escHtml(formatChatTs(it.addedAt) || it.addedAt) : ''}</div>`
+      ? `<div class="artifact-item-by" title="filed by @${escHtml(it.addedBy)} at ${escHtml(it.addedAt || 'unknown')}">filed by @${escHtml(it.addedBy)}${it.addedAt ? ' · ' + escHtml(formatChatTsWithDate(it.addedAt) || it.addedAt) : ''}</div>`
       : '';
     const mergedFrom = Array.isArray(it.mergedFrom) ? it.mergedFrom : [];
     const mergedBadge = mergedFrom.length

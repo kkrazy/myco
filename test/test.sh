@@ -2694,6 +2694,16 @@ test_chat_window() {
   # id preserved for fr-50 tests) + the CSS (flex-column parent, 92px
   # right padding on nav row, :has auto-show, crumb ellipsis preserved).
   node_test_result test/bug-33-file-viewer-breadcrumb-row.test.js "test/bug-33-file-viewer-breadcrumb-row.test.js (9 cases)"
+  # bug-34: plan-item byline timestamp now includes the date — was
+  # formatChatTs (time-only, ambiguous for items days/weeks old);
+  # now formatChatTsWithDate ("MMM D, YYYY, HH:MM" via toLocaleString).
+  # Scope-limited to the plan-item byline; adjacent comment + Updated
+  # banner timestamps deliberately still use formatChatTs (the bug-34
+  # report didn't mention them). Static guards on the helper shape +
+  # null-safety, the byline call site, behavior simulation on fixed
+  # ISO inputs, and a negative guard that the wider formatChatTs use
+  # wasn't accidentally swept (scope-creep tripwire).
+  node_test_result test/bug-34-plan-item-create-time-shows-date.test.js "test/bug-34-plan-item-create-time-shows-date.test.js (9 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-
