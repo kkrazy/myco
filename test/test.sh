@@ -2685,6 +2685,15 @@ test_chat_window() {
   # cleanup block (gated on state.activeId === s.id) + a simulated
   # state-effect assertion.
   node_test_result test/bug-29-delete-clears-plan.test.js "test/bug-29-delete-clears-plan.test.js (9 cases)"
+  # bug-33: file viewer header is now two stacked rows — nav (back +
+  # breadcrumb) on top, actions (edit/save/cancel/wrap/copy) below.
+  # Actions row auto-hides via :has(button:not([hidden])) so a
+  # non-editable file open keeps the minimal one-row look. Static
+  # guards pin the HTML structure (two .files-view-header-row divs,
+  # breadcrumb in nav row + 5 actions in actions row, every existing
+  # id preserved for fr-50 tests) + the CSS (flex-column parent, 92px
+  # right padding on nav row, :has auto-show, crumb ellipsis preserved).
+  node_test_result test/bug-33-file-viewer-breadcrumb-row.test.js "test/bug-33-file-viewer-breadcrumb-row.test.js (9 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-

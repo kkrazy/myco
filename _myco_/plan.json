@@ -2785,12 +2785,24 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "rs-dddd77934f23",
+          "user": "claude",
+          "text": "**Fix shipped.**\n\n### What changed\n`#files-view-header` was a single flex row mixing 7 controls (back button + breadcrumb + spacer + 5 action buttons + 92px right-padding for the floating chrome). On narrow viewports or deep paths the row got crowded. Per the user's expected behavior, the breadcrumb now lives on its own dedicated row.\n\n### Two-row layout\n\n```\n[← back]  path/to/some/file.js                                  ← Row 1: .files-view-header-nav\n                                           [✎ Edit] [📋 Copy]    ← Row 2: .files-view-header-actions\n```\n\n- **Row 1** (`.files-view-header-nav`): back button + breadcrumb. Keeps the 92px right-padding to clear the floating `#btn-files` + `#btn-chat` chrome.\n- **Row 2** (`.files-view-header-actions`): the 5 action buttons (`#files-edit`, `#files-edit-save`, `#files-edit-cancel`, `#files-wrap-toggle`, `#files-copy`). Right-aligned via `justify-content: flex-end` to match the pre-fix visual.\n\n### Auto-hide the actions row when empty\nAll 5 action buttons are `hidden` by default and shown contextually (e.g. only the owner sees Edit; Save+Cancel only appear during an edit). The actions row uses:\n\n```css\n.files-view-header-actions { display: none; }\n.files-view-header-actions:has(button:not([hidden])) { display: flex; }\n```\n\nSo when no action button is visible (non-editable file open, fresh viewer), the row collapses to zero height — the header looks identical to a one-row \"just the breadcrumb\" layout for the common case. When ANY button becomes visible, the row appears under the breadcrumb. `:has()` has full modern-browser support (2023+).\n\n### Backwards-compat\nEvery existing id is preserved (`#files-view-back`, `#files-view-crumbs`, `#files-edit`, …). The fr-50 tests (edit-button visibility + the file-editor flow) keep passing unchanged — 5/5 + 17/17 ✓ after the move.\n\n### Test\n`test/bug-33-file-viewer-breadcrumb-row.test.js` — 9 cases:\n- HTML structure: two rows with the correct class names, nav row has back+crumb, actions row has all 5 buttons, breadcrumb NOT in actions row\n- CSS: `flex-direction: column` on the header, nav row keeps 92px right padding, actions row has `display:none` + `:has()` auto-show, crumb `flex:1 / min-width:0 / overflow:hidden` for ellipsis preserved\n- Backwards-compat: every existing id still present\n\n9/9 ✓ direct. **Red-flipped against pre-fix code (3/9 failed via git stash)** — the structural guards trip without the layout split. Adjacent file-viewer tests: fr-50-edit-button-visible 5/5 ✓, fr-50-file-editor 17/17 ✓ — bug-33's HTML re-arrangement preserved their contracts.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1, same as every commit since td-31).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/ change — no server rebuild needed for correctness.\n\nStatus: closed.",
+          "ts": "2026-05-23T04:47:56.005Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the file viewer path breadscrum cluttered with the icons on the top, it should be in its own row",
         "rewritten": true
-      }
+      },
+      "status": "closed",
+      "closedAt": "2026-05-23T04:47:56.005Z"
     },
     {
       "id": "bug-34",
@@ -2827,5 +2839,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-23T04:41:22.792Z"
+  "updatedAt": "2026-05-23T04:47:56.005Z"
 }

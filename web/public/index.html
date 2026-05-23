@@ -252,21 +252,32 @@
           <div id="files-tree-msg" hidden></div>
         </div>
         <div id="files-view-pane" hidden>
+          <!-- bug-33: header is two stacked rows so the breadcrumb path
+               gets its own row and isn't crammed against the action
+               icons. Row 1 holds back-button + breadcrumb (the "nav +
+               context" row, kept under the floating chrome buttons via
+               the 92px right padding). Row 2 holds the edit/save/cancel/
+               wrap/copy action buttons; the row auto-hides via :has when
+               every button is hidden (default state for non-editable
+               files / fresh open). -->
           <header id="files-view-header">
-            <button id="files-view-back" title="Back to tree" aria-label="Back to tree">
-              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-            </button>
-            <span id="files-view-crumbs"></span>
-            <span class="header-spacer"></span>
-            <!-- Owner-only edit affordances. JS hides these for viewers
-                 (state.viewerMode === true). Edit swaps the rendered
-                 body for a textarea; Save POSTs to /file/edit; Cancel
-                 reverts to the rendered view without writing. -->
-            <button id="files-edit" title="Edit this file (owner only)" hidden>✎ Edit</button>
-            <button id="files-edit-save" title="Save changes" hidden>💾 Save</button>
-            <button id="files-edit-cancel" title="Cancel edit" hidden>✕ Cancel</button>
-            <button id="files-wrap-toggle" title="Toggle wrap" hidden>⏎</button>
-            <button id="files-copy" title="Copy" hidden>📋</button>
+            <div class="files-view-header-row files-view-header-nav">
+              <button id="files-view-back" title="Back to tree" aria-label="Back to tree">
+                <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+              <span id="files-view-crumbs"></span>
+            </div>
+            <div class="files-view-header-row files-view-header-actions">
+              <!-- Owner-only edit affordances. JS hides these for viewers
+                   (state.viewerMode === true). Edit swaps the rendered
+                   body for a textarea; Save POSTs to /file/edit; Cancel
+                   reverts to the rendered view without writing. -->
+              <button id="files-edit" title="Edit this file (owner only)" hidden>✎ Edit</button>
+              <button id="files-edit-save" title="Save changes" hidden>💾 Save</button>
+              <button id="files-edit-cancel" title="Cancel edit" hidden>✕ Cancel</button>
+              <button id="files-wrap-toggle" title="Toggle wrap" hidden>⏎</button>
+              <button id="files-copy" title="Copy" hidden>📋</button>
+            </div>
           </header>
           <div id="files-action-bar" hidden>
             <span id="files-action-label">L—</span>

@@ -3517,19 +3517,52 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: #0d1117;
   position: relative;       /* anchor for the floating action bar */
 }
+/* bug-33: two-row layout. Row 1 holds back-button + breadcrumb (the
+   "nav + context" row, padded right to clear the floating chrome).
+   Row 2 holds the edit/save/cancel/wrap/copy action buttons and
+   auto-hides via :has when all buttons are hidden. The parent is now
+   flex-column to stack the two rows; the per-row styles live in
+   .files-view-header-row + the two specific row classes below. */
 #files-view-header {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 92px 8px 12px;        /* right padding clears #btn-files + #btn-chat (32+8+32+10+10) */
-  min-height: var(--pane-header-h);  /* shared with sidebar / file list / chat */
+  flex-direction: column;
   box-sizing: border-box;
   border-bottom: 1px solid rgba(255, 255, 255, .06);
   font: 12px 'JetBrains Mono', monospace;
   background: rgba(255, 255, 255, .02);
-  flex-wrap: nowrap;                 /* directory + filename stay on one line */
   flex-shrink: 0;
-  overflow: hidden;                  /* crumbs shrink with ellipsis instead of wrapping */
+}
+.files-view-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.files-view-header-nav {
+  /* Right-padding 92px clears the floating #btn-files + #btn-chat
+     chrome (32+8+32+10+10) so the breadcrumb tail doesn't disappear
+     under them. min-height matches the original #files-view-header
+     line so external layouts that measured against --pane-header-h
+     keep their sizing. */
+  padding: 8px 92px 8px 12px;
+  min-height: var(--pane-header-h);
+}
+.files-view-header-actions {
+  /* Action buttons right-aligned (matches the pre-bug-33 visual where
+     the .header-spacer flex:1 pushed them to the right). Bottom padding
+     gives a clean line under the action row before the file body. */
+  justify-content: flex-end;
+  padding: 4px 12px 6px 12px;
+  /* Default hidden — only show when at least one action button is
+     visible (i.e. has no `hidden` attribute). Uses :has, supported in
+     all modern browsers since 2023. When every button is hidden (the
+     non-editable file / fresh open default), this row collapses to
+     zero height, leaving the breadcrumb row alone on top. */
+  display: none;
+}
+.files-view-header-actions:has(button:not([hidden])) {
+  display: flex;
 }
 #files-view-header button {
   background: transparent;
@@ -3543,6 +3576,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   flex-shrink: 0;
 }
 #files-view-header button:hover { background: rgba(255, 255, 255, .08); }
+/* .header-spacer: kept as a no-op for any historical / cross-pane
+   reference. The pre-bug-33 layout used this as a flex:1 separator
+   between the breadcrumb and the action buttons on a single row; the
+   new two-row layout doesn't need it but harmlessly keeps it styled. */
 #files-view-header .header-spacer { flex: 1; }
 #files-save { background: rgba(80, 160, 110, .25) !important; font-weight: 600; }
 #files-save:hover { background: rgba(80, 160, 110, .40) !important; }
