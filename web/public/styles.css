@@ -2350,6 +2350,30 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   .artifact-item-edited .btn-icon {
     padding: 0 4px;
   }
+  /* User feedback: "make the bottom buttons to take the entire row
+     space, adjust icon size if needed to make sure all button show
+     up in one row." */
+  .artifact-item-actions {
+    flex-wrap: nowrap;      /* keep everything on one row */
+    gap: 6px;               /* tighter than the 10px from fr-62 — room for all 6 buttons on a 360px phone */
+    overflow-x: auto;       /* if it truly doesn't fit, horizontal-scroll instead of clipping */
+    -webkit-overflow-scrolling: touch;
+  }
+  .artifact-item-actions > button {
+    flex: 1 1 0;            /* every button takes an equal share of the row */
+    min-width: 0;           /* allow shrinking below the fr-62 44px target if necessary */
+    justify-content: center;/* center the icon when the button is wider than its content */
+  }
+}
+/* Reduce icon font slightly on very narrow viewports (<= 380px /
+   small phones in portrait) so a 6-button row fits without
+   overflowing into the horizontal-scroll fallback above. Flat
+   media query (not nested inside the 900px block) for broader
+   browser compat. */
+@media (max-width: 380px) {
+  .artifact-item-actions .btn-icon {
+    font-size: 0.9em;
+  }
 }
 
 /* fr-62: tap-target bump on mobile. Plan-item action buttons are
