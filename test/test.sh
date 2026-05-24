@@ -2813,7 +2813,21 @@ test_chat_window() {
   # listener-count collapse + push site + per-flag binding + end-to-end
   # behavior simulation against a real EventEmitter (two parallel
   # dispatches each get their own response).
-  node_test_result test/bug-36-parallel-run-clobber.test.js "test/bug-36-parallel-run-clobber.test.js (11 cases)"
+  node_test_result test/bug-36-parallel-run-clobber.test.js "test/bug-36-parallel-run-clobber.test.js (12 cases)"
+  # bug-37: SDK batches rapid session.write calls into one turn (verified
+  # via opti's events.jsonl, 2026-05-24 15:54: 3 writes → 1 turn_result).
+  # The bug-36 FIFO assumed 1:1 — popping one head per turn_result left
+  # the other batched entries stranded, and every subsequent turn bound
+  # to the wrong item. Fix (variant B): count turn_start events as
+  # session._pendingTurnStarts; on terminal pop max(1, pendingTurnStarts)
+  # heads (capped at queue.length); distribute the SAME agent response
+  # to EVERY popped head's chat-side binding (each item's panel gets a
+  # full copy of the agent's reply since the SDK batched these into one
+  # logical turn). _bindHeadToTerminal helper factored out — main pop-
+  # loop + fr-51 fallback share the binding logic. assistant_text now
+  # always buffers into queue[0] (chatBound gate dropped) so mixed
+  # batches still capture text.
+  node_test_result test/bug-37-sdk-batched-turn-distribution.test.js "test/bug-37-sdk-batched-turn-distribution.test.js (8 cases)"
   # fr-90 Phase 0: worktree MCP tools (worktree_create / remove / list)
   # + registry at <absCwd>/_myco_/worktrees.json + helpers exported
   # for Phase 1 dispatch use. Foundation for parallel item runs (Phase

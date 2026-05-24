@@ -157,14 +157,30 @@ function _registerExternalSession(sessionId, session) {
       if (!Array.isArray(session._activeItemQueue)) {
         session._activeItemQueue = [];
       }
+      if (typeof session._pendingTurnStarts !== 'number') {
+        session._pendingTurnStarts = 0;
+      }
       const queue = session._activeItemQueue;
-      // assistant_text events accumulate into the head's buffer ONLY
-      // when the head is chat-bound. Run-only turns don't drive a
-      // chat panel response, so their assistant_text doesn't need
-      // capturing here (rec.chat still records it via the parallel
-      // chat-persistence listener in agent-session.js).
+      // bug-37: count turn_start events between terminal events. The
+      // SDK's streaming-input mode (agent-session.js write()) emits
+      // one turn_start per session.write call, but BATCHES rapid
+      // writes into a single logical turn — so N writes can produce
+      // M ≤ N turn_results. Pre-bug-37 the listener assumed 1:1 and
+      // popped one head per turn_result, leaving the rest of the
+      // batched entries stranded at the head + every subsequent
+      // turn bound to the wrong item. Now: count turn_starts, then
+      // on the next terminal event pop EXACTLY that many heads.
+      if (ev.type === 'turn_start') {
+        session._pendingTurnStarts += 1;
+        return;
+      }
+      // assistant_text accumulates into queue[0]._buffer. We always
+      // buffer (regardless of chatBound) so that a mixed batch
+      // (queue[0]=run-only, queue[1]=chat-bound) still captures the
+      // shared turn text — every chat-bound head in the batch will
+      // get the same buffer distributed on terminal (bug-37 variant B).
       if (ev.type === 'assistant_text' && typeof ev.text === 'string') {
-        if (queue.length > 0 && queue[0].chatBound) {
+        if (queue.length > 0) {
           queue[0]._buffer += ev.text;
         }
         return;
@@ -176,21 +192,27 @@ function _registerExternalSession(sessionId, session) {
       // 'running' forever, blocking pending entries from advancing.
       const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
       if (!terminalTypes.has(ev.type)) return;
-      // Pop the FIFO head — this is the item whose turn just landed.
-      let head = queue.length > 0 ? queue.shift() : null;
-      // fr-51 fallback (belt-and-braces): if the queue head is null
-      // when a terminal event arrives but rec.runQueue has a running
-      // entry, use THAT as the source of truth. Covers session
-      // re-instantiation by the 5-min reaper + any dispatch path
-      // that bypassed handleChatMessage's marker push. Diag log
-      // preserved so the underlying staleness can still be root-
-      // caused in follow-up.
-      if (!head) {
+      // bug-37: how many heads should this terminal event pop?
+      //   max(1, pendingTurnStarts)  — at least 1 (defensive — covers
+      //   cases where the SDK fires a terminal without a preceding
+      //   turn_start, like fr-51's fallback scenario).
+      //   capped at queue.length      — never shift more than is there.
+      // pendingTurnStarts is then reset to 0 for the next turn.
+      let popCount = Math.max(1, session._pendingTurnStarts);
+      session._pendingTurnStarts = 0;
+      if (queue.length === 0) {
+        // fr-51 fallback (belt-and-braces): if the queue is empty
+        // when a terminal event arrives but rec.runQueue has a
+        // running entry, synthesize a run-bound head from it. Covers
+        // session re-instantiation by the 5-min reaper + any dispatch
+        // path that bypassed handleChatMessage's marker push. Diag
+        // log preserved so the underlying staleness can still be
+        // root-caused in follow-up.
         const rec = sessionsMod.getSessionRecord(sessionId);
         const runningEntry = rec && Array.isArray(rec.runQueue)
           && rec.runQueue.find((e) => e && e.status === 'running');
         if (runningEntry) {
-          head = {
+          const synthHead = {
             itemId: runningEntry.itemId,
             type: 'plan',
             chatBound: false,
@@ -199,44 +221,21 @@ function _registerExternalSession(sessionId, session) {
             _buffer: '',
           };
           console.log(`[runQueue-diag] ${sessionId} ${ev.type} — _activeItemQueue head was null; falling back to queue's running entry ${runningEntry.itemId} (fr-51 belt-and-braces)`);
-        } else {
-          return;   // truly nothing to advance
+          _bindHeadToTerminal(sessionId, session, synthHead, ev, '');
         }
+        return;
       }
-      // Run-bound: stamp runs[] outcome + advance the run-queue.
-      if (head.runBound) {
-        if (ev.type === 'turn_result') {
-          try {
-            _stampPlanItemRunOutcome(sessionId, head.itemId, ev, head.startedAt);
-          } catch (err) {
-            console.error('[plan-run] stamp outcome failed:', err.message);
-          }
-        } else {
-          // For abort/fatal, stamp a brief synthetic "aborted"/"error"
-          // run record so the plan item's chip strip reflects the
-          // outcome even when the queue is what fired the terminal.
-          const synthStatus = ev.type === 'iteration_aborted' ? 'aborted' : 'error';
-          try {
-            _stampPlanItemStatus(sessionId, head.itemId, synthStatus,
-              ev.type === 'iteration_aborted' ? 'interrupted by Stop' : (ev.error || 'fatal'));
-          } catch (err) {
-            console.error('[plan-run] stamp status (' + ev.type + ') failed:', err.message);
-          }
-        }
-        try {
-          _advanceRunQueue(sessionId, session, head.itemId, ev);
-        } catch (err) {
-          console.error('[runQueue] auto-advance failed:', err.message);
-        }
-      }
-      // Chat-bound: flush accumulated assistant_text into the item's
-      // aiChat[] so the panel renders the agent's response.
-      if (head.chatBound) {
-        try {
-          _appendAgentAiChatTurn(sessionId, head.itemId, ev, head._buffer);
-        } catch (err) {
-          console.error('[ai-chat] agent turn append failed:', err.message);
-        }
+      popCount = Math.min(popCount, queue.length);
+      // bug-37 variant B: capture the shared buffer (queue[0]'s
+      // accumulated assistant_text) BEFORE popping, so every popped
+      // head's chat-binding gets the same agent text. The SDK
+      // batched these writes into one logical turn — its response
+      // applies to all of them.
+      const sharedBuffer = queue[0]._buffer || '';
+      for (let i = 0; i < popCount; i++) {
+        const head = queue.shift();
+        if (!head) break;
+        _bindHeadToTerminal(sessionId, session, head, ev, sharedBuffer);
       }
     });
     session.on('exit', () => {
@@ -247,6 +246,48 @@ function _registerExternalSession(sessionId, session) {
     });
   }
   return session;
+}
+
+// bug-37: helper that binds ONE FIFO head to a terminal event.
+// Factored out so the merged listener's main pop-loop and the fr-51
+// fallback path share the same binding logic. Each head gets:
+//   - run-side: _stampPlanItemRunOutcome (turn_result) /
+//               _stampPlanItemStatus (abort/fatal) + _advanceRunQueue
+//               when head.runBound
+//   - chat-side: _appendAgentAiChatTurn with sharedBuffer when
+//               head.chatBound — same agent text distributed to every
+//               popped head per bug-37 variant B (SDK-batched turns
+//               apply to every item in the batch).
+function _bindHeadToTerminal(sessionId, session, head, ev, sharedBuffer) {
+  if (head.runBound) {
+    if (ev.type === 'turn_result') {
+      try {
+        _stampPlanItemRunOutcome(sessionId, head.itemId, ev, head.startedAt);
+      } catch (err) {
+        console.error('[plan-run] stamp outcome failed:', err.message);
+      }
+    } else {
+      const synthStatus = ev.type === 'iteration_aborted' ? 'aborted' : 'error';
+      try {
+        _stampPlanItemStatus(sessionId, head.itemId, synthStatus,
+          ev.type === 'iteration_aborted' ? 'interrupted by Stop' : (ev.error || 'fatal'));
+      } catch (err) {
+        console.error('[plan-run] stamp status (' + ev.type + ') failed:', err.message);
+      }
+    }
+    try {
+      _advanceRunQueue(sessionId, session, head.itemId, ev);
+    } catch (err) {
+      console.error('[runQueue] auto-advance failed:', err.message);
+    }
+  }
+  if (head.chatBound) {
+    try {
+      _appendAgentAiChatTurn(sessionId, head.itemId, ev, sharedBuffer);
+    } catch (err) {
+      console.error('[ai-chat] agent turn append failed:', err.message);
+    }
+  }
 }
 
 // Update the running status of a plan item before a turn lands. The

@@ -140,18 +140,22 @@ t('attach.js: FIFO push happens RIGHT BEFORE session.write (not in marker block 
     'the .push must be after appendChatMessage (i.e. on the dispatch path, not the early marker-parse block)');
 });
 
-t('attach.js: fr-51 fallback preserved (queue head null + rec.runQueue running → bind)', () => {
+t('attach.js: fr-51 fallback preserved (queue empty + rec.runQueue running → bind)', () => {
   // The fr-51 belt-and-braces fallback covers cases where the FIFO
-  // entry was lost (session re-instantiation, etc.). The listener
-  // must still consult rec.runQueue for a running entry when the
-  // shifted head is null.
-  const idx = ATTACH.search(/queue\.shift\s*\(/);
-  assert.ok(idx > -1, 'queue.shift() call must exist in the listener');
-  const win = ATTACH.slice(idx, idx + 2500);
+  // entry was lost (session re-instantiation, etc.). When the queue
+  // is empty on a terminal event but rec.runQueue has a running
+  // entry, the listener synthesizes a run-bound head from it.
+  // bug-37 refactor: the binding goes through _bindHeadToTerminal
+  // helper now (factored out from the listener body).
+  const listenerIdx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
+  assert.ok(listenerIdx > -1, 'agent-event listener must exist');
+  const win = ATTACH.slice(listenerIdx, listenerIdx + 5000);
   assert.ok(/runningEntry|rec\.runQueue/.test(win),
-    'after shift, listener must fall back to rec.runQueue.find(running) when head is null');
+    'listener must look up rec.runQueue.find(running) when queue is empty');
   assert.ok(/\[runQueue-diag\]/.test(win),
     'fr-51 diag log line must still fire on fallback');
+  assert.ok(/_bindHeadToTerminal\s*\(|synthHead/.test(win),
+    'fallback must synthesize a head + bind it via _bindHeadToTerminal (bug-37 refactor)');
 });
 
 // ──────────────────────────────────────────────────────────────────────

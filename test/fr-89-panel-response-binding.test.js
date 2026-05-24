@@ -129,29 +129,38 @@ t('attach.js: bug-36 FIFO replaces the fr-89 singular-slot + preempt-flush pair'
     'singular session._activeRunItem must be gone from runtime code (replaced by FIFO)');
 });
 
-t('attach.js: agent-event listener pops FIFO head + binds via chatBound/runBound flags', () => {
-  // The listener must shift() the head on terminal events and
-  // dispatch to the chat-side and run-side handlers based on the
-  // entry's flags. Pin both the shift + the flag-driven branches.
+t('attach.js: agent-event listener pops FIFO head(s) + binds via chatBound/runBound flags', () => {
+  // The listener pops head(s) on terminal events and dispatches via
+  // the _bindHeadToTerminal helper (bug-37 refactor). The helper
+  // contains the per-side branching.
   const idx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
   assert.ok(idx > -1, 'agent-event listener must exist');
-  const win = ATTACH.slice(idx, idx + 4000);
-  assert.ok(/\.shift\s*\(/.test(win), 'listener must .shift() the FIFO head');
-  assert.ok(/head\.chatBound|chatBound\)/.test(win),
-    'listener must branch on head.chatBound for chat-side binding');
-  assert.ok(/head\.runBound|runBound\)/.test(win),
-    'listener must branch on head.runBound for run-side binding');
+  const win = ATTACH.slice(idx, idx + 5000);
+  assert.ok(/\.shift\s*\(/.test(win), 'listener must .shift() the FIFO head(s)');
+  assert.ok(/_bindHeadToTerminal\s*\(/.test(win),
+    'listener must call _bindHeadToTerminal helper (bug-37 refactor)');
+  // The helper must branch on both flags.
+  const helperIdx = ATTACH.search(/function\s+_bindHeadToTerminal\s*\(/);
+  const helperWin = ATTACH.slice(helperIdx, helperIdx + 2000);
+  assert.ok(/head\.chatBound|chatBound\)/.test(helperWin),
+    '_bindHeadToTerminal must branch on head.chatBound for chat-side binding');
+  assert.ok(/head\.runBound|runBound\)/.test(helperWin),
+    '_bindHeadToTerminal must branch on head.runBound for run-side binding');
 });
 
-t('attach.js: assistant_text only accumulates into the head\'s buffer when chatBound', () => {
-  // Run-only turns must NOT capture assistant_text into a buffer that
-  // gets bound to a chat item somewhere else — that was the original
-  // clobber. Pin the chatBound gate around the buffer-accumulate path.
+t('attach.js: assistant_text accumulates into head[0]\'s buffer (bug-37 variant B)', () => {
+  // bug-37 dropped the chatBound gate on assistant_text buffering.
+  // Variant B: ALWAYS buffer into queue[0]._buffer so a mixed batch
+  // (queue[0]=run-only, queue[1]=chat-bound) still captures the
+  // shared turn text — the same buffer is distributed to every
+  // popped head\'s chat-side binding via _bindHeadToTerminal.
   const idx = ATTACH.search(/_activeItemQueue/);
-  const win = ATTACH.slice(idx, idx + 4000);
-  // Match e.g. `if (queue.length > 0 && queue[0].chatBound) { ... _buffer += ev.text` etc.
-  assert.ok(/chatBound[\s\S]{0,80}_buffer\s*\+=/.test(win),
-    'assistant_text buffer-accumulate must be gated on head.chatBound — otherwise run-only turns clobber the head\'s buffer');
+  const win = ATTACH.slice(idx, idx + 5000);
+  // Buffer-accumulate uses queue[0]._buffer += ev.text (gated only
+  // on queue.length > 0, not chatBound).
+  assert.ok(/queue\[0\]\._buffer\s*\+=\s*ev\.text/.test(win) ||
+            /_buffer\s*\+=\s*ev\.text/.test(win),
+    'listener must accumulate assistant_text into queue[0]._buffer (bug-37 variant B: always buffer, distribute on terminal)');
 });
 
 // ──────────────────────────────────────────────────────────────────────

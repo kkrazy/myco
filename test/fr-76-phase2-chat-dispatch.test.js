@@ -151,29 +151,46 @@ t('agent-event listener accumulates assistant_text into the FIFO head\'s _buffer
 
 t('agent-event listener flushes on terminal event (turn_result/iteration_aborted/fatal)', () => {
   // Same terminal-types set the bug-36 merged listener handles (per
-  // fr-51\'s contract). Pin all three within the listener body.
+  // fr-51\'s contract). Pin all three. bug-37 refactor: the actual
+  // _appendAgentAiChatTurn call moved into the _bindHeadToTerminal
+  // helper; the listener pops heads + calls the helper.
   const listenerIdx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
   assert.ok(listenerIdx > -1, 'agent-event listener must exist');
   const window = ATTACH.slice(listenerIdx, listenerIdx + 5000);
-  assert.ok(/_appendAgentAiChatTurn\s*\(/.test(window),
-    '_appendAgentAiChatTurn must be called from the listener');
+  assert.ok(/_bindHeadToTerminal\s*\(/.test(window),
+    '_bindHeadToTerminal helper must be called from the listener (bug-37 refactor)');
+  // The helper itself must call _appendAgentAiChatTurn.
+  const helperIdx = ATTACH.search(/function\s+_bindHeadToTerminal\s*\(/);
+  assert.ok(helperIdx > -1, '_bindHeadToTerminal helper must be defined');
+  const helperWin = ATTACH.slice(helperIdx, helperIdx + 2000);
+  assert.ok(/_appendAgentAiChatTurn\s*\(/.test(helperWin),
+    '_bindHeadToTerminal must call _appendAgentAiChatTurn for chat-bound heads');
+  // Terminal types — listener handles ALL three.
   assert.ok(/turn_result/.test(window) && /iteration_aborted/.test(window) && /fatal/.test(window),
     'agent-event listener must handle ALL three terminal event types (turn_result + iteration_aborted + fatal) — same fr-51 contract');
 });
 
-t('agent-event listener pops FIFO head BEFORE binding (avoid re-entry)', () => {
-  // bug-36 replacement: was clearing session._activeChatItem to null
-  // before calling _appendAgentAiChatTurn; now the .shift() pops the
-  // head BEFORE the bind calls so a state-update triggered by the
-  // append cannot re-enter and re-process the same entry.
-  const listenerIdx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
-  const window = ATTACH.slice(listenerIdx, listenerIdx + 5000);
-  const shiftIdx = window.search(/\.shift\s*\(/);
-  const bindIdx = window.search(/_appendAgentAiChatTurn\s*\(/);
-  assert.ok(shiftIdx > -1, 'listener must .shift() the FIFO head');
-  assert.ok(bindIdx > -1, 'listener must call _appendAgentAiChatTurn');
+t('agent-event listener pops FIFO head(s) BEFORE binding (avoid re-entry)', () => {
+  // bug-36 + bug-37: was clearing session._activeChatItem to null
+  // before calling _appendAgentAiChatTurn; now the .shift() pops
+  // head(s) BEFORE the bind helper calls so state-update broadcasts
+  // can\'t re-enter and re-process the same entries.
+  //
+  // Source-order check: the for-loop pattern must be
+  //   `const head = queue.shift(); ... _bindHeadToTerminal(...head...)`
+  // i.e. .shift() and _bindHeadToTerminal in close proximity, with
+  // shift first. Anchored on a window around the loop, not the
+  // fallback path (which constructs synthHead inline + binds without
+  // shifting).
+  const loopIdx = ATTACH.search(/for\s*\([^)]+;[^)]+;[^)]+\)\s*\{[\s\S]{0,80}\.shift\s*\(/);
+  assert.ok(loopIdx > -1, 'pop-loop with .shift() must exist in the listener');
+  const loopWin = ATTACH.slice(loopIdx, loopIdx + 600);
+  const shiftIdx = loopWin.search(/\.shift\s*\(/);
+  const bindIdx = loopWin.search(/_bindHeadToTerminal\s*\(/);
+  assert.ok(shiftIdx > -1, 'loop must .shift()');
+  assert.ok(bindIdx > -1, 'loop must call _bindHeadToTerminal');
   assert.ok(shiftIdx < bindIdx,
-    '.shift() (pop head) must come BEFORE _appendAgentAiChatTurn — avoids re-entry on state-update');
+    '.shift() must come BEFORE _bindHeadToTerminal in the pop-loop');
 });
 
 // ──────────────────────────────────────────────────────────────────────
