@@ -6536,6 +6536,15 @@ function renderArtifact(type, artifact) {
     const points = voters.length;
     const userHasVoted = !!(me && voters.includes(me));
     const comments = Array.isArray(it.comments) ? it.comments : [];
+    // fr-64: status chip — 🟢 closed / ▶ running / ⏸ queued /
+    // 📌 in-progress (has runs) / ⚪ open. Derived from existing
+    // state (it.done, it.runs[], state.runQueue.entries) — no schema
+    // change. Plan-only (supportsVoting): the test artifact doesn't
+    // have a queue/done lifecycle to surface.
+    const statusChip = supportsVoting
+      ? _planItemStatusChipHtml(_planItemStatus(it,
+          (state.runQueue && state.runQueue.entries) || []))
+      : '';
     const voteBlock = supportsVoting ? `
       <button class="artifact-vote ${userHasVoted ? 'is-voted' : ''}" data-id="${escHtml(it.id)}"
               title="${userHasVoted ? 'Click to remove your vote' : 'Click to vote — items at 2 votes auto-execute'}">
@@ -6715,6 +6724,7 @@ function renderArtifact(type, artifact) {
     const liId = it.id ? `id="artifact-item-${escHtml(it.id)}"` : '';
     return `<li class="${cls}" ${liId} data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
+        ${statusChip}
         ${idChip}
         <div class="artifact-item-text artifact-md">${renderMd(it.text || '')}</div>
       </div>
@@ -9061,6 +9071,41 @@ function _readPlanLayerExpanded(layerKey) {
 }
 function _writePlanLayerExpanded(layerKey, expanded) {
   try { localStorage.setItem('myco_plan_layer_expand_' + layerKey, expanded ? '1' : '0'); } catch {}
+}
+
+// fr-64: derive a single status string for a plan item based on
+// existing state — no new schema. Precedence (first match wins):
+//   running    — item is in state.runQueue with status==='running'
+//   queued     — item is in state.runQueue with status==='pending'
+//   closed     — item.done is truthy
+//   inprogress — has prior run history (runs.length > 0) but isn't
+//                currently active or closed (treated as "📌 pinned"
+//                in the chip glyph — represents in-flight work the
+//                user has touched at least once)
+//   open       — fallthrough default for fresh items
+function _planItemStatus(it, runQueueEntries) {
+  const entries = Array.isArray(runQueueEntries) ? runQueueEntries : [];
+  const qEntry = entries.find((e) => e && e.itemId === it.id);
+  if (qEntry && qEntry.status === 'running') return 'running';
+  if (qEntry && qEntry.status === 'pending') return 'queued';
+  if (it && it.done) return 'closed';
+  if (it && Array.isArray(it.runs) && it.runs.length > 0) return 'inprogress';
+  return 'open';
+}
+
+// fr-64: status → glyph + CSS class + accessible label. Pure mapper.
+// Kept as a top-level constant + function so the regression test can
+// pin the contract without DOM.
+const _PLAN_ITEM_STATUS_MAP = {
+  running:    { glyph: '▶',  label: 'running',     cls: 'is-running' },
+  queued:     { glyph: '⏸',  label: 'queued',      cls: 'is-queued' },
+  closed:     { glyph: '🟢', label: 'closed',      cls: 'is-closed' },
+  inprogress: { glyph: '📌', label: 'in progress', cls: 'is-inprogress' },
+  open:       { glyph: '⚪', label: 'open',        cls: 'is-open' },
+};
+function _planItemStatusChipHtml(status) {
+  const s = _PLAN_ITEM_STATUS_MAP[status] || _PLAN_ITEM_STATUS_MAP.open;
+  return `<span class="artifact-item-status-chip ${s.cls}" title="${s.label}" aria-label="${s.label}">${s.glyph}</span>`;
 }
 
 // fr-56: pure filter function shared by renderArtifact('plan', ...).

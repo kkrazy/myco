@@ -2400,6 +2400,19 @@ test_chat_window() {
   # handler + CSS, plus behavior simulation of the partition + the
   # bug-15 interaction.
   node_test_result test/fr-65-plan-layer-done-accordion.test.js "test/fr-65-plan-layer-done-accordion.test.js (12 cases)"
+  # fr-64: at-a-glance status chip at the start of each plan-item row.
+  # Five states derived from existing state (it.done, it.runs[],
+  # state.runQueue.entries) — no schema change:
+  #   ▶ running  (queue entry status==='running')
+  #   ⏸ queued   (queue entry status==='pending')
+  #   🟢 closed  (it.done)
+  #   📌 inprogress (has runs[] but not active/done)
+  #   ⚪ open    (fallthrough default)
+  # Plan-only (supportsVoting branch). Static guards on helper +
+  # mapping shape + render wiring + CSS; behavior simulation pins the
+  # precedence (running > queued > closed > inprogress > open) +
+  # defensive null-fallbacks.
+  node_test_result test/fr-64-plan-item-status-chip.test.js "test/fr-64-plan-item-status-chip.test.js (16 cases)"
   # fr-39: per-session admin delegation. Owners can /admin @user to
   # grant admin (multi-admin supported); admins inherit everything
   # except DELETE-session + grant/revoke admin (those stay

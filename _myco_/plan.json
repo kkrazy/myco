@@ -2964,7 +2964,26 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": []
+      "comments": [
+        {
+          "id": "rs-3a5a6fdff888",
+          "user": "claude",
+          "text": "**Shipped.**\n\n### What you see now\nEach plan-item row leads with a small color-coded status chip:\n\n```\n[▶  bug-42]  Live-reload subagent dispatch                ← running\n[⏸  bug-43]  WS reconnect storm fix                       ← queued\n[🟢 bug-12]  Re-entry restore chat pane                   ← closed\n[📌 fr-58]   Lean-ctx Serena MCP integration              ← in-progress (has runs)\n[⚪ bug-90]  Random Tuesday Tab keyboard bug              ← open\n```\n\n### State derivation (no schema change)\nSingle function `_planItemStatus(it, runQueueEntries)` with strict precedence (first match wins):\n\n1. **running** — `state.runQueue.entries` has this id with `status==='running'`\n2. **queued** — same, with `status==='pending'`\n3. **closed** — `it.done` truthy\n4. **inprogress** — `it.runs[]` non-empty AND not active/done (signal: \"I've worked on this before\")\n5. **open** — fallthrough default\n\nThe 📌 (pinned glyph) is repurposed for \"in-progress / touched at least once\" — pure data-derived, no new schema. If you'd rather use 📌 for an explicit user-pin field, that's a separate fr that adds `it.pinned` to the schema.\n\n### Plan-only\nGated on `supportsVoting` so the chip only renders for the Plan tab, not Test (which has no queue/done lifecycle to surface).\n\n### Reactivity\nChip updates on every `renderArtifact('plan', …)` call — same triggers as bug-15 / fr-56 / fr-65: queue state changes (`state-update` WS frame), item.done flips, run completion, etc. No new event wiring needed.\n\n### Files touched\n- `web/public/app.js`: 3 helpers (`_planItemStatus`, `_planItemStatusChipHtml`, `_PLAN_ITEM_STATUS_MAP`) in the fr-56/fr-65 helper region; `statusChip` computed inside `renderItem` and injected at the start of `.artifact-item-row` (before `idChip`).\n- `web/public/styles.css`: `.artifact-item-status-chip` base rule + five `.is-*` modifier rules with distinct `border-left-color` per status.\n\n### Test\n`test/fr-64-plan-item-status-chip.test.js` — 16 cases:\n- Static: 3 helpers + the `_PLAN_ITEM_STATUS_MAP` constant; each of 5 states present in the map with glyph + label + cls; chip placement at start of row; `supportsVoting` gate; defensive null-fallback for missing runQueue\n- CSS: base rule + 5 per-status modifier rules\n- Behavior simulation: 9 cases on a reference implementation pinning the precedence (running > queued > closed > inprogress > open), each state derivation, and null-fallback safety\n\n16/16 ✓ direct. **Red-flipped against pre-fix code (5+/16 failed via git stash)** — confirms the test catches the regression.\n\nAdjacent plan-tab tests all stay green: fr-65-plan-layer-done-accordion 12/12 ✓, fr-56-plan-filter-search 20/20 ✓, plan-open-only-toggle 9/9 ✓, bug-27-queue-session-scope 7/7 ✓.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/ change.\n\nStatus: closed.",
+          "ts": "2026-05-24T01:33:53.548Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
+      "runs": [
+        {
+          "status": "running",
+          "ts": "2026-05-24T01:26:39.354Z",
+          "summary": null
+        }
+      ],
+      "status": "closed",
+      "closedAt": "2026-05-24T01:33:53.548Z"
     },
     {
       "id": "fr-65",
@@ -2979,17 +2998,25 @@
       ],
       "comments": [
         {
-          "id": "rs-f5bc0a87af13",
+          "id": "07bc2cac107d",
           "user": "claude",
-          "text": "**Shipped.**\n\n### Layout\nWithin each layer (Bug / Feature / Todo / Other), items now partition:\n\n```\n▼ BUG\n  □  bug-42  Latest open bug\n  □  bug-41  Another open one\n  ▶ 28 closed                        ← accordion (default collapsed)\n\n▼ FEATURE\n  □  fr-67  / focus shortcut\n  □  fr-66  sparkline\n  ▶ 12 closed                        ← accordion\n```\n\nClick the dashed \"▶ N closed\" button → expands the done items below, persisted across reloads.\n\n### Implementation\n- `renderArtifact('plan')` partitions each layer's items into `openItems` + `doneItems` (`it.done` flag, same field bug-15 + fr-47 already use).\n- Open items render first. If `doneItems.length > 0`, the accordion appears with `▶ N closed` (or `▼ N closed` when expanded).\n- Click handler on `.artifact-layer-accordion-toggle` flips persisted state + re-renders the cached plan artifact for instant feedback.\n- Per-layer expand state stored as `localStorage.myco_plan_layer_expand_<key>` where `<key>` = sanitized layer name (e.g. `bug`, `feature`, `todo`).\n- Default: collapsed. Opt-in expansion per layer.\n\n### Interaction with bug-15 \"Open only\" toggle\nClean degradation: when Open only is ON, displayItems already has no done items → each layer's doneItems is empty → no accordion renders. When Open only is OFF (default), the accordion replaces the all-or-nothing experience with finer-grained per-layer control.\n\n### Files touched\n- `web/public/app.js`: partition + accordion render in `renderArtifact`; click handler binding next to the existing artifact-comment toggle; 3 helpers (`_planLayerStorageKey`, `_readPlanLayerExpanded`, `_writePlanLayerExpanded`).\n- `web/public/styles.css`: `.artifact-layer-accordion-toggle` (dashed-border pill with hover state), `.accordion-caret` (▶/▼ glyph), `.artifact-items-done` (opacity .82 to de-emphasize done items below open ones).\n\n### Test\n`test/fr-65-plan-layer-done-accordion.test.js` — 12 cases:\n- Static: helpers (`_planLayerStorageKey`, `_readPlanLayerExpanded`, `_writePlanLayerExpanded`) defined; localStorage key shape pinned\n- Static: partition uses `items.filter((it) => !it.done)` + `items.filter((it) => it.done)` inside the layer-rendering block\n- Static: accordion gated on `doneItems.length > 0` (no done = no accordion)\n- Static: toggle button carries `data-layer` + `aria-expanded` for a11y\n- Static: click handler binding wired via `querySelectorAll(.artifact-layer-accordion-toggle)` + calls `_writePlanLayerExpanded` + `renderArtifact('plan', ...)`\n- CSS: `.artifact-layer-accordion-toggle` styled (with hover); `.artifact-items-done` has opacity < 1\n- Behavior simulation: partition splits by done flag; storageKey sanitization shape; bug-15 interaction (done bucket empty under Open only)\n\n12/12 ✓ direct. **Red-flipped against pre-fix code (8/12 failed via git stash)** — confirms the test catches the regression.\n\nAdjacent plan-tab tests stay green: fr-56-plan-filter-search 20/20 ✓, plan-open-only-toggle 9/9 ✓. Full `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/ change.\n\nStatus: closed.",
-          "ts": "2026-05-24T01:26:24.923Z",
+          "text": "✓ success · 332.4s · $26.2823 · 29↓/19848↑\n\nPushed `5254f5b` to `origin/main`.\n\n## fr-65 closed — per-layer done-items accordion\n\n**Layout now per layer:**\n```\n▼ BUG\n  □  bug-42  Latest open bug\n  □  bug-41  Another open one\n  ▶ 28 closed                ← dashed pill, default collapsed\n```\n\n**Click** the `▶ N closed` pill → expands the done items below at opacity .82 (visually de-emphasized but readable). Persisted in `localStorage.myco_plan_layer_expand_<key>` so the choice survives reloads + page navigations.\n\n**Interaction with bug-15 \"Open only\" toggle:** clean degradation — when Open only is ON, done items are already filtered out so the accordion silently doesn't render. When OFF (default), the accordion is the per-layer alternative to the all-or-nothing toggle.\n\n**Tests:** fr-65 12/12 ✓ direct + **red-flipped** (8/12 fail …",
+          "ts": "2026-05-24T01:26:39.174Z",
           "meta": {
-            "kind": "run-summary"
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-24T01:21:06.644Z"
           }
         }
       ],
-      "status": "closed",
-      "closedAt": "2026-05-24T01:26:24.923Z"
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-24T01:26:39.174Z",
+          "startedAt": "2026-05-24T01:21:06.644Z",
+          "summary": "332.4s · 29→19848 tok",
+          "result": "Pushed `5254f5b` to `origin/main`.\n\n## fr-65 closed — per-layer done-items accordion\n\n**Layout now per layer:**\n```\n▼ BUG\n  □  bug-42  Latest open bug\n  □  bug-41  Another open one\n  ▶ 28 closed                ← dashed pill, default collapsed\n```\n\n**Click** the `▶ N closed` pill → expands the done items below at opacity .82 (visually de-emphasized but readable). Persisted in `localStorage.myco_plan_layer_expand_<key>` so the choice survives reloads + page navigations.\n\n**Interaction with bug-15 \"Open only\" toggle:** clean degradation — when Open only is ON, done items are already filtered out so the accordion silently doesn't render. When OFF (default), the accordion is the per-layer alternative to the all-or-nothing toggle.\n\n**Tests:** fr-65 12/12 ✓ direct + **red-flipped** (8/12 fail against pre-fix). Adjacent fr-56 + plan-open-only-toggle stay green.\n\n**Takes effect on browser reload after next `./scripts/deploy.sh`** — pure web/public/ change.\n\nCommit `5254f5b` live on `origin/main`. Want me to tackle another from the fr-61..74 list? The quickest unblocked picks: **fr-61 (sticky filter row, ~15min), fr-62 (mobile tap targets, ~15min), fr-69 (clear-filters button, ~15min), fr-70 (layer accent strip, ~20min)** — all CSS-only and could batch as one mobile-fundamentals commit."
+        }
+      ]
     },
     {
       "id": "fr-66",
@@ -3089,7 +3116,23 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "fr-75",
+      "text": "**Problem:** Coding is no longer the primary axis of software engineering work — feature definition is — but the FRs just recommended still center on code-authoring workflows.\n**Expected:** A plan/feature-centered software engineering approach, with FRs framed around feature ideation, specification, and lifecycle management.\n**Actual:** Recommended FRs remain code-centric and do not reflect the shift toward feature-driven engineering.\n**Context:** Re-examine the FRs previously recommended and provide revised suggestions aligned with the plan/feature-centered model.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:31:49.418Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "giving coding is no longer the main focus for software enginnering, we are more and more focus on what feature is needed. We need to redesign a plan/feature centerred software enginneeing approach. Reexam the fr you just recommended and provide suggestions.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-24T01:26:24.923Z"
+  "updatedAt": "2026-05-24T01:33:53.548Z"
 }
