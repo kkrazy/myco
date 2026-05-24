@@ -29,9 +29,38 @@ For shell, `ctx_shell <cmd>` filters the noisy bits of common output
 with Bash for read-mostly invocations (`git log`, `npm test`, `cargo
 check`); use Bash when you need the raw stream verbatim.
 
-## 1. Refactor opportunistically — high cohesion, low coupling
+## 1. High cohesion, low coupling — single place for related responsibility, independent + test-friendly by construction
 
-Every change is also a chance to simplify. Look for ways to:
+The first principle of how code is shaped in this repo. Design to it
+up-front; refactor toward it whenever a change reveals you've drifted.
+
+1. **High cohesion — single place for all related responsibility.**
+   Each module owns ONE responsibility, and ALL the code for that
+   responsibility lives in that ONE module. If you have to read three
+   files to understand a single concept, it's spread too thin —
+   consolidate. If one file mixes two unrelated concepts, it's
+   diluted — split it. The acid test: can a teammate explain the
+   module's purpose in one sentence?
+
+2. **Low coupling — narrow, named interfaces.** Modules communicate
+   through explicit interfaces (function arguments, named exports,
+   typed protocol messages) — never through shared mutable globals,
+   filesystem side-effects, or order-dependent side imports. The
+   blast radius of any change should be contained to its module +
+   the documented surface it exposes. If a one-line edit ripples
+   across the repo, the surface is too wide.
+
+3. **Independent and test-friendly to ensure correctness.** Because
+   coupling is low, each module can be exercised in isolation by a
+   test that doesn't drag in the rest of the system. Because cohesion
+   is high, that test asserts exactly one responsibility. The two
+   properties together ARE what makes a codebase verifiable — every
+   piece of behaviour has a test that runs on its own and fails
+   precisely when that behaviour breaks. This isn't a nice-to-have;
+   it's the only way to keep a growing codebase trustworthy.
+
+**Refactoring corollary.** Every change is also a chance to simplify.
+Look for ways to:
 
 - Split functions doing more than one thing.
 - Pull duplicated logic into shared helpers; remove the duplicates.

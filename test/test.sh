@@ -358,6 +358,12 @@ test_best_practices_template() {
   grep -qF 'Anti-bloat, anti-assumption discipline for AI-assisted edits' web/public/best-practices-template.md \
     && pass "best-practices-template.md: §8 karpathy-skills discipline rules present" \
     || fail "best-practices-template.md: §8 karpathy-skills discipline rules missing — auto-injection won't carry them to project CLAUDE.md files"
+  # User-requested (2026-05-24): §1 must be PRESCRIPTIVE about the
+  # design principle (high cohesion + low coupling + single place for
+  # related responsibility + independent/test-friendly), not just a
+  # "refactor opportunistically" framing. Pinned by a dedicated test
+  # so the wording can't quietly drift on a future template re-extract.
+  node_test_result test/best-practices-cohesion-principle.test.js "test/best-practices-cohesion-principle.test.js (4 cases)"
   grep -qF 'id="bp-toggle"' web/public/index.html \
     && pass "index.html: bp-toggle checkbox in arch-wrap header" \
     || fail "index.html: bp-toggle checkbox missing — no UI to enable/disable injection"
