@@ -2830,6 +2830,14 @@ test_chat_window() {
   # UI: plan-card chip shows branch + state, color-coded per mergeStatus.
   # Real-git behavior simulation: ff-only success + diverged-main conflict.
   node_test_result test/fr-90-phase3-merge-flow.test.js "test/fr-90-phase3-merge-flow.test.js (17 cases)"
+  # fr-76 Phase 4: related-item context in chat panel dispatch. New
+  # artifacts.getRelatedItemsContext(rec, itemId, opts?) helper builds
+  # a "[Related context for X]" block (item body + dependsOn + text-
+  # mentioned items + last run); capped at 2000 chars default.
+  # handleChatMessage augments the agent-bound text with this block
+  # when a [chat:plan#X] marker is present (try/catch graceful).
+  # Persisted user turn stays unaugmented — strictly dispatch-time.
+  node_test_result test/fr-76-phase4-related-context.test.js "test/fr-76-phase4-related-context.test.js (14 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

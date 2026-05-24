@@ -439,6 +439,82 @@ function getAiChatHistory(item, opts) {
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 
+// fr-76 Phase 4: build a multi-line context string injected into the
+// agent-bound dispatch text when a [chat:plan#<id>] marker is present.
+// Gives claude immediate context (item body + dependsOn neighbors +
+// text-mentioned items + last run) without needing a tool round-trip.
+// Persisted user turn (item.aiChat[]) stays unaugmented — this is
+// strictly the dispatch-time augmentation seen only by the SDK.
+//
+// Capped at maxChars (default 2000) so the context block doesn't
+// blow up claude's working memory. Truncates with "..." on overflow.
+// Caller passes the session rec; helper resolves plan + item from it.
+function getRelatedItemsContext(rec, itemId, opts) {
+  if (!rec || !itemId) return '';
+  const plan = rec.artifacts && rec.artifacts.plan;
+  if (!plan || !Array.isArray(plan.items)) return '';
+  const item = plan.items.find((x) => x && x.id === itemId);
+  if (!item) return '';
+  const maxChars = (opts && opts.maxChars) || 2000;
+  const itemBodyLimit = 400;
+  const depBodyLimit = 200;
+  const mentionBodyLimit = 200;
+  const lines = [];
+  lines.push(`[Related context for ${itemId}]`);
+  if (item.layer) lines.push(`- Layer: ${item.layer}${item.done ? ' (done)' : ''}`);
+  const body = String(item.text || '').trim();
+  if (body) lines.push(`- Body: ${body.length > itemBodyLimit ? body.slice(0, itemBodyLimit - 3) + '...' : body}`);
+  // dependsOn neighbors (resolved against plan).
+  const deps = Array.isArray(item.dependsOn) ? item.dependsOn.filter(Boolean).slice(0, 5) : [];
+  if (deps.length) {
+    lines.push(`- dependsOn:`);
+    for (const depId of deps) {
+      const dep = plan.items.find((x) => x && x.id === depId);
+      if (dep) {
+        const depBody = String(dep.text || '').replace(/\s+/g, ' ').trim().slice(0, depBodyLimit);
+        lines.push(`  - ${depId}: ${depBody}${dep.done ? ' (DONE)' : ''}`);
+      } else {
+        lines.push(`  - ${depId} (not found in plan)`);
+      }
+    }
+  }
+  // text-mentioned items (regex match fr-N|bug-N|td-N in body + comments).
+  // Excludes self-mention + items already in dependsOn (no duplicate).
+  const commentText = Array.isArray(item.comments)
+    ? item.comments.map((c) => (c && c.text) || '').join(' ')
+    : '';
+  const textCorpus = (item.text || '') + ' ' + commentText;
+  const mentionRe = /\b(?:fr|bug|td)-\d+\b/g;
+  const seenSet = new Set([itemId, ...deps]);
+  const mentions = [];
+  for (const m of textCorpus.match(mentionRe) || []) {
+    if (seenSet.has(m)) continue;
+    seenSet.add(m);
+    mentions.push(m);
+    if (mentions.length >= 5) break;
+  }
+  if (mentions.length) {
+    lines.push(`- Mentioned items:`);
+    for (const mentionId of mentions) {
+      const m = plan.items.find((x) => x && x.id === mentionId);
+      if (m) {
+        const mBody = String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, mentionBodyLimit);
+        lines.push(`  - ${mentionId}: ${mBody}${m.done ? ' (DONE)' : ''}`);
+      }
+    }
+  }
+  // Most recent run summary, if any — gives claude visibility into
+  // what previous attempts at this item produced.
+  const runs = Array.isArray(item.runs) ? item.runs : [];
+  if (runs.length) {
+    const last = runs[runs.length - 1];
+    const lastSummary = last.summary || (last.result ? String(last.result).slice(0, 120) : 'no summary');
+    lines.push(`- Last run (${last.status}): ${lastSummary}`);
+  }
+  const out = lines.join('\n');
+  return out.length > maxChars ? out.slice(0, maxChars - 3) + '...' : out;
+}
+
 // fr-88 migration 4: shared queue-add helper used by BOTH the HTTP
 // POST /sessions/:id/queue/add route AND the new mcp__myco__queue_add
 // tool. Validates type/itemId/item-exists, calls runQueue.addToQueue
@@ -1241,6 +1317,9 @@ module.exports = {
   // fr-88 migration 4: shared queue-add helper used by both
   // HTTP POST /sessions/:id/queue/add + mcp__myco__queue_add.
   queueItemForRun,
+  // fr-76 Phase 4: build related-item context block for chat panel
+  // dispatches (dependsOn + text-mention extraction).
+  getRelatedItemsContext,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

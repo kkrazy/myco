@@ -1853,9 +1853,32 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
     }
   }
 
+  // fr-76 Phase 4: when a chat-panel marker is present, augment the
+  // agent-bound text with related-item context (item body + dependsOn
+  // neighbors + text-mentioned items + last run). Gives claude
+  // immediate context without a tool round-trip. The persisted user
+  // turn (aiChat[]) stays unaugmented — the augmentation is strictly
+  // dispatch-time, seen only by the SDK.
+  let agentText = input;
+  const chatMarkerMatch = input.match(/^\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
+  if (chatMarkerMatch) {
+    try {
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      if (rec) {
+        const artifactsMod = require('./artifacts');
+        const ctx = artifactsMod.getRelatedItemsContext(rec, chatMarkerMatch[2]);
+        if (ctx) {
+          agentText = input + '\n\n' + ctx;
+        }
+      }
+    } catch (err) {
+      console.warn(`[fr-76 phase4] context injection failed: ${err.message}`);
+    }
+  }
+
   // Normal forward — pushes into the SDK streaming-input queue.
   console.log(`[chat→agent] ${user}: ${input.substring(0, 80)}`);
-  session.write(input);
+  session.write(agentText);
 }
 
 async function runAssistant(sessionId, session, lastMessage) {
