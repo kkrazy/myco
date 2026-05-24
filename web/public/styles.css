@@ -2038,15 +2038,45 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    marker on the dispatched text binds the next turn_result back to the item).
    Plan items also have per-item voting + a flat comment thread; once votes
    hit the threshold (2 by default) the server auto-dispatches the item. */
-.artifact-items { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+/* User feedback: "Instead of single line, make it multi line and
+   looks like card." Each plan item now reads as a distinct card —
+   roomier padding, stronger border + subtle shadow for depth, and
+   more vertical gap between cards so the list scans cleanly even
+   when each card has multiple stacked rows (meta / text / byline
+   / actions).
+
+   Inner spacing: gap: 8px between the stacked rows inside a card
+   gives clear hierarchy without being airy.
+
+   Visual stack:
+     | [▶ bug-42]                                |  ← meta row
+     | Lorem ipsum dolor sit amet, …            |  ← text (full width)
+     | [Show more]                               |  ← clamp toggle (long items)
+     | filed by @kkrazy · May 24, 2026, 02:15   |  ← byline (muted)
+     | 👍0 💬0  ▶ Fix  Close  ✎ Edit  ×          |  ← actions
+*/
+.artifact-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;          /* was 6px — more separation between cards */
+}
 .artifact-items li {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: 8px;           /* was 4px — clearer hierarchy between stacked rows */
+  padding: 12px 14px; /* was 6px 8px — roomier card */
+  border-radius: 8px; /* was 6px — rounder, more card-like */
   background: var(--surface-2);
   border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .15), 0 0 0 0 transparent;
+  transition: box-shadow .14s, border-color .14s, transform .08s;
+}
+.artifact-items li:hover {
+  border-color: rgba(255, 255, 255, .14);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .25);
 }
 .artifact-items li.is-done { opacity: .55; }
 .artifact-items li.is-done .artifact-item-text { text-decoration: line-through; }
