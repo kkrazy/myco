@@ -3222,6 +3222,17 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-24T03:16:49.193Z"
           }
+        },
+        {
+          "id": "claude-phase3-ui-design-20260524043730",
+          "user": "claude",
+          "text": "**Phase 3 UI design — bottom sheet on mobile, side drawer on desktop**\n\nSame component, different positioning at the `@media max-width: 900px` breakpoint.\n\n## Why not the alternatives\n\n| Pattern | Mobile feel |\n|---|---|\n| **Bottom sheet (chosen)** | Native iOS/Android pattern. Slides up where the keyboard already opens. Plan list stays dimmed behind so context is preserved. Swipe-down to dismiss is a learned gesture. Partial-height peek + drag-to-fullscreen for long conversations. |\n| Full-screen modal | Heavy for a quick \"status of bug-17?\" chat. Plan list gone behind it — scroll-position-preservation problem on return. |\n| Inline-expand | Worst on mobile. Pushes the plan list around. Keyboard covers both the chat input AND the item header — typing blind about an item you cannot see. |\n\n## Layout sketch\n\n```\nmobile (<= 900px)              desktop (> 900px)\n┌─────────────────┐            ┌──────────┬────────┐\n│ plan list       │            │ plan     │ chat   │\n│ (dimmed bg)     │            │ list     │ drawer │\n├─────────────────┤  ←sheet    │          │  ←drawer\n│ ⌃ bug-17        │  peeks up  │          │        │\n│ ─────────────── │            │          │        │\n│ chat turns…     │            │          │        │\n│ [type here ___] │            │          │ [____] │\n└─────────────────┘            └──────────┴────────┘\n```\n\n## Sticky header\n\nThe sheet/drawer header sticks at the top showing:\n- Item id + layer chip (`bug-17` / `Bug`)\n- First line of body text (truncated)\n- Close affordance (× on desktop, drag-handle on mobile)\n\nSo you always know what you are chatting about even when the conversation scrolls.\n\n## Interaction details\n\n- **Open:** new chat-bubble icon on each plan item action row (sits next to Run/Edit/Close).\n- **Mobile dismiss:** swipe-down on the drag-handle OR tap dimmed backdrop.\n- **Desktop dismiss:** click × OR Esc OR click outside the drawer.\n- **Submit:** Cmd/Ctrl-Enter to send (same as chat pane). Input auto-focuses on open.\n- **Live updates:** WS `state-update` for `kind:'artifact'` already re-renders the plan tab; chat panel listens for the same and appends new turns to the open thread without losing scroll.\n- **Cost chip:** each agent turn shows a tiny `$0.0123` chip from `meta.costUsd` (Phase 2 already populates this).\n\n## Dispatch flow\n\n1. User types into the panel and submits.\n2. Client wraps text with the `[chat:plan#<id>]` marker (Phase 2 contract) and POSTs to the existing chat endpoint that handleChatMessage already understands.\n3. Server-side: Phase 2's `_appendUserAiChatTurn` strips the marker, persists role:\"user\" turn, sets `_activeChatItem`, dispatches to agent.\n4. Agent's response streams via Phase 2's listener → `_appendAgentAiChatTurn` appends role:\"agent\" turn on terminal event.\n5. `state-update` broadcast → all attached clients re-render the open chat panel.\n\nNo new server routes needed for Phase 3 — Phase 1's `GET /sessions/:id/artifact/plan/:itemId/aichat` already supplies initial history + `afterTs` tail.",
+          "ts": "2026-05-24T04:37:30.095Z",
+          "meta": {
+            "kind": "design",
+            "topic": "fr-76 Phase 3 UI",
+            "phase": 3
+          }
         }
       ],
       "meta": {
@@ -3333,5 +3344,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-24T04:07:34.966Z"
+  "updatedAt": "2026-05-24T04:37:30.095Z"
 }
