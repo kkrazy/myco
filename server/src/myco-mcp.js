@@ -270,6 +270,48 @@ function createMycoMcpServer(sessionId) {
       // [chat|run:plan#<id>] turn, and again after each TaskUpdate
       // that changes status. The registry persists at
       // _myco_/task-items.json — committable + cross-session.
+      // fr-88 migration 2: mark a plan/test item done (or reopen it).
+      // Shares the setItemDone helper in artifacts.js with the POST
+      // /artifact/mark HTTP route. Pure lifecycle toggle — no claude
+      // dispatch. Use after shipping fr-X to mark it done. To dispatch
+      // an item to the queue, use mcp__myco__queue_add (separate tool).
+      tool(
+        'set_item_done',
+        'Mark a plan or test item as done (done=true) or reopen it ' +
+        '(done=false). Pure lifecycle toggle — does NOT dispatch the ' +
+        'item to claude (use queue_add for that). Use after shipping ' +
+        'fr-X / fixing bug-X to close the item, or when reopening ' +
+        'something that turned out to need more work. Broadcast live ' +
+        'to every attached client.',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id (e.g. "fr-1", "bug-17", "td-22") or test item id.'),
+          done: z.boolean().describe('true → mark done (close). false → reopen.'),
+          type: z.enum(['plan', 'test']).optional().describe('Artifact type. Defaults to "plan". "arch" is rejected.'),
+        },
+        async (args) => {
+          const artifactsMod = require('./artifacts');
+          const type = args.type || 'plan';
+          const r = artifactsMod.setItemDone(sessionId, type, args.itemId, args.done);
+          if (!r.ok) {
+            return {
+              content: [{ type: 'text', text: `set_item_done failed: ${r.error}` }],
+              isError: true,
+            };
+          }
+          try {
+            const attachMod = require('./attach');
+            const session = attachMod.getSession && attachMod.getSession(sessionId);
+            if (session && typeof session.emit === 'function') {
+              session.emit('state-update', { kind: 'artifact', artifactType: type, artifact: r.artifact });
+            }
+          } catch {}
+          return {
+            content: [{ type: 'text', text: `${args.itemId} → ${args.done ? '✓ done' : '↻ reopened'}.` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
       // fr-88 migration 1: append a comment to a plan/test item.
       // Shares the appendCommentToItem helper in artifacts.js with the
       // POST /artifact/comment HTTP route — two surfaces, one source

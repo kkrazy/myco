@@ -2760,6 +2760,12 @@ test_chat_window() {
   # delegation + state-update broadcast + CLAUDE.md content; behavior
   # simulation of round-trip append + 5 validation rejections.
   node_test_result test/fr-88-add-comment-tool.test.js "test/fr-88-add-comment-tool.test.js (14 cases)"
+  # fr-88 migration 2: /close → mcp__myco__set_item_done. Pure
+  # lifecycle toggle (item.done = true|false), no claude dispatch.
+  # Shared setItemDone helper in artifacts.js with HTTP POST
+  # /artifact/mark. Lets the agent close fr-X after shipping +
+  # reopen if needed.
+  node_test_result test/fr-88-m2-set-item-done-tool.test.js "test/fr-88-m2-set-item-done-tool.test.js (8 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

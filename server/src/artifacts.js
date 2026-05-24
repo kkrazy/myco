@@ -413,6 +413,34 @@ function getAiChatHistory(item, opts) {
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 
+// fr-88 migration 2: shared item-done helper used by BOTH the HTTP
+// POST /artifact/mark route AND the new mcp__myco__set_item_done tool.
+// Toggles item.done (true/false), persists rec + mirror file. Returns
+// the updated artifact so the caller can broadcast. No claude
+// dispatch — pure lifecycle toggle. Same {ok, item, artifact} /
+// {ok:false, error, status} return shape as appendCommentToItem.
+function setItemDone(sessionId, type, itemId, done) {
+  if (!ARTIFACT_TYPES.includes(type)) {
+    return { ok: false, error: 'unknown type', status: 400 };
+  }
+  if (type === 'arch') {
+    return { ok: false, error: 'arch has no items', status: 400 };
+  }
+  if (!itemId) {
+    return { ok: false, error: 'itemId required', status: 400 };
+  }
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  _loadArtifactIntoRecFromFile(rec, type);
+  const item = findItem(rec, type, itemId);
+  if (!item) return { ok: false, error: 'no such item', status: 404 };
+  item.done = !!done;
+  persistArtifact(rec, type, rec.artifacts[type]);
+  return { ok: true, item, artifact: rec.artifacts[type] };
+}
+
 // fr-88 migration 1: shared comment-append helper used by BOTH the
 // HTTP POST /artifact/comment route AND the new mcp__myco__add_comment
 // tool. Single source of truth for "append a comment to an item":
@@ -668,17 +696,11 @@ function register(app, deps) {
     const type = String(req.query.type || '');
     const itemId = String(req.query.itemId || '');
     const done = String(req.query.done || '') === '1';
-    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
-    if (!itemId) return res.status(400).json({ error: 'itemId required' });
-    if (type === 'arch') return res.status(400).json({ error: 'arch has no items' });
-    _loadArtifactIntoRecFromFile(ctx.rec, type);
-
-    const item = findItem(ctx.rec, type, itemId);
-    if (!item) return res.status(404).json({ error: 'no such item' });
-    item.done = done;
-    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
-    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
-    res.json({ ok: true, item });
+    // fr-88 migration 2: delegate to the shared setItemDone helper.
+    const result = setItemDone(ctx.id, type, itemId, done);
+    if (!result.ok) return res.status(result.status || 400).json({ error: result.error });
+    broadcastArtifact(ctx.id, type, result.artifact);
+    res.json({ ok: true, item: result.item });
   });
 
   // Toggle a vote on a Plan item; auto-dispatch the run if the per-item
@@ -1099,6 +1121,9 @@ module.exports = {
   appendCommentToItem,
   COMMENT_TEXT_MAX,
   COMMENTS_PER_ITEM_MAX,
+  // fr-88 migration 2: shared item-done helper used by both
+  // HTTP POST /artifact/mark + mcp__myco__set_item_done.
+  setItemDone,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.
