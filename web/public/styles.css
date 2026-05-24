@@ -2334,14 +2334,20 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    Tiny visual touch: when text is hidden, give the icon a small
    horizontal padding so the button doesn't look cramped. */
 @media (max-width: 900px) {
+  /* Buttons */
   .artifact-item-run .btn-text,
   .artifact-item-close .btn-text,
-  .artifact-item-edit .btn-text {
+  .artifact-item-edit .btn-text,
+  /* Badges (run-status "✓ done" / "● running" / "■ error" + edited badge) */
+  .artifact-item-run-status .btn-text,
+  .artifact-item-edited .btn-text {
     display: none;
   }
   .artifact-item-run .btn-icon,
   .artifact-item-close .btn-icon,
-  .artifact-item-edit .btn-icon {
+  .artifact-item-edit .btn-icon,
+  .artifact-item-run-status .btn-icon,
+  .artifact-item-edited .btn-icon {
     padding: 0 4px;
   }
 }

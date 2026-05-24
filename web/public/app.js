@@ -6644,12 +6644,14 @@ function renderArtifact(type, artifact) {
     // chip; click the chip (or expand the item) for the full log.
     const runs = Array.isArray(it.runs) ? it.runs : [];
     const lastRun = runs.length ? runs[runs.length - 1] : null;
+    // Icon + text split so mobile hides the word via .btn-text rule.
+    // Tooltip carries status + ts + summary for full context on hover/tap.
     const runChip = lastRun
       ? `<span class="artifact-item-run-status artifact-run-${escHtml(lastRun.status || 'unknown')}" title="${escHtml((lastRun.status || 'unknown') + ' · ' + (lastRun.ts || '') + (lastRun.summary ? '\n' + lastRun.summary : ''))}">${
-          lastRun.status === 'running' ? '● running'
-          : lastRun.status === 'success' ? '✓ done'
-          : lastRun.status === 'error'   ? '■ error'
-          : escHtml(lastRun.status || '')
+          lastRun.status === 'running' ? '<span class="btn-icon">●</span><span class="btn-text">running</span>'
+          : lastRun.status === 'success' ? '<span class="btn-icon">✓</span><span class="btn-text">done</span>'
+          : lastRun.status === 'error'   ? '<span class="btn-icon">■</span><span class="btn-text">error</span>'
+          : '<span class="btn-text">' + escHtml(lastRun.status || '') + '</span>'
         }</span>`
       : '';
     // Dependency check: if this item has dependsOn=[id,...], the
@@ -6692,8 +6694,10 @@ function renderArtifact(type, artifact) {
     // fr-46: edit pencil for item body text. Gated on !state.readOnly
     // (owner+admin only — viewers don't see it). meta.editedBy chip
     // surfaces the audit trail for everyone.
+    // "· edited" → ✎ icon + "edited" text. Mobile shows just the
+    // ✎ icon; desktop keeps both. Tooltip retains the audit details.
     const itemEditedBadge = (it.meta && it.meta.editedBy)
-      ? `<span class="artifact-item-edited" title="edited by ${escHtml(it.meta.editedBy)} at ${escHtml(it.meta.editedAt || '')}${it.meta.originalText ? ' · original preserved' : ''}">· edited</span>`
+      ? `<span class="artifact-item-edited" title="edited by ${escHtml(it.meta.editedBy)} at ${escHtml(it.meta.editedAt || '')}${it.meta.originalText ? ' · original preserved' : ''}"><span class="btn-icon">✎</span><span class="btn-text">edited</span></span>`
       : '';
     const editBtn = (!state.readOnly && supportsVoting)
       ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit"><span class="btn-icon">✎</span><span class="btn-text">Edit</span></button>`
