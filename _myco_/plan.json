@@ -3530,6 +3530,12 @@
             "commit": "bac1fa7",
             "migration": "fr-88/1"
           }
+        },
+        {
+          "id": "7003a4b58112",
+          "user": "kkrazy",
+          "text": "each slash cmd should have hooks to pre and post. Cmd that triggers substabsive code changes should be gated by agent to find out if its in a good state to kick off the action. E.g. Comment doesnt need to be gated.",
+          "ts": "2026-05-24T09:33:26.446Z"
         }
       ]
     },
@@ -3543,7 +3549,34 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "fr-89",
+      "text": "**Problem:** Plan-item chats don't receive responses for actions they fire, and chats leak messages across items.\n**Expected:** Each action fired from a plan-item chat routes its response back to that same chat; chats are scoped per item.\n**Actual:** Action responses don't return to the originating chat, and actions fired from other items appear in unrelated item chats.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T10:00:42.709Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "Each action fired from the plan item chat should send response back to that chat. Also chat should be isolated by item, e.g. Actions sent from other items shouldnt be visible to this item chat.",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-90",
+      "text": "**Problem:** Today the run-queue serializes items strictly — fr-1 must finish before fr-2 starts. The agent is single-threaded per session, and the queue's `_advanceRunQueue` won't dispatch the next pending entry while another is running. Long-running items (test suite, refactor) block everything behind them, even when the work is on totally unrelated files.\n\n**Expected:** Multiple plan items can run truly in parallel within ONE session, each in an isolated git worktree so their file edits don't collide. User dispatches fr-1 + fr-2 + fr-3 → all three start working immediately, each in its own checkout, each writing to its own branch. Results merge back (or stay as branches for review) on completion.\n\n**Actual:** Sequential queue + single-threaded agent ⇒ \"I clicked Run on fr-1 and fr-2, but fr-2 sits at `pending` for 8 minutes while fr-1 grinds through tests.\"\n\n## Architecture sketch\n\n```mermaid\nflowchart TB\n  U[User dispatches fr-1, fr-2, fr-3] --> Q[(rec.runQueue)]\n  Q --> ADV[\"_advanceRunQueue<br/>(parallelism cap = N, default 3)\"]\n  ADV --> W1[git worktree add<br/>_myco_/worktrees/fr-1<br/>branch wt-fr-1]\n  ADV --> W2[git worktree add<br/>_myco_/worktrees/fr-2<br/>branch wt-fr-2]\n  ADV --> W3[git worktree add<br/>_myco_/worktrees/fr-3<br/>branch wt-fr-3]\n  W1 --> S1[Subagent runs in WT<br/>commits to wt-fr-1]\n  W2 --> S2[Subagent runs in WT<br/>commits to wt-fr-2]\n  W3 --> S3[Subagent runs in WT<br/>commits to wt-fr-3]\n  S1 --> M[Parent agent decides:<br/>auto-merge OR keep branch]\n  S2 --> M\n  S3 --> M\n  M --> C[git worktree remove<br/>cleanup on success]\n  style W1 fill:#cfc\n  style W2 fill:#cfc\n  style W3 fill:#cfc\n```\n\n## Proposed phases\n\n| Phase | Scope | Risk |\n|---|---|---|\n| **0** | Worktree MCP tools: `worktree_create`, `worktree_remove`, `worktree_list`, registry at `_myco_/worktrees.json`. No orchestration changes. Tests against a real temp git repo. | Low — additive |\n| **1** | Serial dispatch via worktree. Run-queue still serializes (one at a time), but each entry runs in a worktree, then merge/branch on completion. Validates the worktree lifecycle + commit-and-return flow. | Medium — touches dispatch path |\n| **2** | Parallel dispatch. `_advanceRunQueue` dispatches up to N (configurable, default 3) entries concurrently. Each gets its own worktree + its own subagent via Task tool. Per-item run tracking; `_active*Item` slots become per-worktree. | High — touches concurrency model + state-slot architecture |\n| **3** | Merge/PR flow. On subagent terminal: either auto-merge to main (if tests pass + item.meta.autoMerge = true) OR leave the branch for user review with a UI affordance (chip → \"review fr-1 changes\"). | Medium — depends on test infrastructure |\n| **4** | Conflict detection + UI. Pre-dispatch: warn if two queued items touch overlapping files (static analysis on dependsOn + grep heuristic). Post-merge: surface conflicts in plan card with a \"resolve\" action. | High — needs static analysis + new UI surface |\n\n## Key design decisions\n\n1. **Worktree lifecycle owned by myco-mcp tools**, not by claude's ad-hoc git invocations. Each tool is server-validated, registry-tracked, broadcast-aware (per fr-88 design rule).\n2. **Subagent per item, not subagent per turn**. Each item's worktree gets a fresh Task-tool subagent with `cwd=<worktree-path>`. Parent agent orchestrates; subagent does the work + reports back.\n3. **Branch-per-item naming**: `wt-<itemId>` (e.g. `wt-fr-1`, `wt-bug-17`). Predictable; cleans up easily; grep-able in `git branch`.\n4. **Default behavior = branch + chip, NOT auto-merge**. User reviews before merging. Auto-merge is opt-in per item via `meta.autoMerge: true`.\n5. **Parallelism cap = 3 by default**, configurable via session settings. Prevents resource exhaustion (each worktree is a checkout). Cap is per-session, not per-user.\n6. **Run-queue entry state extended** with `{worktreePath, branch, status: pending|preparing|running|merged|branched|conflicted|failed}`.\n\n## Out of scope (call out explicitly)\n\n- **Cross-session parallelism**: already works (different sessions = different processes). fr-90 is intra-session.\n- **Auto-merge conflict resolution**: subagent attempts merge; on conflict, leaves branch + chip; human resolves.\n- **Disk-space management**: each worktree is a full checkout. For large repos, could fill disk fast. Out of scope for v1; flag if it becomes a real problem.\n- **`/admin`, `/setpat`, `/strict` migration to MCP tools** (fr-88 leftover): unrelated; stay slashcmd-only per fr-88 out-of-scope clause.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T10:26:56.650Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T09:19:10.034Z"
+  "updatedAt": "2026-05-24T10:26:56.650Z"
 }
