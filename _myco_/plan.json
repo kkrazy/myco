@@ -3519,6 +3519,17 @@
             "kind": "design-shipped",
             "commit": "93d0eea"
           }
+        },
+        {
+          "id": "claude-fr88-m1-closeout-20260524091910",
+          "user": "claude",
+          "text": "**Migration 1 shipped** (commit `bac1fa7`, branch `plan-driven-ui`).\n\n`/comment` → `mcp__myco__add_comment` — first slash→tool migration under the fr-88 design rule. Agent can now leave closeout summaries on plan items via tool call instead of asking the user to type `/comment …`. This very comment would have been the dog-food demonstration, but the MCP server is created once per AgentSession at session start (createMycoMcpServer captures sessionId in closure for the lifetime of the session) — my current session was spawned BEFORE the new tool existed, so the chicken-and-egg means the LAST manual-script comment lands via the OLD path. From any session spawned after `bac1fa7`, this same content flows via `mcp__myco__add_comment({itemId: 'fr-88', text})`.\n\n## What landed\n\n- `server/src/artifacts.js` — extracted `appendCommentToItem(sessionId, type, itemId, user, text)` to module scope. Returns `{ok, comment, item, artifact}` on success or `{ok:false, error, status}` on validation failure. Two callers — HTTP `POST /artifact/comment` (refactored to a 5-line delegation) and the new MCP tool — exercise identical backend logic.\n- `server/src/myco-mcp.js` — `mcp__myco__add_comment` tool with zod schema `{itemId, text, type?}`. Handler calls the shared helper, attributes author to `\"claude\"`, then broadcasts `state-update {kind: 'artifact', artifactType, artifact}` via `attach.getSession()+emit` (same pattern `_appendPlanItems` uses).\n- `CLAUDE.md` §Code Style #3 — closeout-comment etiquette added. Tool replaces the \"write a one-shot node script to mutate `_myco_/plan.json`\" pattern that I had been using up until this commit.\n\n## Test (14 cases, all green)\n\n`test/fr-88-add-comment-tool.test.js` — static guards on the helper + exports + HTTP-route delegation + MCP tool definition + tool→helper invocation + state-update broadcast + CLAUDE.md content. Behavior simulation: real temp-dir round-trip (append + verify mirror file persisted + comment.id is 12-hex) + 5 validation rejection cases each with the correct status code.\n\nRed-flip 14/14 fail against pre-fix source (the helper doesn't exist in HEAD, so every guard flips).\n\n## Migration cadence — 1 of 4 done\n\n| Done | Slash | Tool |\n|---|---|---|\n| ✅ | `/comment <text>` | `mcp__myco__add_comment({itemId, text})` |\n| Next | `/close` | `mcp__myco__set_item_done({itemId, done})` |\n| Next | `/upvote` | `mcp__myco__vote_item({itemId})` |\n| Next | `/queue` | `mcp__myco__queue_add({itemId})` |\n\nSame pattern (helper at module scope, both surfaces delegate, fr-87-shape test) replays for each.",
+          "ts": "2026-05-24T09:19:10.034Z",
+          "meta": {
+            "kind": "closeout",
+            "commit": "bac1fa7",
+            "migration": "fr-88/1"
+          }
         }
       ]
     },
@@ -3534,5 +3545,5 @@
       "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T08:38:45.096Z"
+  "updatedAt": "2026-05-24T09:19:10.034Z"
 }
