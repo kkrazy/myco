@@ -3427,6 +3427,18 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-24T07:10:45.107Z"
           }
+        },
+        {
+          "id": "claude-fr-85-closeout-20260524083613",
+          "user": "claude",
+          "text": "**Round 3 shipped** (commit `93d0eea`).\n\nTwo follow-up polish items from kkrazy on top of the r1 (size + slash filter + visibility) and r2 (action buttons → slash commands) work already shipped:\n\n1. **`/edit` slash removed.** Pre-r3, `/edit` closed the chat panel and opened the card-side inline editor in the dimmed background — a jarring two-step handoff (kkrazy: \"doesn't provide good UX\"). Body edits still reachable via the ✎ Edit button on the plan card (kept in actionsRow from r2). Re-add only when an in-panel editor is built.\n2. **Comment chip icon 💬 → 📝.** Pre-r3 the 💬 Chat button and the 💬 comment-count chip on the same card used the same speech-bubble icon — visually indistinguishable. Comment chip now uses 📝 (note/memo metaphor); chatBtn keeps 💬 (it's the primary AI conversation entry point). Also updated the /comment toast confirmation 💬→📝 to match.\n\n**Files touched:**\n- `web/public/app.js` — `AICHAT_VIRTUAL_COMMANDS` array (dropped `{name: 'edit'}`), `_dispatchAiChatSlash` (regex narrowed, `case 'edit':` removed, `/comment` toast emoji updated), comment-chip render (💬→📝)\n- `test/fr-85-chat-panel-polish.test.js` — flipped assertions: `AICHAT_VIRTUAL_COMMANDS` must NOT include `/edit` (with surgical array-body grep so the rationale comment doesn't false-positive), `_dispatchAiChatSlash` must NOT have `case \"edit\":`, regex behavior test moves `/edit` from \"ok\" list to \"skip\" list, new test pins chatBtn 💬 + comment-chip 📝 + comment-chip must NOT carry 💬 (visual-conflict guard)\n\n**Test:** 31/31 cases green. Full suite sweep clean across all 84+ test files.\n\nfr-85 closed across three rounds. The plan card now reads cleanly: id + body + 👍 N + 📝 N (when comments exist) + 💬 Chat + ✎ Edit + ×. Inside the panel autocomplete: `/run /close /upvote /comment` first, then the agent-control allow-list.",
+          "ts": "2026-05-24T08:36:13.277Z",
+          "meta": {
+            "kind": "closeout",
+            "commit": "93d0eea",
+            "round": 3,
+            "testCount": 31
+          }
         }
       ],
       "meta": {
@@ -3469,7 +3481,19 @@
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "claude-fr-87-closeout-20260524083613",
+          "user": "claude",
+          "text": "**Shipped** (commit `c94d5c4`, branch `plan-driven-ui`).\n\nv2 architecture as agreed (v1 prompt-based was abandoned mid-flight per the design comment above):\n\n```mermaid\nflowchart LR\n  A[claude in turn] -->|TaskCreate| T[(SDK tasks)]\n  A -->|mcp__myco__<br/>register_task_item| R[(_myco_/<br/>task-items.json)]\n  U[\"/task in fr-1 panel\"] --> H[handleTaskList]\n  H -->|ctx.chatItem=fr-1| R\n  H -->|read + format| O[server-formatted reply]\n  style R fill:#cfc\n  style O fill:#cfc\n```\n\n**Files touched:**\n- `server/src/myco-mcp.js` — new `mcp__myco__register_task_item` tool + `loadTaskItems` / `saveTaskItems` / `getTasksForItem` helpers + `<absCwd>/_myco_/task-items.json` persistence\n- `server/src/slashcmds.js handleTaskList` — scope-aware read from registry via `getTasksForItem(sessionId, itemId, {onlyInFlight: true})`, replies directly via `ctx.reply` (NO agent round-trip). `/task all` / `--all` / `-a` escapes\n- `server/src/attach.js handleChatMessage` — `ctx` now carries `chatItem` + `runItem` derived from `session._activeChatItem` / `_activeRunItem`\n- `CLAUDE.md` — task-list etiquette extended: every `TaskCreate` during a `[chat|run:plan#X]` turn must be followed by `mcp__myco__register_task_item({taskId, itemId, subject, status: 'pending'})`. Re-call after each TaskUpdate status change\n\n**Test:** `test/fr-87-task-item-registry.test.js` — 14 cases. Static guards on tool definition + helpers + registry path + scope detection + ctx wiring + CLAUDE.md content. Behavior simulation against a real temp dir verifies the register→read round-trip including the `onlyInFlight` filter (3 in-flight tasks vs 1 completed for fr-1; 1 for fr-2). Red-flip: 11/14 fail against pre-fix.\n\n**Future unlocks** (registry is now a first-class data source):\n- Bulk ops: deleting fr-1 can cancel its tasks; merging fr-1→fr-2 reassigns; \"what tasks for fr-3?\" is a registry query\n- Chip on plan card: \"3 in-flight tasks\" surfaced from the registry, no prompt round-trip\n- Cross-session resume: a future session opening fr-1 reads the registry to know where prior work stalled",
+          "ts": "2026-05-24T08:36:13.277Z",
+          "meta": {
+            "kind": "closeout",
+            "commit": "c94d5c4",
+            "testCount": 14
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "add a onboarding guide to get users kick start quickly, either a demo or a project from github/gitee",
@@ -3485,8 +3509,19 @@
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": []
+      "comments": [
+        {
+          "id": "claude-fr-88-closeout-20260524083613",
+          "user": "claude",
+          "text": "**Design rule shipped** as a project-level instruction in `myco/CLAUDE.md` (commit `93d0eea`, branch `plan-driven-ui`). Added as §Code Style point 3:\n\n> When adding a new operation that touches plan items / artifacts / session state, expose it FIRST as an `mcp__myco__*` tool in `server/src/myco-mcp.js` (or a sibling MCP server) with a typed zod schema. Then write the slash command as a thin wrapper that delegates to the same backend code path the tool invokes. Two surfaces, one source of truth.\n\nCodifies the pattern fr-87 just shipped: `register_task_item` tool registers the data, `/task` slash command reads + formats. Both speak to the same backend; the agent can self-invoke the tool without waiting for a user to type the slash.\n\n**Motivation:** today claude can't INVOKE slash commands directly — has to ask the user to type them. With tool-backed commands, claude can self-close items, self-comment, self-queue follow-up items, etc. Removes the user-as-intermediary step for routine work.\n\n**Candidate first migration targets** (high-value, low-risk):\n\n| Slash | New tool | Agent self-invoke use case |\n|---|---|---|\n| `/comment <text>` | `mcp__myco__add_comment({itemId, text})` | After closing fr-X, leave a closeout summary on the item |\n| `/close` | `mcp__myco__set_item_done({itemId, done})` | Mark fr-X done after shipping |\n| `/upvote` | `mcp__myco__vote_item({itemId})` | (less interesting but mirrors pattern) |\n| `/queue` | `mcp__myco__queue_add({itemId})` | Self-queue follow-up items spotted mid-work |\n\n**Out of scope:** auth/permission commands (`/admin`, `/setpat`, `/strict`) stay slashcmd-only — they're user-trust boundaries the agent shouldn't cross.\n\n**Migration cadence:** one tool per commit, each with an fr-87-shape test (static guards on the tool definition + slashcmd delegation pin + behavior simulation against a fake session). No big-bang refactor.\n\n**Status:** rule landed, ready for first migration commit. Pick a candidate to start with via a follow-up `/run` on this item, or wait until the corresponding workflow naturally surfaces the need.",
+          "ts": "2026-05-24T08:36:13.277Z",
+          "meta": {
+            "kind": "design-shipped",
+            "commit": "93d0eea"
+          }
+        }
+      ]
     }
   ],
-  "updatedAt": "2026-05-24T08:28:01.960Z"
+  "updatedAt": "2026-05-24T08:36:13.277Z"
 }
