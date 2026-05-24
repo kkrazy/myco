@@ -107,18 +107,29 @@ t('handleTaskList consumes ctx.chatItem / ctx.runItem for scope detection', () =
     'handleTaskList must read ctx.runItem (run-marker dispatch)');
 });
 
-t('handleTaskList calls myco-mcp.getTasksForItem(sessionId, itemId, {onlyInFlight: true})', () => {
+t('handleTaskList calls myco-mcp.getTasksForItem with onlyInFlight + includeStale opts', () => {
+  // fr-91 widened the opts: instead of literal `onlyInFlight: true`,
+  // the call now passes `onlyInFlight: !wantStale` (toggleable via
+  // /task stale). Pin the function call + the opts SHAPE rather than
+  // the literal value, so future flag additions don't bust this guard.
   const idx = SLASHCMDS_SRC.search(/function\s+handleTaskList\s*\(/);
-  const win = SLASHCMDS_SRC.slice(idx, idx + 2500);
+  const win = SLASHCMDS_SRC.slice(idx, idx + 4000);
   assert.ok(/getTasksForItem\s*\(/.test(win),
     'handleTaskList must invoke getTasksForItem (registry read)');
-  assert.ok(/onlyInFlight:\s*true/.test(win),
-    'handleTaskList must request {onlyInFlight: true} so completed/deleted are filtered out');
+  // The opts object must include BOTH onlyInFlight and includeStale
+  // keys — onlyInFlight filters out completed/deleted; includeStale
+  // bypasses fr-91's bootId epoch for audit view.
+  assert.ok(/onlyInFlight:/.test(win),
+    'handleTaskList must pass an onlyInFlight option (filters completed/deleted)');
+  assert.ok(/includeStale:/.test(win),
+    'handleTaskList must pass includeStale option (fr-91 — exposes pre-restart entries)');
 });
 
 t('handleTaskList replies DIRECTLY (no agent round-trip in scoped path)', () => {
   const idx = SLASHCMDS_SRC.search(/function\s+handleTaskList\s*\(/);
-  const win = SLASHCMDS_SRC.slice(idx, idx + 2500);
+  // Bumped window from 2500→5000 to clear fr-91's expanded reply
+  // formatting + stale-handling branch.
+  const win = SLASHCMDS_SRC.slice(idx, idx + 5000);
   // The scoped path uses ctx.reply (server-side reply); the global
   // fallback uses ctx.session.write (forwards to agent). Both must
   // exist; pin both to ensure the scoped path was added without

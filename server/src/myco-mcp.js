@@ -195,15 +195,40 @@ function saveTaskItems(sessionId, registry) {
 // Look up the task ids associated with a given plan item.
 // Returns array of { taskId, ...meta } sorted by createdAt ascending,
 // optionally filtered to in-flight statuses (pending + in_progress).
+//
+// fr-91: by default, filter to entries whose bootId matches the
+// current AgentSession's bootId — pre-restart entries reference
+// ghost task IDs (SDK's TaskList doesn't survive process death even
+// though sdkSessionId does). Pass {includeStale: true} to bypass
+// the bootId filter for audit / history view.
 function getTasksForItem(sessionId, itemId, opts) {
   const onlyInFlight = !!(opts && opts.onlyInFlight);
+  const includeStale = !!(opts && opts.includeStale);
   const reg = loadTaskItems(sessionId);
+  // Resolve current bootId from the live AgentSession. If the agent
+  // isn't running (rare — /task can only be invoked through the live
+  // session anyway), treat as "no current epoch" and show everything.
+  let currentBootId = null;
+  if (!includeStale) {
+    try {
+      const attachMod = require('./attach');
+      const session = attachMod.getSession && attachMod.getSession(sessionId);
+      if (session && session.bootId) currentBootId = session.bootId;
+    } catch {}
+  }
   const out = [];
   for (const [taskId, info] of Object.entries(reg.tasks || {})) {
     if (!info || info.itemId !== itemId) continue;
     if (onlyInFlight) {
       const s = info.status || 'pending';
       if (s !== 'pending' && s !== 'in_progress') continue;
+    }
+    // fr-91 epoch filter: when currentBootId is set + entry has a
+    // bootId, only show matches. Entries WITHOUT bootId (legacy /
+    // pre-fr-91) are also filtered — they predate the epoch model
+    // and should be considered stale until re-registered.
+    if (!includeStale && currentBootId) {
+      if (info.bootId !== currentBootId) continue;
     }
     out.push({ taskId, ...info });
   }
@@ -219,6 +244,16 @@ function _registerTaskItem(sessionId, args) {
   if (!reg.tasks) reg.tasks = {};
   const now = new Date().toISOString();
   const existing = reg.tasks[args.taskId] || {};
+  // fr-91: capture current AgentSession bootId so /task can filter
+  // out pre-restart entries by default. Falls back to existing.bootId
+  // on re-register (preserves the original epoch); falls back to null
+  // if no live session (rare — defensive).
+  let currentBootId = existing.bootId || null;
+  try {
+    const attachMod = require('./attach');
+    const session = attachMod.getSession && attachMod.getSession(sessionId);
+    if (session && session.bootId) currentBootId = session.bootId;
+  } catch {}
   const entry = {
     itemId: String(args.itemId || ''),
     itemType: String(args.itemType || 'plan'),
@@ -226,6 +261,7 @@ function _registerTaskItem(sessionId, args) {
     status: args.status != null ? String(args.status) : (existing.status || 'pending'),
     createdAt: existing.createdAt || now,
     updatedAt: now,
+    bootId: currentBootId,
   };
   if (!entry.itemId) {
     return { ok: false, message: 'itemId is required' };

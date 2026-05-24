@@ -811,30 +811,42 @@ function handleAdd2Plan(ctx) {
 function handleTaskList(ctx) {
   const args = String((ctx && ctx.args) || '').trim().toLowerCase();
   const wantAll = args === 'all' || args === '--all' || args === '-a';
+  // fr-91: `/task stale` (or `--stale`) bypasses the bootId epoch
+  // filter so pre-restart entries surface as audit history. Default
+  // (without the flag) hides them — pre-restart taskIds reference
+  // ghosts since the SDK's TaskList doesn't survive process death.
+  const wantStale = args === 'stale' || args === '--stale';
   const scope = wantAll ? null : (ctx.chatItem || ctx.runItem || null);
 
   if (scope && scope.itemId) {
     // Registry-backed reply — fully server-side, no agent round-trip.
     const mycoMcp = require('./myco-mcp');
-    const tasks = mycoMcp.getTasksForItem(ctx.sessionId, scope.itemId, { onlyInFlight: true });
+    const tasks = mycoMcp.getTasksForItem(ctx.sessionId, scope.itemId, {
+      onlyInFlight: !wantStale,
+      includeStale: wantStale,
+    });
     if (!tasks.length) {
       ctx.reply(
-        `📋 No in-flight tasks registered for **${scope.itemId}**. ` +
+        `📋 No ${wantStale ? '' : 'in-flight '}tasks registered for **${scope.itemId}**${wantStale ? ' (including stale/pre-restart)' : ''}. ` +
         `(If the agent has spun tasks but didn\'t call \`mcp__myco__register_task_item\`, they won\'t show here. ` +
-        `Use \`/task all\` to see every task in the session.)`,
+        `Use \`/task all\` to see every task in the session, or \`/task stale\` to surface pre-restart history.)`,
       );
       return;
     }
     const lines = tasks.map((t, i) => {
-      const status = t.status === 'in_progress' ? '⏳' : '◯';
+      const status = t.status === 'in_progress' ? '⏳' : t.status === 'pending' ? '◯' : t.status === 'completed' ? '✓' : '·';
       const subject = t.subject || '(no subject)';
-      return `${i + 1}. ${status} \`${t.taskId}\` — ${subject}`;
+      // fr-91: mark stale entries when surfaced via /task stale.
+      const stalePrefix = wantStale ? '🕰️ ' : '';
+      return `${i + 1}. ${stalePrefix}${status} \`${t.taskId}\` — ${subject}`;
     });
-    ctx.reply(
-      `📋 **${tasks.length} in-flight task${tasks.length === 1 ? '' : 's'} for ${scope.itemId}:**\n` +
-      lines.join('\n') +
-      `\n_Source: \`_myco_/task-items.json\` registry. Use \`/task all\` for the global list._`,
-    );
+    const headerLabel = wantStale
+      ? `🕰️ **${tasks.length} task${tasks.length === 1 ? '' : 's'} for ${scope.itemId} (incl. pre-restart history):**`
+      : `📋 **${tasks.length} in-flight task${tasks.length === 1 ? '' : 's'} for ${scope.itemId}:**`;
+    const footer = wantStale
+      ? `\n_Source: \`_myco_/task-items.json\` registry. fr-91: entries from prior agent processes shown as 🕰️ stale._`
+      : `\n_Source: \`_myco_/task-items.json\` registry. Use \`/task all\` for the global list, \`/task stale\` for pre-restart history._`;
+    ctx.reply(headerLabel + '\n' + lines.join('\n') + footer);
     return;
   }
 

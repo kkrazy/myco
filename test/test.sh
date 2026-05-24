@@ -2805,6 +2805,14 @@ test_chat_window() {
   # when [wt:...] marker present. Tests against real git repo +
   # graceful non-git fallback.
   node_test_result test/fr-90-phase1-wt-dispatch.test.js "test/fr-90-phase1-wt-dispatch.test.js (10 cases)"
+  # fr-91: registry resilience across restart via per-process bootId.
+  # AgentSession constructor sets this.bootId from crypto.randomBytes
+  # (NOT persisted across restart by design). _registerTaskItem
+  # captures the live session's bootId on each register. getTasksForItem
+  # filters by current bootId by default — pre-restart entries
+  # reference ghost taskIds since SDK TaskList doesn't survive
+  # process death. /task stale flag bypasses for audit/history.
+  node_test_result test/fr-91-registry-bootid-epoch.test.js "test/fr-91-registry-bootid-epoch.test.js (10 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

@@ -3576,7 +3576,18 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "fr-91",
+      "text": "**Problem:** fr-87's task-items registry (`_myco_/task-items.json`) persists across server restart — the file is on disk. BUT the taskIds it references point to in-process SDK state that does NOT persist (SDK's TaskList is rebuilt from scratch after each restart). So `/task` in a per-item panel shows entries that look in-flight but actually reference ghosts from before the restart.\n\n**Expected:** `/task` tells the truth. Pre-restart entries are either auto-marked stale + hidden by default, or surfaced explicitly via `/task stale`.\n\n**Fix (Option C / per-process epoch):** Each `AgentSession` generates a fresh `bootId` (UUID) in its constructor — NOT persisted, deliberately per-process. Each registry entry tags with the current `bootId` on register. `getTasksForItem` filters by current `bootId` by default; `/task stale` flag bypasses to surface old-bootId entries as audit history.\n\n**Why bootId not sdkSessionId:** the SDK's `sdkSessionId` ACTUALLY persists across restart (via the SDK's `resume=<id>` parameter — see `agent-session.js` line 351). So sdkSessionId is the wrong epoch — it survives the very event we're trying to detect. bootId is the right epoch: fresh on every AgentSession constructor call.\n\n**Touch-points:** server/src/agent-session.js (bootId field), server/src/myco-mcp.js (registry entry shape, getTasksForItem filter), server/src/slashcmds.js handleTaskList (parse `stale` arg).\n\n**Sibling-survivability check (called out in the question):** other in-memory state that also dies on restart and isn't addressed by fr-91 — `session._activeChatItem` / `_activeRunItem` (the chat/run scoping slots). Pre-restart partial assistant_text buffers are lost. fr-89's preempt-flush handles turn-to-turn handoff but not process death. Out of scope here; file a separate issue if it becomes a real problem.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T11:26:01.000Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T10:26:56.650Z"
+  "updatedAt": "2026-05-24T11:26:01.000Z"
 }

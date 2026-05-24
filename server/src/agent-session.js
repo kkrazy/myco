@@ -155,6 +155,15 @@ class AgentSession extends EventEmitter {
     // when respawning an AgentSession after a server restart so the
     // SDK conversation picks up where the prior process left off.
     this.sdkSessionId = opts.resumeSdkSessionId || null;
+    // fr-91: per-process boot id. Fresh on every AgentSession
+    // construction — NOT persisted across restart by design. The
+    // task-items registry (fr-87) tags each entry with the bootId so
+    // /task can filter out pre-restart entries (whose taskIds reference
+    // ghosts in a long-gone SDK process). Distinct from sdkSessionId
+    // which DOES persist via the SDK's resume= flow. The right epoch
+    // for "this entry was created in the currently-running agent
+    // process" is bootId, not sdkSessionId.
+    this.bootId = require('crypto').randomBytes(8).toString('hex');
     // Latest model + tool list reported by system/init; useful for the
     // attach-snapshot a freshly-connecting client should see.
     this._initSnapshot = null;
