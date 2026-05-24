@@ -65,8 +65,17 @@ function buildArtifactRunText(type, item, user) {
   // set _activeRunItem and queue entries stayed `running` forever.
   // Conditional on item.id being truthy — guards legacy / synthetic
   // call sites that build dispatch text without a backing plan item.
-  const runMarkerPrefix = item && item.id ? `[run:${type}#${item.id}] ` : '';
-  const header = `${runMarkerPrefix}[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
+  //
+  // fr-89 bugfix: ALSO prepend the [chat:<type>#<id>] marker so the
+  // chat-mode listener (Phase 2) binds the agent's assistant_text
+  // events to this item's aiChat[]. Pre-fix the panel that triggered
+  // /run saw no response in its chat history — response only landed
+  // in runs[]. Now the response shows up in BOTH places (runs[] for
+  // the dispatch ledger + aiChat[] for the conversational view that
+  // the panel reads). Both listeners are independent; both fire on
+  // the same terminal event.
+  const markers = item && item.id ? `[chat:${type}#${item.id}] [run:${type}#${item.id}] ` : '';
+  const header = `${markers}[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
   return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 function buildArtifactQuorumText(type, item) {
@@ -75,8 +84,10 @@ function buildArtifactQuorumText(type, item) {
   // fr-48 bugfix: same marker prepend (conditional on id) as
   // buildArtifactRunText — the quorum auto-fire goes through the same
   // handleChatMessage path and needs _activeRunItem set.
-  const runMarkerPrefix = item && item.id ? `[run:${type}#${item.id}] ` : '';
-  const header = `${runMarkerPrefix}[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
+  // fr-89: chat marker too — auto-quorum results also bind to the
+  // item's aiChat[] so anyone with the panel open sees the response.
+  const markers = item && item.id ? `[chat:${type}#${item.id}] [run:${type}#${item.id}] ` : '';
+  const header = `${markers}[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
   return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
 

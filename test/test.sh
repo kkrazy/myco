@@ -2778,6 +2778,15 @@ test_chat_window() {
   # up at the next turn boundary. Returns 409 on duplicate (same
   # as HTTP route). Closes the fr-88 migration set (1/4 → 4/4).
   node_test_result test/fr-88-m4-queue-add-tool.test.js "test/fr-88-m4-queue-add-tool.test.js (9 cases)"
+  # fr-89: bind dispatched-action responses back to the panel + prevent
+  # cross-item chat leak. (A) buildArtifactRunText + buildArtifactQuorumText
+  # now prepend BOTH [chat:<type>#<id>] AND [run:<type>#<id>] markers, so
+  # the chat-mode listener binds the agent reply into the item's aiChat[]
+  # alongside the run-mode listener stamping runs[]. (B) handleChatMessage
+  # preempt-flushes _activeChatItem at the start of every user turn —
+  # turn-scoped now, not session-scoped. _appendUserAiChatTurn strips
+  # BOTH markers from the displayed user turn.
+  node_test_result test/fr-89-panel-response-binding.test.js "test/fr-89-panel-response-binding.test.js (11 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

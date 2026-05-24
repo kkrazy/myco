@@ -352,8 +352,13 @@ function _appendUserAiChatTurn(sessionId, itemId, user, fullText) {
   if (!planArtifact || !Array.isArray(planArtifact.items)) return;
   const item = planArtifact.items.find((it) => it && it.id === itemId);
   if (!item) return;
+  // fr-89: strip BOTH chat AND run markers (in any order) — queue
+  // dispatches now wrap with both, and the user-displayed turn should
+  // carry neither prefix.
   const text = String(fullText || '')
     .replace(/^\[chat:[^\]]+\]\s*/, '')
+    .replace(/^\[run:[^\]]+\]\s*/, '')
+    .replace(/^\[chat:[^\]]+\]\s*/, '')   // in case order was run→chat
     .trim();
   if (!text) return;
   const artifactsMod = getArtifactsMod();
@@ -1553,6 +1558,26 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   // already carries claude's conversation memory across turns, so the
   // agent has context naturally — aiChat[] is for persistent DISPLAY
   // (the per-item chat panel renders from it), not for re-prompting.
+  //
+  // fr-89 leak fix: _activeChatItem must be TURN-SCOPED, not session-
+  // scoped. Pre-fix it was set on chat-marker arrival and only cleared
+  // on terminal event — so if a non-chat turn (or different chat turn)
+  // interleaved before terminal, the listener kept routing its
+  // assistant_text into the stale item's buffer. Now: at the start of
+  // every user turn, FLUSH any in-flight buffer to aiChat[] (preempt),
+  // then clear _activeChatItem. The fresh marker (if any) re-sets it.
+  if (user !== ASSISTANT_USER && session._activeChatItem) {
+    const stale = session._activeChatItem;
+    session._activeChatItem = null;
+    if (stale._buffer && stale._buffer.trim()) {
+      try {
+        _appendAgentAiChatTurn(sessionId, stale.itemId,
+          { type: 'preempt' }, stale._buffer);
+      } catch (err) {
+        console.error('[ai-chat] preempt-flush failed:', err.message);
+      }
+    }
+  }
   const chatMatch = text.match(/\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
   if (chatMatch && user !== ASSISTANT_USER) {
     session._activeChatItem = {

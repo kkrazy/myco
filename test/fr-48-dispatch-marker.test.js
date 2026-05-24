@@ -25,11 +25,17 @@ function t(name, fn) {
 
 console.log('── fr-48 bugfix: dispatch text includes [run:<type>#<id>] marker ──');
 
-t('buildArtifactRunText output starts with [run:plan#<id>] marker', () => {
+t('buildArtifactRunText output carries [run:plan#<id>] marker (fr-48) + [chat:plan#<id>] marker (fr-89)', () => {
+  // fr-89: dispatches now wrap with BOTH markers so the chat-mode
+  // listener binds the agent response to aiChat[] (panel view)
+  // alongside runs[]. Order is chat-then-run; both must be reachable
+  // by their respective recognition regexes.
   const item = { id: 'bug-1', text: 'fix the thing', layer: 'Bug' };
   const text = artifacts.buildArtifactRunText('plan', item, 'kkrazy');
-  assert.match(text, /^\[run:plan#bug-1\]/,
-    'first chars must be [run:plan#bug-1] so handleChatMessage marker regex matches → _activeRunItem set');
+  assert.match(text, /\[run:plan#bug-1\]/,
+    '[run:plan#bug-1] marker must be present so handleChatMessage sets _activeRunItem (fr-48 contract)');
+  assert.match(text, /\[chat:plan#bug-1\]/,
+    '[chat:plan#bug-1] marker must be present so handleChatMessage sets _activeChatItem — binds the agent response to fr-1\'s aiChat[] (fr-89 fix)');
 });
 
 t('buildArtifactRunText output still includes submitter + body text', () => {
@@ -39,11 +45,13 @@ t('buildArtifactRunText output still includes submitter + body text', () => {
   assert.match(text, /add retry loop/, 'item body preserved');
 });
 
-t('buildArtifactQuorumText output starts with [run:plan#<id>] marker too', () => {
+t('buildArtifactQuorumText output carries [run:] + [chat:] markers (fr-48 + fr-89)', () => {
   const item = { id: 'td-22', text: 'do the thing', voters: ['alice', 'bob'] };
   const text = artifacts.buildArtifactQuorumText('plan', item);
-  assert.match(text, /^\[run:plan#td-22\]/,
-    'quorum-fired dispatches also need the marker — same handleChatMessage code path');
+  assert.match(text, /\[run:plan#td-22\]/,
+    'quorum-fired dispatches must carry the [run:] marker (fr-48 contract — same handleChatMessage path)');
+  assert.match(text, /\[chat:plan#td-22\]/,
+    'quorum-fired dispatches must ALSO carry the [chat:] marker (fr-89 — agent reply binds to td-22\'s aiChat[])');
 });
 
 t('marker regex (from attach.js handleChatMessage) matches buildArtifactRunText output', () => {
