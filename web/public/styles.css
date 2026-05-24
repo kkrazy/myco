@@ -1785,18 +1785,37 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
      - z-index: 5   — above the plan items but below modal overlays
      - background   — opaque so items scrolling underneath don't
                       visually bleed through the row
-     - margin: -16px -16px 0 -16px — counter the body's padding so
-                      the sticky row spans the full body width
-                      (matches the visual "header strip" look).
-                      Desktop body padding is 16px (line ~3181);
-                      mobile is 12px 14px — -16 over-cancels mobile
-                      by a few px but visually clean either way. */
+     - margin: 0 (the body's top padding is zeroed for the plan tab
+                      via #artifact-body-plan rule below; horizontal
+                      bleed is also zero since we let the filter row
+                      sit inside the body's left/right padding rather
+                      than try to span its full width. Avoids the
+                      mobile-vs-desktop padding mismatch the previous
+                      negative-margin approach created (over-cancel on
+                      mobile body padding of 12/14 by -16 left a 4px
+                      visual gap below the header). */
 #plan-filter-row {
   position: sticky;
   top: 0;
   z-index: 5;
   background: var(--bg);
-  margin: -16px -16px 0 -16px;
+  margin: 0;
+}
+/* Zero the plan body's top padding so the sticky filter row sits
+   flush against the header (no padding-gap between header and
+   filter row). Side + bottom padding preserved for the items
+   list. Applied to #artifact-body-plan specifically so other
+   artifact bodies (arch / test) keep their default padding. */
+#artifact-body-plan {
+  padding-top: 0;
+}
+@media (min-width: 901px) {
+  /* The desktop rule .artifact-main-view .artifact-body uses
+     padding: 16px (shorthand) which would override the
+     padding-top: 0 above. Re-zero specifically for plan. */
+  .artifact-main-view #artifact-body-plan {
+    padding-top: 0;
+  }
 }
 /* Open only checkbox now lives inside the filter row alongside the
    chips (moved per user feedback). Same compact pill look so it
