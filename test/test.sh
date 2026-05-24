@@ -2795,6 +2795,16 @@ test_chat_window() {
   # (round-trip create + list + idempotent re-create + remove with
   # branch preservation). Also pins _myco_/.gitignore gets worktrees/.
   node_test_result test/fr-90-phase0-worktree-tools.test.js "test/fr-90-phase0-worktree-tools.test.js (10 cases)"
+  # fr-90 Phase 1: serial dispatch via worktree. queueItemForRun now
+  # ALSO creates a worktree (graceful: skips if no git repo) and
+  # stores wt info on the queue entry. buildArtifactRunText takes a
+  # 4th `rec` arg, reads the entry's worktree, and emits a
+  # [wt:<path>#<branch>] marker. All 7 dispatch sites updated to
+  # pass `rec`. _appendUserAiChatTurn strips [wt:...] too. CLAUDE.md
+  # instructs the agent to spawn a Task subagent in the worktree
+  # when [wt:...] marker present. Tests against real git repo +
+  # graceful non-git fallback.
+  node_test_result test/fr-90-phase1-wt-dispatch.test.js "test/fr-90-phase1-wt-dispatch.test.js (10 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

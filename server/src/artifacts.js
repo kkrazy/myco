@@ -55,7 +55,7 @@ function _artifactCommentsBlock(item) {
   }
   return lines;
 }
-function buildArtifactRunText(type, item, user) {
+function buildArtifactRunText(type, item, user, rec) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
   // fr-48 bugfix: prepend the [run:<type>#<id>] marker. attach.js
   // handleChatMessage parses this marker to set session._activeRunItem,
@@ -74,7 +74,22 @@ function buildArtifactRunText(type, item, user) {
   // the dispatch ledger + aiChat[] for the conversational view that
   // the panel reads). Both listeners are independent; both fire on
   // the same terminal event.
-  const markers = item && item.id ? `[chat:${type}#${item.id}] [run:${type}#${item.id}] ` : '';
+  //
+  // fr-90 Phase 1: ALSO prepend the [wt:<path>#<branch>] marker when
+  // the queue entry has a worktree assigned (queueItemForRun creates
+  // one if the session has a git repo). The agent's CLAUDE.md
+  // etiquette teaches it: when [wt:...] is present, spawn a Task
+  // subagent that operates in that worktree, commits to that branch,
+  // and reports back. The wt-isolation prevents parallel runs (Phase
+  // 2+) from colliding on shared files.
+  let wtMarker = '';
+  if (rec && item && item.id) {
+    const entry = (rec.runQueue || []).find((e) => e && e.itemId === item.id);
+    if (entry && entry.worktree && entry.worktree.path && entry.worktree.branch) {
+      wtMarker = `[wt:${entry.worktree.path}#${entry.worktree.branch}] `;
+    }
+  }
+  const markers = item && item.id ? `[chat:${type}#${item.id}] [run:${type}#${item.id}] ${wtMarker}` : '';
   const header = `${markers}[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
   return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
 }
@@ -453,6 +468,28 @@ function queueItemForRun(sessionId, type, itemId, addedBy) {
     return { ok: false, error: err.message, status: 409 };
   }
   sessionsMod.saveStore();
+  // fr-90 Phase 1: try to create an isolated git worktree for this
+  // entry so the agent works in a branch (wt-<itemId>) rather than
+  // the main checkout. Phase 2 unlocks parallel dispatches; this
+  // step is what makes the isolation possible per entry. Graceful:
+  // if createWorktree fails (no git repo, git not installed, disk
+  // full, …) the dispatch still proceeds without a worktree — the
+  // existing serial behavior is preserved. The [wt:...] marker in
+  // buildArtifactRunText is conditional on entry.worktree being
+  // populated, so a missing worktree just means the legacy main-cwd
+  // dispatch path runs.
+  try {
+    const mycoMcp = require('./myco-mcp');
+    const wt = mycoMcp.createWorktree(sessionId, itemId);
+    if (wt && wt.ok) {
+      entry.worktree = { path: wt.path, branch: wt.branch, baseRef: wt.baseRef };
+      sessionsMod.saveStore();
+    } else {
+      console.warn(`[fr-90] worktree create for ${itemId} skipped: ${wt && wt.error}`);
+    }
+  } catch (err) {
+    console.warn(`[fr-90] worktree create for ${itemId} threw (graceful skip): ${err.message}`);
+  }
   return { ok: true, entry, item, rec };
 }
 
@@ -731,7 +768,7 @@ function register(app, deps) {
           runQueue.markRunning(ctx.rec, itemId);
           saveStore();
           broadcastRunQueue(ctx.id, ctx.rec);
-          const dispatchText = opts.text || buildArtifactRunText(type, item, user);
+          const dispatchText = opts.text || buildArtifactRunText(type, item, user, ctx.rec);
           handleChatMessage(ctx.id, session, opts.dispatchUser || user, dispatchText);
         } catch (err) {
           console.error(`[runQueue] kick dispatch failed: ${err.message}`);
@@ -1089,7 +1126,7 @@ function register(app, deps) {
           runQueue.markRunning(ctx.rec, itemId);
           saveStore();
           broadcastRunQueue(ctx.id, ctx.rec);
-          handleChatMessage(ctx.id, session, user, buildArtifactRunText(type, item, user));
+          handleChatMessage(ctx.id, session, user, buildArtifactRunText(type, item, user, ctx.rec));
         } catch (err) {
           console.error(`[runQueue] initial dispatch failed: ${err.message}`);
         }
@@ -1158,7 +1195,7 @@ function register(app, deps) {
           runQueue.markRunning(ctx.rec, next.itemId);
           saveStore();
           broadcastRunQueue(ctx.id, ctx.rec);
-          handleChatMessage(ctx.id, session, user, buildArtifactRunText(next.type, item, user));
+          handleChatMessage(ctx.id, session, user, buildArtifactRunText(next.type, item, user, ctx.rec));
         } catch (err) {
           console.error(`[runQueue] resume-dispatch failed: ${err.message}`);
         }

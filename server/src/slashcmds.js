@@ -1305,7 +1305,7 @@ function handleQueue(ctx) {
             sessionsMod.saveStore();
             session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
             attachMod.handleChatMessage(ctx.sessionId, session, ctx.user,
-              artifactsMod.buildArtifactRunText(next.type, item, ctx.user));
+              artifactsMod.buildArtifactRunText(next.type, item, ctx.user, rec));
           } catch (err) {
             console.error(`[runQueue] /queue kick failed: ${err.message}`);
           }
@@ -1397,7 +1397,7 @@ function handleQCancel(ctx) {
         sessionsMod.saveStore();
         ctx.session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
         attachMod.handleChatMessage(ctx.sessionId, ctx.session, ctx.user,
-          artifactsMod.buildArtifactRunText(next.type, nextItem, ctx.user));
+          artifactsMod.buildArtifactRunText(next.type, nextItem, ctx.user, rec));
       } catch (err) {
         console.error(`[runQueue] /qcancel auto-advance failed: ${err.message}`);
       }
@@ -1445,7 +1445,7 @@ function handleQResume(ctx) {
     sessionsMod.saveStore();
     session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
     attachMod.handleChatMessage(ctx.sessionId, session, ctx.user,
-      artifactsMod.buildArtifactRunText(next.type, item, ctx.user));
+      artifactsMod.buildArtifactRunText(next.type, item, ctx.user, rec));
   } catch (err) {
     console.error(`[runQueue] /qresume dispatch failed: ${err.message}`);
     ctx.reply(`⚠ Queue unpaused but dispatch failed: ${err.message}`);

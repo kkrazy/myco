@@ -355,10 +355,13 @@ function _appendUserAiChatTurn(sessionId, itemId, user, fullText) {
   // fr-89: strip BOTH chat AND run markers (in any order) — queue
   // dispatches now wrap with both, and the user-displayed turn should
   // carry neither prefix.
+  // fr-90 Phase 1: also strip the [wt:<path>#<branch>] worktree
+  // marker. Same idea — plumbing, not user-visible content.
   const text = String(fullText || '')
     .replace(/^\[chat:[^\]]+\]\s*/, '')
     .replace(/^\[run:[^\]]+\]\s*/, '')
     .replace(/^\[chat:[^\]]+\]\s*/, '')   // in case order was run→chat
+    .replace(/^\[wt:[^\]]+\]\s*/, '')      // fr-90: strip worktree marker
     .trim();
   if (!text) return;
   const artifactsMod = getArtifactsMod();
@@ -462,7 +465,7 @@ function _advanceRunQueue(sessionId, session, finishedItemId, turnResultEv) {
   sessionsMod.saveStore();
   session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
   const artifactsMod = require('./artifacts');
-  const dispatchText = artifactsMod.buildArtifactRunText(next.type, item, runningEntry.addedBy || 'queue');
+  const dispatchText = artifactsMod.buildArtifactRunText(next.type, item, runningEntry.addedBy || 'queue', rec);
   console.log(`[runQueue] ${sessionId} auto-dispatching ${next.itemId} (next of ${rec.runQueue.length} entries)`);
   handleChatMessage(sessionId, session, runningEntry.addedBy || 'queue', dispatchText);
 }
