@@ -34,8 +34,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { createSdkMcpServer, tool } = require('@anthropic-ai/claude-agent-sdk');
-const { z } = require('zod');
+
+// fr-91 followup: SDK + zod requires are deferred to createMycoMcpServer
+// (the only caller that needs them). Top-level require of the SDK
+// breaks on Node 18 because the SDK ships as ESM (.mjs) and require()
+// of ESM is only supported on Node 22+. Tests that exercise the data
+// helpers (loadWorktrees, getTasksForItem, _findPathOverlap, etc.)
+// don't need the SDK at all — they can load this module on any Node
+// version. Production agent-session.js runs on Node 22+ in the docker
+// image, where the lazy require resolves cleanly when createMycoMcpServer
+// is invoked at AgentSession construction.
 
 // Tool-name prefix the SDK applies to MCP server tools:
 //   mcp__<server-name>__<tool-name>
@@ -589,6 +597,12 @@ function mergeWorktree(sessionId, itemId, opts) {
 }
 
 function createMycoMcpServer(sessionId) {
+  // fr-91 followup: lazy-require — top-level would fail on Node 18.
+  // See module header. This call site is only reached when an
+  // AgentSession is constructing its MCP server surface, which
+  // happens inside the agent runtime (Node 22+).
+  const { createSdkMcpServer, tool } = require('@anthropic-ai/claude-agent-sdk');
+  const { z } = require('zod');
   return createSdkMcpServer({
     name: 'myco',
     version: '1.0.0',

@@ -3587,7 +3587,40 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "bug-36",
+      "text": "**Problem:** Two test failures reported by kkrazy after running `./test/test.sh` on opti (plan-driven-ui @ ffade2a): 563 ✓ / 2 ✗ / exit 1.\n\n**Failure 1:** test.sh static-grep guard at lines 1896, 1902, 1917 anchored on `^\\[run:plan#X\\]` for buildArtifactRunText / buildArtifactQuorumText output — but fr-89 + fr-90 Phase 1 changed the output to dual-marker (`[chat:plan#X] [run:plan#X] [wt:...?] [📋 header]`). Guard drifted; test failed.\n\n**Fix:** updated all three regexes to expect `^\\[chat:...\\]\\s+\\[run:...\\]\\s+[header]`. Commit ships with this fix.",
+      "layer": "Bug",
+      "done": true,
+      "addedAt": "2026-05-24T14:01:33.961Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "bug-37",
+      "text": "**Problem:** Tests that load `server/src/myco-mcp.js` (fr-87, fr-90 Phase 0/1/3, fr-91 — anything touching the registry helpers or worktree tools) throw `ERR_REQUIRE_ESM` on Node 18. Root cause: `myco-mcp.js` top-level `require('@anthropic-ai/claude-agent-sdk')` — the SDK ships as ESM (`.mjs`), require-of-ESM is only supported on Node 22+.\n\n**Production unaffected:** the docker container runs Node 22, where require-of-ESM works. Only the on-host test gate (when host is Node 18) fails.\n\n**Fix:** moved both SDK requires + zod require INSIDE `createMycoMcpServer`. Data helpers (loadWorktrees, getTasksForItem, _findPathOverlap, etc.) don't need the SDK and now load cleanly on any Node version. The single caller of createMycoMcpServer (agent-session.js) runs in the container = Node 22 = clean resolution.",
+      "layer": "Bug",
+      "done": true,
+      "addedAt": "2026-05-24T14:01:33.961Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "td-32",
+      "text": "**Problem:** Reported by kkrazy alongside two real test failures: when a node test exits non-zero quickly (e.g. in 0.18s), test.sh's parallel-runner falsely reports it as \"background runner exceeded 180s budget\" — misleading. The test actually ran fast + failed; the runner conflated exit-code != 0 with timeout.\n\n**Fix idea:** check actual elapsed time before classifying as timeout. If elapsed < budget but exit != 0, report as \"FAILED (exit N, ran Ns)\" not \"BUDGET EXCEEDED\". Lower priority — cosmetic but obscures real failures.",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-05-24T14:01:33.961Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T11:26:01.000Z"
+  "updatedAt": "2026-05-24T14:01:33.961Z"
 }
