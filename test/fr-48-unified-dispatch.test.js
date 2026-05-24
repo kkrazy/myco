@@ -45,16 +45,39 @@ t('app.js onArtifactItemRun POSTs to /queue/add (NOT /artifact/run)', () => {
     'onArtifactItemRun must NOT POST to /artifact/run directly — every plan-item invocation goes through the queue');
 });
 
-t('artifacts.js /artifact/run route body enqueues via runQueue.addToQueue', () => {
+t('artifacts.js /artifact/run route body enqueues via _enqueueAndKickIfIdle (wraps runQueue.addToQueue)', () => {
   // Locate the POST /artifact/run handler body — bounded by the next
-  // app.<verb>( declaration.
+  // app.<verb>( declaration. fr-88 followup: the route was refactored
+  // to call `_enqueueAndKickIfIdle(ctx, type, itemId, user)` — a
+  // helper that owns runQueue.addToQueue + the kick. The previous
+  // version of this guard looked for `runQueue.addToQueue` literally
+  // in the route body; after the helper extraction the call moved
+  // one indirection deeper. The invariant (every plan-item invocation
+  // flows through the queue — no direct handleChatMessage) still
+  // holds; we just check for the helper here and the helper's body
+  // separately so the chain is grep-able both ways.
   const start = PROD_ARTIFACTS.search(/app\.post\(\s*['"`]\/sessions\/:id\/artifact\/run['"`]/);
   assert.ok(start > -1, 'POST /artifact/run route must exist');
   const rest = PROD_ARTIFACTS.slice(start);
-  const next = rest.slice(1).search(/\napp\.(get|post|patch|put|delete)\(/);
+  // Routes live INSIDE register(app, deps) so they're indented 2
+  // spaces — the next route's `app.<verb>(` is preceded by `\n  `,
+  // NOT `\n`. Allow optional leading whitespace so the body slice
+  // terminates correctly at the next route.
+  const next = rest.slice(1).search(/\n\s*app\.(get|post|patch|put|delete)\(/);
   const body = next === -1 ? rest : rest.slice(0, next + 1);
-  assert.ok(/runQueue\.addToQueue|addToQueue\s*\(/.test(body),
-    '/artifact/run route must enqueue via runQueue.addToQueue — direct handleChatMessage dispatch is no longer allowed (every plan-item invocation flows through the queue)');
+  // The route MUST go through _enqueueAndKickIfIdle (queue path), NOT
+  // call handleChatMessage directly.
+  assert.ok(/_enqueueAndKickIfIdle\s*\(/.test(body),
+    '/artifact/run route must enqueue via _enqueueAndKickIfIdle helper (wraps runQueue.addToQueue + kicks the queue)');
+  assert.ok(!/handleChatMessage\s*\(/.test(body),
+    '/artifact/run route must NOT call handleChatMessage directly — every plan-item invocation goes through the queue');
+  // The helper itself must still call runQueue.addToQueue — pin
+  // separately so the chain is intact.
+  const helperIdx = PROD_ARTIFACTS.search(/function\s+_enqueueAndKickIfIdle\s*\(/);
+  assert.ok(helperIdx > -1, '_enqueueAndKickIfIdle helper must be defined');
+  const helperBody = PROD_ARTIFACTS.slice(helperIdx, helperIdx + 3000);
+  assert.ok(/runQueue\.addToQueue\s*\(/.test(helperBody),
+    '_enqueueAndKickIfIdle must call runQueue.addToQueue (the actual enqueue step)');
 });
 
 t('artifacts.js auto-quorum dispatch path also enqueues', () => {
