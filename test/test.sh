@@ -2726,6 +2726,16 @@ test_chat_window() {
   # cleanup block (gated on state.activeId === s.id) + a simulated
   # state-effect assertion.
   node_test_result test/bug-29-delete-clears-plan.test.js "test/bug-29-delete-clears-plan.test.js (9 cases)"
+  # bug-31: AskUserQuestion modal dismissal recovery. Two failure modes
+  # the user reported — (a) backdrop outside-click dismissed the prompt
+  # accidentally; (b) once dismissed, the chat-pane reopen affordance
+  # was invisible (no badge, just whole-row clickable with no cue).
+  # Fix: backdrop no longer carries data-perm-defer (dismiss is explicit
+  # only — X button + Esc); active menu rows now render a visible
+  # .chat-menu-reopen-hint pill ("↗ Tap to answer"). Static guards on
+  # both HTML + JS + CSS layers plus a behavior simulation of the
+  # state.permModalDismissed flow.
+  node_test_result test/bug-31-modal-dismiss-recovery.test.js "test/bug-31-modal-dismiss-recovery.test.js (8 cases)"
   # bug-33: file viewer header is now two stacked rows — nav (back +
   # breadcrumb) on top, actions (edit/save/cancel/wrap/copy) below.
   # Actions row auto-hides via :has(button:not([hidden])) so a

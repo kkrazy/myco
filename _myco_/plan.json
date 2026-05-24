@@ -2737,12 +2737,24 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "rs-81387e61c6b5",
+          "user": "claude",
+          "text": "**Fix shipped.**\n\n### Two failure modes from the report\n\n**(a) Accidental dismiss via backdrop click.** Pre-fix:\n```html\n<div class=\"perm-modal-backdrop\" data-perm-defer=\"1\"></div>\n```\nThe backdrop's `data-perm-defer=\"1\"` routed outside-clicks through the same defer handler as the X button. On touch, a thumb-edge tap that missed the dialog box dismissed it. Once dismissed, the agent's `AskUserQuestion` Promise stayed blocked but the modal was gone — user had no obvious way back, and typing in chat didn't unblock the agent (the SDK iteration was awaiting the tool-call Promise).\n\n**(b) No visible recovery affordance.** The chat-pane menu row WAS already click-to-reopen via `data-perm-reopen` + `_bindChatMenuClicks`. But the active-branch render set `optsHtml = ''` with a comment \"No visible affordance line\" — users didn't know the row was clickable. Until another `AskUserQuestion` fired, the session looked stuck.\n\n### Fix\n- **Removed `data-perm-defer=\"1\"`** from `.perm-modal-backdrop`. Dismiss is now explicit only — X button OR Esc key. Accidental outside-clicks are no-ops.\n- **Added visible `.chat-menu-reopen-hint`** pill (\"↗ Tap to answer\") inside active menu chat rows. The pill carries `data-perm-reopen` so the existing `_bindChatMenuClicks` delegation picks up the click and reopens the modal.\n\n### Why not \"the modal can't be dismissed at all\"\nThe user's expected said either-or. Hard-locking the modal on screen is hostile UX — if the modal pops mid-conversation and the user wants to scroll back to re-read something, they need a temporary escape. Explicit X + Esc preserves that, and the visible chat affordance preserves the recovery path.\n\n### CSS\nPill-shaped accent (blue, semi-transparent bg + 1px border) so it reads as an interactive affordance, not static text. Has `:hover` state for tactile feedback. `cursor: pointer` reinforces.\n\n### Test\n`test/bug-31-modal-dismiss-recovery.test.js` — 8 cases:\n- HTML: `.perm-modal-backdrop` does NOT carry `data-perm-defer`\n- HTML: X button still does (explicit dismiss preserved)\n- JS: Esc still dismisses (preserved)\n- JS: active menu rows now render `.chat-menu-reopen-hint` with `data-perm-reopen`\n- JS: existing reopen wiring stays in place\n- CSS: pill styled with cursor:pointer + hover state\n- Behavior: dismiss flips flag true; reopen flips false; backdrop click is a no-op\n\n8/8 ✓ direct. **Red-flipped against pre-fix code (3/8 failed via git stash)** — one failing test per surface (HTML backdrop, JS reopen-hint, CSS pill), confirming the test catches each piece independently.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Notes for future work\nThe bug-31 fix does NOT address \"free-form chat with the agent for deeper clarification\" — that requires the agent to include an \"Other...\" option in its AskUserQuestion (the existing `_permOptionIsFreeText` heuristic auto-focuses the chat input on such picks). Encouraging the agent to consistently add \"Other...\" is a guidance/training question, separable from bug-31's recovery UX. If the user wants to file a follow-up \"always offer Other...\" fr, that's a separate item.\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/ change.\n\nStatus: closed.",
+          "ts": "2026-05-24T01:55:00.588Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "accidentially click outside the askuserquestion would stuck without opportunith to answer again until next askuserquestion show up. It doesnt have a way to provide user specific questions or allow user to chat with agent for deeper clarification.",
         "rewritten": true
-      }
+      },
+      "status": "closed",
+      "closedAt": "2026-05-24T01:55:00.588Z"
     },
     {
       "id": "bug-32",
@@ -2907,7 +2919,17 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "rs-c2d5f6def747",
+          "user": "claude",
+          "text": "**Investigation (no code yet) — this is a behavioral change with real trade-offs.**\n\n### Where mid-run pauses come from\nThree sources today, all reachable from a queued run:\n\n| Source | Path | What pauses the agent |\n|---|---|---|\n| **`AskUserQuestion` tool** | `agent-session.js _handleAskUserQuestion` → modal popup | Agent decided it needs clarification. SDK Promise blocks until user clicks an answer. |\n| **Permission requests** (canUseTool) | `agent-session.js _handlePermissionRequest` → 3-option chat menu | Tool not in allow/deny list. Agent waits for [Allow once / Allow always / Deny]. |\n| **Inline questions in chat text** | Agent writes \"should I do X or Y?\" as a regular assistant message | Soft pause — no SDK lock, but the agent typically waits for the next user turn. |\n\nThe queue dispatch (`buildArtifactRunText`) currently has no signal that distinguishes a queued run from an interactive one — the agent treats both the same and follows the same CLAUDE.md guidance (which actually *encourages* clarifying questions per §8.1).\n\n### What \"queued\" means today\nQueue dispatch → `handleChatMessage` → text with `[run:plan#<id>]` marker → agent gets it in chat → agent acts as normal. The marker only binds `turn_result` back to the queue entry; it doesn't change behavior.\n\n### Four options for \"autopilot mode\"\n\n**Option A — In-prompt directive (simplest, ~1 hr)**\n`buildArtifactRunText` prepends an \"autopilot mode\" instruction:\n\n> *This was dispatched via the run-queue. You're in autopilot mode: make best-judgment assumptions, document them in your reply, and complete the work without asking clarifying questions or waiting for further input. If a decision is truly blocking and you can't make a reasonable assumption, fail loudly with a clear \"blocked by: <reason>\" message and stop.*\n\nTrade-offs:\n- ✓ Cheap, no SDK/server changes beyond text-building\n- ✓ Agent retains judgment — can still STOP for genuinely blocking issues\n- ✗ Soft contract — relies on the agent obeying. Some agent flavors / SDK versions may still pop `AskUserQuestion` despite the instruction.\n- ✗ Doesn't handle permission requests — if a queued run hits an unapproved tool, the chat menu still pops.\n\n**Option B — Two-phase: gather-questions first, then queue (matches user's \"Expected\" verbatim)**\n- User clicks ▶ Run → server sends a special \"scoping\" dispatch: *\"Read this item. List ANY clarifying questions you'd need to finish it. Stop after listing — do not write code yet.\"*\n- Agent replies with question list (or \"no questions; ready to run\")\n- A new \"▶ Queue with answers\" button appears\n- User answers in a single form, hits \"Queue\"\n- THEN the queue dispatches the item with the Q&A pasted in as context\n\nTrade-offs:\n- ✓ Matches the user's Expected behavior exactly\n- ✓ Strong contract — the autopilot is the SECOND turn, after questions are answered\n- ✗ Doubles the chat round-trips per queued item\n- ✗ Needs new UI state (\"scoping\" / \"awaiting answers\" between Pending and Running)\n- ✗ Significant scope — ~half day\n\n**Option C — Tool-level enforcement (hard contract, ~2 hr)**\n- Set `session._queuedMode = true` when dispatching from the queue\n- In `_canUseTool`, when `_queuedMode` is on:\n  - `AskUserQuestion` → auto-resolve with empty answers (agent gets a clear \"no answers\" signal and must proceed)\n  - Permission requests → auto-deny with the reason \"blocked: queued runs don't prompt for permissions; add an allow rule first\"\n- `_queuedMode` clears when the queue entry's terminal event lands\n\nTrade-offs:\n- ✓ Hard guarantee — agent literally cannot pause\n- ✓ Surfaces missing permission rules upfront (blocked items pause the queue cleanly)\n- ✗ Aggressive — a genuinely-needed clarification dies silently; the agent might just plow forward with a wrong assumption\n- ✗ Permission auto-deny will fail queued items that need tools the user hasn't pre-approved\n\n**Option D — Hybrid: A + C, with Option C as the safety net**\n- In-prompt directive (Option A) tells the agent to behave\n- Tool-level enforcement (Option C) catches it if it doesn't\n- Best of both: agent has agency to STOP cleanly with a clear failure message, but if it tries to ask anyway, the system makes that fail fast\n\n### My recommendation: **Option D**\nReasons:\n1. Option A alone is too soft — different SDK / model versions may not obey\n2. Option B is the most \"correct\" UX but doubles every queued run's turns; high cost for a maybe-rare scenario (most plan items DON'T need clarification)\n3. Option C alone risks silent bad-assumption work\n4. Option D = soft guidance (agent decides whether to STOP cleanly with a \"blocked by X\" failure) + hard backstop (tool can't actually pop a modal). The queue stays moving; failures are visible.\n\n### Test plan (for any option)\n- Static guards: `buildArtifactRunText` includes the autopilot directive when called with item.id; `_canUseTool` checks `_queuedMode`\n- Behavior simulation: fake session with `_queuedMode=true` → `AskUserQuestion` resolves with empty answers; permission request resolves with deny\n- Integration: dispatch a queued item; assert agent doesn't pop a modal even when it would have\n\n### Estimated effort\n- A alone: ~1 hr\n- C alone: ~2 hr\n- D: ~3 hr\n- B: ~half day + UI work\n\n### Questions for you\n1. **Which option** — A, B, C, D, or a different shape entirely?\n2. **When the agent encounters genuine ambiguity** in autopilot mode, what should happen?\n   - **Best-guess + document**: agent picks the most reasonable option, notes the assumption in its reply, proceeds\n   - **Hard-stop**: agent marks the queue entry failed with \"blocked: <reason>\", queue auto-pauses for triage\n   - **Best-guess + flag**: agent proceeds but appends a \"⚠ ambiguous decisions made — review\" footer to its reply\n3. **Permission requests**: same question — auto-deny (fail loud) or auto-allow (yolo)? Current proposal is auto-deny.\n\nStatus: investigation only, awaiting Option pick.",
+          "ts": "2026-05-24T01:49:39.019Z",
+          "meta": {
+            "kind": "investigation"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "for plan items added to the queue, it should try to run to its completion without user interaction. Should ask up front question when submitting to the queue and then go into autopilot mode",
@@ -3150,7 +3172,20 @@
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "791104123ac8",
+          "user": "kkrazy",
+          "text": "Redesign a new view along side the current plan view. The top priority is to help user always have a complete view of what they are doing. AI together with tools, skills, hooks and even optimized/sft models can all be considered.",
+          "ts": "2026-05-24T01:51:57.079Z"
+        },
+        {
+          "id": "842a562d623d",
+          "user": "kkrazy",
+          "text": "AI tools,hooks,agents,skill should be helping along the entire process to do the chores.",
+          "ts": "2026-05-24T01:52:54.127Z"
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "giving coding is no longer the main focus for software enginnering, we are more and more focus on what feature is needed. We need to redesign a plan/feature centerred software enginneeing approach. Reexam the fr you just recommended and provide suggestions.",
@@ -3158,5 +3193,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-24T01:47:37.009Z"
+  "updatedAt": "2026-05-24T01:55:00.588Z"
 }

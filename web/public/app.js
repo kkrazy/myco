@@ -3547,8 +3547,12 @@ function renderChatMessage(m, isActiveMenu) {
     optsHtml = '<span class="chat-menu-resolved chat-menu-resolved-inline">↪ Superseded by a newer dialog</span>';
   } else if (menuOpts && isActiveMenu) {
     // Active row: data-perm-reopen on the chat-msg div below makes
-    // the whole row click-to-reopen-modal. No visible affordance line.
-    optsHtml = '';
+    // the whole row click-to-reopen-modal. bug-31: now WITH a visible
+    // affordance ("↗ Tap to answer / re-open answer dialog") — pre-fix
+    // the row had no visible cue, so a user who dismissed the modal
+    // (or never saw it pop e.g. mobile-backgrounded) had no recovery
+    // path until the agent fired another AskUserQuestion.
+    optsHtml = '<span class="chat-menu-reopen-hint" data-perm-reopen="1" title="Tap to open / re-open the answer dialog">↗ Tap to answer</span>';
     cls += ' chat-msg-menu-active';
   } else if (menuOpts) {
     optsHtml = '<span class="chat-menu-resolved chat-menu-resolved-inline">(no longer active)</span>';

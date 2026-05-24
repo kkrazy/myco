@@ -405,7 +405,14 @@
        canUseTool requests (e.g., subagent tool calls in parallel)
        resolve to the right pending promise on the server. -->
   <div id="perm-modal" class="perm-modal" hidden>
-    <div class="perm-modal-backdrop" data-perm-defer="1"></div>
+    <!-- bug-31: backdrop no longer carries data-perm-defer="1". Outside-
+         click was the most common ACCIDENTAL dismiss path — once
+         dismissed, the agent stays blocked on the AskUserQuestion
+         Promise but the modal is gone, leaving the user with no
+         obvious way back. Dismiss is now explicit only (X button or
+         Esc key). The chat-pane menu row (rendered with a visible
+         reopen-hint badge per bug-31) is the recovery path. -->
+    <div class="perm-modal-backdrop"></div>
     <div class="perm-modal-box" role="dialog" aria-modal="true" aria-labelledby="perm-modal-title">
       <!-- Carousel chips row — one chip per pending request. Only
            renders for parallel canUseTool batches (>= 2 pending).

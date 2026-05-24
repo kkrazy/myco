@@ -4854,6 +4854,30 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .chat-msg.chat-msg-menu.chat-msg-menu-active:hover {
   background: rgba(255, 255, 255, .02);
 }
+/* bug-31: visible "tap to answer" badge on active (unresolved) menu
+   chat rows. Pre-fix the row was silently click-to-reopen with no
+   visible cue — a user who dismissed the modal had no obvious
+   recovery path until the agent fired another AskUserQuestion.
+   Pill-shaped accent so it reads as a clickable affordance, not
+   just static text. */
+.chat-menu-reopen-hint {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: .76rem;
+  font-weight: 500;
+  color: var(--accent, #7ab4ff);
+  background: rgba(80, 120, 200, .14);
+  border: 1px solid rgba(80, 120, 200, .35);
+  border-radius: 999px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s, border-color .12s;
+}
+.chat-menu-reopen-hint:hover {
+  background: rgba(80, 120, 200, .26);
+  border-color: rgba(80, 120, 200, .55);
+}
 /* Menu chat rows now inherit the .from-claude .chat-text bubble
    (green wash, 2px accent left bar, rounded corners, 8×12 padding)
    — claude-authored content is rendered consistently across plain
