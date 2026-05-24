@@ -6731,6 +6731,49 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   }
 }
 
+/* fr-90 Phase 3: worktree chip on plan card. Shows the branch name +
+   merge state. Color-coded by mergeStatus so the user can scan the
+   plan view + immediately see which items have pending review work. */
+.artifact-item-wt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+  cursor: help;
+}
+.artifact-item-wt.wt-branched {
+  color: #58a6ff;
+  border-color: rgba(56, 139, 253, 0.32);
+  background: rgba(56, 139, 253, 0.08);
+}
+.artifact-item-wt.wt-merged {
+  color: #4caf50;
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.08);
+}
+.artifact-item-wt.wt-conflicted {
+  color: #f0883e;
+  border-color: rgba(240, 136, 62, 0.4);
+  background: rgba(240, 136, 62, 0.08);
+}
+.artifact-item-wt.wt-skipped {
+  color: var(--muted, #8b949e);
+  border-color: #30363d;
+  background: rgba(255, 255, 255, 0.04);
+}
+/* Mobile: hide branch name, keep just the icon — same pattern as
+   the other action-row chips. */
+@media (max-width: 900px) {
+  .artifact-item-wt .btn-text {
+    display: none;
+  }
+}
+
 /* fr-85 round 2: vote + comment chips on the plan card (display-only,
    replaced the clickable buttons). Same visual density as the other
    status chips (.artifact-item-deps, .artifact-item-run-status). */

@@ -300,6 +300,47 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
     summary,
     result: turnResultEv.result ? String(turnResultEv.result).slice(0, 2000) : null,
   };
+  // fr-90 Phase 3: capture worktree info from the matching queue
+  // entry (set by Phase 1's queueItemForRun) + attempt auto-merge
+  // when item.meta.autoMerge === true and the run succeeded.
+  // Possible mergeStatus values:
+  //   'branched'   — run done, branch waits for human review (default)
+  //   'merged'     — auto-merge succeeded
+  //   'conflicted' — auto-merge ran into conflicts; branch preserved
+  //   'skipped'    — autoMerge requested but run failed; not attempted
+  const queueEntry = Array.isArray(rec.runQueue)
+    ? rec.runQueue.find((e) => e && e.itemId === itemId)
+    : null;
+  if (queueEntry && queueEntry.worktree && queueEntry.worktree.branch) {
+    let mergeStatus = 'branched';
+    let mergeError = null;
+    const wantAutoMerge = item.meta && item.meta.autoMerge === true;
+    if (wantAutoMerge && status === 'success') {
+      try {
+        const mycoMcp = require('./myco-mcp');
+        const r = mycoMcp.mergeWorktree(sessionId, itemId);
+        if (r.ok) {
+          mergeStatus = 'merged';
+        } else {
+          mergeStatus = r.conflict ? 'conflicted' : 'branched';
+          mergeError = r.error || null;
+          console.warn(`[fr-90] auto-merge for ${itemId} ${mergeStatus}: ${mergeError}`);
+        }
+      } catch (err) {
+        mergeStatus = 'branched';
+        mergeError = err.message;
+        console.warn(`[fr-90] auto-merge threw for ${itemId} (graceful): ${err.message}`);
+      }
+    } else if (wantAutoMerge && status !== 'success') {
+      mergeStatus = 'skipped';
+    }
+    outcome.worktree = {
+      path: queueEntry.worktree.path,
+      branch: queueEntry.worktree.branch,
+      mergeStatus,
+      ...(mergeError ? { mergeError } : {}),
+    };
+  }
   const last = item.runs[item.runs.length - 1];
   if (last && last.status === 'running') {
     item.runs[item.runs.length - 1] = outcome;

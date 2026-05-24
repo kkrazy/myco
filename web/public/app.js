@@ -6668,6 +6668,20 @@ function renderArtifact(type, artifact) {
           : '<span class="btn-text">' + escHtml(lastRun.status || '') + '</span>'
         }</span>`
       : '';
+    // fr-90 Phase 3: worktree chip. Surfaces the branch + merge state
+    // for the latest run that had a worktree. The user sees at-a-glance
+    // whether there's pending review work (branched), it merged (merged),
+    // or it failed to merge automatically (conflicted).
+    //   🔀 branched   — branch waiting for human review (DEFAULT)
+    //   ✅ merged     — auto-merged into main (item.meta.autoMerge=true)
+    //   ⚠️ conflicted — auto-merge bailed; branch preserved
+    //   ⏭️ skipped    — autoMerge requested but run failed; not attempted
+    const lastWt = lastRun && lastRun.worktree ? lastRun.worktree : null;
+    const wtChipMap = { branched: '🔀', merged: '✅', conflicted: '⚠️', skipped: '⏭️' };
+    const wtChipColorMap = { branched: 'wt-branched', merged: 'wt-merged', conflicted: 'wt-conflicted', skipped: 'wt-skipped' };
+    const wtChip = lastWt && lastWt.branch
+      ? `<span class="artifact-item-wt ${wtChipColorMap[lastWt.mergeStatus] || 'wt-branched'}" title="${escHtml(`branch: ${lastWt.branch}\nstatus: ${lastWt.mergeStatus || 'branched'}${lastWt.mergeError ? '\nerror: ' + lastWt.mergeError : ''}`)}">${wtChipMap[lastWt.mergeStatus] || '🔀'}<span class="btn-text">${escHtml(lastWt.branch)}</span></span>`
+      : '';
     // Dependency check: if this item has dependsOn=[id,...], the
     // Run button stays disabled until every listed prereq is done
     // (or merged/marked-done). UI also surfaces an "↗ depends on:"
@@ -6734,6 +6748,7 @@ function renderArtifact(type, artifact) {
         ${mergedBadge}
         ${depsChip}
         ${runChip}
+        ${wtChip}
         ${itemEditedBadge}
         ${voteBlock}
         ${chatBtn}

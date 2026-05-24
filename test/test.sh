@@ -2821,6 +2821,15 @@ test_chat_window() {
   # spawning Task subagents with run_in_background:true per the
   # fr-90 etiquette in CLAUDE.md §Code Style #3.
   node_test_result test/fr-90-phase2-parallel-cap.test.js "test/fr-90-phase2-parallel-cap.test.js (10 cases)"
+  # fr-90 Phase 3: merge/PR flow + UI chip. New mcp__myco__worktree_merge
+  # tool + mergeWorktree helper (git merge --ff-only by default,
+  # classifies conflict-on-divergence vs other failures). attach.js
+  # _stampPlanItemRunOutcome captures the queue entry's worktree info,
+  # attempts auto-merge if item.meta.autoMerge===true && status===success,
+  # annotates outcome.worktree.mergeStatus (branched|merged|conflicted|skipped).
+  # UI: plan-card chip shows branch + state, color-coded per mergeStatus.
+  # Real-git behavior simulation: ff-only success + diverged-main conflict.
+  node_test_result test/fr-90-phase3-merge-flow.test.js "test/fr-90-phase3-merge-flow.test.js (17 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

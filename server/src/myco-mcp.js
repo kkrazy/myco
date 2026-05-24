@@ -511,6 +511,83 @@ function removeWorktree(sessionId, itemId, opts) {
   return { ok: true, ...entry };
 }
 
+// fr-90 Phase 3: attempt a fast-forward merge of the worktree's branch
+// into the current main checkout. Default `--ff-only` so unexpected
+// divergence surfaces as a conflict rather than silently creating a
+// merge commit. Returns { ok, merged, conflict?, mainBranch, error? }.
+// On success, the wt-<itemId> branch is folded into main; caller can
+// then remove the worktree via removeWorktree.
+function mergeWorktree(sessionId, itemId, opts) {
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  if (!itemId) return { ok: false, error: 'itemId required', status: 400 };
+  const reg = loadWorktrees(sessionId);
+  const entry = reg.worktrees && reg.worktrees[itemId];
+  if (!entry) return { ok: false, error: `no worktree registered for ${itemId}`, status: 404 };
+  if (!entry.branch) return { ok: false, error: 'registry entry missing branch', status: 500 };
+
+  const findProjectRoot = () => {
+    try { if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory() ||
+                fs.statSync(path.join(rec.absCwd, '.git')).isFile()) {
+      return rec.absCwd;
+    } } catch {}
+    try {
+      const entries = fs.readdirSync(rec.absCwd, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+        .map((d) => d.name).sort();
+      for (const name of entries) {
+        try {
+          const dotgit = path.join(rec.absCwd, name, '.git');
+          if (fs.statSync(dotgit).isDirectory() || fs.statSync(dotgit).isFile()) {
+            return path.join(rec.absCwd, name);
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  };
+  const repoRoot = findProjectRoot();
+  if (!repoRoot) return { ok: false, error: 'no git repo found', status: 400 };
+
+  const { execFileSync } = require('child_process');
+  // Resolve current branch name on main checkout (for messaging).
+  let mainBranch = 'HEAD';
+  try {
+    mainBranch = String(execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' })).trim();
+  } catch {}
+  if (mainBranch === entry.branch) {
+    return { ok: false, error: `currently checked out on ${entry.branch} — switch to main first`, status: 409 };
+  }
+  // Attempt the merge.
+  const ffOnly = !(opts && opts.allowNonFastForward);
+  const mergeArgs = ['-C', repoRoot, 'merge'];
+  if (ffOnly) mergeArgs.push('--ff-only');
+  mergeArgs.push(entry.branch);
+  try {
+    execFileSync('git', mergeArgs, { stdio: 'pipe' });
+  } catch (err) {
+    const stderr = err.stderr ? String(err.stderr) : err.message;
+    // ff-only failure (diverged) returns non-zero; classify as conflict.
+    const isConflict = /not possible to fast-forward|CONFLICT|fix conflicts/i.test(stderr);
+    return {
+      ok: false,
+      conflict: isConflict,
+      mainBranch,
+      error: stderr.trim(),
+      status: isConflict ? 409 : 500,
+    };
+  }
+  // Mark the registry entry as merged.
+  entry.status = 'merged';
+  entry.mergedAt = new Date().toISOString();
+  reg.worktrees[itemId] = entry;
+  reg.updatedAt = entry.mergedAt;
+  saveWorktrees(sessionId, reg);
+  return { ok: true, merged: true, mainBranch, branch: entry.branch };
+}
+
 function createMycoMcpServer(sessionId) {
   return createSdkMcpServer({
     name: 'myco',
@@ -797,6 +874,42 @@ function createMycoMcpServer(sessionId) {
         },
         { alwaysLoad: true }
       ),
+      // fr-90 Phase 3: attempt to merge the worktree's branch back
+      // into the main checkout (`git merge --ff-only` by default).
+      // Fast-forward only is the safe default — if main has diverged,
+      // the merge fails with a "conflict" classification + leaves the
+      // branch for human review. Pass allowNonFastForward=true to
+      // accept a regular merge commit (still bails on real conflicts).
+      tool(
+        'worktree_merge',
+        'Attempt to merge the worktree\'s branch back into main. By ' +
+        'default uses --ff-only — safe, refuses if main diverged. Pass ' +
+        'allowNonFastForward=true to accept a merge commit. Returns ' +
+        '{ok, merged} on success OR {ok:false, conflict, error} on ' +
+        'conflict (branch stays; human resolves). Marks the registry ' +
+        'entry status:"merged" on success.',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id whose worktree branch should be merged.'),
+          allowNonFastForward: z.boolean().optional().describe('Allow a regular merge commit if main has diverged (still bails on file conflicts).'),
+        },
+        async (args) => {
+          const r = mergeWorktree(sessionId, args.itemId, {
+            allowNonFastForward: args.allowNonFastForward,
+          });
+          if (!r.ok) {
+            const tag = r.conflict ? 'conflict' : 'failed';
+            return {
+              content: [{ type: 'text', text: `worktree_merge ${tag}: ${r.error}` }],
+              isError: true,
+            };
+          }
+          return {
+            content: [{ type: 'text', text: `Merged ${r.branch} → ${r.mainBranch}. Run mcp__myco__worktree_remove to clean up the worktree dir.` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
       tool(
         'worktree_list',
         'List all worktrees this session has registered (active + removed ' +
@@ -869,4 +982,7 @@ module.exports = {
   listWorktrees,
   createWorktree,
   removeWorktree,
+  // fr-90 Phase 3: merge helper exported so attach.js
+  // _stampPlanItemRunOutcome can attempt auto-merge when item.meta.autoMerge.
+  mergeWorktree,
 };
