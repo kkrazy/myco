@@ -413,6 +413,58 @@ function getAiChatHistory(item, opts) {
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 
+// fr-88 migration 1: shared comment-append helper used by BOTH the
+// HTTP POST /artifact/comment route AND the new mcp__myco__add_comment
+// tool. Single source of truth for "append a comment to an item":
+// validates length + non-empty, loads the rec, finds the item,
+// stamps id+ts, tail-trims at COMMENTS_PER_ITEM_MAX, persists rec +
+// mirror file. Returns the appended comment + the updated artifact
+// so the caller can do its own broadcast (HTTP route uses
+// broadcastArtifact from the register-closure; MCP tool uses
+// attach.getSession()+emit — same pattern as _appendPlanItems).
+//
+// Returns:
+//   { ok: true,  comment, item, artifact }
+//   { ok: false, error: '<message>', status: <http-style code> }
+function appendCommentToItem(sessionId, type, itemId, user, text) {
+  if (!ARTIFACT_TYPES.includes(type)) {
+    return { ok: false, error: 'unknown type', status: 400 };
+  }
+  if (type === 'arch') {
+    return { ok: false, error: 'arch items can\'t be commented', status: 400 };
+  }
+  if (!itemId) {
+    return { ok: false, error: 'itemId required', status: 400 };
+  }
+  const cleaned = String(text || '').trim();
+  if (!cleaned) {
+    return { ok: false, error: 'comment text required', status: 400 };
+  }
+  if (cleaned.length > COMMENT_TEXT_MAX) {
+    return { ok: false, error: `comment too long (max ${COMMENT_TEXT_MAX} chars)`, status: 400 };
+  }
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  _loadArtifactIntoRecFromFile(rec, type);
+  const item = findItem(rec, type, itemId);
+  if (!item) return { ok: false, error: 'no such item', status: 404 };
+  ensureVoterAndCommentFields(item);
+  const comment = {
+    id: crypto.randomBytes(6).toString('hex'),
+    user: String(user || 'unknown'),
+    text: cleaned,
+    ts: new Date().toISOString(),
+  };
+  item.comments.push(comment);
+  if (item.comments.length > COMMENTS_PER_ITEM_MAX) {
+    item.comments = item.comments.slice(-COMMENTS_PER_ITEM_MAX);
+  }
+  persistArtifact(rec, type, rec.artifacts[type]);
+  return { ok: true, comment, item, artifact: rec.artifacts[type] };
+}
+
 // Wire the routes onto the express app. `deps` carries the shared auth
 // preamble + the chat-dispatch hooks that live in index.js / pty.js — the
 // artifact module stays decoupled from auth and PTY plumbing.
@@ -690,30 +742,14 @@ function register(app, deps) {
     const type = String(req.query.type || '');
     const itemId = String(req.query.itemId || '');
     const text = String((req.body && req.body.text) || '').trim();
-    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
-    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be commented' });
-    if (!itemId) return res.status(400).json({ error: 'itemId required' });
-    if (!text) return res.status(400).json({ error: 'comment text required' });
-    if (text.length > COMMENT_TEXT_MAX) return res.status(400).json({ error: `comment too long (max ${COMMENT_TEXT_MAX} chars)` });
-    _loadArtifactIntoRecFromFile(ctx.rec, type);
-
-    const item = findItem(ctx.rec, type, itemId);
-    if (!item) return res.status(404).json({ error: 'no such item' });
-    ensureVoterAndCommentFields(item);
-
-    const comment = {
-      id: crypto.randomBytes(6).toString('hex'),
-      user: reqUser(req, ctx),
-      text,
-      ts: new Date().toISOString(),
-    };
-    item.comments.push(comment);
-    if (item.comments.length > COMMENTS_PER_ITEM_MAX) {
-      item.comments = item.comments.slice(-COMMENTS_PER_ITEM_MAX);
-    }
-    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
-    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
-    res.json({ ok: true, comment, item });
+    // fr-88 migration 1: delegate to the shared appendCommentToItem
+    // helper so the MCP tool (mcp__myco__add_comment) and this HTTP
+    // route exercise IDENTICAL backend logic. Two surfaces, one
+    // source of truth.
+    const result = appendCommentToItem(ctx.id, type, itemId, reqUser(req, ctx), text);
+    if (!result.ok) return res.status(result.status || 400).json({ error: result.error });
+    broadcastArtifact(ctx.id, type, result.artifact);
+    res.json({ ok: true, comment: result.comment, item: result.item });
   });
 
   // fr-76 Phase 1: per-item AI chat — read history.
@@ -1058,6 +1094,11 @@ module.exports = {
   ensureAiChatField,
   appendAiChatTurn,
   getAiChatHistory,
+  // fr-88 migration 1: shared append-comment helper used by both the
+  // HTTP POST /artifact/comment route + the mcp__myco__add_comment tool.
+  appendCommentToItem,
+  COMMENT_TEXT_MAX,
+  COMMENTS_PER_ITEM_MAX,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

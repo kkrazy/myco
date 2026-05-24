@@ -2747,6 +2747,19 @@ test_chat_window() {
   # inside chat panel is the single path). Pure CSS-side gets cursor:
   # pointer + hover + open-state via aria-expanded selector.
   node_test_result test/bug-35-comment-chip-toggle.test.js "test/bug-35-comment-chip-toggle.test.js (9 cases)"
+  # fr-88 migration 1: /comment → mcp__myco__add_comment tool. First
+  # migration under the fr-88 design rule (CLAUDE.md §Code Style #3:
+  # slash commands as MCP tools where possible). Shared
+  # appendCommentToItem helper extracted to artifacts.js module scope;
+  # HTTP POST /artifact/comment + the new MCP tool both call it.
+  # Lets the agent leave closeout summaries on plan items without
+  # asking the user to type /comment …, replacing the manual
+  # node-script-to-mutate-plan.json pattern. CLAUDE.md gets the
+  # closeout-comment etiquette rule. Tests: static guards on helper +
+  # exports + HTTP delegation + tool definition + tool→helper
+  # delegation + state-update broadcast + CLAUDE.md content; behavior
+  # simulation of round-trip append + 5 validation rejections.
+  node_test_result test/fr-88-add-comment-tool.test.js "test/fr-88-add-comment-tool.test.js (14 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

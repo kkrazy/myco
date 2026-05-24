@@ -10,6 +10,13 @@
 //     (_myco_/task-items.json). Lets `/task` inside a per-item chat
 //     panel filter to that item's tasks authoritatively (server reads
 //     the registry; no reliance on prompt-based filtering).
+//   mcp__myco__add_comment (fr-88 migration 1) — append a comment to
+//     a plan/test item. Shares the appendCommentToItem helper in
+//     artifacts.js with POST /artifact/comment (the HTTP route the
+//     /comment slash + plan-card form hit). Lets the agent leave
+//     closeout summaries on items without asking the user to type
+//     `/comment …` — first migration under the fr-88 slash-cmds-as-
+//     tools design rule.
 //
 // One MCP server is created per AgentSession so the tool handler
 // can capture sessionId in closure. agent-session.js passes
@@ -263,6 +270,58 @@ function createMycoMcpServer(sessionId) {
       // [chat|run:plan#<id>] turn, and again after each TaskUpdate
       // that changes status. The registry persists at
       // _myco_/task-items.json — committable + cross-session.
+      // fr-88 migration 1: append a comment to a plan/test item.
+      // Shares the appendCommentToItem helper in artifacts.js with the
+      // POST /artifact/comment HTTP route — two surfaces, one source
+      // of truth (per fr-88 design rule in CLAUDE.md §Code Style #3).
+      // Use this after closing fr-X to leave a closeout summary, or
+      // any time the agent wants to leave a trail on an item without
+      // asking the user to type /comment ….
+      tool(
+        'add_comment',
+        'Append a comment to a plan or test item. Use this after closing ' +
+        'fr-X to leave a closeout summary (replaces the manual node-script ' +
+        'pattern), or any time you want to leave a trail on an item ' +
+        'without asking the user to type /comment …. The comment is ' +
+        'recorded with you as the author (user: "claude") and broadcast ' +
+        'live to every attached client. Comment text capped at 1000 ' +
+        'chars; per-item ring buffer of 50 (oldest dropped on overflow). ' +
+        'Returns ok + the appended comment id.',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id (e.g. "fr-1", "bug-17", "td-22") or test item id.'),
+          text: z.string().min(1).max(1000).describe('Comment body. Markdown OK — gets rendered when viewed in the plan card.'),
+          type: z.enum(['plan', 'test']).optional().describe('Artifact type. Defaults to "plan". "arch" is rejected (arch items have no comment thread).'),
+        },
+        async (args) => {
+          const artifactsMod = require('./artifacts');
+          const type = args.type || 'plan';
+          const r = artifactsMod.appendCommentToItem(sessionId, type, args.itemId, 'claude', args.text);
+          if (!r.ok) {
+            return {
+              content: [{ type: 'text', text: `add_comment failed: ${r.error}` }],
+              isError: true,
+            };
+          }
+          // Broadcast state-update so all attached clients refresh.
+          // Same pattern _appendPlanItems uses elsewhere in this file.
+          try {
+            const attachMod = require('./attach');
+            const session = attachMod.getSession && attachMod.getSession(sessionId);
+            if (session && typeof session.emit === 'function') {
+              session.emit('state-update', {
+                kind: 'artifact',
+                artifactType: type,
+                artifact: r.artifact,
+              });
+            }
+          } catch {}
+          return {
+            content: [{ type: 'text', text: `Comment ${r.comment.id} added to ${args.itemId}.` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
       tool(
         'register_task_item',
         'Register a SDK-task ↔ plan-item association in the session\'s ' +
