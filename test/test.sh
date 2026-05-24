@@ -2766,6 +2766,11 @@ test_chat_window() {
   # /artifact/mark. Lets the agent close fr-X after shipping +
   # reopen if needed.
   node_test_result test/fr-88-m2-set-item-done-tool.test.js "test/fr-88-m2-set-item-done-tool.test.js (8 cases)"
+  # fr-88 migration 3: /upvote → mcp__myco__vote_item. Toggles agent's
+  # vote on item (idempotent: re-voting removes). Shared toggleVote
+  # helper. KEY INVARIANT: tool does NOT trigger auto-quorum dispatch
+  # (HTTP route keeps it — social-signal path for human voters).
+  node_test_result test/fr-88-m3-vote-item-tool.test.js "test/fr-88-m3-vote-item-tool.test.js (8 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

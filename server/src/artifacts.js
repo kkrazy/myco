@@ -413,6 +413,42 @@ function getAiChatHistory(item, opts) {
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 
+// fr-88 migration 3: shared vote-toggle helper used by BOTH the HTTP
+// POST /artifact/vote route AND the new mcp__myco__vote_item tool.
+// Toggles user presence in item.voters (idempotent — re-voting is
+// removal); returns the action ('added' | 'removed') so the caller
+// can decide whether to invoke auto-fire (HTTP route does;
+// mcp tool does NOT — agents shouldn't trigger auto-quorum dispatch
+// via tool, that's a social signal not an agent action).
+function toggleVote(sessionId, type, itemId, user) {
+  if (!ARTIFACT_TYPES.includes(type)) {
+    return { ok: false, error: 'unknown type', status: 400 };
+  }
+  if (type === 'arch') {
+    return { ok: false, error: 'arch items can\'t be voted on', status: 400 };
+  }
+  if (!itemId) {
+    return { ok: false, error: 'itemId required', status: 400 };
+  }
+  if (!user) {
+    return { ok: false, error: 'user required', status: 400 };
+  }
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  _loadArtifactIntoRecFromFile(rec, type);
+  const item = findItem(rec, type, itemId);
+  if (!item) return { ok: false, error: 'no such item', status: 404 };
+  ensureVoterAndCommentFields(item);
+  const idx = item.voters.indexOf(user);
+  let action;
+  if (idx >= 0) { item.voters.splice(idx, 1); action = 'removed'; }
+  else          { item.voters.push(user);    action = 'added'; }
+  persistArtifact(rec, type, rec.artifacts[type]);
+  return { ok: true, item, action, artifact: rec.artifacts[type] };
+}
+
 // fr-88 migration 2: shared item-done helper used by BOTH the HTTP
 // POST /artifact/mark route AND the new mcp__myco__set_item_done tool.
 // Toggles item.done (true/false), persists rec + mirror file. Returns
@@ -730,28 +766,19 @@ function register(app, deps) {
     if (!ctx) return;
     const type = String(req.query.type || '');
     const itemId = String(req.query.itemId || '');
-    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
-    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be voted on' });
-    if (!itemId) return res.status(400).json({ error: 'itemId required' });
-    _loadArtifactIntoRecFromFile(ctx.rec, type);
-
-    const item = findItem(ctx.rec, type, itemId);
-    if (!item) return res.status(404).json({ error: 'no such item' });
-    ensureVoterAndCommentFields(item);
-
     const user = reqUser(req, ctx);
-    const idx = item.voters.indexOf(user);
-    let action;
-    if (idx >= 0) { item.voters.splice(idx, 1); action = 'removed'; }
-    else          { item.voters.push(user);    action = 'added'; }
-
-    const autoFired = action === 'added' ? autoFireIfQuorum(ctx, type, item) : null;
-    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
-    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    // fr-88 migration 3: delegate the vote-toggle to the shared helper.
+    // Auto-fire stays in the route — it's a social-context dispatch
+    // (the route's ctx + getPtySession + handleChatMessage closure
+    // are needed; the agent-facing MCP tool intentionally skips it).
+    const result = toggleVote(ctx.id, type, itemId, user);
+    if (!result.ok) return res.status(result.status || 400).json({ error: result.error });
+    const autoFired = result.action === 'added' ? autoFireIfQuorum(ctx, type, result.item) : null;
+    broadcastArtifact(ctx.id, type, result.artifact);
     res.json({
       ok: true,
-      item,
-      action,
+      item: result.item,
+      action: result.action,
       threshold: AUTO_EXECUTE_VOTE_THRESHOLD,
       autoFired: !!(autoFired && autoFired.fired),
       note: autoFired && autoFired.err ? autoFired.err : null,
@@ -1124,6 +1151,9 @@ module.exports = {
   // fr-88 migration 2: shared item-done helper used by both
   // HTTP POST /artifact/mark + mcp__myco__set_item_done.
   setItemDone,
+  // fr-88 migration 3: shared vote-toggle helper used by both
+  // HTTP POST /artifact/vote + mcp__myco__vote_item.
+  toggleVote,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

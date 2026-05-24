@@ -270,6 +270,48 @@ function createMycoMcpServer(sessionId) {
       // [chat|run:plan#<id>] turn, and again after each TaskUpdate
       // that changes status. The registry persists at
       // _myco_/task-items.json — committable + cross-session.
+      // fr-88 migration 3: toggle the agent's vote on a plan/test item.
+      // Shares the toggleVote helper in artifacts.js with the POST
+      // /artifact/vote HTTP route. NO auto-fire — the human-vote
+      // auto-quorum dispatch (HTTP route) is a social signal, not
+      // an agent action. If the agent wants to dispatch an item to
+      // claude, it should use mcp__myco__queue_add directly.
+      tool(
+        'vote_item',
+        'Toggle the agent\'s vote (👍) on a plan or test item. ' +
+        'Idempotent: re-voting REMOVES the vote (action="removed"); ' +
+        'voting fresh ADDS it (action="added"). Author is fixed to ' +
+        '"claude". Does NOT trigger auto-quorum dispatch (that\'s a ' +
+        'social-signal path reserved for human voters via the HTTP ' +
+        'route) — use mcp__myco__queue_add if you want to enqueue.',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id (e.g. "fr-1", "bug-17", "td-22") or test item id.'),
+          type: z.enum(['plan', 'test']).optional().describe('Artifact type. Defaults to "plan". "arch" is rejected.'),
+        },
+        async (args) => {
+          const artifactsMod = require('./artifacts');
+          const type = args.type || 'plan';
+          const r = artifactsMod.toggleVote(sessionId, type, args.itemId, 'claude');
+          if (!r.ok) {
+            return {
+              content: [{ type: 'text', text: `vote_item failed: ${r.error}` }],
+              isError: true,
+            };
+          }
+          try {
+            const attachMod = require('./attach');
+            const session = attachMod.getSession && attachMod.getSession(sessionId);
+            if (session && typeof session.emit === 'function') {
+              session.emit('state-update', { kind: 'artifact', artifactType: type, artifact: r.artifact });
+            }
+          } catch {}
+          return {
+            content: [{ type: 'text', text: `Vote ${r.action} on ${args.itemId} (now ${r.item.voters.length} total).` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
       // fr-88 migration 2: mark a plan/test item done (or reopen it).
       // Shares the setItemDone helper in artifacts.js with the POST
       // /artifact/mark HTTP route. Pure lifecycle toggle — no claude
