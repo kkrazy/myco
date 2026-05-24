@@ -6442,9 +6442,13 @@ function _renderMergeProposals(proposals, errMsg) {
 // Hoisted to module scope so renderItem inside renderArtifact can see
 // it without re-defining per-render.
 function _runButtonLabel(layer) {
+  // Keep labels short (3-5 chars) so the action row doesn't wrap on
+  // mobile. "Implement" was 9 chars and pushed the row to two lines
+  // alongside the post-fr-62 44px button width budget. "Build" carries
+  // the same verb intent without the wrap pressure.
   switch (layer) {
     case 'Bug':     return 'Fix';
-    case 'Feature': return 'Implement';
+    case 'Feature': return 'Build';
     case 'Todo':    return 'Do';
     default:        return 'Run';
   }
@@ -6691,7 +6695,7 @@ function renderArtifact(type, artifact) {
       ? `<span class="artifact-item-edited" title="edited by ${escHtml(it.meta.editedBy)} at ${escHtml(it.meta.editedAt || '')}${it.meta.originalText ? ' · original preserved' : ''}">· edited</span>`
       : '';
     const editBtn = (!state.readOnly && supportsVoting)
-      ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit">✎</button>`
+      ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit">✎ Edit</button>`
       : '';
     // fr-48: per-item ⊤ Queue button was pruned after the unified
     // dispatch refactor (commit 606f14c) made the ▶ Run button itself
