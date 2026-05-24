@@ -6774,6 +6774,29 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   }
 }
 
+/* fr-90 Phase 4: path-overlap warning chip. Surfaces the heuristic
+   that two queued items mention the same file paths in their bodies
+   — they MIGHT collide during parallel worktree dispatch. Display-
+   only; user decides whether to serialize or proceed in parallel. */
+.artifact-item-overlap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: #f0883e;
+  background: rgba(240, 136, 62, 0.08);
+  border: 1px solid rgba(240, 136, 62, 0.4);
+  border-radius: 10px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+  cursor: help;
+}
+@media (max-width: 900px) {
+  .artifact-item-overlap .btn-text {
+    display: none;
+  }
+}
+
 /* fr-85 round 2: vote + comment chips on the plan card (display-only,
    replaced the clickable buttons). Same visual density as the other
    status chips (.artifact-item-deps, .artifact-item-run-status). */

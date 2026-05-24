@@ -439,6 +439,65 @@ function getAiChatHistory(item, opts) {
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 
+// fr-90 Phase 4: extract file path references from an item's body +
+// comments. Heuristic — anything that looks like a file path with a
+// recognizable extension. Used by _findPathOverlap to warn when two
+// queued items might step on each other's files during parallel
+// worktree dispatch. NOT a hard gate — just a metadata hint that
+// surfaces as a warning chip on the plan card.
+function _extractFilePaths(textCorpus) {
+  // Match path-shaped tokens ending in a known source-file extension.
+  // Lenient: includes paths with /, ., -, _, alphanumerics. Excludes
+  // URLs (no protocol://), bare extensions (.js alone), and obvious
+  // false-positives (single-word like "file.js" without any /).
+  // Source: a small, opinionated extension list — bias toward common
+  // dev files.
+  const re = /\b[\w/.-]+\.(?:js|jsx|ts|tsx|json|md|css|html|htm|sh|yaml|yml|sql|py|go|rs|rb|java|c|cc|cpp|h|hpp|php|swift|kt|sass|scss|toml|ini|conf|env|lock|gitignore|dockerfile)\b/gi;
+  const matches = String(textCorpus || '').match(re) || [];
+  // Filter: must contain at least one / (skip bare file.ext that's
+  // probably just discussion, not a path), strip the leading ` or '
+  // that markdown might wrap them in.
+  const cleaned = matches
+    .map((m) => m.replace(/^[`'"]+|[`'",.;:]+$/g, ''))
+    .filter((m) => m.includes('/') && !m.startsWith('http'));
+  return [...new Set(cleaned)];
+}
+
+// fr-90 Phase 4: detect file-path overlap between this item + any
+// currently-active queue entries (status pending or running). Returns
+// a list of { itemId, paths } pairs the caller can attach to the new
+// queue entry as a warning chip. Heuristic, not authoritative — false
+// positives possible (different items mention same file for different
+// reasons); false negatives expected (claude might touch unmentioned
+// files). Use as a hint, not a gate.
+function _findPathOverlap(rec, itemId) {
+  if (!rec) return [];
+  const plan = rec.artifacts && rec.artifacts.plan;
+  if (!plan || !Array.isArray(plan.items)) return [];
+  const myItem = plan.items.find((x) => x && x.id === itemId);
+  if (!myItem) return [];
+  const myCorpus = (myItem.text || '') + ' ' +
+    (Array.isArray(myItem.comments) ? myItem.comments.map((c) => (c && c.text) || '').join(' ') : '');
+  const myPaths = _extractFilePaths(myCorpus);
+  if (!myPaths.length) return [];
+  // Find OTHER active queue entries (pending or running).
+  const activeEntries = (rec.runQueue || [])
+    .filter((e) => e && e.itemId !== itemId && (e.status === 'pending' || e.status === 'running'));
+  const overlaps = [];
+  for (const entry of activeEntries) {
+    const otherItem = plan.items.find((x) => x && x.id === entry.itemId);
+    if (!otherItem) continue;
+    const otherCorpus = (otherItem.text || '') + ' ' +
+      (Array.isArray(otherItem.comments) ? otherItem.comments.map((c) => (c && c.text) || '').join(' ') : '');
+    const otherPaths = _extractFilePaths(otherCorpus);
+    const shared = myPaths.filter((p) => otherPaths.includes(p));
+    if (shared.length) {
+      overlaps.push({ itemId: entry.itemId, paths: shared });
+    }
+  }
+  return overlaps;
+}
+
 // fr-76 Phase 4: build a multi-line context string injected into the
 // agent-bound dispatch text when a [chat:plan#<id>] marker is present.
 // Gives claude immediate context (item body + dependsOn neighbors +
@@ -544,6 +603,22 @@ function queueItemForRun(sessionId, type, itemId, addedBy) {
     return { ok: false, error: err.message, status: 409 };
   }
   sessionsMod.saveStore();
+  // fr-90 Phase 4: heuristic path-overlap detection. If this item's
+  // body/comments mention file paths that are ALSO mentioned by any
+  // currently-active queue entry (pending or running), record a
+  // warning on the entry so the UI can surface "⚠ may overlap with
+  // fr-X" — lets the user decide whether to proceed in parallel or
+  // serialize. Pure metadata; doesn't block the dispatch.
+  try {
+    const overlaps = _findPathOverlap(rec, itemId);
+    if (overlaps.length) {
+      entry.overlapWarning = overlaps;
+      sessionsMod.saveStore();
+      console.warn(`[fr-90 phase4] ${itemId} overlaps with: ${overlaps.map((o) => `${o.itemId}(${o.paths.join(',')})`).join(', ')}`);
+    }
+  } catch (err) {
+    console.warn(`[fr-90 phase4] overlap detection threw (graceful): ${err.message}`);
+  }
   // fr-90 Phase 1: try to create an isolated git worktree for this
   // entry so the agent works in a branch (wt-<itemId>) rather than
   // the main checkout. Phase 2 unlocks parallel dispatches; this
@@ -1320,6 +1395,11 @@ module.exports = {
   // fr-76 Phase 4: build related-item context block for chat panel
   // dispatches (dependsOn + text-mention extraction).
   getRelatedItemsContext,
+  // fr-90 Phase 4: path-overlap heuristic — warns when queued items
+  // mention the same file paths in their bodies/comments. Used by
+  // queueItemForRun to stamp entry.overlapWarning for UI surface.
+  _extractFilePaths,
+  _findPathOverlap,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

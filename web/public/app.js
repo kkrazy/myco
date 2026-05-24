@@ -6682,6 +6682,20 @@ function renderArtifact(type, artifact) {
     const wtChip = lastWt && lastWt.branch
       ? `<span class="artifact-item-wt ${wtChipColorMap[lastWt.mergeStatus] || 'wt-branched'}" title="${escHtml(`branch: ${lastWt.branch}\nstatus: ${lastWt.mergeStatus || 'branched'}${lastWt.mergeError ? '\nerror: ' + lastWt.mergeError : ''}`)}">${wtChipMap[lastWt.mergeStatus] || '🔀'}<span class="btn-text">${escHtml(lastWt.branch)}</span></span>`
       : '';
+    // fr-90 Phase 4: path-overlap warning chip. Reads from the run-queue
+    // entry's overlapWarning (set by queueItemForRun when this item's
+    // body mentions file paths that another active entry also mentions).
+    // Display-only — surfaces the heuristic so the user can decide
+    // whether to serialize or proceed in parallel.
+    const queueState = (state.runQueue && Array.isArray(state.runQueue.entries))
+      ? state.runQueue.entries : [];
+    const myEntry = queueState.find((e) => e && e.itemId === it.id
+      && (e.status === 'pending' || e.status === 'running'));
+    const overlapList = (myEntry && Array.isArray(myEntry.overlapWarning))
+      ? myEntry.overlapWarning : [];
+    const overlapChip = overlapList.length
+      ? `<span class="artifact-item-overlap" title="${escHtml('Path overlap with ' + overlapList.map((o) => `${o.itemId} (${o.paths.join(', ')})`).join('; ') + '\nHeuristic — may not actually conflict. Watch for merge issues.')}">⚠️<span class="btn-text">overlap × ${overlapList.length}</span></span>`
+      : '';
     // Dependency check: if this item has dependsOn=[id,...], the
     // Run button stays disabled until every listed prereq is done
     // (or merged/marked-done). UI also surfaces an "↗ depends on:"
@@ -6749,6 +6763,7 @@ function renderArtifact(type, artifact) {
         ${depsChip}
         ${runChip}
         ${wtChip}
+        ${overlapChip}
         ${itemEditedBadge}
         ${voteBlock}
         ${chatBtn}

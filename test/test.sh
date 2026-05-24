@@ -2838,6 +2838,14 @@ test_chat_window() {
   # when a [chat:plan#X] marker is present (try/catch graceful).
   # Persisted user turn stays unaugmented — strictly dispatch-time.
   node_test_result test/fr-76-phase4-related-context.test.js "test/fr-76-phase4-related-context.test.js (14 cases)"
+  # fr-90 Phase 4: pre-dispatch path-overlap heuristic. _extractFilePaths
+  # regex-matches file-shaped tokens (extension allow-list, must have
+  # /, skip URLs/bare). _findPathOverlap scans rec.runQueue for other
+  # active entries that share paths. queueItemForRun stamps
+  # entry.overlapWarning when overlap found. UI: orange ⚠ chip on plan
+  # card with shared-paths tooltip. Heuristic, not a hard gate.
+  # Conflict-on-merge UI stays in Phase 3's wtChip.
+  node_test_result test/fr-90-phase4-overlap-heuristic.test.js "test/fr-90-phase4-overlap-heuristic.test.js (11 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND
