@@ -1884,16 +1884,24 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
   // there would leak entries that no terminal event ever pops,
   // gradually poisoning the head. We push only on the dispatch path
   // that actually drives the agent.
-  if (chatMatch || runMatch) {
+  //
+  // bug-36 hotfix: re-derive the markers from `text` here rather than
+  // referencing the chatMatch/runMatch from handleChatMessage — this
+  // function (handleChatPostfixes) has its own scope. Pre-hotfix the
+  // push referenced out-of-scope vars and threw a ReferenceError on
+  // every queue dispatch path, so /run never reached session.write.
+  const _runMatch = text.match(/\[run:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
+  const _chatMatch = text.match(/\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
+  if (_chatMatch || _runMatch) {
     if (!Array.isArray(session._activeItemQueue)) {
       session._activeItemQueue = [];
     }
-    const targetId = (chatMatch && chatMatch[2]) || (runMatch && runMatch[2]);
+    const targetId = (_chatMatch && _chatMatch[2]) || (_runMatch && _runMatch[2]);
     session._activeItemQueue.push({
       itemId: targetId,
       type: 'plan',
-      chatBound: !!chatMatch,
-      runBound: !!runMatch,
+      chatBound: !!_chatMatch,
+      runBound: !!_runMatch,
       startedAt: new Date().toISOString(),
       _buffer: '',
     });

@@ -64,16 +64,15 @@ t('handleChatMessage pushes a chatBound entry to the FIFO _activeItemQueue', () 
   const idx = ATTACH.search(/session\._activeItemQueue\.push\s*\(/);
   // Window covers the push call + a few lines before (the targetId
   // derivation reads chatMatch[2] / runMatch[2]).
-  const window = ATTACH.slice(Math.max(0, idx - 300), idx + 600);
-  assert.ok(/chatBound:\s*!!chatMatch/.test(window),
-    'queue entry must carry chatBound: !!chatMatch so the listener knows whether to bind to aiChat[]');
+  const window = ATTACH.slice(Math.max(0, idx - 400), idx + 600);
+  // Allow bare chatMatch OR the hotfix _chatMatch (handleChatPostfixes
+  // re-derives the match locally to avoid out-of-scope reference).
+  assert.ok(/chatBound:\s*!!_?chatMatch/.test(window),
+    'queue entry must carry chatBound: !!chatMatch (or hotfix _chatMatch) so the listener knows whether to bind to aiChat[]');
   assert.ok(/_buffer:\s*['"]['"]/.test(window),
     'queue entry _buffer must be initialized to "" — accumulates assistant_text events until terminal event pops the head');
-  // The itemId comes from chatMatch[2] (the captured id group) — either
-  // directly assigned (legacy shape) or via a local targetId that reads
-  // chatMatch[2]. Both shapes acceptable.
-  assert.ok(/chatMatch\[2\]/.test(window),
-    'queue entry itemId must derive from chatMatch[2] (the captured id group)');
+  assert.ok(/_?chatMatch\[2\]/.test(window),
+    'queue entry itemId must derive from chatMatch[2] / _chatMatch[2] (the captured id group)');
 });
 
 t('handleChatMessage calls _appendUserAiChatTurn after marker match', () => {

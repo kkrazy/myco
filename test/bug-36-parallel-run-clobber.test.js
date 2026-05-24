@@ -75,11 +75,14 @@ t('attach.js: session._activeItemQueue is the FIFO data structure', () => {
 t('attach.js: queue entries carry both chatBound + runBound flags', () => {
   // Each entry knows whether it should bind chat-side, run-side, or
   // both (the fr-89 dual-marker dispatch case). Separate flags so a
-  // chat-only dispatch doesn't accidentally stamp runs[].
-  assert.ok(/chatBound:\s*!!chatMatch/.test(ATTACH),
-    'queue push must set chatBound from !!chatMatch');
-  assert.ok(/runBound:\s*!!runMatch/.test(ATTACH),
-    'queue push must set runBound from !!runMatch');
+  // chat-only dispatch doesn't accidentally stamp runs[]. Allow
+  // either bare chatMatch / runMatch or the hotfix _chatMatch /
+  // _runMatch (handleChatPostfixes re-derives the match locally so
+  // it doesn't reference handleChatMessage-scoped vars).
+  assert.ok(/chatBound:\s*!!_?chatMatch/.test(ATTACH),
+    'queue push must set chatBound from !!chatMatch (or hotfix _chatMatch)');
+  assert.ok(/runBound:\s*!!_?runMatch/.test(ATTACH),
+    'queue push must set runBound from !!runMatch (or hotfix _runMatch)');
 });
 
 t('attach.js: legacy _activeChatItem / _activeRunItem slots are gone from runtime paths', () => {
@@ -354,6 +357,55 @@ t('behavior: run-only entry does NOT pollute the previous item\'s aiChat[]', () 
   // fr-B aiChat[] must be empty (it was run-only — no chat binding).
   assert.ok(!Array.isArray(itemB.aiChat) || itemB.aiChat.length === 0,
     'fr-B aiChat must stay empty (run-only dispatch); got ' + JSON.stringify(itemB.aiChat));
+});
+
+t('regression: queue dispatch through handleChatMessage does NOT throw "chatMatch is not defined"', () => {
+  // Hotfix on top of the bug-36 fix: the FIFO push lives inside
+  // handleChatPostfixes (the fallthrough after slash/mention guards),
+  // NOT inside handleChatMessage. Pre-hotfix it referenced chatMatch /
+  // runMatch declared in handleChatMessage — out-of-scope by the time
+  // handleChatPostfixes ran. Every queue dispatch path threw
+  // `ReferenceError: chatMatch is not defined`, which the route's
+  // try/catch silently logged as "[runQueue] initial dispatch failed".
+  // Net effect on opti: every ▶ Run click logged an error and the
+  // agent never received any text — zero progress, no symptom in the
+  // UI other than the chip never advancing.
+  //
+  // This test calls handleChatMessage with the EXACT shape that queue
+  // dispatch produces (via buildArtifactRunText) and asserts no throw +
+  // a queue entry lands on the session.
+  const sid = 'sess-bug36-hotfix';
+  seedSession(sid, [
+    { id: 'bug-99', text: 'fix the thing', layer: 'Bug', voters: [], comments: [], aiChat: [] },
+  ]);
+  const session = new EventEmitter();
+  session.alive = true;
+  session.write = () => { session._wrote = true; };
+  attach._registerExternalSession(sid, session);
+
+  // Mimic what artifacts.js line 1288 does on queue first-dispatch.
+  const artifactsMod = require('../server/src/artifacts');
+  const item = { id: 'bug-99', text: 'fix the thing', layer: 'Bug', comments: [] };
+  const dispatchText = artifactsMod.buildArtifactRunText('plan', item, 'kkrazy');
+  assert.ok(/\[run:plan#bug-99\]/.test(dispatchText), 'dispatch text must carry run marker');
+
+  // The PRE-hotfix bug threw ReferenceError here. Post-hotfix must succeed
+  // + push a queue entry.
+  assert.doesNotThrow(() => {
+    attach.handleChatMessage(sid, session, 'kkrazy', dispatchText);
+  }, 'handleChatMessage must not throw on queue-dispatch text (the original bug-36 hotfix scope)');
+
+  assert.ok(Array.isArray(session._activeItemQueue),
+    'session._activeItemQueue must be initialized');
+  assert.strictEqual(session._activeItemQueue.length, 1,
+    'one entry must be pushed (the queue dispatch text carries both markers)');
+  assert.strictEqual(session._activeItemQueue[0].itemId, 'bug-99');
+  assert.strictEqual(session._activeItemQueue[0].runBound, true,
+    'runBound must be true (dispatch text has [run:] marker)');
+  assert.strictEqual(session._activeItemQueue[0].chatBound, true,
+    'chatBound must be true (dispatch text has [chat:] marker per fr-89 dual-marker)');
+  assert.strictEqual(session._wrote, true,
+    'session.write must have been called (dispatch reached the SDK)');
 });
 
 t('behavior: FIFO queue is reset to empty when no marker entries remain', () => {

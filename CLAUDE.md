@@ -69,7 +69,9 @@
 
 2. **Deploying to `mycobeta.labxnow.ai`: do it on the host itself.** Local Docker is often unavailable, so the working recipe (verified 2026-05-11) is: `git archive HEAD -o /tmp/myco-src.tgz`, `scp` it to `kkrazy@mycobeta.labxnow.ai:/tmp/`, extract into `~/myco-src` (overwriting), then `ssh kkrazy@mycobeta.labxnow.ai 'cd ~/myco-src && MYCO_DEPLOY_HOST=kkrazy@localhost ./scripts/deploy.sh'`. The script SSHes back to localhost on mycobeta and runs the normal build/swap there. ssh-to-self on mycobeta is already set up.
 
-3. **Single-state-dir layout** (the deploy.sh contract):
+3. **Deploying to `opti.labxnow.ai`: same on-the-host recipe as mycobeta.** Local Docker is unavailable on opti too. Recipe: `git archive HEAD -o /tmp/myco-src.tgz`, `scp` to `kkrazy@opti.labxnow.ai:/tmp/`, extract into `~/myco-src`, then `ssh kkrazy@opti.labxnow.ai 'cd ~/myco-src && MYCO_DEPLOY_HOST=kkrazy@localhost MYCO_VERIFY_DOMAIN=opti.labxnow.ai ./scripts/deploy.sh'`. ssh-to-self on opti must be set up the same way as on mycobeta (`~/.ssh/authorized_keys` includes the host's own pubkey). The agent itself ssh'es to opti from the session sandbox using the key at `_myco_/agent-ssh-key.pub` — kkrazy installed it into `kkrazy@opti.labxnow.ai:~/.ssh/authorized_keys` on 2026-05-24 to unblock the agent from running diagnostics + deploys without the user in the loop. Pubkey lives in the repo (committable, public-key-only); the matching private key is per-session at `/root/.ssh/id_ed25519` in the agent container (NOT committed, regenerated on session bootstrap if absent).
+
+4. **Single-state-dir layout** (the deploy.sh contract):
    - One host directory holds *all* persistent state. Default: `MYCO_STATE_DIR=/home/kkrazy/myco-state` (override with the env var).
    - Container bind-mounts:
      ```
@@ -82,14 +84,14 @@
    - No named or anonymous Docker volumes — everything is reachable from the host. Backup = tar the state dir; restore = untar and `docker run`.
    - The Caddyfile lives in the state dir too — `deploy.sh` seeds it from `/home/kkrazy/myco/Caddyfile` (remote, historical) or the project tree (local — `docker/Caddyfile`) on first deploy.
 
-4. **Auth: GitHub OAuth + invitation allowlist.**
+5. **Auth: GitHub OAuth + invitation allowlist.**
    - Required env in `$STATE_DIR/.env`: `MYCO_GH_CLIENT_ID`, `MYCO_GH_CLIENT_SECRET`, `MYCO_PUBLIC_ORIGIN` (e.g. `https://myco.labxnow.ai`). Set with `./scripts/deploy.sh --set-oauth <id>:<secret>`.
    - The OAuth App's callback must be `<MYCO_PUBLIC_ORIGIN>/auth/github/callback`. Scopes requested: `read:user user:email repo`.
    - `$STATE_DIR/allowed-github-users.txt` lists invited GitHub logins, one per line (`#` comments). Only listed users can complete sign-in. Add with `./scripts/deploy.sh --allow-github-user <login>` (idempotent, no container restart).
    - Minted myco session tokens live in `$STATE_DIR/auth-sessions.json` (mode 0600, 30-day sliding TTL).
    - The OAuth access token for each user is mirrored into `$STATE_DIR/git-tokens.json` (mode 0600) at the user-level `github` slot. Per-repo PATs (set via `/setpat <token>` from a session) live in the same file under `<provider>/<owner>/<repo>` keys and override the user-level fallback. Used by `/feature`/`/bug` slash commands — they auto-detect provider (github vs. gitee) from the session's `git remote get-url origin` and pick the right PAT. Gitee has no OAuth flow yet — Gitee repos require an explicit `/setpat` from the session.
 
-5. **Override knobs:** `MYCO_DEPLOY_HOST`, `MYCO_STATE_DIR`, `MYCO_IMAGE_TAG`, `MYCO_CONTAINER`. `--skip-tests` skips `./test/test.sh`, `--dry-run` reports the plan without shipping or swapping.
+6. **Override knobs:** `MYCO_DEPLOY_HOST`, `MYCO_STATE_DIR`, `MYCO_IMAGE_TAG`, `MYCO_CONTAINER`, `MYCO_VERIFY_DOMAIN`. `--skip-tests` skips `./test/test.sh`, `--dry-run` reports the plan without shipping or swapping.
 
 ## Troubleshooting
 
