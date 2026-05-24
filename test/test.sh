@@ -2429,7 +2429,7 @@ test_chat_window() {
   # sticky has a scroll-container ancestor to pin against). Called
   # after every plan-path body.innerHTML write so the row survives
   # innerHTML wipes. Static-grep only.
-  node_test_result test/fr-61-plan-filter-row-sticky.test.js "test/fr-61-plan-filter-row-sticky.test.js (9 cases)"
+  node_test_result test/fr-61-plan-filter-row-sticky.test.js "test/fr-61-plan-filter-row-sticky.test.js (13 cases)"
   # fr-39: per-session admin delegation. Owners can /admin @user to
   # grant admin (multi-admin supported); admins inherit everything
   # except DELETE-session + grant/revoke admin (those stay

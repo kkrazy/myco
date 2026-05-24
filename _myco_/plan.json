@@ -2956,6 +2956,15 @@
           "meta": {
             "kind": "run-summary"
           }
+        },
+        {
+          "id": "rs-8b6aaea7c8ef",
+          "user": "claude",
+          "text": "**Reopened + fixed (second pass).**\n\n### User report\n\"The plan view filter for bug/fr/tod and search disappears after switch tabs.\"\n\n### Root cause\nFirst-pass fix moved `#plan-filter-row` INTO `#artifact-body-plan` so `position: sticky` works. `_attachPlanFilterRowToBody` ran AFTER each `body.innerHTML` write to re-insert the row.\n\nBut the helper looks up `#plan-filter-row` by id at run-time:\n```js\nconst filterRow = document.getElementById('plan-filter-row');\nif (!filterRow) return;   // early-return — bug-31 starts here\n```\n\nAfter `body.innerHTML = ...` wiped the body, the filter row was destroyed (it was inside the body). The post-wipe helper had nothing to find and returned silently. Filter row gone, no recovery on subsequent renders.\n\nThis hit the user on **tab switches** (switching away from plan, switching back triggers a fresh `renderArtifact('plan')` which wipes-then-tries-to-reattach), **session switches** (`clearArtifactBodies` wipes every artifact body), and **session deletes** (same path).\n\n### Second-pass fix — stash-before-wipe pattern\nNew helper `_stashPlanFilterRow()` that rescues the row back to its original static-HTML parent (`#plan-wrap`) BEFORE the wipe. Then `_attachPlanFilterRowToBody` after the wipe finds the rescued row at `#plan-wrap` and re-inserts it at the body's first child.\n\n```js\n_stashPlanFilterRow();           // rescue: body → plan-wrap\nbody.innerHTML = newContent;     // wipe is safe now\n_attachPlanFilterRowToBody(...); // restore: plan-wrap → body\n```\n\nCalled before each of the 4 plan-path `body.innerHTML` writes AND in `clearArtifactBodies` (session-switch / delete paths).\n\n### Test\n`test/fr-61-plan-filter-row-sticky.test.js` extended from 9 → 13 cases:\n- `_stashPlanFilterRow` helper exists\n- Restores to `#plan-wrap` (not anywhere else)\n- ≥5 references total (definition + ≥4 call sites — one before each wipe)\n- `clearArtifactBodies` includes the rescue call\n\n13/13 ✓ direct. **Red-flipped against pre-fix code (4/13 failed via git stash)** — one failure per surface, confirming each call site is independently enforced.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/app.js change.\n\nStatus: closed (second time).",
+          "ts": "2026-05-24T02:06:35.983Z",
+          "meta": {
+            "kind": "run-summary"
+          }
         }
       ],
       "status": "closed",
@@ -3191,7 +3200,25 @@
         "originalText": "giving coding is no longer the main focus for software enginnering, we are more and more focus on what feature is needed. We need to redesign a plan/feature centerred software enginneeing approach. Reexam the fr you just recommended and provide suggestions.",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-76",
+      "text": "**Problem:** Plan view is the main axis, but there's no way to chat with AI directly from a FR/bug/TD, so context gets diluted and decisions aren't recorded against the item.\n**Expected:** Open an AI chat scoped to a single FR/bug/TD; the conversation and resulting decision are persisted on that item, and related plan items are surfaced into the chat context when relevant.\n**Actual:** Chat happens outside the plan item, context is unfocused, decisions aren't captured, and related plan items aren't pulled in.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T02:05:27.345Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "plan view as the main axis we should be able to chat with AI directory from a fr/bug/td so that the ctx is focused and decision is recorded. related plan items should be brought into attention if needed.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-24T01:55:00.588Z"
+  "updatedAt": "2026-05-24T02:06:35.983Z"
 }

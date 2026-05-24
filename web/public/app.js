@@ -6235,6 +6235,14 @@ const ARTIFACT_EMPTY_HTML = {
 };
 
 function clearArtifactBodies() {
+  // Rescue the fr-61 sticky filter row before wiping the plan body —
+  // otherwise the wipe destroys it permanently and on next plan render
+  // _attachPlanFilterRowToBody has nothing to find. Symptom (user
+  // report): "The plan view filter for bug/fr/tod and search disappears
+  // after switch tabs." Pre-fix the row vanished after any path that
+  // hit clearArtifactBodies (session switch via _resetUiForNewSession,
+  // active-session delete via deleteSessionWithConfirm).
+  _stashPlanFilterRow();
   for (const type of ARTIFACT_TYPES) {
     const body = document.getElementById(`artifact-body-${type}`);
     if (!body) continue;
@@ -6500,6 +6508,7 @@ function renderArtifact(type, artifact) {
     ? _filterPlanItems(openOnlyItems, { types: planTypes, search: planSearch })
     : openOnlyItems;
   if (!items.length) {
+    _stashPlanFilterRow();
     body.innerHTML = '<div class="artifact-empty">Nothing extracted. The recent session activity may not contain todos.</div>';
     // Re-attach preservedCallout (no flicker rule applies on the empty
     // path too — the user just merged the last item, the callout might
@@ -6509,6 +6518,7 @@ function renderArtifact(type, artifact) {
     return;
   }
   if (!displayItems.length) {
+    _stashPlanFilterRow();
     // Empty-state message preference:
     //   - openOnly is the ONLY active filter → bug-15's verbatim message
     //     ("All N item(s) are done. Uncheck Open only to see them.")
@@ -6790,6 +6800,10 @@ function renderArtifact(type, artifact) {
   } else {
     bodyHtml = `<ul class="artifact-items">${displayItems.map(renderItem).join('')}</ul>`;
   }
+  // Stash the sticky filter row before the body.innerHTML wipe destroys
+  // it (it lives INSIDE the body since fr-61). _attachPlanFilterRowToBody
+  // below re-inserts it at the top of the freshly-rendered body.
+  _stashPlanFilterRow();
   body.innerHTML = bodyHtml +
     (artifact.updatedAt ? `<div class="artifact-updated">Updated ${escHtml(formatChatTsWithDate(artifact.updatedAt) || artifact.updatedAt)}</div>` : '');
   // fr-61: prepend the sticky filter row so it shares the body's
@@ -9070,9 +9084,33 @@ function bindPlanSearch() {
 // row is a SIBLING of the scroll container and sticky has no
 // scrolling ancestor to pin against (it silently behaves like
 // static — the filter would scroll out of view on a long list).
-// Idempotent: safe to call multiple times. Called after every
-// body.innerHTML write in the plan-rendering paths because the
-// innerHTML write wipes the body's children (filter row included).
+//
+// Used as a detach-set-innerHTML-reattach pair:
+//   _stashPlanFilterRow()             // rescue from the body
+//   body.innerHTML = newContent;      // wipe is safe now
+//   _attachPlanFilterRowToBody(...)   // re-insert at top
+//
+// _stashPlanFilterRow is REQUIRED before any plan-body innerHTML
+// write — otherwise the wipe destroys the row permanently and
+// _attachPlanFilterRowToBody returns early (no element to find).
+// Tab switches + clearArtifactBodies + the renderArtifact paths
+// all participate in this dance. Pre-fix the user reported the
+// filter row vanishing after tab/session switches (the wipe ate
+// it; the post-innerHTML _attachPlanFilterRowToBody had nothing
+// to re-attach).
+function _stashPlanFilterRow() {
+  const filterRow = document.getElementById('plan-filter-row');
+  if (!filterRow) return;
+  const planWrap = document.getElementById('plan-wrap');
+  const planBody = document.getElementById('artifact-body-plan');
+  if (!planWrap || !planBody) return;
+  // Move back to its original static-HTML position (sibling of the
+  // body inside the wrap) so the upcoming body.innerHTML wipe doesn't
+  // destroy it. _attachPlanFilterRowToBody after the wipe restores it.
+  if (filterRow.parentElement !== planWrap) {
+    planWrap.insertBefore(filterRow, planBody);
+  }
+}
 function _attachPlanFilterRowToBody(body, type) {
   if (type !== 'plan' || !body) return;
   const filterRow = document.getElementById('plan-filter-row');

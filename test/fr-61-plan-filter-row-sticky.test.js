@@ -133,5 +133,65 @@ t('HTML: #plan-filter-row still declared in static markup', () => {
     'index.html must still declare <div id="plan-filter-row"> so _attachPlanFilterRowToBody has something to relocate');
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// fr-61 second-pass — stash-before-wipe so tab switches + session
+// switches don't destroy the filter row.
+//
+// User reported: "The plan view filter for bug/fr/tod and search
+// disappears after switch tabs." Root cause: the fr-61 first-pass
+// helper ran AFTER body.innerHTML — but innerHTML had already
+// destroyed the filter row (which was inside the body since the
+// previous render). The post-wipe re-attach found nothing and
+// returned early. Filter row gone forever.
+//
+// Fix: _stashPlanFilterRow() rescues the row BACK to #plan-wrap
+// (its original static-HTML parent) before any body.innerHTML
+// wipe. Then _attachPlanFilterRowToBody after the wipe finds the
+// rescued row and re-inserts it at the body's first child.
+// ──────────────────────────────────────────────────────────────────────
+
+t('app.js: _stashPlanFilterRow helper defined', () => {
+  // The detach side of the detach-set-reattach pattern.
+  assert.ok(/function\s+_stashPlanFilterRow\s*\(/.test(APP),
+    'app.js must define _stashPlanFilterRow() — moves the filter row back to #plan-wrap before any body.innerHTML wipe so the row survives');
+});
+
+t('app.js: _stashPlanFilterRow puts the row back into #plan-wrap (not the body)', () => {
+  // Pin the destination: rescue lands at #plan-wrap (the original
+  // static-HTML parent), not anywhere else.
+  const start = APP.search(/function\s+_stashPlanFilterRow\s*\(/);
+  assert.ok(start > -1);
+  const rest = APP.slice(start);
+  const end = rest.slice(1).search(/\nfunction\s+[A-Za-z_]/);
+  const body = end === -1 ? rest : rest.slice(0, end + 1);
+  assert.ok(/planWrap\.insertBefore\s*\(\s*filterRow\s*,\s*planBody\s*\)/.test(body),
+    '_stashPlanFilterRow must call planWrap.insertBefore(filterRow, planBody) — restoring the row to the static-HTML position right before the body');
+});
+
+t('app.js: every plan-body innerHTML write is preceded by _stashPlanFilterRow', () => {
+  // The bug was specifically that body.innerHTML wiped the row but
+  // the post-wipe re-attach had nothing to find. With the stash
+  // call right before each wipe, the row is rescued first.
+  const stashCalls = (APP.match(/_stashPlanFilterRow\s*\(/g) || []).length;
+  // Definition + ≥4 call sites (4 plan-path body.innerHTML writes
+  // + 1 in clearArtifactBodies for session switch/delete) = ≥5
+  // total. Keep some slack for future additions.
+  assert.ok(stashCalls >= 5,
+    'Expected ≥5 references to _stashPlanFilterRow (function definition + ≥4 call sites — one before each plan-body innerHTML wipe). Found ' + stashCalls);
+});
+
+t('app.js: clearArtifactBodies rescues the filter row before wiping (session switch / delete)', () => {
+  // clearArtifactBodies is called from _resetUiForNewSession (session
+  // switch) AND deleteSessionWithConfirm (active-session delete).
+  // Both paths wiped the plan body and destroyed the filter row.
+  const start = APP.search(/function\s+clearArtifactBodies\s*\(/);
+  assert.ok(start > -1);
+  const rest = APP.slice(start);
+  const end = rest.slice(1).search(/\nfunction\s+[A-Za-z_]/);
+  const body = end === -1 ? rest : rest.slice(0, end + 1);
+  assert.ok(/_stashPlanFilterRow\s*\(/.test(body),
+    'clearArtifactBodies must call _stashPlanFilterRow() before wiping each artifact body — otherwise session switches + active-session deletes destroy the plan filter row');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
