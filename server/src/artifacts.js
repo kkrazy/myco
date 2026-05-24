@@ -758,10 +758,11 @@ function register(app, deps) {
     }
     saveStore();
     broadcastRunQueue(ctx.id, ctx.rec);
-    // Kick if idle (no running entry + not paused). The turn_result
-    // hook in attach.js handles all subsequent advances.
-    const hasRunning = ctx.rec.runQueue.some((e) => e.status === 'running');
-    if (!hasRunning && !ctx.rec.runQueuePaused) {
+    // fr-90 Phase 2: dispatch immediately if cap allows. Pre-fix this
+    // checked `!hasRunning` (serial-only). Now: `canDispatchMore` so
+    // up to runQueueMaxConcurrent items can be in flight concurrently.
+    const willDispatch = runQueue.canDispatchMore(ctx.rec);
+    if (willDispatch) {
       const session = getPtySession(ctx.id);
       if (session) {
         try {
@@ -775,7 +776,7 @@ function register(app, deps) {
         }
       }
     }
-    return { ok: true, entry, item, kicked: !hasRunning && !ctx.rec.runQueuePaused };
+    return { ok: true, entry, item, kicked: willDispatch };
   }
 
   app.post('/sessions/:id/artifact/run', (req, res) => {
@@ -1118,8 +1119,15 @@ function register(app, deps) {
     broadcastRunQueue(ctx.id, ctx.rec);
     // Kick the queue if idle. The attach.js turn_result hook handles
     // post-first auto-advance; we trigger the FIRST dispatch here.
-    const hasRunning = ctx.rec.runQueue.some((e) => e.status === 'running');
-    if (!hasRunning && !ctx.rec.runQueuePaused) {
+    // fr-90 Phase 2: dispatch immediately if cap allows. Pre-fix this
+    // checked `!hasRunning` — only ever dispatched when nothing was
+    // running, serializing every queue add. Now: `canDispatchMore`
+    // (running < runQueueMaxConcurrent, not paused) so up to N items
+    // can be in flight at once. Each item still goes to the agent as
+    // its own dispatch; concurrency happens at the Task-subagent
+    // layer (per CLAUDE.md etiquette: Task({run_in_background: true})).
+    const willDispatch = runQueue.canDispatchMore(ctx.rec);
+    if (willDispatch) {
       const session = getPtySession(ctx.id);
       if (session) {
         try {

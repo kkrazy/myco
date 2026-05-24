@@ -27,9 +27,39 @@
 // entry's record stays for audit.
 const TERMINAL_STATUSES = new Set(['success', 'failed', 'cancelled']);
 
+// fr-90 Phase 2: default parallel-dispatch cap. With this many slots
+// open, the queue dispatches up to N concurrent entries. Each entry
+// is expected to run in its own worktree (Phase 1) + the agent
+// spawns Task-tool subagents with run_in_background:true (per
+// CLAUDE.md etiquette) so the concurrent items don't block each
+// other on the SDK's single conversation stream. Configurable per
+// session via rec.runQueueMaxConcurrent — default 3 if unset.
+const DEFAULT_MAX_CONCURRENT = 3;
+
 function _ensureQueueFields(rec) {
   if (!Array.isArray(rec.runQueue)) rec.runQueue = [];
   if (typeof rec.runQueuePaused !== 'boolean') rec.runQueuePaused = false;
+}
+
+// fr-90 Phase 2: resolve the configured (or default) concurrency cap.
+function maxConcurrent(rec) {
+  const n = rec && Number.isInteger(rec.runQueueMaxConcurrent) ? rec.runQueueMaxConcurrent : DEFAULT_MAX_CONCURRENT;
+  return Math.max(1, n);   // floor at 1 — cap=0 would deadlock the queue
+}
+
+// fr-90 Phase 2: how many entries are currently mid-dispatch.
+function countRunning(rec) {
+  _ensureQueueFields(rec);
+  return rec.runQueue.reduce((n, e) => n + (e.status === 'running' ? 1 : 0), 0);
+}
+
+// fr-90 Phase 2: can we dispatch one more entry without violating
+// the concurrency cap? Used by every "kick if idle" check to decide
+// whether to advance the queue.
+function canDispatchMore(rec) {
+  _ensureQueueFields(rec);
+  if (rec.runQueuePaused) return false;
+  return countRunning(rec) < maxConcurrent(rec);
 }
 
 // Append a fresh pending entry. Throws on duplicate of a non-terminal
@@ -157,4 +187,9 @@ module.exports = {
   resumeQueue,
   getQueueState,
   TERMINAL_STATUSES,
+  // fr-90 Phase 2: parallel-dispatch helpers.
+  DEFAULT_MAX_CONCURRENT,
+  maxConcurrent,
+  countRunning,
+  canDispatchMore,
 };

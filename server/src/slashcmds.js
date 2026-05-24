@@ -1304,10 +1304,10 @@ function handleQueue(ctx) {
   const session = ctx.session;
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
-    // Kick the queue if this added a first pending entry and nothing
-    // is running. Mirrors the /queue/add HTTP path's kick logic.
-    const hasRunning = rec.runQueue.some((e) => e.status === 'running');
-    if (!hasRunning && !rec.runQueuePaused) {
+    // fr-90 Phase 2: dispatch immediately if cap allows (up to
+    // runQueueMaxConcurrent items running). Mirrors the artifacts.js
+    // kick logic — both paths agree on the cap.
+    if (runQueue.canDispatchMore(rec)) {
       const next = runQueue.peekNextPending(rec);
       if (next) {
         const item = items.find((it) => it && it.id === next.itemId);

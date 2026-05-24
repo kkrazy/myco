@@ -2813,6 +2813,14 @@ test_chat_window() {
   # reference ghost taskIds since SDK TaskList doesn't survive
   # process death. /task stale flag bypasses for audit/history.
   node_test_result test/fr-91-registry-bootid-epoch.test.js "test/fr-91-registry-bootid-epoch.test.js (10 cases)"
+  # fr-90 Phase 2: parallel concurrency on the run queue. Default cap
+  # = 3 (runQueue.DEFAULT_MAX_CONCURRENT), configurable per session
+  # via rec.runQueueMaxConcurrent. All 3 kick sites converted from
+  # `!hasRunning && !paused` → `runQueue.canDispatchMore(rec)`. The
+  # SDK is still single-stream — true parallelism comes from agent
+  # spawning Task subagents with run_in_background:true per the
+  # fr-90 etiquette in CLAUDE.md §Code Style #3.
+  node_test_result test/fr-90-phase2-parallel-cap.test.js "test/fr-90-phase2-parallel-cap.test.js (10 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND
