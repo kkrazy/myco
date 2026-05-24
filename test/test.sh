@@ -2670,6 +2670,14 @@ test_chat_window() {
   # successful deploy. Warnings only, never aborts. --skip-post-checks
   # opts out. Static-grep guards on the function + flag + invocation.
   node_test_result test/deploy-post-deploy-checks.test.js "test/deploy-post-deploy-checks.test.js (14 cases)"
+  # fr-76 Phase 1: per-item AI chat data model + persistence + routes.
+  # Schema: item.aiChat[] { id, user, role, text, ts, meta? }.
+  # Helpers: ensureAiChatField, appendAiChatTurn (tail-trim at 100),
+  # getAiChatHistory (afterTs + limit). Routes: GET/POST
+  # /sessions/:id/artifact/plan/:itemId/aichat. No agent wiring yet
+  # (Phase 2), no UI yet (Phase 3). Static guards + module-export
+  # checks + behavior simulation on the helpers.
+  node_test_result test/fr-76-per-item-chat-persistence.test.js "test/fr-76-per-item-chat-persistence.test.js (19 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

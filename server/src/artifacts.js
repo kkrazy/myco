@@ -280,6 +280,28 @@ const AUTO_EXECUTE_VOTE_THRESHOLD = 2;
 const COMMENT_TEXT_MAX = 1000;
 const COMMENTS_PER_ITEM_MAX = 50;
 
+// fr-76: per-item AI chat. Each plan item carries its own
+// conversation thread (it.aiChat[]) separate from human-to-human
+// comments (it.comments[]). The thread persists in plan.json
+// → git → travels with the project. Future teammates clone the
+// repo and inherit every decision made on every item.
+//
+// Schema per turn: { id, user, role: 'user'|'agent', text, ts, meta? }
+//   - id        — 12-hex random, for delete/edit if added later
+//   - user      — myco-login string (the requesting human, even for
+//                  agent turns — captures who initiated)
+//   - role      — 'user' for human-initiated, 'agent' for SDK response
+//   - text      — the message body (markdown-safe)
+//   - ts        — ISO timestamp
+//   - meta      — optional: { kind, runId, tokens, costUsd, ... }
+//
+// Caps: AI_CHAT_TEXT_MAX is 10× comments (chat turns can be longer
+// answers / code blocks); AI_CHAT_PER_ITEM_MAX of 100 turns gives
+// long but bounded conversations. Tail-trim on overflow (oldest
+// dropped first), same pattern as comments.
+const AI_CHAT_TEXT_MAX = 10000;
+const AI_CHAT_PER_ITEM_MAX = 100;
+
 function emptyArtifact(type) {
   if (type === 'arch') return { markdown: '', updatedAt: null };
   return { items: [], updatedAt: null };
@@ -345,6 +367,48 @@ function findItem(rec, type, itemId) {
 function ensureVoterAndCommentFields(item) {
   if (!Array.isArray(item.voters)) item.voters = [];
   if (!Array.isArray(item.comments)) item.comments = [];
+}
+
+// fr-76: lazy-init item.aiChat — separate from comments because the
+// thread has a distinct lifecycle (multi-turn agent conversation,
+// not free-form human commentary).
+function ensureAiChatField(item) {
+  if (!Array.isArray(item.aiChat)) item.aiChat = [];
+}
+
+// fr-76: append a turn to the per-item chat, tail-trimming on overflow.
+// Returns the inserted turn (with id stamped) so callers can echo it
+// back on the wire. Caller is responsible for persist + broadcast.
+function appendAiChatTurn(item, turn) {
+  ensureAiChatField(item);
+  const stamped = {
+    id: crypto.randomBytes(6).toString('hex'),
+    user: String(turn.user || ''),
+    role: turn.role === 'agent' ? 'agent' : 'user',
+    text: String(turn.text || ''),
+    ts: turn.ts || new Date().toISOString(),
+    ...(turn.meta ? { meta: turn.meta } : {}),
+  };
+  item.aiChat.push(stamped);
+  if (item.aiChat.length > AI_CHAT_PER_ITEM_MAX) {
+    item.aiChat = item.aiChat.slice(-AI_CHAT_PER_ITEM_MAX);
+  }
+  return stamped;
+}
+
+// fr-76: read the full or paginated chat history.
+//   opts.afterTs  — return only turns with ts > afterTs (for live tail)
+//   opts.limit    — max turns returned (default: all)
+// No filtering by role — both user + agent turns return.
+function getAiChatHistory(item, opts) {
+  ensureAiChatField(item);
+  const { afterTs, limit } = (opts || {});
+  let out = item.aiChat;
+  if (afterTs) out = out.filter((t) => t && t.ts && t.ts > afterTs);
+  if (typeof limit === 'number' && limit > 0 && out.length > limit) {
+    out = out.slice(-limit);
+  }
+  return out;
 }
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
@@ -652,6 +716,56 @@ function register(app, deps) {
     res.json({ ok: true, comment, item });
   });
 
+  // fr-76 Phase 1: per-item AI chat — read history.
+  // GET /sessions/:id/artifact/plan/:itemId/aichat?afterTs=&limit=
+  //   afterTs (ISO)  — only return turns with ts > afterTs (live tail)
+  //   limit          — cap to last N turns
+  // Plan items only (type fixed to 'plan' in the route — test + arch
+  // don't have chat threads). Read-only — viewers can read history,
+  // they're gated separately from writes (Phase 2 POST below).
+  app.get('/sessions/:id/artifact/plan/:itemId/aichat', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const itemId = String(req.params.itemId || '');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    const item = findItem(ctx.rec, 'plan', itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    const afterTs = req.query.afterTs ? String(req.query.afterTs) : null;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : null;
+    const turns = getAiChatHistory(item, { afterTs, limit });
+    res.json({ ok: true, itemId, turns, total: (item.aiChat || []).length });
+  });
+
+  // fr-76 Phase 1: per-item AI chat — append a user-initiated turn.
+  // Body: { text }
+  // The agent's RESPONSE turn is appended by attach.js's agent-event
+  // listener in Phase 2 (after the SDK iteration produces assistant_text).
+  // Phase 1 only handles the human side — the round-trip wiring lands
+  // in Phase 2.
+  app.post('/sessions/:id/artifact/plan/:itemId/aichat', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const itemId = String(req.params.itemId || '');
+    const text = String((req.body && req.body.text) || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!text) return res.status(400).json({ error: 'turn text required' });
+    if (text.length > AI_CHAT_TEXT_MAX) {
+      return res.status(400).json({ error: `turn too long (max ${AI_CHAT_TEXT_MAX} chars)` });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    const item = findItem(ctx.rec, 'plan', itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    const turn = appendAiChatTurn(item, {
+      user: reqUser(req, ctx),
+      role: 'user',
+      text,
+    });
+    persistArtifact(ctx.rec, 'plan', ctx.rec.artifacts.plan);
+    broadcastArtifact(ctx.id, 'plan', ctx.rec.artifacts.plan);
+    res.json({ ok: true, turn, item });
+  });
+
   // Apply a merge proposal generated by the dedupe scan. Body: { ids: [...] }
   // — the listed plan items must all be the same layer (Feature/Todo/Bug).
   // The lowest-numbered prefixed id becomes the canonical; the others'
@@ -936,6 +1050,14 @@ module.exports = {
   AUTO_EXECUTE_VOTE_THRESHOLD,
   buildArtifactRunText,
   buildArtifactQuorumText,
+  // fr-76: per-item AI chat helpers — exported so attach.js can
+  // call them from the agent-event listener (Phase 2 will append
+  // role='agent' turns when the SDK iteration produces assistant_text).
+  AI_CHAT_TEXT_MAX,
+  AI_CHAT_PER_ITEM_MAX,
+  ensureAiChatField,
+  appendAiChatTurn,
+  getAiChatHistory,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.
