@@ -1802,10 +1802,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin: 0;
 }
 /* Zero the plan body's top padding so the sticky filter row sits
-   flush against the header (no padding-gap between header and
-   filter row). Side + bottom padding preserved for the items
-   list. Applied to #artifact-body-plan specifically so other
-   artifact bodies (arch / test) keep their default padding. */
+   flush against the (now-removed) header position (no padding-gap).
+   Side + bottom padding preserved for the items list. Applied to
+   #artifact-body-plan specifically so other artifact bodies (arch
+   / test) keep their default padding. */
 #artifact-body-plan {
   padding-top: 0;
 }
@@ -1815,6 +1815,20 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
      padding-top: 0 above. Re-zero specifically for plan. */
   .artifact-main-view #artifact-body-plan {
     padding-top: 0;
+  }
+  /* User-feedback follow-up: after removing the .artifact-header
+     from #plan-wrap, the existing `.artifact-main-view
+     .artifact-header { padding-right: 232px }` rule (which kept
+     the title + Refresh button out from under the floating chrome
+     cluster) no longer applies. The sticky filter row is now the
+     topmost element of the plan view, so it needs the SAME right
+     padding to keep the fuzz-search input from sliding under the
+     5-button chrome cluster (~210-232px wide). Desktop only —
+     mobile reserves the chrome's vertical band via the wrap's
+     padding-top so the filter row sits BELOW the cluster, no
+     horizontal overlap. */
+  #plan-filter-row {
+    padding-right: 232px;
   }
 }
 /* Open only checkbox now lives inside the filter row alongside the

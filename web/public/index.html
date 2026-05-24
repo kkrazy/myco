@@ -177,11 +177,16 @@
           </div>
         </form>
       </div>
-      <div id="plan-wrap" class="artifact-main-view" hidden>
-        <div class="artifact-header">
-          <span class="artifact-title">Plan</span>
-          <button class="artifact-refresh" data-type="plan" title="Re-extract from the latest session activity">↻ Refresh</button>
-        </div>
+      <div id="plan-wrap" class="artifact-main-view" hidden aria-label="Plan">
+        <!-- User feedback: "remove the plan header and the refresh
+             button." Title was redundant (chrome cluster's Plan
+             icon already identifies the tab) + Refresh dropped from
+             the UI. Server-side state-update WS frames still auto-
+             refresh the plan on session activity; manual re-extract
+             is still reachable via the /refresh slash command.
+             aria-label="Plan" preserves the region's name for
+             assistive tech (screen readers) since the visible title
+             span is gone. -->
         <!-- fr-56: type filter + fuzz search row. Chips persist across
              reloads (localStorage.myco_plan_type_filter); search resets
              on reload (fresh slate). Intersected with the Open only
