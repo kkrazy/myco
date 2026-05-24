@@ -100,47 +100,58 @@ t('artifacts.js: dual-marker output still matches BOTH marker-parse regexes used
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// Bug B: handleChatMessage flushes + clears stale _activeChatItem
+// Bug B: chat leak / clobber — superseded by bug-36 FIFO refactor
 // ──────────────────────────────────────────────────────────────────────
+//
+// fr-89's "preempt-flush" was a partial fix that only helped when the
+// stale buffer was non-empty at the moment a new turn arrived. It
+// missed the parallel-/run case (fr-90 Phase 2 cap > 1) where two
+// dispatches arrived in quick succession and both turns' bindings
+// landed on the wrong item. bug-36 replaced the singular slots with a
+// FIFO `session._activeItemQueue`; the per-turn isolation is now
+// structural, not flush-based. See test/bug-36-parallel-run-clobber.test.js
+// for the regression guards. Below we re-assert the contract fr-89
+// originally protected — different mechanism, same invariant:
+// each turn's response binds to its own item.
 
-t('attach.js: handleChatMessage preempt-flushes _activeChatItem at start of each user turn', () => {
-  // The leak fix — pre-fix _activeChatItem persisted across turns
-  // and the chat-mode listener kept routing assistant_text into the
-  // stale item's buffer. Post-fix: at every user turn start, if
-  // _activeChatItem is set, flush its buffer to aiChat[] then clear.
-  // The fresh chat marker (if any) re-sets it.
-  //
-  // Pin the flush+clear logic anchored on the comment + the call.
-  assert.ok(/preempt-flush|preempt[\s\S]{0,50}flush|fr-89 leak fix/i.test(ATTACH),
-    'attach.js must explicitly comment the fr-89 leak fix / preempt-flush');
-  // The cleanup must happen BEFORE the new chat marker is matched
-  // (otherwise the fresh _activeChatItem just got set + immediately
-  // cleared).
-  const flushIdx = ATTACH.search(/session\._activeChatItem\s*=\s*null/);
-  const matchIdx = ATTACH.search(/const\s+chatMatch\s*=\s*text\.match/);
-  assert.ok(flushIdx > -1, 'must clear _activeChatItem to null somewhere');
-  assert.ok(matchIdx > -1, 'chatMatch declaration must exist');
-  assert.ok(flushIdx < matchIdx,
-    'the flush+clear must come BEFORE chatMatch — otherwise the fresh chat marker gets clobbered by the cleanup');
+t('attach.js: bug-36 FIFO replaces the fr-89 singular-slot + preempt-flush pair', () => {
+  // The FIFO queue is the new mechanism; the singular slots are gone.
+  assert.ok(/session\._activeItemQueue/.test(ATTACH),
+    'attach.js must use session._activeItemQueue (bug-36 FIFO)');
+  // Comments / commit history may still mention the legacy names;
+  // strip comment lines before checking the runtime code shape.
+  const codeOnly = ATTACH.split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n');
+  assert.ok(!/session\._activeChatItem/.test(codeOnly),
+    'singular session._activeChatItem must be gone from runtime code (replaced by FIFO)');
+  assert.ok(!/session\._activeRunItem/.test(codeOnly),
+    'singular session._activeRunItem must be gone from runtime code (replaced by FIFO)');
 });
 
-t('attach.js: preempt-flush calls _appendAgentAiChatTurn with the stale buffer', () => {
-  // The buffer must be salvaged, not silently dropped — preserves
-  // any in-flight assistant_text from the previous turn.
-  const idx = ATTACH.search(/fr-89 leak fix|preempt-flush/i);
-  assert.ok(idx > -1, 'fr-89 leak fix block must exist');
-  const win = ATTACH.slice(idx, idx + 1500);
-  assert.ok(/_appendAgentAiChatTurn\s*\(/.test(win),
-    'preempt-flush must call _appendAgentAiChatTurn to save the in-flight buffer to aiChat[]');
-  assert.ok(/stale\._buffer/.test(win),
-    'must read .stale._buffer (the in-flight assistant_text accumulated for the previous turn)');
+t('attach.js: agent-event listener pops FIFO head + binds via chatBound/runBound flags', () => {
+  // The listener must shift() the head on terminal events and
+  // dispatch to the chat-side and run-side handlers based on the
+  // entry's flags. Pin both the shift + the flag-driven branches.
+  const idx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
+  assert.ok(idx > -1, 'agent-event listener must exist');
+  const win = ATTACH.slice(idx, idx + 4000);
+  assert.ok(/\.shift\s*\(/.test(win), 'listener must .shift() the FIFO head');
+  assert.ok(/head\.chatBound|chatBound\)/.test(win),
+    'listener must branch on head.chatBound for chat-side binding');
+  assert.ok(/head\.runBound|runBound\)/.test(win),
+    'listener must branch on head.runBound for run-side binding');
 });
 
-t('attach.js: preempt-flush only fires when buffer has content (no empty turn pollution)', () => {
-  const idx = ATTACH.search(/fr-89 leak fix|preempt-flush/i);
-  const win = ATTACH.slice(idx, idx + 1500);
-  assert.ok(/_buffer[\s\S]{0,50}\.trim\(\)/.test(win),
-    'flush must guard on .trim() — empty/whitespace-only buffers don\'t create pollution turns');
+t('attach.js: assistant_text only accumulates into the head\'s buffer when chatBound', () => {
+  // Run-only turns must NOT capture assistant_text into a buffer that
+  // gets bound to a chat item somewhere else — that was the original
+  // clobber. Pin the chatBound gate around the buffer-accumulate path.
+  const idx = ATTACH.search(/_activeItemQueue/);
+  const win = ATTACH.slice(idx, idx + 4000);
+  // Match e.g. `if (queue.length > 0 && queue[0].chatBound) { ... _buffer += ev.text` etc.
+  assert.ok(/chatBound[\s\S]{0,80}_buffer\s*\+=/.test(win),
+    'assistant_text buffer-accumulate must be gated on head.chatBound — otherwise run-only turns clobber the head\'s buffer');
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -181,71 +192,74 @@ t('behavior: dual-marker strip yields the bare body text', () => {
   assert.strictEqual(stripBoth('[run:plan#fr-1] only run'), 'only run');
 });
 
-t('behavior: preempt-flush prevents cross-item leak (state-machine simulation)', () => {
-  // Simulate: turn 1 starts chat for fr-1, mid-flight a new turn 2
-  // (without chat marker) arrives. Pre-fix: turn 2's assistant_text
-  // would accumulate into fr-1's buffer. Post-fix: turn 2's start
-  // flushes turn 1's partial buffer to aiChat[] + clears
-  // _activeChatItem, so turn 2's text goes nowhere (no chat
-  // marker → no aiChat binding).
-  const session = { _activeChatItem: null };
-  const aiChatWritten = [];   // mock: each entry = { itemId, text }
-  const flushAndAppend = (itemId, ev, buffer) => aiChatWritten.push({ itemId, text: buffer });
-
-  // Turn 1 arrives with [chat:plan#fr-1] marker.
-  const startTurn = (text) => {
-    // preempt-flush
-    if (session._activeChatItem && session._activeChatItem._buffer
-        && session._activeChatItem._buffer.trim()) {
-      flushAndAppend(session._activeChatItem.itemId, { type: 'preempt' },
-        session._activeChatItem._buffer);
-    }
-    session._activeChatItem = null;
-    // re-set if marker present
-    const m = text.match(/\[chat:plan#([A-Za-z0-9_-]+)\]/);
-    if (m) {
-      session._activeChatItem = { itemId: m[1], _buffer: '' };
-    }
+t('behavior: FIFO queue isolates per-turn bindings (state-machine simulation)', () => {
+  // bug-36 replacement for fr-89's preempt-flush simulation. The new
+  // design: each turn pushes one entry to a FIFO queue; terminal
+  // events pop the head + bind. Two interleaved dispatches each
+  // bind to their own item — no clobber.
+  const queue = [];
+  const aiChatWritten = [];   // mock: { itemId, text }
+  const runsWritten = [];     // mock: { itemId, result }
+  const dispatch = (chatId, runId) => {
+    queue.push({
+      itemId: chatId || runId,
+      chatBound: !!chatId,
+      runBound: !!runId,
+      _buffer: '',
+    });
+  };
+  const onText = (txt) => {
+    if (queue.length > 0 && queue[0].chatBound) queue[0]._buffer += txt;
+  };
+  const onTerminal = (ev) => {
+    if (queue.length === 0) return;
+    const head = queue.shift();
+    if (head.runBound) runsWritten.push({ itemId: head.itemId, result: ev.result });
+    if (head.chatBound) aiChatWritten.push({ itemId: head.itemId, text: head._buffer });
   };
 
-  startTurn('[chat:plan#fr-1] hello fr-1');
-  assert.strictEqual(session._activeChatItem.itemId, 'fr-1');
-  // Mid-flight: agent produces partial buffer (assistant_text events).
-  session._activeChatItem._buffer = 'agent partial reply';
-  // Turn 2 arrives WITHOUT chat marker (e.g. a queue dispatch
-  // with only [run:plan#fr-2]).
-  startTurn('[run:plan#fr-2] dispatched fr-2');
-  // Turn 1's partial buffer should have been flushed to fr-1's aiChat.
-  assert.strictEqual(aiChatWritten.length, 1);
+  // Dispatch fr-1 (chat), then fr-2 (run), then events for both.
+  dispatch('fr-1', null);
+  dispatch(null, 'fr-2');
+  onText('text for fr-1');
+  onTerminal({ type: 'turn_result', result: 'fr-1 done' });
+  onText('text for fr-2 (run-only, should not be captured)');
+  onTerminal({ type: 'turn_result', result: 'fr-2 done' });
+
+  // Each item bound to its own response/outcome.
+  assert.strictEqual(aiChatWritten.length, 1, 'one aiChat write (fr-1 only)');
   assert.strictEqual(aiChatWritten[0].itemId, 'fr-1');
-  assert.strictEqual(aiChatWritten[0].text, 'agent partial reply');
-  // _activeChatItem is now null (no chat marker on turn 2).
-  assert.strictEqual(session._activeChatItem, null,
-    'no chat marker on turn 2 → _activeChatItem stays null → no leak');
+  assert.strictEqual(aiChatWritten[0].text, 'text for fr-1',
+    'fr-1 aiChat must carry fr-1\'s text, not fr-2\'s');
+  assert.strictEqual(runsWritten.length, 1, 'one runs write (fr-2 only)');
+  assert.strictEqual(runsWritten[0].itemId, 'fr-2');
+  assert.strictEqual(runsWritten[0].result, 'fr-2 done');
+  assert.strictEqual(queue.length, 0, 'queue empty after both pops');
 });
 
-t('behavior: preempt-flush does NOT lose data on chat→chat handoff', () => {
-  // Same state machine, but turn 2 has a chat marker for a DIFFERENT
-  // item. Turn 1's partial buffer must still flush to fr-1, then turn 2
-  // re-binds to fr-2.
-  const session = { _activeChatItem: null };
+t('behavior: FIFO preserves chat→chat handoff without losing data', () => {
+  // Two chat dispatches for DIFFERENT items in quick succession. Each
+  // turn\'s buffer binds to its own item. No cross-contamination.
+  const queue = [];
   const aiChatWritten = [];
-  const startTurn = (text) => {
-    if (session._activeChatItem && session._activeChatItem._buffer
-        && session._activeChatItem._buffer.trim()) {
-      aiChatWritten.push({ itemId: session._activeChatItem.itemId,
-                           text: session._activeChatItem._buffer });
-    }
-    session._activeChatItem = null;
-    const m = text.match(/\[chat:plan#([A-Za-z0-9_-]+)\]/);
-    if (m) session._activeChatItem = { itemId: m[1], _buffer: '' };
+  const dispatch = (id) => queue.push({ itemId: id, chatBound: true, runBound: false, _buffer: '' });
+  const onText = (txt) => { if (queue.length > 0 && queue[0].chatBound) queue[0]._buffer += txt; };
+  const onTerminal = () => {
+    if (queue.length === 0) return;
+    const head = queue.shift();
+    if (head.chatBound) aiChatWritten.push({ itemId: head.itemId, text: head._buffer });
   };
-  startTurn('[chat:plan#fr-1] q1');
-  session._activeChatItem._buffer = 'partial-fr1';
-  startTurn('[chat:plan#fr-2] q2');
-  // fr-1's buffer flushed; fr-2 freshly bound; no cross-contamination.
-  assert.deepStrictEqual(aiChatWritten, [{ itemId: 'fr-1', text: 'partial-fr1' }]);
-  assert.strictEqual(session._activeChatItem.itemId, 'fr-2');
+  dispatch('fr-1');
+  dispatch('fr-2');
+  onText('partial-fr1');
+  onTerminal();
+  onText('answer-fr2');
+  onTerminal();
+  assert.deepStrictEqual(aiChatWritten, [
+    { itemId: 'fr-1', text: 'partial-fr1' },
+    { itemId: 'fr-2', text: 'answer-fr2' },
+  ]);
+  assert.strictEqual(queue.length, 0);
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

@@ -114,23 +114,27 @@ t('behavior: paused queue does NOT surface a next pending after cancel', () => {
 // entry when _activeRunItem is unexpectedly null/undefined.
 // ──────────────────────────────────────────────────────────────────────
 
-t('static guard: agent-event listener has a fallback when _activeRunItem is null', () => {
-  // The listener at attach.js:140-178 used to early-return on
-  // !active. The fix adds a fallback: use the queue's running entry
-  // as the active id source. The static-grep guards look for the
-  // fallback marker comment + a lookup of the queue's running entry.
-  // We anchor on a stable marker string we add in the fix so this
-  // guard isn't sensitive to formatting drift.
+t('static guard: agent-event listener has a fallback when FIFO head is null', () => {
+  // The merged bug-36 listener pops the FIFO head on terminal
+  // events. If the head is null but rec.runQueue still has a running
+  // entry (a queue dispatch whose marker-parse path was bypassed —
+  // session re-instantiation, reaper, etc.), the fallback uses that
+  // entry as the run-bound id source. The static-grep guards look
+  // for the fallback marker comment + a lookup of the queue's
+  // running entry. We anchor on a stable marker string we add in
+  // the fix so this guard isn\'t sensitive to formatting drift.
   assert.ok(/fr-51.*fallback|fallback.*fr-51|fr-51.*belt|belt.*fr-51/i.test(ATTACH),
     'attach.js must carry the fr-51 fallback marker so the next reviewer sees what defends the queue advance');
-  // Either the listener walks rec.runQueue for status==='running', OR
-  // it calls a helper that does. The simplest grep: in a 600-char
-  // window around 'runningEntry' we should see _activeRunItem.
+  // The listener walks rec.runQueue for status==='running' as the
+  // fallback id source.
   const idx = ATTACH.search(/runningEntry|runQueue\.find\([^)]*status[^)]*running/);
   assert.ok(idx > -1, 'attach.js must look up the queue running entry as a fallback active-id source');
-  const window = ATTACH.slice(Math.max(0, idx - 600), idx + 600);
-  assert.ok(/_activeRunItem|activeRunItem/.test(window),
-    'the queue-running-entry fallback must be wired into the _activeRunItem code path');
+  const window = ATTACH.slice(Math.max(0, idx - 800), idx + 800);
+  // bug-36: the fallback now wires into the FIFO queue (_activeItemQueue)
+  // — pre-bug-36 it wired into _activeRunItem. Either marker shows the
+  // fallback is hooked into the right place.
+  assert.ok(/_activeItemQueue|head\.itemId|head\.runBound/.test(window),
+    'the queue-running-entry fallback must be wired into the FIFO _activeItemQueue code path (bug-36)');
 });
 
 t('static guard: diag log fires when the fallback is used', () => {

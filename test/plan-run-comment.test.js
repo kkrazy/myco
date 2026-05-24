@@ -78,11 +78,13 @@ t('success outcome appends a claude comment with status + duration + cost + resu
 
   // Invoke the outcome stamper directly through its public surface:
   // simulate the agent-event 'turn_result' listener firing.
+  // bug-36: was session._activeRunItem = {...}; now push to the FIFO.
   const session = attach.getSession(sid);
-  session._activeRunItem = {
+  session._activeItemQueue = [{
     type: 'plan', itemId: 'td-42',
-    startedAt: '2026-05-16T08:00:00.000Z',
-  };
+    chatBound: false, runBound: true,
+    startedAt: '2026-05-16T08:00:00.000Z', _buffer: '',
+  }];
   session.emit('agent-event', {
     type: 'turn_result',
     subtype: 'success',
@@ -121,10 +123,11 @@ t('real listener path: outcome lands on item.runs[] and item.comments[]', () => 
   // _registerExternalSession installs the agent-event listener that
   // calls _stampPlanItemRunOutcome when type==='turn_result'.
   attach._registerExternalSession(sid, session);
-  session._activeRunItem = {
+  session._activeItemQueue = [{
     type: 'plan', itemId: 'td-99',
-    startedAt: '2026-05-16T08:10:00.000Z',
-  };
+    chatBound: false, runBound: true,
+    startedAt: '2026-05-16T08:10:00.000Z', _buffer: '',
+  }];
   session.emit('agent-event', {
     type: 'turn_result',
     subtype: 'success',
@@ -154,9 +157,11 @@ t('real listener path: outcome lands on item.runs[] and item.comments[]', () => 
   assert.ok(c.text.includes('Wired the toggle'),
     'comment body missing truncated final assistant text: ' + c.text);
 
-  // _activeRunItem should be cleared after stamping (one summary per run).
-  assert.strictEqual(session._activeRunItem, null,
-    '_activeRunItem should be cleared once the outcome is stamped');
+  // bug-36 (FIFO refactor): the popped entry must be gone from the
+  // queue. The single agent-event listener .shift()s the head before
+  // binding, so after a terminal event the queue length is N-1.
+  assert.strictEqual(session._activeItemQueue.length, 0,
+    'FIFO _activeItemQueue head must be popped after the outcome is stamped');
 });
 
 t('error outcome uses ⚠ glyph + error status in the comment', () => {
@@ -170,10 +175,11 @@ t('error outcome uses ⚠ glyph + error status in the comment', () => {
   const session = new EventEmitter();
   session.alive = true;
   attach._registerExternalSession(sid, session);
-  session._activeRunItem = {
+  session._activeItemQueue = [{
     type: 'plan', itemId: 'td-err',
-    startedAt: '2026-05-16T08:20:00.000Z',
-  };
+    chatBound: false, runBound: true,
+    startedAt: '2026-05-16T08:20:00.000Z', _buffer: '',
+  }];
   session.emit('agent-event', {
     type: 'turn_result',
     subtype: 'error_max_turns',
@@ -202,10 +208,11 @@ t('missing final assistant text falls back to "(no final assistant text)" body',
   const session = new EventEmitter();
   session.alive = true;
   attach._registerExternalSession(sid, session);
-  session._activeRunItem = {
+  session._activeItemQueue = [{
     type: 'plan', itemId: 'td-empty',
-    startedAt: '2026-05-16T08:30:00.000Z',
-  };
+    chatBound: false, runBound: true,
+    startedAt: '2026-05-16T08:30:00.000Z', _buffer: '',
+  }];
   session.emit('agent-event', {
     type: 'turn_result',
     subtype: 'success',

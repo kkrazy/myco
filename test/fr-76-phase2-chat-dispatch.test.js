@@ -4,13 +4,17 @@
 // chat is persistent multi-turn dialogue. Phase 2A scope:
 //
 //   1. handleChatMessage recognizes [chat:plan#<id>] (regex similar
-//      to runMatch), sets session._activeChatItem with the item id.
+//      to runMatch), pushes a chatBound entry to the FIFO
+//      session._activeItemQueue (bug-36 refactor — was the singular
+//      session._activeChatItem pre-bug-36).
 //   2. _appendUserAiChatTurn strips the marker + appends a role:'user'
 //      turn to it.aiChat via the Phase-1 appendAiChatTurn helper.
-//   3. agent-event listener accumulates assistant_text events while
-//      _activeChatItem is set; on terminal event (turn_result /
-//      iteration_aborted / fatal) flushes the buffer as a role:'agent'
-//      turn via _appendAgentAiChatTurn.
+//   3. ONE merged agent-event listener (bug-36 — pre-fix there were
+//      two: run-mode + chat-mode) accumulates assistant_text events
+//      into the head's _buffer when chatBound; on terminal event
+//      (turn_result / iteration_aborted / fatal) pops the head and
+//      flushes the buffer as a role:'agent' turn via
+//      _appendAgentAiChatTurn.
 //
 // Phase 2 does NOT include prior-turn context in the dispatch text —
 // the SDK session naturally carries claude's conversation memory
@@ -48,17 +52,28 @@ t('handleChatMessage parses the [chat:plan#<id>] marker', () => {
     'attach.js must declare a chatMatch regex /\\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\\]/ — same shape as runMatch');
 });
 
-t('handleChatMessage sets session._activeChatItem on chat-marker match', () => {
-  // Anchor on the marker recognition block.
-  const idx = ATTACH.search(/const\s+chatMatch\s*=\s*text\.match/);
-  assert.ok(idx > -1, 'chatMatch declaration must exist');
-  const window = ATTACH.slice(idx, idx + 800);
-  assert.ok(/session\._activeChatItem\s*=\s*\{/.test(window),
-    'on chatMatch + non-assistant user, session._activeChatItem must be set so the agent-event listener can route the response back to the item');
-  assert.ok(/itemId:\s*chatMatch\[2\]/.test(window),
-    '_activeChatItem.itemId must come from chatMatch[2] (the captured id group)');
+t('handleChatMessage pushes a chatBound entry to the FIFO _activeItemQueue', () => {
+  // bug-36 refactor: was session._activeChatItem = {...} singular slot;
+  // now session._activeItemQueue.push({..., chatBound: true, ...}) so
+  // parallel dispatches can\'t clobber each other. The push happens at
+  // dispatch time (right before session.write), not in the top-of-
+  // handleChatMessage marker-parse block — so slashcmds short-circuiting
+  // don\'t leak queue entries.
+  assert.ok(/session\._activeItemQueue\.push\s*\(/.test(ATTACH),
+    'attach.js must push to _activeItemQueue (FIFO of in-flight item bindings)');
+  const idx = ATTACH.search(/session\._activeItemQueue\.push\s*\(/);
+  // Window covers the push call + a few lines before (the targetId
+  // derivation reads chatMatch[2] / runMatch[2]).
+  const window = ATTACH.slice(Math.max(0, idx - 300), idx + 600);
+  assert.ok(/chatBound:\s*!!chatMatch/.test(window),
+    'queue entry must carry chatBound: !!chatMatch so the listener knows whether to bind to aiChat[]');
   assert.ok(/_buffer:\s*['"]['"]/.test(window),
-    '_activeChatItem._buffer must be initialized to "" — accumulates assistant_text events until terminal event');
+    'queue entry _buffer must be initialized to "" — accumulates assistant_text events until terminal event pops the head');
+  // The itemId comes from chatMatch[2] (the captured id group) — either
+  // directly assigned (legacy shape) or via a local targetId that reads
+  // chatMatch[2]. Both shapes acceptable.
+  assert.ok(/chatMatch\[2\]/.test(window),
+    'queue entry itemId must derive from chatMatch[2] (the captured id group)');
 });
 
 t('handleChatMessage calls _appendUserAiChatTurn after marker match', () => {
@@ -122,31 +137,44 @@ t('_appendAgentAiChatTurn uses role:"agent" + sets meta', () => {
     'agent-side turn must carry meta (kind/subtype/usage/costUsd)');
 });
 
-t('agent-event listener routes assistant_text into _activeChatItem._buffer', () => {
-  // The listener that handles chat mode (separate from the run-mode
-  // listener). Pin the buffer-accumulate pattern.
-  const idx = ATTACH.search(/session\._activeChatItem\._buffer\s*\+=/);
-  assert.ok(idx > -1,
-    'agent-event listener must accumulate assistant_text events into session._activeChatItem._buffer');
+t('agent-event listener accumulates assistant_text into the FIFO head\'s _buffer', () => {
+  // bug-36 refactor: was `session._activeChatItem._buffer += ev.text`;
+  // now `queue[0]._buffer += ev.text` gated on queue[0].chatBound so
+  // run-only turns don\'t accidentally capture chat-side text.
+  assert.ok(/_buffer\s*\+=\s*ev\.text/.test(ATTACH),
+    'agent-event listener must accumulate assistant_text events into the FIFO head\'s _buffer');
+  // The accumulate path must be gated on chatBound.
+  const idx = ATTACH.search(/_buffer\s*\+=\s*ev\.text/);
+  const win = ATTACH.slice(Math.max(0, idx - 400), idx + 50);
+  assert.ok(/chatBound/.test(win),
+    'buffer-accumulate must be gated on chatBound — run-only turns must not capture text into a chat-bound binding');
 });
 
 t('agent-event listener flushes on terminal event (turn_result/iteration_aborted/fatal)', () => {
-  // Same terminal-types set as the run-mode listener (per fr-51's
-  // contract). Pin all three.
-  const idx = ATTACH.search(/_appendAgentAiChatTurn\s*\(/);
-  assert.ok(idx > -1, '_appendAgentAiChatTurn must be called from the listener');
-  // Within ~600 chars of the call site we should see the terminal-type
-  // set.
-  const window = ATTACH.slice(Math.max(0, idx - 600), idx + 200);
+  // Same terminal-types set the bug-36 merged listener handles (per
+  // fr-51\'s contract). Pin all three within the listener body.
+  const listenerIdx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
+  assert.ok(listenerIdx > -1, 'agent-event listener must exist');
+  const window = ATTACH.slice(listenerIdx, listenerIdx + 5000);
+  assert.ok(/_appendAgentAiChatTurn\s*\(/.test(window),
+    '_appendAgentAiChatTurn must be called from the listener');
   assert.ok(/turn_result/.test(window) && /iteration_aborted/.test(window) && /fatal/.test(window),
-    'agent-event listener for chat mode must handle ALL three terminal event types (turn_result + iteration_aborted + fatal) — same fr-51 contract as run mode');
+    'agent-event listener must handle ALL three terminal event types (turn_result + iteration_aborted + fatal) — same fr-51 contract');
 });
 
-t('agent-event listener clears _activeChatItem before append (avoid re-entry)', () => {
-  const idx = ATTACH.search(/_appendAgentAiChatTurn\s*\(/);
-  const window = ATTACH.slice(Math.max(0, idx - 400), idx + 100);
-  assert.ok(/session\._activeChatItem\s*=\s*null/.test(window),
-    'the listener must clear session._activeChatItem to null BEFORE calling _appendAgentAiChatTurn — avoids re-entry if the append triggers a state-update that re-enters the listener');
+t('agent-event listener pops FIFO head BEFORE binding (avoid re-entry)', () => {
+  // bug-36 replacement: was clearing session._activeChatItem to null
+  // before calling _appendAgentAiChatTurn; now the .shift() pops the
+  // head BEFORE the bind calls so a state-update triggered by the
+  // append cannot re-enter and re-process the same entry.
+  const listenerIdx = ATTACH.search(/session\.on\(\s*['"]agent-event['"]/);
+  const window = ATTACH.slice(listenerIdx, listenerIdx + 5000);
+  const shiftIdx = window.search(/\.shift\s*\(/);
+  const bindIdx = window.search(/_appendAgentAiChatTurn\s*\(/);
+  assert.ok(shiftIdx > -1, 'listener must .shift() the FIFO head');
+  assert.ok(bindIdx > -1, 'listener must call _appendAgentAiChatTurn');
+  assert.ok(shiftIdx < bindIdx,
+    '.shift() (pop head) must come BEFORE _appendAgentAiChatTurn — avoids re-entry on state-update');
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -154,8 +182,8 @@ t('agent-event listener clears _activeChatItem before append (avoid re-entry)', 
 // ──────────────────────────────────────────────────────────────────────
 
 t('behavior: accumulate-flush pattern preserves streamed assistant_text', () => {
-  // Simulate the listener's contract on a fake state object.
-  const state = { _activeChatItem: { itemId: 'bug-42', _buffer: '' } };
+  // Simulate the bug-36 FIFO listener's contract on a fake state.
+  const state = { queue: [{ itemId: 'bug-42', chatBound: true, runBound: false, _buffer: '' }] };
   const events = [
     { type: 'assistant_text', text: 'Looking at the code...' },
     { type: 'assistant_text', text: ' I see the issue.' },
@@ -163,25 +191,27 @@ t('behavior: accumulate-flush pattern preserves streamed assistant_text', () => 
     { type: 'assistant_text', text: ' The fix is to change X to Y.' },
     { type: 'turn_result', subtype: 'success', result: 'Done.', usage: { input_tokens: 100 } },
   ];
+  let captured = null;
   for (const ev of events) {
-    if (!state._activeChatItem) break;
     if (ev.type === 'assistant_text' && typeof ev.text === 'string') {
-      state._activeChatItem._buffer += ev.text;
+      if (state.queue.length > 0 && state.queue[0].chatBound) {
+        state.queue[0]._buffer += ev.text;
+      }
       continue;
     }
     if (['turn_result', 'iteration_aborted', 'fatal'].includes(ev.type)) {
-      // Flush.
-      const chat = state._activeChatItem;
-      state._activeChatItem = null;
-      // (In real code: _appendAgentAiChatTurn(... chat._buffer))
-      // Assert the buffer carries all three assistant_text segments.
-      assert.strictEqual(chat._buffer,
-        'Looking at the code... I see the issue. The fix is to change X to Y.',
-        'buffer must accumulate all assistant_text events from the turn');
+      // Pop head + bind.
+      const head = state.queue.shift();
+      if (head && head.chatBound) {
+        captured = head._buffer;
+      }
     }
   }
-  assert.strictEqual(state._activeChatItem, null,
-    '_activeChatItem must be cleared after terminal event');
+  assert.strictEqual(captured,
+    'Looking at the code... I see the issue. The fix is to change X to Y.',
+    'buffer must accumulate all assistant_text events from the turn');
+  assert.strictEqual(state.queue.length, 0,
+    'FIFO queue must be empty after terminal event pops the head');
 });
 
 t('behavior: ev.result fallback covers result-only turns (no streamed text)', () => {
@@ -211,15 +241,27 @@ t('behavior: empty result + non-success terminal → placeholder text', () => {
 // Run + chat modes can coexist (independent _active* state)
 // ──────────────────────────────────────────────────────────────────────
 
-t('chat-mode listener is SEPARATE from run-mode listener (independent state)', () => {
-  // Both listeners are registered on session.on('agent-event', …).
-  // We pin that the chat path uses _activeChatItem (not _activeRunItem),
-  // so the two modes have independent state slots and can't collide.
-  const chatHandlerIdx = ATTACH.search(/_activeChatItem\._buffer/);
-  assert.ok(chatHandlerIdx > -1);
-  const window = ATTACH.slice(Math.max(0, chatHandlerIdx - 200), chatHandlerIdx + 200);
-  assert.ok(!/_activeRunItem/.test(window),
-    'chat-mode listener block must NOT touch _activeRunItem — independent state slot per mode prevents collisions');
+t('chat + run modes coexist via per-entry chatBound/runBound flags on the SAME FIFO', () => {
+  // bug-36 refactor: pre-fix _registerExternalSession registered TWO
+  // separate listeners (one per singular slot). Now ONE merged
+  // listener consumes the FIFO, and each entry's chatBound +
+  // runBound flags decide which side(s) to bind. Pin: exactly one
+  // agent-event listener IN _registerExternalSession + the per-side
+  // gating exists in the source. Other session.on('agent-event',…)
+  // calls live in attachWebSocket / attachViewerWebSocket (WS event
+  // forwarders), unrelated to binding.
+  const fnIdx = ATTACH.search(/function\s+_registerExternalSession\s*\(/);
+  assert.ok(fnIdx > -1, '_registerExternalSession must exist');
+  const rest = ATTACH.slice(fnIdx);
+  const endIdx = rest.slice(50).search(/\nfunction\s+\w+\s*\(/);
+  const body = endIdx === -1 ? rest : rest.slice(0, endIdx + 50);
+  const occurrences = (body.match(/session\.on\(\s*['"]agent-event['"]\s*,/g) || []).length;
+  assert.strictEqual(occurrences, 1,
+    '_registerExternalSession must register exactly ONE agent-event listener (collapsed run + chat into FIFO-driven listener); count=' + occurrences);
+  // The single listener must branch on both flags so chat-only and
+  // run-only dispatches stay isolated.
+  assert.ok(/chatBound/.test(body) && /runBound/.test(body),
+    'merged listener must branch on both head.chatBound and head.runBound — independent binding per side prevents collisions');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

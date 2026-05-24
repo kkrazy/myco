@@ -2688,15 +2688,18 @@ test_chat_window() {
   # checks + behavior simulation on the helpers.
   node_test_result test/fr-76-per-item-chat-persistence.test.js "test/fr-76-per-item-chat-persistence.test.js (19 cases)"
   # fr-76 Phase 2: agent dispatch wiring. handleChatMessage recognizes
-  # [chat:plan#<id>] (sister of fr-48's [run:plan#<id>] marker), sets
-  # session._activeChatItem. _appendUserAiChatTurn strips the marker
-  # and persists a role:'user' turn via Phase-1 appendAiChatTurn.
-  # A SEPARATE agent-event listener accumulates assistant_text into
-  # _activeChatItem._buffer and flushes on terminal events
-  # (turn_result/iteration_aborted/fatal) as a role:'agent' turn.
-  # Independent state slot (_activeChatItem vs _activeRunItem) so run
-  # and chat modes can coexist. Static guards on attach.js + behavior
-  # simulation of the buffer accumulate-flush pattern.
+  # [chat:plan#<id>] (sister of fr-48's [run:plan#<id>] marker) and
+  # pushes a chatBound entry to the FIFO session._activeItemQueue
+  # (bug-36 refactor — was the singular session._activeChatItem slot).
+  # _appendUserAiChatTurn strips the marker and persists a role:'user'
+  # turn via Phase-1 appendAiChatTurn. ONE merged agent-event listener
+  # (bug-36 — pre-fix there were two, one per mode) accumulates
+  # assistant_text into the head's _buffer when chatBound; on terminal
+  # event (turn_result/iteration_aborted/fatal) pops the head and
+  # binds the response via _appendAgentAiChatTurn. Chat + run modes
+  # coexist via per-entry flags on the same FIFO. Static guards on
+  # attach.js + behavior simulation of the buffer accumulate-flush
+  # pattern.
   node_test_result test/fr-76-phase2-chat-dispatch.test.js "test/fr-76-phase2-chat-dispatch.test.js (16 cases)"
   # fr-76 Phase 3: per-item AI chat panel UI. Bottom sheet on mobile
   # (slides up from bottom, swipe-down to dismiss), side drawer on
@@ -2737,7 +2740,9 @@ test_chat_window() {
   # reads the registry directly via myco-mcp.getTasksForItem — server-
   # authoritative reply, no agent round-trip. /task all (--all / -a)
   # escape hatch for the global view. attach.js ctx now carries
-  # chatItem/runItem populated from session._activeChatItem/_activeRunItem.
+  # chatItem/runItem populated from each turn's local chatMatch /
+  # runMatch (bug-36: was the singular session._activeChatItem /
+  # _activeRunItem slots, now per-turn isolated).
   # CLAUDE.md instructs the agent to call register_task_item after every
   # TaskCreate / TaskUpdate during chat/run turns.
   node_test_result test/fr-87-task-item-registry.test.js "test/fr-87-task-item-registry.test.js (14 cases)"
@@ -2785,11 +2790,30 @@ test_chat_window() {
   # cross-item chat leak. (A) buildArtifactRunText + buildArtifactQuorumText
   # now prepend BOTH [chat:<type>#<id>] AND [run:<type>#<id>] markers, so
   # the chat-mode listener binds the agent reply into the item's aiChat[]
-  # alongside the run-mode listener stamping runs[]. (B) handleChatMessage
-  # preempt-flushes _activeChatItem at the start of every user turn —
-  # turn-scoped now, not session-scoped. _appendUserAiChatTurn strips
-  # BOTH markers from the displayed user turn.
+  # alongside the run-mode listener stamping runs[]. (B) Per-turn
+  # isolation of the response binding — pre-bug-36 via a "preempt-
+  # flush" of the singular _activeChatItem at the start of every turn;
+  # post-bug-36 via a FIFO queue (see bug-36 below). _appendUserAiChatTurn
+  # strips BOTH markers from the displayed user turn.
   node_test_result test/fr-89-panel-response-binding.test.js "test/fr-89-panel-response-binding.test.js (11 cases)"
+  # bug-36 (race fix, kkrazy 2026-05-24): parallel /run on two plan
+  # items clobbered each other's responses in the UI. Root cause: two
+  # singular session slots (_activeChatItem + _activeRunItem) got
+  # overwritten when a second handleChatMessage call arrived before
+  # the first turn_result. fr-89's preempt-flush only helped when the
+  # stale buffer was non-empty; for parallel /run (fr-90 Phase 2
+  # cap>1), both turns arrived in quick succession and the
+  # preempt-flush ran on empty buffers, silently dropping bindings.
+  # Fix: replaced the singular slots with a FIFO session._activeItemQueue.
+  # handleChatMessage pushes one entry per marker-bearing turn right
+  # before session.write; ONE merged agent-event listener pops the
+  # head on terminal events and binds chat-side/run-side via
+  # chatBound/runBound flags. SDK queries are serialized per session,
+  # so FIFO matches the natural arrival order. Static guards on the
+  # listener-count collapse + push site + per-flag binding + end-to-end
+  # behavior simulation against a real EventEmitter (two parallel
+  # dispatches each get their own response).
+  node_test_result test/bug-36-parallel-run-clobber.test.js "test/bug-36-parallel-run-clobber.test.js (11 cases)"
   # fr-90 Phase 0: worktree MCP tools (worktree_create / remove / list)
   # + registry at <absCwd>/_myco_/worktrees.json + helpers exported
   # for Phase 1 dispatch use. Foundation for parallel item runs (Phase

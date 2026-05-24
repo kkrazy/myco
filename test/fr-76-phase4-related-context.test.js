@@ -79,11 +79,12 @@ t('artifacts.js: helper dedupes mentions vs dependsOn (no double-listing)', () =
 t('attach.js: handleChatMessage injects context for [chat:...] markers', () => {
   // The whole point — when a chat marker is present, the agent-bound
   // text gets augmented with the context block before session.write.
-  const idx = ATTACH_SRC.search(/Normal forward[\s\S]{0,200}session\.write/);
-  assert.ok(idx > -1, 'session.write dispatch site must exist');
-  // Right before the write, fr-76 Phase 4 builds agentText with the
-  // marker test + context lookup.
-  const win = ATTACH_SRC.slice(Math.max(0, idx - 1500), idx + 200);
+  // We anchor on the fr-76 Phase 4 comment header (stable through the
+  // bug-36 FIFO refactor which added ~50 lines between the context
+  // injection and the actual session.write call).
+  const idx = ATTACH_SRC.search(/fr-76 Phase 4: when a chat-panel marker/);
+  assert.ok(idx > -1, 'fr-76 Phase 4 context-injection block must exist');
+  const win = ATTACH_SRC.slice(idx, idx + 3000);
   assert.ok(/chatMarkerMatch/.test(win),
     'must compute chatMarkerMatch from input');
   assert.ok(/getRelatedItemsContext/.test(win),
@@ -93,8 +94,8 @@ t('attach.js: handleChatMessage injects context for [chat:...] markers', () => {
 });
 
 t('attach.js: context injection is in try/catch (graceful skip)', () => {
-  const idx = ATTACH_SRC.search(/Normal forward[\s\S]{0,200}session\.write/);
-  const win = ATTACH_SRC.slice(Math.max(0, idx - 1500), idx + 200);
+  const idx = ATTACH_SRC.search(/fr-76 Phase 4: when a chat-panel marker/);
+  const win = ATTACH_SRC.slice(idx, idx + 3000);
   assert.ok(/try\s*\{[\s\S]{0,800}getRelatedItemsContext[\s\S]{0,400}\}\s*catch/.test(win),
     'context lookup must be in try/catch — failure must not break the dispatch');
 });

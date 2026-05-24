@@ -130,97 +130,113 @@ function _registerExternalSession(sessionId, session) {
   sessions.set(sessionId, session);
   if (typeof session.on === 'function') {
     session.on('menu', (menu) => menuMod.handleSessionMenu(sessionId, session, menu));
-    // Plan-item ▶ Run linkage: when the user kicks off a run via
-    // the chat-pane Run button, handleChatMessage stamps
-    // session._activeRunItem with the item id. On turn_result we
-    // append a run record to that item (status / summary / cost /
-    // turn ts) and broadcast the artifact update so all clients
-    // see the linked status. One run per turn — _activeRunItem
-    // clears after the outcome is stamped.
+    // bug-36 (race) — FIFO `_activeItemQueue` replaces the legacy
+    // single-slot `_activeChatItem` + `_activeRunItem` pair. Pre-fix,
+    // two handleChatMessage calls arriving before the first
+    // turn_result clobbered the slots: turn 1's response got rebound
+    // to turn 2's item and turn 1's response was lost. Symptom:
+    // parallel /run on two plan items wiped each other's panel
+    // responses (user-reported 2026-05-24).
+    //
+    // FIFO works because the SDK serializes queries per session, so
+    // agent events arrive in dispatch order. handleChatMessage pushes
+    // one entry per marker-bearing turn right before session.write;
+    // this single listener buffers assistant_text into the head's
+    // buffer, then on terminal events pops the head and binds the
+    // response (chat-side) + outcome (run-side) to the correct
+    // itemId.
+    //
+    // Both fr-76 Phase 2 (chat panel binding) and fr-48 / fr-51
+    // (run-queue outcome stamping) collapse into this single
+    // listener — each queue entry tracks chatBound + runBound
+    // independently so a `[chat:plan#X] [run:plan#X]` dual-marker
+    // dispatch (fr-89) binds both sides from one entry, and a chat-
+    // only dispatch skips the run-side cleanly.
     session.on('agent-event', (ev) => {
       if (!ev) return;
+      if (!Array.isArray(session._activeItemQueue)) {
+        session._activeItemQueue = [];
+      }
+      const queue = session._activeItemQueue;
+      // assistant_text events accumulate into the head's buffer ONLY
+      // when the head is chat-bound. Run-only turns don't drive a
+      // chat panel response, so their assistant_text doesn't need
+      // capturing here (rec.chat still records it via the parallel
+      // chat-persistence listener in agent-session.js).
+      if (ev.type === 'assistant_text' && typeof ev.text === 'string') {
+        if (queue.length > 0 && queue[0].chatBound) {
+          queue[0]._buffer += ev.text;
+        }
+        return;
+      }
       // fr-48 bugfix: queue must see iteration_aborted + fatal as
       // terminal events too — not just turn_result. Pre-fix, a user-
       // initiated Stop (iteration_aborted) or fr-43 retry-exhausted
       // failure (fatal) left the queue's running entry stuck in
       // 'running' forever, blocking pending entries from advancing.
-      // _advanceRunQueue's success-check evaluates subtype==='success'
-      // which is false for both abort and fatal, so the entry gets
-      // marked failed + queue auto-pauses (user can /qresume to
-      // continue or /qcancel bug-X to drop the failed head).
       const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
       if (!terminalTypes.has(ev.type)) return;
-      // fr-51 fallback (belt-and-braces): if session._activeRunItem is
-      // null/undefined when a terminal event arrives but the queue
-      // clearly has a running entry, use THAT as the source of truth.
-      // Pre-fix the early-return on !active left the queue stuck
-      // forever in cases the original report shows (live repro:
-      // bug-13 dispatched via the queue, turn_result subtype=success
-      // fired, _activeRunItem was null when the listener ran → queue
-      // entry stayed `running` indefinitely, 5 pending items blocked).
-      // The fallback covers every scenario where _activeRunItem can be
-      // lost — session re-instantiation by the 5-min reaper, a race
-      // with another clear, or a dispatch path that bypassed the
-      // marker regex. The [runQueue-diag] log line captures every
-      // fallback occurrence so the underlying staleness can still be
-      // root-caused in a follow-up pass without leaving the queue
-      // broken in the meantime.
-      let active = session._activeRunItem;
-      if (!active || !active.itemId) {
+      // Pop the FIFO head — this is the item whose turn just landed.
+      let head = queue.length > 0 ? queue.shift() : null;
+      // fr-51 fallback (belt-and-braces): if the queue head is null
+      // when a terminal event arrives but rec.runQueue has a running
+      // entry, use THAT as the source of truth. Covers session
+      // re-instantiation by the 5-min reaper + any dispatch path
+      // that bypassed handleChatMessage's marker push. Diag log
+      // preserved so the underlying staleness can still be root-
+      // caused in follow-up.
+      if (!head) {
         const rec = sessionsMod.getSessionRecord(sessionId);
         const runningEntry = rec && Array.isArray(rec.runQueue)
           && rec.runQueue.find((e) => e && e.status === 'running');
         if (runningEntry) {
-          active = { itemId: runningEntry.itemId, startedAt: runningEntry.startedAt || null };
-          console.log(`[runQueue-diag] ${sessionId} ${ev.type} — _activeRunItem was null; falling back to queue's running entry ${runningEntry.itemId} (fr-51 belt-and-braces)`);
+          head = {
+            itemId: runningEntry.itemId,
+            type: 'plan',
+            chatBound: false,
+            runBound: true,
+            startedAt: runningEntry.startedAt || null,
+            _buffer: '',
+          };
+          console.log(`[runQueue-diag] ${sessionId} ${ev.type} — _activeItemQueue head was null; falling back to queue's running entry ${runningEntry.itemId} (fr-51 belt-and-braces)`);
         } else {
-          return; // truly nothing to advance
+          return;   // truly nothing to advance
         }
       }
-      if (ev.type === 'turn_result') {
+      // Run-bound: stamp runs[] outcome + advance the run-queue.
+      if (head.runBound) {
+        if (ev.type === 'turn_result') {
+          try {
+            _stampPlanItemRunOutcome(sessionId, head.itemId, ev, head.startedAt);
+          } catch (err) {
+            console.error('[plan-run] stamp outcome failed:', err.message);
+          }
+        } else {
+          // For abort/fatal, stamp a brief synthetic "aborted"/"error"
+          // run record so the plan item's chip strip reflects the
+          // outcome even when the queue is what fired the terminal.
+          const synthStatus = ev.type === 'iteration_aborted' ? 'aborted' : 'error';
+          try {
+            _stampPlanItemStatus(sessionId, head.itemId, synthStatus,
+              ev.type === 'iteration_aborted' ? 'interrupted by Stop' : (ev.error || 'fatal'));
+          } catch (err) {
+            console.error('[plan-run] stamp status (' + ev.type + ') failed:', err.message);
+          }
+        }
         try {
-          _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
+          _advanceRunQueue(sessionId, session, head.itemId, ev);
         } catch (err) {
-          console.error('[plan-run] stamp outcome failed:', err.message);
+          console.error('[runQueue] auto-advance failed:', err.message);
         }
-      } else {
-        // For abort/fatal, stamp a brief synthetic "aborted"/"error"
-        // run record so the plan item's chip strip reflects the
-        // outcome even when the queue is what fired the terminal.
-        const synthStatus = ev.type === 'iteration_aborted' ? 'aborted' : 'error';
+      }
+      // Chat-bound: flush accumulated assistant_text into the item's
+      // aiChat[] so the panel renders the agent's response.
+      if (head.chatBound) {
         try {
-          _stampPlanItemStatus(sessionId, active.itemId, synthStatus,
-            ev.type === 'iteration_aborted' ? 'interrupted by Stop' : (ev.error || 'fatal'));
+          _appendAgentAiChatTurn(sessionId, head.itemId, ev, head._buffer);
         } catch (err) {
-          console.error('[plan-run] stamp status (' + ev.type + ') failed:', err.message);
+          console.error('[ai-chat] agent turn append failed:', err.message);
         }
-      }
-      try {
-        _advanceRunQueue(sessionId, session, active.itemId, ev);
-      } catch (err) {
-        console.error('[runQueue] auto-advance failed:', err.message);
-      }
-      session._activeRunItem = null;
-    });
-    // fr-76 Phase 2: per-item AI chat — accumulate assistant_text
-    // events between [chat:plan#<id>] dispatch and turn_result, then
-    // flush as a role:'agent' turn to it.aiChat. Independent listener
-    // (separate from the run-mode listener above) so the two modes
-    // can coexist without state collisions.
-    session.on('agent-event', (ev) => {
-      if (!ev || !session._activeChatItem) return;
-      if (ev.type === 'assistant_text' && typeof ev.text === 'string') {
-        session._activeChatItem._buffer += ev.text;
-        return;
-      }
-      const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
-      if (!terminalTypes.has(ev.type)) return;
-      const chat = session._activeChatItem;
-      session._activeChatItem = null;       // clear before append to avoid re-entry
-      try {
-        _appendAgentAiChatTurn(sessionId, chat.itemId, ev, chat._buffer);
-      } catch (err) {
-        console.error('[ai-chat] agent turn append failed:', err.message);
       }
     });
     session.on('exit', () => {
@@ -416,10 +432,11 @@ function _appendUserAiChatTurn(sessionId, itemId, user, fullText) {
 
 // fr-76 Phase 2: per-item AI chat — append the agent side of the turn.
 // Called from the agent-event listener when a terminal event fires and
-// session._activeChatItem is set. Prefers the accumulated assistant_text
-// buffer (covers streamed responses); falls back to ev.result for
-// single-shot result-only emissions. meta captures usage/cost so the
-// UI can render the token + dollar info per turn.
+// the popped FIFO head (session._activeItemQueue[0] pre-shift) was
+// chat-bound. Prefers the accumulated assistant_text buffer (covers
+// streamed responses); falls back to ev.result for single-shot
+// result-only emissions. meta captures usage/cost so the UI can render
+// the token + dollar info per turn.
 function _appendAgentAiChatTurn(sessionId, itemId, ev, accumulatedText) {
   const rec = sessionsMod.getSessionRecord(sessionId);
   if (!rec) return;
@@ -1584,16 +1601,12 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     if (mentionTarget === 'all') message.meta.broadcast = true;
   }
   // [run:<type>#<id>] marker: the chat-pane's ▶ Run button on a
-  // plan item produces this prefix. Stash {type, id} on the
-  // session so the NEXT turn_result lands a status record on the
-  // matched plan item via _attachPlanRunOutcome.
+  // plan item produces this prefix. The actual response-binding
+  // bookkeeping happens below (see "bug-36 FIFO push") right before
+  // session.write; here we just record the regex match + flip the
+  // item's chip to 'running' so the UI reflects status immediately.
   const runMatch = text.match(/\[run:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
   if (runMatch && user !== ASSISTANT_USER) {
-    session._activeRunItem = {
-      type: 'plan',                            // td/fr/bug all live in plan.json today
-      itemId: runMatch[2],
-      startedAt: new Date().toISOString(),
-    };
     _stampPlanItemStatus(sessionId, runMatch[2], 'running', null);
   }
   // fr-76 Phase 2: [chat:plan#<id>] marker — multi-turn AI conversation
@@ -1603,32 +1616,11 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   // agent has context naturally — aiChat[] is for persistent DISPLAY
   // (the per-item chat panel renders from it), not for re-prompting.
   //
-  // fr-89 leak fix: _activeChatItem must be TURN-SCOPED, not session-
-  // scoped. Pre-fix it was set on chat-marker arrival and only cleared
-  // on terminal event — so if a non-chat turn (or different chat turn)
-  // interleaved before terminal, the listener kept routing its
-  // assistant_text into the stale item's buffer. Now: at the start of
-  // every user turn, FLUSH any in-flight buffer to aiChat[] (preempt),
-  // then clear _activeChatItem. The fresh marker (if any) re-sets it.
-  if (user !== ASSISTANT_USER && session._activeChatItem) {
-    const stale = session._activeChatItem;
-    session._activeChatItem = null;
-    if (stale._buffer && stale._buffer.trim()) {
-      try {
-        _appendAgentAiChatTurn(sessionId, stale.itemId,
-          { type: 'preempt' }, stale._buffer);
-      } catch (err) {
-        console.error('[ai-chat] preempt-flush failed:', err.message);
-      }
-    }
-  }
+  // The user-side turn is persisted immediately; the response-binding
+  // entry is pushed to session._activeItemQueue below (see "bug-36
+  // FIFO push") right before session.write.
   const chatMatch = text.match(/\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
   if (chatMatch && user !== ASSISTANT_USER) {
-    session._activeChatItem = {
-      itemId: chatMatch[2],
-      startedAt: new Date().toISOString(),
-      _buffer: '',         // accumulates assistant_text events between dispatch + turn_result
-    };
     _appendUserAiChatTurn(sessionId, chatMatch[2], user, text);
   }
   sessionsMod.appendChatMessage(sessionId, message);
@@ -1661,21 +1653,24 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     // (e.g. /task inside fr-1's chat panel → only tasks tagged for
     // fr-1, read authoritatively from the _myco_/task-items.json
     // registry that the agent maintains via mcp__myco__register_task_item).
-    // The marker recognition steps above already populated
-    // session._activeChatItem / _activeRunItem; we just expose them
-    // through ctx. Either may be null (typing in the main chat pane
-    // with no marker context); handlers must tolerate null and fall
-    // back to the global behavior.
+    //
+    // bug-36 (race fix): chatItem/runItem now come from THIS TURN's
+    // local marker matches (chatMatch / runMatch) — not from a
+    // shared session slot that another parallel turn could clobber.
+    // Each handleChatMessage call observes only its own markers.
+    // Either may be null (typing in the main chat pane with no
+    // marker context); handlers must tolerate null and fall back to
+    // the global behavior.
     const ctx = {
       user,
       sessionId,
       absCwd,
       session,
-      chatItem: session._activeChatItem
-        ? { type: 'plan', itemId: session._activeChatItem.itemId }
+      chatItem: chatMatch
+        ? { type: 'plan', itemId: chatMatch[2] }
         : null,
-      runItem: session._activeRunItem
-        ? { type: session._activeRunItem.type || 'plan', itemId: session._activeRunItem.itemId }
+      runItem: runMatch
+        ? { type: 'plan', itemId: runMatch[2] }
         : null,
       reply: (replyText, opts = {}) => {
         const replyMsg = {
@@ -1873,6 +1868,40 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
       }
     } catch (err) {
       console.warn(`[fr-76 phase4] context injection failed: ${err.message}`);
+    }
+  }
+
+  // bug-36 FIFO push — record this turn's marker bindings so the
+  // single agent-event listener (see _registerExternalSession above)
+  // can route the eventual terminal event back to the right plan
+  // item. One queue entry per marker-bearing user turn, popped by
+  // the listener on the next terminal event. SDK queries are
+  // serialized per session, so FIFO matches arrival order.
+  //
+  // Why this lives HERE (not in the marker-parse block at the top of
+  // handleChatMessage): slash commands + @mentions short-circuit
+  // earlier and never reach session.write. Pushing the entry up
+  // there would leak entries that no terminal event ever pops,
+  // gradually poisoning the head. We push only on the dispatch path
+  // that actually drives the agent.
+  if (chatMatch || runMatch) {
+    if (!Array.isArray(session._activeItemQueue)) {
+      session._activeItemQueue = [];
+    }
+    const targetId = (chatMatch && chatMatch[2]) || (runMatch && runMatch[2]);
+    session._activeItemQueue.push({
+      itemId: targetId,
+      type: 'plan',
+      chatBound: !!chatMatch,
+      runBound: !!runMatch,
+      startedAt: new Date().toISOString(),
+      _buffer: '',
+    });
+    // Defensive cap — a runaway non-terminal stream shouldn't grow
+    // the queue forever. 50 in-flight turns would already be a
+    // serious upstream bug; this just prevents memory bloat.
+    if (session._activeItemQueue.length > 50) {
+      session._activeItemQueue = session._activeItemQueue.slice(-50);
     }
   }
 

@@ -3559,68 +3559,56 @@
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "daac410c33ec",
+          "user": "claude",
+          "text": "✓ success · 734.2s · $12.0706 · 26↓/34186↑\n\nPushed `6659573`. Now your architecture question:\n\n---\n\n## How is item-specific response implemented?\n\nThe whole mechanism is **markers on the dispatch text + two parallel session-state slots + two independent agent-event listeners.** Server-side, single-threaded per session. Here's the flow:\n\n```mermaid\nflowchart TB\n  subgraph dispatch [Dispatch text wraps with markers]\n    U[\"User types /run on fr-1's panel\"] --> H[HTTP POST<br/>/queue/add]\n    H --> Q[\"runQueue.addToQueue<br/>(rec.runQueue entry)\"]\n    Q --> B[\"buildArtifactRunText<br/>(fr-89: dual-marker)\"]\n    B --> T[\"'[chat:plan#fr-1] [run:plan#fr-1] body'\"]\n    T --> HCM[handleChatMessage]\n  end\n  subgraph state [handleChatMessage parses markers → two state slots]\n    HCM --> S1[\"session._activeChatItem<br/>= {itemId: 'fr-1', _b…",
+          "ts": "2026-05-24T10:13:50.740Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-24T10:01:34.419Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "Each action fired from the plan item chat should send response back to that chat. Also chat should be isolated by item, e.g. Actions sent from other items shouldnt be visible to this item chat.",
         "rewritten": true
-      }
-    },
-    {
-      "id": "fr-90",
-      "text": "**Problem:** Today the run-queue serializes items strictly — fr-1 must finish before fr-2 starts. The agent is single-threaded per session, and the queue's `_advanceRunQueue` won't dispatch the next pending entry while another is running. Long-running items (test suite, refactor) block everything behind them, even when the work is on totally unrelated files.\n\n**Expected:** Multiple plan items can run truly in parallel within ONE session, each in an isolated git worktree so their file edits don't collide. User dispatches fr-1 + fr-2 + fr-3 → all three start working immediately, each in its own checkout, each writing to its own branch. Results merge back (or stay as branches for review) on completion.\n\n**Actual:** Sequential queue + single-threaded agent ⇒ \"I clicked Run on fr-1 and fr-2, but fr-2 sits at `pending` for 8 minutes while fr-1 grinds through tests.\"\n\n## Architecture sketch\n\n```mermaid\nflowchart TB\n  U[User dispatches fr-1, fr-2, fr-3] --> Q[(rec.runQueue)]\n  Q --> ADV[\"_advanceRunQueue<br/>(parallelism cap = N, default 3)\"]\n  ADV --> W1[git worktree add<br/>_myco_/worktrees/fr-1<br/>branch wt-fr-1]\n  ADV --> W2[git worktree add<br/>_myco_/worktrees/fr-2<br/>branch wt-fr-2]\n  ADV --> W3[git worktree add<br/>_myco_/worktrees/fr-3<br/>branch wt-fr-3]\n  W1 --> S1[Subagent runs in WT<br/>commits to wt-fr-1]\n  W2 --> S2[Subagent runs in WT<br/>commits to wt-fr-2]\n  W3 --> S3[Subagent runs in WT<br/>commits to wt-fr-3]\n  S1 --> M[Parent agent decides:<br/>auto-merge OR keep branch]\n  S2 --> M\n  S3 --> M\n  M --> C[git worktree remove<br/>cleanup on success]\n  style W1 fill:#cfc\n  style W2 fill:#cfc\n  style W3 fill:#cfc\n```\n\n## Proposed phases\n\n| Phase | Scope | Risk |\n|---|---|---|\n| **0** | Worktree MCP tools: `worktree_create`, `worktree_remove`, `worktree_list`, registry at `_myco_/worktrees.json`. No orchestration changes. Tests against a real temp git repo. | Low — additive |\n| **1** | Serial dispatch via worktree. Run-queue still serializes (one at a time), but each entry runs in a worktree, then merge/branch on completion. Validates the worktree lifecycle + commit-and-return flow. | Medium — touches dispatch path |\n| **2** | Parallel dispatch. `_advanceRunQueue` dispatches up to N (configurable, default 3) entries concurrently. Each gets its own worktree + its own subagent via Task tool. Per-item run tracking; `_active*Item` slots become per-worktree. | High — touches concurrency model + state-slot architecture |\n| **3** | Merge/PR flow. On subagent terminal: either auto-merge to main (if tests pass + item.meta.autoMerge = true) OR leave the branch for user review with a UI affordance (chip → \"review fr-1 changes\"). | Medium — depends on test infrastructure |\n| **4** | Conflict detection + UI. Pre-dispatch: warn if two queued items touch overlapping files (static analysis on dependsOn + grep heuristic). Post-merge: surface conflicts in plan card with a \"resolve\" action. | High — needs static analysis + new UI surface |\n\n## Key design decisions\n\n1. **Worktree lifecycle owned by myco-mcp tools**, not by claude's ad-hoc git invocations. Each tool is server-validated, registry-tracked, broadcast-aware (per fr-88 design rule).\n2. **Subagent per item, not subagent per turn**. Each item's worktree gets a fresh Task-tool subagent with `cwd=<worktree-path>`. Parent agent orchestrates; subagent does the work + reports back.\n3. **Branch-per-item naming**: `wt-<itemId>` (e.g. `wt-fr-1`, `wt-bug-17`). Predictable; cleans up easily; grep-able in `git branch`.\n4. **Default behavior = branch + chip, NOT auto-merge**. User reviews before merging. Auto-merge is opt-in per item via `meta.autoMerge: true`.\n5. **Parallelism cap = 3 by default**, configurable via session settings. Prevents resource exhaustion (each worktree is a checkout). Cap is per-session, not per-user.\n6. **Run-queue entry state extended** with `{worktreePath, branch, status: pending|preparing|running|merged|branched|conflicted|failed}`.\n\n## Out of scope (call out explicitly)\n\n- **Cross-session parallelism**: already works (different sessions = different processes). fr-90 is intra-session.\n- **Auto-merge conflict resolution**: subagent attempts merge; on conflict, leaves branch + chip; human resolves.\n- **Disk-space management**: each worktree is a full checkout. For large repos, could fill disk fast. Out of scope for v1; flag if it becomes a real problem.\n- **`/admin`, `/setpat`, `/strict` migration to MCP tools** (fr-88 leftover): unrelated; stay slashcmd-only per fr-88 out-of-scope clause.",
-      "layer": "Feature",
-      "done": false,
-      "addedAt": "2026-05-24T10:26:56.650Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "fr-91",
-      "text": "**Problem:** fr-87's task-items registry (`_myco_/task-items.json`) persists across server restart — the file is on disk. BUT the taskIds it references point to in-process SDK state that does NOT persist (SDK's TaskList is rebuilt from scratch after each restart). So `/task` in a per-item panel shows entries that look in-flight but actually reference ghosts from before the restart.\n\n**Expected:** `/task` tells the truth. Pre-restart entries are either auto-marked stale + hidden by default, or surfaced explicitly via `/task stale`.\n\n**Fix (Option C / per-process epoch):** Each `AgentSession` generates a fresh `bootId` (UUID) in its constructor — NOT persisted, deliberately per-process. Each registry entry tags with the current `bootId` on register. `getTasksForItem` filters by current `bootId` by default; `/task stale` flag bypasses to surface old-bootId entries as audit history.\n\n**Why bootId not sdkSessionId:** the SDK's `sdkSessionId` ACTUALLY persists across restart (via the SDK's `resume=<id>` parameter — see `agent-session.js` line 351). So sdkSessionId is the wrong epoch — it survives the very event we're trying to detect. bootId is the right epoch: fresh on every AgentSession constructor call.\n\n**Touch-points:** server/src/agent-session.js (bootId field), server/src/myco-mcp.js (registry entry shape, getTasksForItem filter), server/src/slashcmds.js handleTaskList (parse `stale` arg).\n\n**Sibling-survivability check (called out in the question):** other in-memory state that also dies on restart and isn't addressed by fr-91 — `session._activeChatItem` / `_activeRunItem` (the chat/run scoping slots). Pre-restart partial assistant_text buffers are lost. fr-89's preempt-flush handles turn-to-turn handoff but not process death. Out of scope here; file a separate issue if it becomes a real problem.",
-      "layer": "Feature",
-      "done": false,
-      "addedAt": "2026-05-24T11:26:01.000Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
+      },
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-24T10:13:50.740Z",
+          "startedAt": "2026-05-24T10:01:34.419Z",
+          "summary": "734.2s · 26→34186 tok",
+          "result": "Pushed `6659573`. Now your architecture question:\n\n---\n\n## How is item-specific response implemented?\n\nThe whole mechanism is **markers on the dispatch text + two parallel session-state slots + two independent agent-event listeners.** Server-side, single-threaded per session. Here's the flow:\n\n```mermaid\nflowchart TB\n  subgraph dispatch [Dispatch text wraps with markers]\n    U[\"User types /run on fr-1's panel\"] --> H[HTTP POST<br/>/queue/add]\n    H --> Q[\"runQueue.addToQueue<br/>(rec.runQueue entry)\"]\n    Q --> B[\"buildArtifactRunText<br/>(fr-89: dual-marker)\"]\n    B --> T[\"'[chat:plan#fr-1] [run:plan#fr-1] body'\"]\n    T --> HCM[handleChatMessage]\n  end\n  subgraph state [handleChatMessage parses markers → two state slots]\n    HCM --> S1[\"session._activeChatItem<br/>= {itemId: 'fr-1', _buffer: ''}\"]\n    HCM --> S2[\"session._activeRunItem<br/>= {itemId: 'fr-1', startedAt}\"]\n    HCM -->|\"preempt-flush<br/>(fr-89 leak fix)\"| F[\"if prev _activeChatItem<br/>had buffer → flush to aiChat[]\"]\n  end\n  subgraph dispatch2 [Marker-stripped text → agent]\n    HCM --> SDK[\"claude SDK<br/>query(stripped text)\"]\n    SDK --> EV1[\"assistant_text events<br/>(streamed)\"]\n    EV1 --> EV2[turn_result terminal event]\n  end\n  subgraph listeners [Two INDEPENDENT listeners both see every event]\n    EV1 -->|each event| L_C[chat-mode listener]\n    EV1 -->|each event| L_R[run-mode listener]\n    L_C -->|\"if _activeChatItem set<br/>buffer += ev.text\"| BUF[(buffer)]\n    L_R -->|\"if _activeRunItem set<br/>stamp runs[].status='running'\"| RS[(runs[])]\n    EV2 -->|terminal| L_C\n    EV2 -->|terminal| L_R\n    L_C -->|\"_appendAgentAiChatTurn<br/>(clear _activeChatItem)\"| AI[(item.aiChat[]<br/>role: 'agent')]\n    L_R -->|\"_stampPlanItemRunOutcome<br/>(clear _activeRunItem)\"| RS2[(runs[] entry<br/>summary + cost)]\n  end\n  AI -->|state-update<br/>kind:'artifact'| P[Panel UI<br/>re-renders aiChat]\n  RS2 -->|state-update<br/>kind:'artifact'| C[Plan card UI<br/>re-renders runs chip]\n  style S1 fill:#cfc\n  style "
+        }
+      ]
     },
     {
       "id": "bug-36",
-      "text": "**Problem:** Two test failures reported by kkrazy after running `./test/test.sh` on opti (plan-driven-ui @ ffade2a): 563 ✓ / 2 ✗ / exit 1.\n\n**Failure 1:** test.sh static-grep guard at lines 1896, 1902, 1917 anchored on `^\\[run:plan#X\\]` for buildArtifactRunText / buildArtifactQuorumText output — but fr-89 + fr-90 Phase 1 changed the output to dual-marker (`[chat:plan#X] [run:plan#X] [wt:...?] [📋 header]`). Guard drifted; test failed.\n\n**Fix:** updated all three regexes to expect `^\\[chat:...\\]\\s+\\[run:...\\]\\s+[header]`. Commit ships with this fix.",
+      "text": "**Problem:** Invoking `/run` on two plan items concurrently causes their responses to clobber each other in the plan-item UI.\n**Expected:** Each plan item retains its own `/run` response independently.\n**Actual:** The first run's response is wiped out by the second run, then the second run's response is also wiped out; everything ends up in the chat pane instead.",
       "layer": "Bug",
       "done": true,
-      "addedAt": "2026-05-24T14:01:33.961Z",
+      "addedAt": "2026-05-24T14:16:04.317Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": []
-    },
-    {
-      "id": "bug-37",
-      "text": "**Problem:** Tests that load `server/src/myco-mcp.js` (fr-87, fr-90 Phase 0/1/3, fr-91 — anything touching the registry helpers or worktree tools) throw `ERR_REQUIRE_ESM` on Node 18. Root cause: `myco-mcp.js` top-level `require('@anthropic-ai/claude-agent-sdk')` — the SDK ships as ESM (`.mjs`), require-of-ESM is only supported on Node 22+.\n\n**Production unaffected:** the docker container runs Node 22, where require-of-ESM works. Only the on-host test gate (when host is Node 18) fails.\n\n**Fix:** moved both SDK requires + zod require INSIDE `createMycoMcpServer`. Data helpers (loadWorktrees, getTasksForItem, _findPathOverlap, etc.) don't need the SDK and now load cleanly on any Node version. The single caller of createMycoMcpServer (agent-session.js) runs in the container = Node 22 = clean resolution.",
-      "layer": "Bug",
-      "done": true,
-      "addedAt": "2026-05-24T14:01:33.961Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
-    },
-    {
-      "id": "td-32",
-      "text": "**Problem:** Reported by kkrazy alongside two real test failures: when a node test exits non-zero quickly (e.g. in 0.18s), test.sh's parallel-runner falsely reports it as \"background runner exceeded 180s budget\" — misleading. The test actually ran fast + failed; the runner conflated exit-code != 0 with timeout.\n\n**Fix idea:** check actual elapsed time before classifying as timeout. If elapsed < budget but exit != 0, report as \"FAILED (exit N, ran Ns)\" not \"BUDGET EXCEEDED\". Lower priority — cosmetic but obscures real failures.",
-      "layer": "Todo",
-      "done": false,
-      "addedAt": "2026-05-24T14:01:33.961Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": []
+      "comments": [
+        {
+          "id": "0f24585ff613",
+          "user": "claude",
+          "text": "Shipped — FIFO refactor.\n\nRoot cause: `_activeChatItem`+`_activeRunItem` were 1-slot each; parallel handleChatMessage calls overwrote each other. fr-89's preempt-flush only helped when stale buffer non-empty, so parallel /run (cap=3) clobbered.\n\nFix: `session._activeItemQueue` FIFO. handleChatMessage pushes one entry right before session.write. ONE merged agent-event listener pops head on terminal events + binds chat/run sides via chatBound/runBound flags. SDK serializes per session → FIFO matches arrival order.\n\nFiles: server/src/attach.js, new test/bug-36-parallel-run-clobber.test.js (11 cases incl. end-to-end repro), + updates to fr-89, fr-76-phase2, fr-87, fr-51, fr-76-phase4, plan-run-comment tests + test.sh.\n\nTests: per-file sweep all 101 test/*.test.js → 0 failures. bug-36 11/11 ✓.",
+          "ts": "2026-05-24T14:49:38.780Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "Send /run on two plan items, the first run's response seems to be wiped out by the second run. Eventually the second run's response is wiped out too. Everything goea to the chat pane.",
+        "rewritten": true
+      }
     }
   ],
-  "updatedAt": "2026-05-24T14:01:33.961Z"
+  "updatedAt": "2026-05-24T14:16:10.428Z"
 }

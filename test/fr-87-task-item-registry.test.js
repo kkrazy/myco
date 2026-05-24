@@ -156,13 +156,18 @@ t('handleTaskList supports `/task all` (and --all / -a) escape hatch', () => {
 // attach.js: ctx surface
 // ──────────────────────────────────────────────────────────────────────
 
-t('attach.js: ctx carries chatItem populated from session._activeChatItem', () => {
+t('attach.js: ctx carries chatItem/runItem populated from this turn\'s local marker matches', () => {
   // Scoped via ctx so slashcmd handlers (handleTaskList, future
   // siblings) can branch without re-parsing markers.
-  assert.ok(/chatItem:\s*session\._activeChatItem/.test(ATTACH_SRC),
-    'ctx.chatItem must be derived from session._activeChatItem');
-  assert.ok(/runItem:\s*session\._activeRunItem/.test(ATTACH_SRC),
-    'ctx.runItem must be derived from session._activeRunItem');
+  //
+  // bug-36 refactor: pre-fix this read from session._activeChatItem /
+  // session._activeRunItem (the singular slots that got clobbered by
+  // parallel dispatches). Post-fix it reads from THIS turn's local
+  // chatMatch / runMatch — per-turn, isolated, no shared state.
+  assert.ok(/chatItem:\s*chatMatch[\s\S]{0,150}chatMatch\[2\]/.test(ATTACH_SRC),
+    'ctx.chatItem must be derived from local chatMatch (not a shared session slot)');
+  assert.ok(/runItem:\s*runMatch[\s\S]{0,150}runMatch\[2\]/.test(ATTACH_SRC),
+    'ctx.runItem must be derived from local runMatch (not a shared session slot)');
 });
 
 // ──────────────────────────────────────────────────────────────────────
