@@ -2678,6 +2678,17 @@ test_chat_window() {
   # (Phase 2), no UI yet (Phase 3). Static guards + module-export
   # checks + behavior simulation on the helpers.
   node_test_result test/fr-76-per-item-chat-persistence.test.js "test/fr-76-per-item-chat-persistence.test.js (19 cases)"
+  # fr-76 Phase 2: agent dispatch wiring. handleChatMessage recognizes
+  # [chat:plan#<id>] (sister of fr-48's [run:plan#<id>] marker), sets
+  # session._activeChatItem. _appendUserAiChatTurn strips the marker
+  # and persists a role:'user' turn via Phase-1 appendAiChatTurn.
+  # A SEPARATE agent-event listener accumulates assistant_text into
+  # _activeChatItem._buffer and flushes on terminal events
+  # (turn_result/iteration_aborted/fatal) as a role:'agent' turn.
+  # Independent state slot (_activeChatItem vs _activeRunItem) so run
+  # and chat modes can coexist. Static guards on attach.js + behavior
+  # simulation of the buffer accumulate-flush pattern.
+  node_test_result test/fr-76-phase2-chat-dispatch.test.js "test/fr-76-phase2-chat-dispatch.test.js (16 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

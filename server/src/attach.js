@@ -202,6 +202,27 @@ function _registerExternalSession(sessionId, session) {
       }
       session._activeRunItem = null;
     });
+    // fr-76 Phase 2: per-item AI chat — accumulate assistant_text
+    // events between [chat:plan#<id>] dispatch and turn_result, then
+    // flush as a role:'agent' turn to it.aiChat. Independent listener
+    // (separate from the run-mode listener above) so the two modes
+    // can coexist without state collisions.
+    session.on('agent-event', (ev) => {
+      if (!ev || !session._activeChatItem) return;
+      if (ev.type === 'assistant_text' && typeof ev.text === 'string') {
+        session._activeChatItem._buffer += ev.text;
+        return;
+      }
+      const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
+      if (!terminalTypes.has(ev.type)) return;
+      const chat = session._activeChatItem;
+      session._activeChatItem = null;       // clear before append to avoid re-entry
+      try {
+        _appendAgentAiChatTurn(sessionId, chat.itemId, ev, chat._buffer);
+      } catch (err) {
+        console.error('[ai-chat] agent turn append failed:', err.message);
+      }
+    });
     session.on('exit', () => {
       setTimeout(() => {
         const cur = sessions.get(sessionId);
@@ -310,6 +331,76 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   // chatty item doesn't bloat plan.json. Oldest dropped first.
   if (item.comments.length > 50) item.comments = item.comments.slice(-50);
 
+  sessionsMod.saveStore();
+  const session = sessions.get(sessionId);
+  if (session && typeof session.emit === 'function') {
+    session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
+  }
+}
+
+// fr-76 Phase 2: per-item AI chat — append the user side of the turn.
+// Called from handleChatMessage when the [chat:plan#<id>] marker is
+// detected. Strips the marker from the persisted text so it doesn't
+// pollute the chat panel render. Mirrors the persist + WS-broadcast
+// pattern of _stampPlanItemRunOutcome (sessions.json saveStore +
+// state-update emit; in-memory rec.artifacts is the runtime source
+// of truth — file mirror happens on the next route-driven mutation).
+function _appendUserAiChatTurn(sessionId, itemId, user, fullText) {
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  if (!rec) return;
+  const planArtifact = rec.artifacts && rec.artifacts.plan;
+  if (!planArtifact || !Array.isArray(planArtifact.items)) return;
+  const item = planArtifact.items.find((it) => it && it.id === itemId);
+  if (!item) return;
+  const text = String(fullText || '')
+    .replace(/^\[chat:[^\]]+\]\s*/, '')
+    .trim();
+  if (!text) return;
+  const artifactsMod = getArtifactsMod();
+  artifactsMod.appendAiChatTurn(item, { user, role: 'user', text });
+  sessionsMod.saveStore();
+  const session = sessions.get(sessionId);
+  if (session && typeof session.emit === 'function') {
+    session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
+  }
+}
+
+// fr-76 Phase 2: per-item AI chat — append the agent side of the turn.
+// Called from the agent-event listener when a terminal event fires and
+// session._activeChatItem is set. Prefers the accumulated assistant_text
+// buffer (covers streamed responses); falls back to ev.result for
+// single-shot result-only emissions. meta captures usage/cost so the
+// UI can render the token + dollar info per turn.
+function _appendAgentAiChatTurn(sessionId, itemId, ev, accumulatedText) {
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  if (!rec) return;
+  const planArtifact = rec.artifacts && rec.artifacts.plan;
+  if (!planArtifact || !Array.isArray(planArtifact.items)) return;
+  const item = planArtifact.items.find((it) => it && it.id === itemId);
+  if (!item) return;
+  let text = String(accumulatedText || '').trim();
+  if (!text && ev && ev.result) text = String(ev.result).trim();
+  if (!text) {
+    // No text to capture — likely an abort/fatal mid-flight. Append a
+    // placeholder so the chat history still records that something
+    // terminal happened (the UI can render an "(aborted)" chip).
+    text = ev && ev.type === 'iteration_aborted' ? '(aborted)'
+         : ev && ev.type === 'fatal' ? '(fatal error)'
+         : '';
+    if (!text) return;
+  }
+  const artifactsMod = getArtifactsMod();
+  artifactsMod.appendAiChatTurn(item, {
+    user: ASSISTANT_USER,
+    role: 'agent',
+    text,
+    meta: {
+      kind: (ev && ev.type) || 'turn_result',
+      subtype: (ev && ev.subtype) || null,
+      usage: (ev && ev.usage) || null,
+      costUsd: (ev && ev.totalCostUsd) || null,
+    },
+  });
   sessionsMod.saveStore();
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
@@ -1455,6 +1546,21 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
       startedAt: new Date().toISOString(),
     };
     _stampPlanItemStatus(sessionId, runMatch[2], 'running', null);
+  }
+  // fr-76 Phase 2: [chat:plan#<id>] marker — multi-turn AI conversation
+  // scoped to a plan item. Sister of fr-48's [run:plan#<id>]; run is
+  // one-shot dispatch, chat is persistent dialogue. The SDK session
+  // already carries claude's conversation memory across turns, so the
+  // agent has context naturally — aiChat[] is for persistent DISPLAY
+  // (the per-item chat panel renders from it), not for re-prompting.
+  const chatMatch = text.match(/\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
+  if (chatMatch && user !== ASSISTANT_USER) {
+    session._activeChatItem = {
+      itemId: chatMatch[2],
+      startedAt: new Date().toISOString(),
+      _buffer: '',         // accumulates assistant_text events between dispatch + turn_result
+    };
+    _appendUserAiChatTurn(sessionId, chatMatch[2], user, text);
   }
   sessionsMod.appendChatMessage(sessionId, message);
   session.emit('chat', message);
