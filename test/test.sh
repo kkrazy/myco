@@ -2787,6 +2787,14 @@ test_chat_window() {
   # turn-scoped now, not session-scoped. _appendUserAiChatTurn strips
   # BOTH markers from the displayed user turn.
   node_test_result test/fr-89-panel-response-binding.test.js "test/fr-89-panel-response-binding.test.js (11 cases)"
+  # fr-90 Phase 0: worktree MCP tools (worktree_create / remove / list)
+  # + registry at <absCwd>/_myco_/worktrees.json + helpers exported
+  # for Phase 1 dispatch use. Foundation for parallel item runs (Phase
+  # 2+): each item can get its own checkout at _myco_/worktrees/<itemId>
+  # on branch wt-<itemId>. Tested against a REAL temp git repo
+  # (round-trip create + list + idempotent re-create + remove with
+  # branch preservation). Also pins _myco_/.gitignore gets worktrees/.
+  node_test_result test/fr-90-phase0-worktree-tools.test.js "test/fr-90-phase0-worktree-tools.test.js (10 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

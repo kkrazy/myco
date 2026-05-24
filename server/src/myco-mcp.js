@@ -17,6 +17,16 @@
 //     closeout summaries on items without asking the user to type
 //     `/comment …` — first migration under the fr-88 slash-cmds-as-
 //     tools design rule.
+//   mcp__myco__set_item_done, vote_item, queue_add (fr-88 migrations
+//     2/3/4) — same pattern (shared helper, HTTP + tool both
+//     delegate).
+//   mcp__myco__worktree_create / worktree_remove / worktree_list
+//     (fr-90 Phase 0) — manage isolated git worktrees per plan item.
+//     Foundation for parallel item runs (Phase 2+): each item can
+//     get its own checkout at _myco_/worktrees/<itemId> with branch
+//     wt-<itemId>, so concurrent subagents don't collide on shared
+//     files. Registry at _myco_/worktrees.json tracks active
+//     worktrees so future operations (merge, cleanup) can find them.
 //
 // One MCP server is created per AgentSession so the tool handler
 // can capture sessionId in closure. agent-session.js passes
@@ -230,6 +240,239 @@ function _registerTaskItem(sessionId, args) {
     message: `Registered task ${args.taskId} → ${entry.itemId} (status: ${entry.status})`,
     entry,
   };
+}
+
+// fr-90 Phase 0: worktree registry persistence. Lives at
+// <absCwd>/_myco_/worktrees.json. Tracks active git worktrees this
+// session has created per plan item, so future operations
+// (status check, merge, cleanup) can find them. NOT committed to
+// the project tree — _myco_/.gitignore excludes worktrees/ since
+// each worktree IS a checkout of the same repo (its files belong
+// to git already, but the worktree dir itself is transient).
+//
+// Shape:
+//   {
+//     worktrees: {
+//       "<itemId>": {
+//         path: "_myco_/worktrees/<itemId>",   // RELATIVE to absCwd
+//         branch: "wt-<itemId>",
+//         createdAt: "<iso>",
+//         status: "active" | "merged" | "removed",
+//         baseRef: "<sha of HEAD when created>",  // for diff base
+//       },
+//       ...
+//     },
+//     updatedAt: "<iso>",
+//   }
+function _worktreesFilePath(sessionId) {
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec || !rec.absCwd) return null;
+  return path.join(rec.absCwd, '_myco_', 'worktrees.json');
+}
+
+function loadWorktrees(sessionId) {
+  const filePath = _worktreesFilePath(sessionId);
+  if (!filePath) return { worktrees: {}, updatedAt: null };
+  try {
+    if (!fs.existsSync(filePath)) return { worktrees: {}, updatedAt: null };
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || !parsed.worktrees) {
+      return { worktrees: {}, updatedAt: null };
+    }
+    return parsed;
+  } catch (err) {
+    console.error(`[myco-mcp] loadWorktrees failed: ${err.message}`);
+    return { worktrees: {}, updatedAt: null };
+  }
+}
+
+function saveWorktrees(sessionId, registry) {
+  const filePath = _worktreesFilePath(sessionId);
+  if (!filePath) return false;
+  try {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(registry, null, 2));
+    return true;
+  } catch (err) {
+    console.error(`[myco-mcp] saveWorktrees failed: ${err.message}`);
+    return false;
+  }
+}
+
+function listWorktrees(sessionId) {
+  const reg = loadWorktrees(sessionId);
+  return Object.entries(reg.worktrees || {})
+    .map(([itemId, info]) => ({ itemId, ...info }))
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+}
+
+// _myco_/.gitignore must exclude worktrees/ since each worktree IS a
+// git checkout (the path would show as untracked in the main repo).
+// Idempotent: appends only if missing.
+function _ensureWorktreeGitignore(rec) {
+  if (!rec || !rec.absCwd) return;
+  const gi = path.join(rec.absCwd, '_myco_', '.gitignore');
+  let body = '';
+  try { body = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : ''; } catch {}
+  if (/^worktrees\/?$/m.test(body)) return;  // already ignored
+  try {
+    if (!fs.existsSync(path.dirname(gi))) fs.mkdirSync(path.dirname(gi), { recursive: true });
+    fs.writeFileSync(gi, (body ? body.replace(/\n*$/, '\n') : '') + 'worktrees/\n');
+  } catch (err) {
+    console.error(`[myco-mcp] _ensureWorktreeGitignore failed: ${err.message}`);
+  }
+}
+
+// Create a git worktree at _myco_/worktrees/<itemId> on a fresh branch
+// wt-<itemId>. If the worktree already exists in the registry as
+// 'active', returns idempotently. Throws via the registry on git errors.
+function createWorktree(sessionId, itemId, opts) {
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  if (!rec.absCwd) return { ok: false, error: 'session has no absCwd', status: 500 };
+  if (!itemId || typeof itemId !== 'string') {
+    return { ok: false, error: 'itemId required', status: 400 };
+  }
+
+  // findProjectRoot logic (mirrors artifacts.js — repo lives at absCwd
+  // OR an immediate subdir of absCwd that has .git/).
+  const findProjectRoot = () => {
+    try { if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory() ||
+                fs.statSync(path.join(rec.absCwd, '.git')).isFile()) {
+      return rec.absCwd;
+    } } catch {}
+    try {
+      const entries = fs.readdirSync(rec.absCwd, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+        .map((d) => d.name).sort();
+      for (const name of entries) {
+        try {
+          const dotgit = path.join(rec.absCwd, name, '.git');
+          if (fs.statSync(dotgit).isDirectory() || fs.statSync(dotgit).isFile()) {
+            return path.join(rec.absCwd, name);
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  };
+  const repoRoot = findProjectRoot();
+  if (!repoRoot) return { ok: false, error: 'no git repo found under session cwd', status: 400 };
+
+  const reg = loadWorktrees(sessionId);
+  if (!reg.worktrees) reg.worktrees = {};
+  const existing = reg.worktrees[itemId];
+  if (existing && existing.status === 'active') {
+    // Idempotent: already created, return existing entry. Verify the
+    // path still exists on disk; if not, fall through to recreate.
+    if (existing.path && fs.existsSync(path.join(rec.absCwd, existing.path))) {
+      return { ok: true, ...existing, idempotent: true };
+    }
+  }
+
+  const branch = (opts && opts.branch) || `wt-${itemId}`;
+  const relPath = path.posix.join('_myco_', 'worktrees', itemId);
+  const absPath = path.join(rec.absCwd, relPath);
+
+  _ensureWorktreeGitignore(rec);
+
+  // Run `git worktree add -b <branch> <path>`. If the branch already
+  // exists (from a previous run that was cleaned up), use it without
+  // -b (so we resume rather than fail).
+  const { execFileSync } = require('child_process');
+  const now = new Date().toISOString();
+  let baseRef = null;
+  try {
+    baseRef = String(execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })).trim();
+  } catch {}
+  // Check if branch already exists.
+  let branchExists = false;
+  try {
+    execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', `refs/heads/${branch}`], { stdio: 'ignore' });
+    branchExists = true;
+  } catch {}
+  try {
+    if (branchExists) {
+      execFileSync('git', ['-C', repoRoot, 'worktree', 'add', absPath, branch], { stdio: 'pipe' });
+    } else {
+      execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', branch, absPath], { stdio: 'pipe' });
+    }
+  } catch (err) {
+    const stderr = err.stderr ? String(err.stderr) : err.message;
+    return { ok: false, error: `git worktree add failed: ${stderr.trim()}`, status: 500 };
+  }
+
+  const entry = {
+    path: relPath,
+    branch,
+    createdAt: now,
+    status: 'active',
+    baseRef,
+  };
+  reg.worktrees[itemId] = entry;
+  reg.updatedAt = now;
+  saveWorktrees(sessionId, reg);
+  return { ok: true, ...entry };
+}
+
+// Remove a git worktree + its branch tracking entry. By default,
+// refuses to remove if the worktree has uncommitted changes (force
+// override available). Updates registry status to 'removed'.
+function removeWorktree(sessionId, itemId, opts) {
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  if (!itemId) return { ok: false, error: 'itemId required', status: 400 };
+  const reg = loadWorktrees(sessionId);
+  const entry = reg.worktrees && reg.worktrees[itemId];
+  if (!entry) return { ok: false, error: `no worktree registered for ${itemId}`, status: 404 };
+
+  const findProjectRoot = () => {
+    try { if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory() ||
+                fs.statSync(path.join(rec.absCwd, '.git')).isFile()) {
+      return rec.absCwd;
+    } } catch {}
+    try {
+      const entries = fs.readdirSync(rec.absCwd, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+        .map((d) => d.name).sort();
+      for (const name of entries) {
+        try {
+          const dotgit = path.join(rec.absCwd, name, '.git');
+          if (fs.statSync(dotgit).isDirectory() || fs.statSync(dotgit).isFile()) {
+            return path.join(rec.absCwd, name);
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  };
+  const repoRoot = findProjectRoot();
+  if (!repoRoot) return { ok: false, error: 'no git repo found', status: 400 };
+
+  const { execFileSync } = require('child_process');
+  const force = !!(opts && opts.force);
+  const args = ['-C', repoRoot, 'worktree', 'remove'];
+  if (force) args.push('--force');
+  args.push(entry.path);
+  try {
+    execFileSync('git', args, { stdio: 'pipe' });
+  } catch (err) {
+    const stderr = err.stderr ? String(err.stderr) : err.message;
+    return { ok: false, error: `git worktree remove failed: ${stderr.trim()}`, status: 500 };
+  }
+  entry.status = 'removed';
+  entry.removedAt = new Date().toISOString();
+  reg.worktrees[itemId] = entry;
+  reg.updatedAt = entry.removedAt;
+  saveWorktrees(sessionId, reg);
+  return { ok: true, ...entry };
 }
 
 function createMycoMcpServer(sessionId) {
@@ -459,6 +702,91 @@ function createMycoMcpServer(sessionId) {
         },
         { alwaysLoad: true }
       ),
+      // fr-90 Phase 0: worktree tools — manage isolated git worktrees
+      // per plan item. Foundation for parallel item runs (Phase 2+).
+      tool(
+        'worktree_create',
+        'Create an isolated git worktree at _myco_/worktrees/<itemId> ' +
+        'on branch wt-<itemId>. Idempotent — if the worktree already ' +
+        'exists for this item (and the path is intact on disk), returns ' +
+        'the existing entry without re-running git. If the branch ' +
+        'wt-<itemId> already exists from a prior run, the new worktree ' +
+        'checks out the existing branch (resume semantics). Records the ' +
+        'entry in _myco_/worktrees.json with the base SHA so a future ' +
+        'diff/merge knows the comparison point.',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id (e.g. "fr-1", "bug-17"). Becomes both the dir name and the branch suffix.'),
+          branch: z.string().max(200).optional().describe('Override the default branch name (wt-<itemId>). Rarely needed.'),
+        },
+        async (args) => {
+          const r = createWorktree(sessionId, args.itemId, { branch: args.branch });
+          if (!r.ok) {
+            return {
+              content: [{ type: 'text', text: `worktree_create failed: ${r.error}` }],
+              isError: true,
+            };
+          }
+          const verb = r.idempotent ? 'already active' : 'created';
+          return {
+            content: [{ type: 'text', text: `Worktree ${verb}: ${r.path} (branch ${r.branch}, base ${r.baseRef ? r.baseRef.slice(0, 7) : '?'}).` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        'worktree_remove',
+        'Remove the git worktree for an item (cleanup after merge or ' +
+        'abandonment). By default refuses to remove if the worktree has ' +
+        'uncommitted changes; pass force=true to override. The wt-<itemId> ' +
+        'BRANCH is preserved (not deleted) so the work isn\'t lost — only ' +
+        'the worktree directory + git\'s internal tracking is removed. ' +
+        'Marks the registry entry as status:"removed" (kept for audit).',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id whose worktree should be removed.'),
+          force: z.boolean().optional().describe('Force removal even if uncommitted changes (LOSES uncommitted work).'),
+        },
+        async (args) => {
+          const r = removeWorktree(sessionId, args.itemId, { force: args.force });
+          if (!r.ok) {
+            return {
+              content: [{ type: 'text', text: `worktree_remove failed: ${r.error}` }],
+              isError: true,
+            };
+          }
+          return {
+            content: [{ type: 'text', text: `Worktree removed: ${r.path} (branch ${r.branch} preserved).` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        'worktree_list',
+        'List all worktrees this session has registered (active + removed ' +
+        'history). Returns each entry\'s itemId, branch, path, baseRef, ' +
+        'status, createdAt (+ removedAt if removed). Use to audit what ' +
+        'parallel work has been spun up + decide what to merge or clean up.',
+        {},
+        async () => {
+          const entries = listWorktrees(sessionId);
+          if (!entries.length) {
+            return {
+              content: [{ type: 'text', text: 'No worktrees registered for this session.' }],
+              isError: false,
+            };
+          }
+          const lines = entries.map((e) => {
+            const status = e.status === 'active' ? '🔀' : e.status === 'removed' ? '🗑️' : '·';
+            return `${status} ${e.itemId} → ${e.branch} (${e.path}, base ${e.baseRef ? e.baseRef.slice(0, 7) : '?'}, status: ${e.status})`;
+          });
+          return {
+            content: [{ type: 'text', text: lines.join('\n') }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
       tool(
         'register_task_item',
         'Register a SDK-task ↔ plan-item association in the session\'s ' +
@@ -497,4 +825,12 @@ module.exports = {
   loadTaskItems,
   saveTaskItems,
   getTasksForItem,
+  // fr-90 Phase 0: worktree helpers exported so the Phase 1 dispatch
+  // path (attach.js / artifacts.js queue helper) can create + manage
+  // worktrees server-side without going through the MCP tool surface.
+  loadWorktrees,
+  saveWorktrees,
+  listWorktrees,
+  createWorktree,
+  removeWorktree,
 };
