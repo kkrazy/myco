@@ -6584,7 +6584,7 @@ function renderArtifact(type, artifact) {
       <span class="artifact-vote-chip${userHasVoted ? ' is-voted' : ''}" title="${points} vote${points === 1 ? '' : 's'} · use /upvote in chat to vote">
         <span class="vote-icon">👍</span><span class="vote-count">${points}</span>
       </span>
-      ${comments.length ? `<span class="artifact-comment-chip" title="${comments.length} comment${comments.length === 1 ? '' : 's'} · use /comment &lt;text&gt; in chat to add">
+      ${comments.length ? `<span class="artifact-comment-chip" data-id="${escHtml(it.id)}" role="button" tabindex="0" title="Click to ${comments.length === 1 ? 'show 1 comment' : 'show ' + comments.length + ' comments'} · use /comment &lt;text&gt; in chat to add">
         📝<span class="comment-count">${comments.length}</span>
       </span>` : ''}` : '';
     // fr-46: pencil/trash on each comment, gated on !state.readOnly
@@ -6614,11 +6614,11 @@ function renderArtifact(type, artifact) {
             </div>`;
           }).join('')
         }</div>
-        <form class="artifact-comment-form" data-id="${escHtml(it.id)}">
-          <input type="text" class="artifact-comment-input" placeholder="Add a comment…" maxlength="1000" />
-          <button type="submit" class="artifact-comment-send">Post</button>
-        </form>
       </div>` : '';
+    // bug-35: inline comment-add form dropped — /comment <text> in the
+    // chat panel is the single path for adding comments now (per fr-85
+    // r2 design). The form was unreachable anyway since the chip toggle
+    // was removed; keeping it would re-introduce two-path confusion.
     // Surface the id (fr-N / td-N / bug-N or legacy hex) and the
     // merged-from badge so users can see at-a-glance which items got
     // absorbed by /merge or the plan-refresh dedupe Apply flow.
@@ -6917,12 +6917,37 @@ function renderArtifact(type, artifact) {
         if (cached) renderArtifact('plan', cached);
       });
     });
-    body.querySelectorAll('.artifact-comment-form').forEach((form) => {
-      form.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const id = form.dataset.id;
-        const input = form.querySelector('.artifact-comment-input');
-        if (input && input.value.trim()) onArtifactComment(type, id, input.value.trim());
+    // bug-35: .artifact-comment-form binding dropped — form no longer
+    // rendered (per fr-85 r2 design, /comment <text> in the chat panel
+    // is the single path for adding comments). Keeping the binding
+    // would be dead code per CLAUDE.md §1.
+    //
+    // bug-35: comment chip is clickable — toggles the .artifact-comments
+    // block for that item. Pre-fix the chip was display-only (count
+    // visible but no way to expand). Restores the pre-r2 "click to
+    // expand comments" affordance on the new chip surface.
+    body.querySelectorAll('.artifact-comment-chip').forEach((chip) => {
+      const onToggle = () => {
+        const id = chip.dataset.id;
+        if (!id) return;
+        const block = body.querySelector(`.artifact-comments[data-id="${CSS.escape(id)}"]`);
+        if (!block) return;
+        const isOpen = !block.hasAttribute('hidden');
+        if (isOpen) {
+          block.setAttribute('hidden', '');
+          chip.setAttribute('aria-expanded', 'false');
+        } else {
+          block.removeAttribute('hidden');
+          chip.setAttribute('aria-expanded', 'true');
+        }
+      };
+      chip.addEventListener('click', onToggle);
+      // Keyboard activation — chip carries role="button" + tabindex="0".
+      chip.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggle();
+        }
       });
     });
   }

@@ -3521,7 +3521,18 @@
           }
         }
       ]
+    },
+    {
+      "id": "bug-35",
+      "text": "**Problem:** Clicking the comment chip (📝 N) on a plan item does nothing. Comments exist in the DOM but are unreachable.\n\n**Expected:** Click the chip → comments list expands below the item card. Re-click → collapses.\n\n**Actual:** Chip is purely decorative (no click handler). Comments are rendered inside `<div class=\"artifact-comments\" hidden>` but the toggle button that used to show them was removed in fr-85 r2 (\"action buttons → slash commands in panel\"). The chip carries the count but isn't interactive.\n\n**Root cause:** fr-85 r2 dropped `.artifact-comment-toggle` button from voteBlock and replaced it with `.artifact-comment-chip` (display-only span). The hidden comments block + the inline `.artifact-comment-form` are still rendered but unreachable. /comment slash inside the chat panel handles ADDING comments now, but VIEWING fell through the cracks.\n\n**Fix:** Make `.artifact-comment-chip` clickable (toggle the `.artifact-comments[data-id=X]` hidden attr). Drop the dead inline `.artifact-comment-form` (use `/comment <text>` in the chat panel instead — single path).",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-24T08:38:45.096Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T08:36:13.277Z"
+  "updatedAt": "2026-05-24T08:38:45.096Z"
 }

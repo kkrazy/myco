@@ -2738,6 +2738,15 @@ test_chat_window() {
   # CLAUDE.md instructs the agent to call register_task_item after every
   # TaskCreate / TaskUpdate during chat/run turns.
   node_test_result test/fr-87-task-item-registry.test.js "test/fr-87-task-item-registry.test.js (14 cases)"
+  # bug-35: clicking the comment chip on a plan item didn't expand the
+  # comments. fr-85 r2 dropped the comment-toggle button + replaced
+  # with a display-only chip but the .artifact-comments block stayed
+  # hidden + unreachable. Fix: chip is now clickable (toggles hidden
+  # attr on the matching block, updates aria-expanded). Inline
+  # comment-add form dropped per fr-85 r2 design (/comment slash
+  # inside chat panel is the single path). Pure CSS-side gets cursor:
+  # pointer + hover + open-state via aria-expanded selector.
+  node_test_result test/bug-35-comment-chip-toggle.test.js "test/bug-35-comment-chip-toggle.test.js (9 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

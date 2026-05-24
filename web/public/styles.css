@@ -6757,6 +6757,24 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .artifact-comment-chip {
   font-size: 0.85rem;
 }
+/* bug-35: comment chip is now clickable (toggles the comments block).
+   Cursor + hover affordance so it reads as interactive. */
+.artifact-comment-chip {
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.artifact-comment-chip:hover,
+.artifact-comment-chip:focus {
+  color: var(--text, #c9d1d9);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+.artifact-comment-chip[aria-expanded="true"] {
+  color: var(--accent, #4caf50);
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.08);
+}
 
 /* aichat-count badge on the Chat button — small pill showing how many
    turns exist for this item. Sits inside .btn-text so it inherits the
