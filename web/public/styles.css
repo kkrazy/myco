@@ -6731,6 +6731,33 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   }
 }
 
+/* fr-85 round 2: vote + comment chips on the plan card (display-only,
+   replaced the clickable buttons). Same visual density as the other
+   status chips (.artifact-item-deps, .artifact-item-run-status). */
+.artifact-vote-chip,
+.artifact-comment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.78rem;
+  color: var(--muted, #8b949e);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 1px 8px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.artifact-vote-chip.is-voted {
+  color: var(--accent, #4caf50);
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.08);
+}
+.artifact-vote-chip .vote-icon,
+.artifact-comment-chip {
+  font-size: 0.85rem;
+}
+
 /* aichat-count badge on the Chat button — small pill showing how many
    turns exist for this item. Sits inside .btn-text so it inherits the
    mobile hide-text rule (icon-only on small screens). */

@@ -144,25 +144,41 @@ t('static guard: app.js defines _runButtonLabel with all three layers', () => {
   assert.ok(/Todo[\s\S]{0,60}Do/.test(src), 'Todo → Do mapping present');
 });
 
-t('static guard: runEnabled gate includes !it.done', () => {
+// fr-85 round 2 (2026-05-24): the ▶ Run button was removed from the
+// plan card and replaced with a /run slash command inside the per-item
+// chat panel. The CLIENT-SIDE gating (runEnabled = enoughVotes &&
+// !unmetDeps && !it.done) is gone — gating now lives SERVER-SIDE in
+// the /queue/add handler that /run dispatches to, enforced regardless
+// of UI source. The bug-8 contract (don't run a done item; layer-aware
+// verb) survives in:
+//   - the inlined pure-function tests at the top of THIS file (they
+//     still pin the contract independent of where the rendering lives)
+//   - /queue/add server-side checks
+//   - the AICHAT_VIRTUAL_COMMANDS /run entry in app.js + the
+//     _dispatchAiChatSlash router that invokes onArtifactItemRun
+//
+// The two static-grep guards below replace the two pre-round-2 guards
+// that pinned `const runEnabled` and `const runBtn = …` literals.
+
+t('static guard: /run slash command replaces the ▶ Run button (fr-85 round 2)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
-  // The fix adds the done-check to runEnabled. We look for ANY place
-  // the run-enable predicate considers `it.done` — tolerant of
-  // `!it.done`, `it.done === false`, or a hoisted `notDone` var.
-  assert.ok(/runEnabled[\s\S]{0,200}(!\s*it\.done|it\.done\s*===\s*false|notDone)/.test(src) ||
-            /(!\s*it\.done|it\.done\s*===\s*false|notDone)[\s\S]{0,200}runEnabled/.test(src),
-    'runEnabled must factor in it.done so completed items disable the Run button');
+  // The runBtn const is gone — and so is the <button class="artifact-item-run">
+  // render. Pin both deletions so a future regression can't quietly
+  // re-introduce the redundant card button.
+  assert.ok(!/const\s+runBtn\s*=/.test(src),
+    'const runBtn = … should be removed (button migrated to /run slash)');
+  assert.ok(!/<button\s+class="artifact-item-run"/.test(src),
+    'no <button class="artifact-item-run"> should render (was the plan-card Run button)');
 });
 
-t('static guard: runBtn template uses the layer-aware label, not hardcoded "▶ Run"', () => {
+t('static guard: AICHAT_VIRTUAL_COMMANDS /run entry exists + dispatches via onArtifactItemRun', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
-  // The fixed template interpolates the label from _runButtonLabel.
-  // Find the runBtn assignment and check that it references the helper
-  // (or a variable computed from the layer) within a small window.
-  const m = src.match(/const runBtn = `<button class="artifact-item-run"[\s\S]{0,500}<\/button>`/);
-  assert.ok(m, 'runBtn template assignment must exist');
-  assert.ok(/runButtonLabel|runLabel|runVerb/.test(m[0]),
-    'runBtn template must use the layer-derived label, not literal "▶ Run"');
+  // The replacement: panel-virtual /run command + _dispatchAiChatSlash
+  // case that invokes onArtifactItemRun (which still POSTs to /queue/add).
+  assert.ok(/AICHAT_VIRTUAL_COMMANDS[\s\S]{0,800}name:\s*['"]run['"]/.test(src),
+    'AICHAT_VIRTUAL_COMMANDS must include a /run entry (panel autocomplete dropdown source)');
+  assert.ok(/['"]run['"][^:]{0,5}:\s*[\s\S]{0,300}onArtifactItemRun/.test(src),
+    '_dispatchAiChatSlash /run case must invoke onArtifactItemRun (preserves the server-side gating + queue path)');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

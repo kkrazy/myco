@@ -6573,14 +6573,20 @@ function renderArtifact(type, artifact) {
       ? _planItemStatusChipHtml(_planItemStatus(it,
           (state.runQueue && state.runQueue.entries) || []))
       : '';
+    // fr-85 round 2: vote + comment-count are now display-only chips
+    // on the card. The actual upvote action moves to /upvote in the
+    // chat panel; comment-add moves to /comment <text>. The chips
+    // still surface the at-a-glance counts the user kept in Q2.
+    // Comments are visible in the panel (existing comments list +
+    // /comment slash to add new); the inline list on the plan card
+    // is dropped to declutter (matches the card-minimalism choice).
     const voteBlock = supportsVoting ? `
-      <button class="artifact-vote ${userHasVoted ? 'is-voted' : ''}" data-id="${escHtml(it.id)}"
-              title="${userHasVoted ? 'Click to remove your vote' : 'Click to vote — items at 2 votes auto-execute'}">
+      <span class="artifact-vote-chip${userHasVoted ? ' is-voted' : ''}" title="${points} vote${points === 1 ? '' : 's'} · use /upvote in chat to vote">
         <span class="vote-icon">👍</span><span class="vote-count">${points}</span>
-      </button>
-      <button class="artifact-comment-toggle" data-id="${escHtml(it.id)}" title="Show comments">
-        💬<span class="comment-count">${comments.length || ''}</span>
-      </button>` : '';
+      </span>
+      ${comments.length ? `<span class="artifact-comment-chip" title="${comments.length} comment${comments.length === 1 ? '' : 's'} · use /comment &lt;text&gt; in chat to add">
+        💬<span class="comment-count">${comments.length}</span>
+      </span>` : ''}` : '';
     // fr-46: pencil/trash on each comment, gated on !state.readOnly
     // (owner+admin only). meta.editedBy/editedAt → small "edited" badge
     // so the audit trail is visible to all readers.
@@ -6682,23 +6688,14 @@ function renderArtifact(type, artifact) {
     // AND on every dependsOn prereq being done AND on the item not
     // already being marked done (bug-8 — completed items shouldn't
     // offer a Run action; reopen the item to re-run).
-    const RUN_VOTE_THRESHOLD = 1;
-    const enoughVotes = points >= RUN_VOTE_THRESHOLD;
-    const notDone = !it.done;
-    const runEnabled = enoughVotes && unmetDeps.length === 0 && notDone;
-    // bug-8: layer-aware verb on the Run button. Bug → "Fix",
-    // Feature → "Implement", Todo → "Do". Unknown / missing layer
-    // (legacy untagged items) falls back to "Run".
-    const runLabel = _runButtonLabel(it.layer);
-    const runTitle = runEnabled
-      ? `Ask claude to ${runLabel.toLowerCase()} this item — status + result will be linked back here`
-      : it.done
-        ? 'This item is marked done — Run is disabled. Reopen the item to re-run.'
-        : !enoughVotes
-          ? `Needs ${RUN_VOTE_THRESHOLD} upvote${RUN_VOTE_THRESHOLD === 1 ? '' : 's'} to run (currently ${points}). Click 👍 above to vote.`
-          : `Blocked by unmet prereq${unmetDeps.length === 1 ? '' : 's'}: ${unmetDeps.join(', ')}. Mark them done first.`;
-    // Mobile hides .btn-text via CSS (icon-only); desktop keeps both.
-    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="${escHtml(runLabel)}"><span class="btn-icon">▶</span><span class="btn-text">${escHtml(runLabel)}</span></button>`;
+    // fr-85 round 2: runBtn dropped from the card. Run is now /run
+    // inside the chat panel. _runButtonLabel + runTitle + runEnabled
+    // are dead local helpers (no caller) — also dropped per CLAUDE.md
+    // §1. RUN_VOTE_THRESHOLD remains relevant info, but the gating
+    // (vote count + dependsOn done) now lives server-side in the
+    // /queue/add handler that /run dispatches to, so it's enforced
+    // regardless of UI source. The depsChip above + voteChip on the
+    // card surface the at-a-glance gating info.
     // fr-46: edit pencil for item body text. Gated on !state.readOnly
     // (owner+admin only — viewers don't see it). meta.editedBy chip
     // surfaces the audit trail for everyone.
@@ -6723,42 +6720,23 @@ function renderArtifact(type, artifact) {
     const chatBtn = supportsVoting
       ? `<button class="artifact-item-chat" data-id="${escHtml(it.id)}" data-type="${escHtml(type)}" title="Chat with claude about this item" aria-label="Chat about ${escHtml(it.id || 'item')}"><span class="btn-icon">💬</span><span class="btn-text">Chat${chatBadge}</span></button>`
       : '';
-    // fr-48: per-item ⊤ Queue button was pruned after the unified
-    // dispatch refactor (commit 606f14c) made the ▶ Run button itself
-    // POST to /queue/add. Both buttons were functionally identical;
-    // ▶ Run carries the layer-aware label (Implement/Fix/Do) which is
-    // more semantic than a generic "Queue" verb. The queue chip strip
-    // at the top of the chat pane remains the always-visible queue
-    // status surface.
-    // fr-47: explicit close/open affordance replaces the dual-purpose
-    // checkbox. Pre-fix the checkbox conflated two actions — checking
-    // dispatched to claude (POST /artifact/run), unchecking marked
-    // done=false. Now ▶ Run owns dispatch (queue path) and this
-    // button owns lifecycle: "Close" toggles done=true, "Reopen"
-    // toggles done=false. Same backend (POST /artifact/mark), no
-    // claude dispatch.
-    // (Declared BEFORE the actions-row template literal references
-    // it — `const` has no hoisting, out-of-order use throws
-    // ReferenceError and wipes the entire renderItem render.)
-    const closeLabel = it.done ? 'Reopen' : 'Close';
-    const closeTitle = it.done
-      ? 'Reopen this item (clears done state)'
-      : 'Close this item (marks done — no claude dispatch)';
-    // Close icon = ✓ (mark done); Reopen icon = ↻ (restart). Mobile
-    // shows just the icon; desktop adds the text label after.
-    const closeIcon = it.done ? '↻' : '✓';
-    const closeBtn = supportsVoting
-      ? `<button class="artifact-item-close" data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" data-done="${it.done ? '1' : '0'}" title="${escHtml(closeTitle)}" aria-label="${escHtml(closeLabel)}"><span class="btn-icon">${closeIcon}</span><span class="btn-text">${escHtml(closeLabel)}</span></button>`
-      : '';
+    // fr-85 round 2: closeBtn dropped from the card. Close/Reopen is
+    // now /close inside the chat panel (which reads it.done from
+    // _findArtifactItem and toggles via the same /artifact/mark
+    // endpoint the old button hit). closeLabel/closeTitle/closeIcon
+    // local helpers also gone — dead per CLAUDE.md §1.
+    // fr-85 round 2: actionsRow keeps STATUS CHIPS only + the Chat
+    // entry point + delete. run/close/upvote moved to slash commands
+    // inside the chat panel (/run /close /upvote /comment).
+    // editBtn kept on the card — inline body editor lives there,
+    // not in the panel, so the icon stays as the affordance.
     const actionsRow = `<div class="artifact-item-actions">
         ${mergedBadge}
         ${depsChip}
         ${runChip}
         ${itemEditedBadge}
         ${voteBlock}
-        ${runBtn}
         ${chatBtn}
-        ${closeBtn}
         ${editBtn}
         <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
       </div>`;
@@ -6849,15 +6827,13 @@ function renderArtifact(type, artifact) {
   // marked emits them as <pre><code class="language-mermaid">; this
   // pass converts them to .conv-mermaid divs.
   renderMermaidInContainer(body).catch(() => {});
-  // fr-47: explicit close/open button (replaces the old checkbox).
-  body.querySelectorAll('.artifact-item-close').forEach((btn) => {
-    btn.addEventListener('click', () => onArtifactItemClose(btn));
-  });
+  // fr-85 round 2: .artifact-item-close + .artifact-item-run bindings
+  // dropped — buttons no longer rendered. Actions live in the chat
+  // panel via /close, /run slash commands. Close/Run handlers
+  // (onArtifactItemClose, onArtifactItemRun) are still exported and
+  // invoked from the panel slash router (_dispatchAiChatSlash).
   body.querySelectorAll('.artifact-item-delete').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactItemDelete(type, btn.dataset.id));
-  });
-  body.querySelectorAll('.artifact-item-run').forEach((btn) => {
-    btn.addEventListener('click', () => onArtifactItemRun(type, btn.dataset.id, btn.dataset.text || ''));
   });
   // fr-76 Phase 3: per-item AI chat — opens the slide-in panel.
   body.querySelectorAll('.artifact-item-chat').forEach((btn) => {
@@ -7249,6 +7225,15 @@ function _bindAiChatPanel(panel, type, itemId) {
 function _submitAiChat(type, itemId, input) {
   const raw = String(input.value || '').trim();
   if (!raw) return;
+  // fr-85 round 2: panel-local slash commands operate on the item
+  // directly (no agent round-trip). _dispatchAiChatSlash returns true
+  // if it consumed the input; falls through to the normal marker-
+  // prepended agent dispatch otherwise.
+  if (_dispatchAiChatSlash(type, itemId, raw)) {
+    input.value = '';
+    input.focus();
+    return;
+  }
   // Prepend the Phase-2 marker so handleChatMessage routes to
   // _appendUserAiChatTurn + _activeChatItem. The marker is stripped
   // server-side before persistence so it never pollutes the display.
@@ -7257,6 +7242,85 @@ function _submitAiChat(type, itemId, input) {
   if (ok) {
     input.value = '';
     input.focus();
+  }
+}
+
+// fr-85 round 2: panel-local slash commands that operate on the
+// current chat-item. These replaced the icon buttons (▶ Run, ✓ Close,
+// 👍 Upvote, 💬 Comment) on the plan card. Each command dispatches
+// to the SAME endpoint the old button used — onArtifactItemRun,
+// the close endpoint, onArtifactVote, onArtifactComment — so the
+// server side is unchanged. Returns true if the slash was recognized
+// + dispatched (caller should skip the marker-prepend path); false
+// for unknown commands (e.g. /task, /skip — those still flow through
+// the agent so claude can act on them).
+function _dispatchAiChatSlash(type, itemId, raw) {
+  const m = raw.match(/^\/(run|close|upvote|vote|comment|edit)\b\s*(.*)$/i);
+  if (!m) return false;
+  const cmd = m[1].toLowerCase();
+  const args = (m[2] || '').trim();
+  switch (cmd) {
+    case 'run':
+      _aiChatShowToast('▶ Dispatching ' + itemId + ' to the run queue…');
+      onArtifactItemRun(type, itemId);
+      return true;
+    case 'close':
+      _closeItemFromPanel(type, itemId).catch((err) =>
+        console.error('[aichat /close] failed:', err));
+      return true;
+    case 'upvote':
+    case 'vote':
+      _aiChatShowToast('👍 Vote recorded on ' + itemId);
+      onArtifactVote(type, itemId);
+      return true;
+    case 'comment':
+      if (!args) {
+        _aiChatShowToast('Usage: /comment <text> — comment text required.');
+        return true;   // consumed; just no-op'd usefully
+      }
+      onArtifactComment(type, itemId, args);
+      _aiChatShowToast('💬 Comment added to ' + itemId);
+      return true;
+    case 'edit':
+      // Inline body editor lives on the plan card, not the panel.
+      // Closing the panel first + invoking the existing editor gives
+      // the user a clean handoff. (If we ever want in-panel editing,
+      // that's a separate iteration.)
+      _closeAiChatPanel();
+      setTimeout(() => onArtifactItemEdit(type, itemId), 260);
+      return true;
+    default:
+      return false;
+  }
+}
+
+// fr-85 round 2: panel /close — looks up the item's CURRENT done
+// state from the cache (since the icon button no longer renders +
+// we lost the dataset.done source), then POSTs the toggled state.
+async function _closeItemFromPanel(type, itemId) {
+  const sid = state.activeId;
+  if (!sid || !type || !itemId) return;
+  const item = _findArtifactItem(type, itemId);
+  if (!item) {
+    _aiChatShowToast('Couldn\'t /close — item ' + itemId + ' not found.');
+    return;
+  }
+  const currentlyDone = !!item.done;
+  const nextDone = currentlyDone ? 0 : 1;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/mark?type=${encodeURIComponent(type)}&itemId=${encodeURIComponent(itemId)}&done=${nextDone}`,
+      { method: 'POST' }
+    );
+    if (!res || !res.ok) {
+      _aiChatShowToast(currentlyDone ? 'Failed to reopen ' + itemId : 'Failed to close ' + itemId);
+      return;
+    }
+    _aiChatShowToast(currentlyDone ? '↻ Reopened ' + itemId : '✓ Closed ' + itemId);
+    await loadArtifact(type);
+  } catch (err) {
+    console.error('[aichat /close] threw:', err);
+    _aiChatShowToast('Error toggling ' + itemId + '. Check console.');
   }
 }
 
@@ -7764,6 +7828,20 @@ const AICHAT_ALLOWED_COMMANDS = new Set([
   'allow', 'deny', 'allowlist', // permission ops while a tool is pending
 ]);
 
+// fr-85 round 2: panel-virtual slash commands. These don't exist on
+// the server's /commands list — they're injected client-side into
+// the panel autocomplete and dispatched by _dispatchAiChatSlash to
+// the same HTTP endpoints the old action-row buttons hit. Each entry
+// mirrors the {name, summary, usage} shape returned by /commands so
+// _computeItemsFiltered can render them uniformly with server commands.
+const AICHAT_VIRTUAL_COMMANDS = [
+  { name: 'run',     summary: 'Dispatch this item to the run queue (▶ Run)',         usage: '/run' },
+  { name: 'close',   summary: 'Close (or reopen) this item — no claude dispatch',    usage: '/close' },
+  { name: 'upvote',  summary: 'Upvote this item — toggles your 👍',                  usage: '/upvote', aliases: ['vote'] },
+  { name: 'comment', summary: 'Add a comment to this item',                          usage: '/comment <text>' },
+  { name: 'edit',    summary: 'Edit this item\'s body text (opens the card editor)', usage: '/edit' },
+];
+
 function bindAiChatAutocomplete(panel) {
   const input = panel.querySelector('.aichat-input');
   if (!input || input.dataset.acBound) return;
@@ -7818,17 +7896,25 @@ function bindAiChatAutocomplete(panel) {
   function _computeItemsFiltered(tok, data) {
     const q = tok.slice(1).toLowerCase();
     if (tok[0] === '/') {
-      // Filter: only commands whose canonical name OR any alias is
-      // in the aichat allow-list. Keeps the autocomplete tightly
-      // scoped to what's meaningful in a per-item conversation.
-      const matches = (data.commands || []).filter((c) => {
+      // Filter server commands: only those in the aichat allow-list
+      // (task/skip/cancel/decide/allow/deny/allowlist).
+      const serverMatches = (data.commands || []).filter((c) => {
         const inAllow = AICHAT_ALLOWED_COMMANDS.has(c.name)
           || (c.aliases || []).some((a) => AICHAT_ALLOWED_COMMANDS.has(a));
         if (!inAllow) return false;
         return c.name.toLowerCase().startsWith(q)
           || (c.aliases || []).some((a) => a.toLowerCase().startsWith(q));
       });
-      return matches.map((c) => ({
+      // fr-85 round 2: ALSO inject the panel-virtual commands
+      // (/run /close /upvote /comment /edit). These replace the
+      // action-row icon buttons that were removed from the plan card.
+      const virtualMatches = AICHAT_VIRTUAL_COMMANDS.filter((c) =>
+        c.name.toLowerCase().startsWith(q)
+        || (c.aliases || []).some((a) => a.toLowerCase().startsWith(q))
+      );
+      // Virtual commands first (they're the item-context primaries);
+      // server commands second (general-purpose).
+      return [...virtualMatches, ...serverMatches].map((c) => ({
         name: c.usage || ('/' + c.name),
         desc: c.summary || '',
         insert: '/' + c.name,

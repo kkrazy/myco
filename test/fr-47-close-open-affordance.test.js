@@ -40,14 +40,18 @@ t('app.js renderItem includes an artifact-item-close button (Close when open, Re
     'app.js must render a button class artifact-item-close on item cards');
 });
 
-t('app.js button label is "Close" when !it.done, "Reopen" when it.done', () => {
-  // Search for both label strings in the renderItem template — should
-  // be visible as literal strings in the source so the layer-aware
-  // ternary is grep-able.
-  assert.ok(/['"`]Close['"`]/.test(PROD_APP),
-    'literal string "Close" must appear in app.js (button label for open items)');
-  assert.ok(/['"`]Reopen['"`]/.test(PROD_APP),
-    'literal string "Reopen" must appear in app.js (button label for done items)');
+t('app.js: Close/Reopen UX still surfaces (now in /close slash toast text after fr-85 round 2)', () => {
+  // Pre-fr-85-round-2: literal "Close" / "Reopen" lived in the
+  // closeBtn template's data-done ternary on the plan card. After
+  // round 2 the button is gone (replaced by /close slash inside the
+  // chat panel) and the user-visible verbs moved into the
+  // _closeItemFromPanel toast messages: "↻ Reopened <id>" and
+  // "✓ Closed <id>". Pin those past-tense strings so the verbs
+  // remain grep-able even after the button rendering went away.
+  assert.ok(/Closed/.test(PROD_APP),
+    'literal "Closed" must appear (toast confirmation after /close on an open item)');
+  assert.ok(/Reopened/.test(PROD_APP),
+    'literal "Reopened" must appear (toast confirmation after /close on a done item)');
 });
 
 // Helper: extract the body of onArtifactItemClose (the click
@@ -81,20 +85,32 @@ t('app.js click handler does NOT route through /artifact/run', () => {
     'onArtifactItemClose must NOT POST to /artifact/run — that path is the ▶ Run / queue dispatch');
 });
 
-t('app.js: closeBtn declaration comes BEFORE the actionsRow that references it (temporal-dead-zone guard)', () => {
-  // Regression guard from the 2026-05-20 "all plan items disappeared"
-  // incident — moving the button into actionsRow without moving its
-  // const declaration up put `${closeBtn}` in the template literal
-  // BEFORE `const closeBtn = …`. const is not hoisted, so the entire
-  // renderItem function threw ReferenceError + every plan item card
-  // failed to render. Pin the source order so this can't recur.
-  const declIdx = PROD_APP.search(/const\s+closeBtn\s*=/);
+t('app.js: closeBtn const + ${closeBtn} reference both gone (fr-85 round 2 — moved to /close slash)', () => {
+  // Original 2026-05-20 TDZ guard guarded an "all plan items disappeared"
+  // incident caused by `${closeBtn}` being referenced before `const
+  // closeBtn = …`. fr-85 round 2 removed BOTH (Close/Reopen is now
+  // a /close slash command inside the chat panel that reads
+  // it.done from the artifact cache via _findArtifactItem and
+  // toggles via the same /artifact/mark endpoint the old button hit).
+  // Invariant now: neither side exists in the source — keeps the
+  // dead-code rule honest + makes the TDZ class of bug impossible.
+  // The plan-card closeBtn const used to render a <button class="artifact-item-close">.
+  // The panel-local `const closeBtn = panel.querySelector('.aichat-close')`
+  // is a DIFFERENT variable (panel × button — unrelated scope) and stays.
+  // So we pin specifically: no const closeBtn assigned to a button
+  // template for .artifact-item-close, and no ${closeBtn} reference
+  // (which only the plan-card actionsRow ever had).
+  assert.ok(!/<button\s+class="artifact-item-close"/.test(PROD_APP),
+    'no <button class="artifact-item-close"> should render (button was dropped from plan card)');
   const useIdx = PROD_APP.search(/\$\{closeBtn\}/);
-  assert.ok(declIdx > -1, 'const closeBtn = … must exist');
-  assert.ok(useIdx > -1, '${closeBtn} reference must exist (inside actionsRow template)');
-  assert.ok(declIdx < useIdx,
-    `closeBtn declaration (idx ${declIdx}) must come BEFORE any \${closeBtn} reference (first use at idx ${useIdx}) — ` +
-    'const has no hoisting; out-of-order use throws ReferenceError and wipes the entire item render.');
+  assert.strictEqual(useIdx, -1,
+    '${closeBtn} should not be referenced (button no longer rendered in actionsRow)');
+  // The replacement path: _closeItemFromPanel + the artifact-mark
+  // endpoint must still both exist so /close works end-to-end.
+  assert.ok(/function\s+_closeItemFromPanel\s*\(/.test(PROD_APP),
+    '_closeItemFromPanel helper must exist (panel slash dispatcher);');
+  assert.ok(/artifact\/mark/.test(PROD_APP),
+    'POST /artifact/mark must still be hit (same backend, different caller)');
 });
 
 t('app.js does NOT keep the old onArtifactItemToggle (no callers after checkbox removal)', () => {

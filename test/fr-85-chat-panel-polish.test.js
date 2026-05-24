@@ -150,7 +150,7 @@ t('app.js: panel autocomplete reuses _loadAcData cache (no duplicate fetch)', ()
   // Both bindings share the same /commands + /users data — fetching
   // twice on first interaction would waste a round-trip and flicker.
   const idx = APP.search(/function\s+bindAiChatAutocomplete\s*\(/);
-  const win = APP.slice(idx, idx + 4000);
+  const win = APP.slice(idx, idx + 6000);
   assert.ok(/_loadAcData\s*\(\s*\)/.test(win),
     'bindAiChatAutocomplete must reuse _loadAcData() (same cache as the global chat autocomplete)');
 });
@@ -238,6 +238,157 @@ t('behavior: @-mentions are unfiltered (work in any context)', () => {
   const tok = '@kk';
   assert.ok(tok[0] === '@',
     '@-mention tokens are routed to the user-list branch, not the command-filter branch');
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// fr-85 round 2: action buttons → slash commands in panel
+// ──────────────────────────────────────────────────────────────────────
+
+t('app.js: AICHAT_VIRTUAL_COMMANDS panel-virtual commands defined', () => {
+  // These are CLIENT-SIDE only — not registered in server's
+  // /commands. The panel autocomplete merges them with the filtered
+  // server allow-list so users see /run /close /upvote /comment /edit
+  // as first-class options in the dropdown.
+  assert.ok(/const\s+AICHAT_VIRTUAL_COMMANDS\s*=\s*\[/.test(APP),
+    'AICHAT_VIRTUAL_COMMANDS array must be defined');
+  for (const cmd of ['run', 'close', 'upvote', 'comment', 'edit']) {
+    assert.ok(new RegExp(`name:\\s*['"]${cmd}['"]`).test(APP),
+      'AICHAT_VIRTUAL_COMMANDS must include /' + cmd);
+  }
+});
+
+t('app.js: virtual commands merged into panel autocomplete dropdown', () => {
+  // _computeItemsFiltered in bindAiChatAutocomplete must concat the
+  // virtual commands so they appear in the dropdown alongside the
+  // server allow-list. Pin via the spread + slice the function's
+  // return tuple.
+  const idx = APP.search(/function\s+bindAiChatAutocomplete\s*\(/);
+  const win = APP.slice(idx, idx + 5000);
+  assert.ok(/AICHAT_VIRTUAL_COMMANDS\.filter/.test(win),
+    'bindAiChatAutocomplete must filter AICHAT_VIRTUAL_COMMANDS by the typed prefix');
+  assert.ok(/\.\.\.virtualMatches[\s\S]{0,80}\.\.\.serverMatches/.test(win),
+    'virtual commands must appear FIRST in the dropdown (they\'re the item-context primaries)');
+});
+
+t('app.js: _dispatchAiChatSlash router exists', () => {
+  assert.ok(/function\s+_dispatchAiChatSlash\s*\(/.test(APP),
+    '_dispatchAiChatSlash(type, itemId, raw) must be defined');
+});
+
+t('app.js: _dispatchAiChatSlash routes /run /close /upvote /comment /edit', () => {
+  const idx = APP.search(/function\s+_dispatchAiChatSlash\s*\(/);
+  const win = APP.slice(idx, idx + 3000);
+  // Each case: pin that the command name appears in the regex/switch
+  // and the existing handler is invoked.
+  assert.ok(/['"]run['"][^:]{0,5}:\s*[\s\S]{0,200}onArtifactItemRun/.test(win),
+    '/run case must call onArtifactItemRun');
+  assert.ok(/['"]close['"][^:]{0,5}:\s*[\s\S]{0,200}_closeItemFromPanel/.test(win),
+    '/close case must invoke _closeItemFromPanel (panel-specific close helper)');
+  assert.ok(/['"]vote['"][^:]{0,5}:\s*[\s\S]{0,200}onArtifactVote/.test(win),
+    '/vote (alias /upvote) case must call onArtifactVote');
+  assert.ok(/['"]comment['"][^:]{0,5}:\s*[\s\S]{0,200}onArtifactComment/.test(win),
+    '/comment case must call onArtifactComment with the args text');
+  assert.ok(/['"]edit['"][^:]{0,5}:\s*[\s\S]{0,500}onArtifactItemEdit/.test(win),
+    '/edit case must call onArtifactItemEdit');
+});
+
+t('app.js: _submitAiChat consults _dispatchAiChatSlash BEFORE marker-dispatch', () => {
+  // The slash router must intercept before the marker is prepended
+  // and sent to the agent — otherwise /run would get routed through
+  // claude as text instead of triggering the queue.
+  const idx = APP.search(/function\s+_submitAiChat\s*\(/);
+  const win = APP.slice(idx, idx + 1500);
+  // Slash dispatch must come BEFORE sendChatMessage.
+  const slashIdx = win.search(/_dispatchAiChatSlash\s*\(/);
+  const sendIdx = win.search(/sendChatMessage\s*\(\s*marker/);
+  assert.ok(slashIdx > -1, '_submitAiChat must call _dispatchAiChatSlash');
+  assert.ok(sendIdx > -1, '_submitAiChat must still have the marker-dispatch path');
+  assert.ok(slashIdx < sendIdx,
+    'slash dispatch must come BEFORE marker-dispatch — otherwise /run is sent to claude as text');
+});
+
+t('app.js: _closeItemFromPanel uses cache item.done (no button dataset)', () => {
+  // The old onArtifactItemClose read btn.dataset.done — that source
+  // is gone (no button rendered). Panel /close must look up the
+  // CURRENT done state from the artifact cache via _findArtifactItem.
+  const idx = APP.search(/async\s+function\s+_closeItemFromPanel\s*\(/);
+  assert.ok(idx > -1, '_closeItemFromPanel helper must exist');
+  const win = APP.slice(idx, idx + 1500);
+  assert.ok(/_findArtifactItem\s*\(\s*type\s*,\s*itemId\s*\)/.test(win),
+    '_closeItemFromPanel must look up the item via _findArtifactItem (cache source)');
+  assert.ok(/item\.done/.test(win),
+    '_closeItemFromPanel must read item.done from the cached item to compute the toggle');
+});
+
+t('app.js: actionsRow drops runBtn + closeBtn templates (kept editBtn)', () => {
+  // The card actionsRow no longer renders ${runBtn} or ${closeBtn}.
+  // editBtn is kept (user comment specified run/close/upvote/comment,
+  // not edit — and the inline body editor lives on the card).
+  const idx = APP.search(/const\s+actionsRow\s*=\s*`<div class="artifact-item-actions">/);
+  assert.ok(idx > -1, 'actionsRow template must exist');
+  // Find the end of the template literal (closing backtick of the
+  // <div>). Search up to a reasonable window.
+  const win = APP.slice(idx, idx + 1000);
+  assert.ok(!/\$\{runBtn\}/.test(win),
+    'actionsRow must NOT render ${runBtn} (moved to /run slash)');
+  assert.ok(!/\$\{closeBtn\}/.test(win),
+    'actionsRow must NOT render ${closeBtn} (moved to /close slash)');
+  assert.ok(/\$\{chatBtn\}/.test(win),
+    'actionsRow must keep ${chatBtn} (entry point to the panel)');
+  assert.ok(/\$\{editBtn\}/.test(win),
+    'actionsRow must keep ${editBtn} (inline editor lives on the card)');
+});
+
+t('app.js: voteBlock is now a display-only chip (no button click)', () => {
+  // Vote count + comment count now render as chips (not buttons).
+  // Clicking is no longer a vote — users /upvote in the panel.
+  const idx = APP.search(/const\s+voteBlock\s*=/);
+  assert.ok(idx > -1);
+  const win = APP.slice(idx, idx + 800);
+  assert.ok(/artifact-vote-chip/.test(win),
+    'voteBlock must use .artifact-vote-chip (chip, not button)');
+  // Must NOT carry a button click affordance — no <button class="artifact-vote"...
+  assert.ok(!/<button[^>]*class="artifact-vote\b/.test(win),
+    'voteBlock must not render a <button class="artifact-vote"> (was the old upvote button)');
+});
+
+t('app.js: .artifact-item-close + .artifact-item-run click bindings removed', () => {
+  // Dead bindings would be no-ops (querySelectorAll returns nothing)
+  // but per CLAUDE.md §1 ("delete code that no longer has a caller")
+  // we drop them so the next reader doesn't have to wonder why a
+  // binding exists for a button that\'s never rendered.
+  assert.ok(!/querySelectorAll\(['"]\.artifact-item-close['"]\)/.test(APP),
+    '.artifact-item-close binding must be removed (no button to bind to)');
+  assert.ok(!/querySelectorAll\(['"]\.artifact-item-run['"]\)/.test(APP),
+    '.artifact-item-run binding must be removed (no button to bind to)');
+});
+
+t('styles.css: .artifact-vote-chip + .artifact-comment-chip styled', () => {
+  assert.ok(/\.artifact-vote-chip\b/.test(CSS),
+    '.artifact-vote-chip must have CSS rules (chip pill appearance)');
+  assert.ok(/\.artifact-vote-chip\.is-voted/.test(CSS),
+    '.artifact-vote-chip.is-voted must surface the "you voted" state');
+  assert.ok(/\.artifact-comment-chip\b/.test(CSS),
+    '.artifact-comment-chip must have CSS rules');
+});
+
+// Behavior simulation: the slash router pattern (independent of source).
+t('behavior: /run /close /upvote /vote /comment /edit are recognized; others fall through', () => {
+  const re = /^\/(run|close|upvote|vote|comment|edit)\b\s*(.*)$/i;
+  const ok = ['/run', '/close', '/upvote', '/vote', '/comment hello world', '/edit'];
+  for (const s of ok) assert.ok(re.test(s), s + ' must match the slash regex');
+  const skip = ['/task', '/help', 'just text', '/runner', 'hi /run'];
+  for (const s of skip) {
+    // 'hi /run' has the / in middle — should not match (^/ anchor).
+    if (re.test(s)) assert.fail(s + ' must NOT match (would mis-route)');
+  }
+});
+
+t('behavior: /comment captures the args after the command name', () => {
+  const m = '/comment This looks great, ship it'.match(/^\/(run|close|upvote|vote|comment|edit)\b\s*(.*)$/i);
+  assert.ok(m);
+  assert.strictEqual(m[1], 'comment');
+  assert.strictEqual(m[2], 'This looks great, ship it');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

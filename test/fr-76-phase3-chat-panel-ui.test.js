@@ -48,19 +48,22 @@ t('app.js: chatBtn template literal lives in the plan item render', () => {
     'chatBtn must carry a .btn-text span (mobile hides it, desktop keeps it)');
 });
 
-t('app.js: chatBtn is wired into the actionsRow template (between runBtn and closeBtn)', () => {
-  // Pinning the slot prevents a future re-order from accidentally
-  // dropping the button. Sister of ▶ Run — chat is the persistent
-  // companion to one-shot run.
+t('app.js: chatBtn is wired into the actionsRow template', () => {
+  // Pinning that chatBtn renders inside actionsRow so a future
+  // re-render refactor can't accidentally drop the entry point to
+  // the panel. fr-85 round 2 removed runBtn + closeBtn from the
+  // template (they're now /run + /close slash commands inside the
+  // panel), so we only assert chatBtn presence — the relative-order
+  // pin is gone with the siblings it referenced.
   const idx = APP.search(/const\s+actionsRow\s*=/);
   assert.ok(idx > -1, 'actionsRow template literal must exist');
-  const window = APP.slice(idx, idx + 600);
+  const window = APP.slice(idx, idx + 800);
   assert.ok(/\$\{chatBtn\}/.test(window),
-    'actionsRow must include ${chatBtn} (between runBtn and closeBtn)');
-  assert.ok(window.indexOf('${runBtn}') < window.indexOf('${chatBtn}'),
-    'chatBtn must come AFTER runBtn (Run is the primary action; Chat is the companion)');
-  assert.ok(window.indexOf('${chatBtn}') < window.indexOf('${closeBtn}'),
-    'chatBtn must come BEFORE closeBtn (chat is more frequent than close)');
+    'actionsRow must include ${chatBtn} (panel entry point)');
+  // editBtn is kept on the card — confirm it still renders
+  // (the user comment specified run/close/upvote/comment, not edit).
+  assert.ok(/\$\{editBtn\}/.test(window),
+    'actionsRow must keep ${editBtn} (inline editor lives on the card)');
 });
 
 t('app.js: chatBtn click binding routes to onArtifactItemAiChat', () => {
@@ -143,18 +146,22 @@ t('app.js: Esc-to-close handler is bound on open and removed on close', () => {
 // Submit path — marker wrapping
 // ──────────────────────────────────────────────────────────────────────
 
-t('app.js: _submitAiChat prepends the [chat:<type>#<id>] marker', () => {
+t('app.js: _submitAiChat prepends the [chat:<type>#<id>] marker (fall-through path)', () => {
   // The marker is the WHOLE dispatch contract with Phase 2. If the
   // client forgets it, handleChatMessage routes the text as a
   // regular chat-pane message — no _activeChatItem, no aiChat turn,
-  // no panel update. Pin both the construction AND the call into
-  // sendChatMessage so neither side drifts.
+  // no panel update. fr-85 round 2 added a slash-router intercept
+  // BEFORE this path (panel /run /close /upvote /comment /edit
+  // dispatch directly to HTTP endpoints, bypassing the agent). The
+  // marker path is the FALL-THROUGH for non-slash text. Window
+  // bumped from 600→1500 to clear the new slash-router code in
+  // front of the marker construction.
   assert.ok(/function\s+_submitAiChat\s*\(/.test(APP),
     '_submitAiChat helper must exist');
   const idx = APP.search(/function\s+_submitAiChat\s*\(/);
-  const window = APP.slice(idx, idx + 600);
+  const window = APP.slice(idx, idx + 1500);
   assert.ok(/`\[chat:\$\{type\}#\$\{itemId\}\]\s*`/.test(window),
-    '_submitAiChat must build a `[chat:${type}#${itemId}] ` marker prefix');
+    '_submitAiChat must build a `[chat:${type}#${itemId}] ` marker prefix on the fall-through path');
   assert.ok(/sendChatMessage\s*\(\s*marker\s*\+\s*raw\s*\)/.test(window),
     '_submitAiChat must dispatch via sendChatMessage(marker + raw) — reuses the existing WS chat path');
 });
