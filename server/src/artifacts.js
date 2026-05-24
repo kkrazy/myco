@@ -413,6 +413,38 @@ function getAiChatHistory(item, opts) {
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
 
+// fr-88 migration 4: shared queue-add helper used by BOTH the HTTP
+// POST /sessions/:id/queue/add route AND the new mcp__myco__queue_add
+// tool. Validates type/itemId/item-exists, calls runQueue.addToQueue
+// (which throws on duplicate), saves. Returns the entry + the rec
+// so the caller can broadcast + (HTTP route only) kick the queue.
+// MCP tool intentionally SKIPS the kick — agent self-queueing inside
+// a turn shouldn't trigger reentrant dispatch; the queue auto-advances
+// at the next turn boundary or on explicit user action.
+function queueItemForRun(sessionId, type, itemId, addedBy) {
+  if (!ARTIFACT_TYPES.includes(type)) {
+    return { ok: false, error: 'unknown type', status: 400 };
+  }
+  if (!itemId) {
+    return { ok: false, error: 'itemId required', status: 400 };
+  }
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec) return { ok: false, error: 'session not found', status: 404 };
+  _loadArtifactIntoRecFromFile(rec, type);
+  const item = findItem(rec, type, itemId);
+  if (!item) return { ok: false, error: 'no such item', status: 404 };
+  let entry;
+  try {
+    entry = runQueue.addToQueue(rec, itemId, type, addedBy || 'unknown');
+  } catch (err) {
+    return { ok: false, error: err.message, status: 409 };
+  }
+  sessionsMod.saveStore();
+  return { ok: true, entry, item, rec };
+}
+
 // fr-88 migration 3: shared vote-toggle helper used by BOTH the HTTP
 // POST /artifact/vote route AND the new mcp__myco__vote_item tool.
 // Toggles user presence in item.voters (idempotent — re-voting is
@@ -1023,22 +1055,18 @@ function register(app, deps) {
     if (!ctx) return;
     const itemId = String((req.body && req.body.itemId) || '').trim();
     const type = String((req.body && req.body.type) || 'plan');
-    if (!itemId) return res.status(400).json({ error: 'itemId required' });
-    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
     const user = reqUser(req, ctx);
+    // Auth check stays in the route (the helper is auth-agnostic so
+    // the MCP tool can use it without re-checking — the MCP boundary
+    // is the agent's own trust gate).
     if (!isOwnerOrAdmin(ctx.id, user)) {
       return res.status(403).json({ error: 'queue mutation requires owner or admin' });
     }
-    _loadArtifactIntoRecFromFile(ctx.rec, type);
-    const item = findItem(ctx.rec, type, itemId);
-    if (!item) return res.status(404).json({ error: 'no such item' });
-    let entry;
-    try {
-      entry = runQueue.addToQueue(ctx.rec, itemId, type, user);
-    } catch (err) {
-      return res.status(409).json({ error: err.message });
-    }
-    saveStore();
+    // fr-88 migration 4: delegate enqueue to the shared helper.
+    const result = queueItemForRun(ctx.id, type, itemId, user);
+    if (!result.ok) return res.status(result.status || 400).json({ error: result.error });
+    const entry = result.entry;
+    const item = result.item;
     broadcastRunQueue(ctx.id, ctx.rec);
     // Kick the queue if idle. The attach.js turn_result hook handles
     // post-first auto-advance; we trigger the FIRST dispatch here.
@@ -1154,6 +1182,9 @@ module.exports = {
   // fr-88 migration 3: shared vote-toggle helper used by both
   // HTTP POST /artifact/vote + mcp__myco__vote_item.
   toggleVote,
+  // fr-88 migration 4: shared queue-add helper used by both
+  // HTTP POST /sessions/:id/queue/add + mcp__myco__queue_add.
+  queueItemForRun,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

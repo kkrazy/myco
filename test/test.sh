@@ -2771,6 +2771,13 @@ test_chat_window() {
   # helper. KEY INVARIANT: tool does NOT trigger auto-quorum dispatch
   # (HTTP route keeps it — social-signal path for human voters).
   node_test_result test/fr-88-m3-vote-item-tool.test.js "test/fr-88-m3-vote-item-tool.test.js (8 cases)"
+  # fr-88 migration 4: /queue → mcp__myco__queue_add. Shared
+  # queueItemForRun helper between POST /queue/add + the tool. KEY
+  # INVARIANT: tool intentionally does NOT kick the queue (no
+  # reentrant dispatch from inside a turn); auto-advance picks it
+  # up at the next turn boundary. Returns 409 on duplicate (same
+  # as HTTP route). Closes the fr-88 migration set (1/4 → 4/4).
+  node_test_result test/fr-88-m4-queue-add-tool.test.js "test/fr-88-m4-queue-add-tool.test.js (9 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

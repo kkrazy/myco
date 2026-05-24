@@ -270,6 +270,59 @@ function createMycoMcpServer(sessionId) {
       // [chat|run:plan#<id>] turn, and again after each TaskUpdate
       // that changes status. The registry persists at
       // _myco_/task-items.json — committable + cross-session.
+      // fr-88 migration 4: enqueue a plan/test item for run-queue
+      // dispatch. Shares the queueItemForRun helper in artifacts.js
+      // with the POST /queue/add HTTP route. INTENTIONALLY skips the
+      // "kick if idle" step the HTTP route does — agent self-queueing
+      // inside a turn shouldn't trigger reentrant dispatch (would
+      // create a recursive handleChatMessage from inside an active
+      // turn). The queue auto-advances at the next turn boundary
+      // (attach.js _advanceRunQueue on turn_result) or on explicit
+      // user action.
+      tool(
+        'queue_add',
+        'Enqueue a plan or test item for run-queue dispatch. Use this ' +
+        'to self-queue follow-up items spotted mid-work (e.g. "while ' +
+        'shipping fr-X I noticed bug-Y also needs fixing — queue it"). ' +
+        'The agent does NOT kick the queue immediately (would create ' +
+        'reentrant dispatch); the next turn boundary or user action ' +
+        'will pick it up. Throws on duplicate (an itemId already ' +
+        'pending or running can\'t be re-queued).',
+        {
+          itemId: z.string().min(1).max(200).describe('Plan-item id (e.g. "fr-1", "bug-17", "td-22") or test item id.'),
+          type: z.enum(['plan', 'test']).optional().describe('Artifact type. Defaults to "plan".'),
+        },
+        async (args) => {
+          const artifactsMod = require('./artifacts');
+          const type = args.type || 'plan';
+          const r = artifactsMod.queueItemForRun(sessionId, type, args.itemId, 'claude');
+          if (!r.ok) {
+            return {
+              content: [{ type: 'text', text: `queue_add failed: ${r.error}` }],
+              isError: true,
+            };
+          }
+          // Broadcast runQueue change so the queue-chip strip updates
+          // live on every attached client. Reuse the attach.getSession
+          // pattern since broadcastRunQueue is in artifacts.js's
+          // register-closure (not module-scope reachable from here).
+          try {
+            const attachMod = require('./attach');
+            const session = attachMod.getSession && attachMod.getSession(sessionId);
+            if (session && typeof session.emit === 'function') {
+              session.emit('state-update', {
+                kind: 'runQueue',
+                runQueue: { entries: r.rec.runQueue || [], paused: !!r.rec.runQueuePaused },
+              });
+            }
+          } catch {}
+          return {
+            content: [{ type: 'text', text: `${args.itemId} queued (status: ${r.entry.status}). Will dispatch on next turn boundary.` }],
+            isError: false,
+          };
+        },
+        { alwaysLoad: true }
+      ),
       // fr-88 migration 3: toggle the agent's vote on a plan/test item.
       // Shares the toggleVote helper in artifacts.js with the POST
       // /artifact/vote HTTP route. NO auto-fire — the human-vote
