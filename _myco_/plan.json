@@ -3212,13 +3212,110 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "dca76782f9aa",
+          "user": "claude",
+          "text": "✓ success · 104.3s · $6.0444 · 9↓/5187↑\n\nInvestigation posted as a comment on fr-76. Short version:\n\n## What already exists (so we don't re-invent)\n- Per-item comments (`it.comments[]`) — free-form, persisted\n- One-shot agent dispatch (fr-48 run-queue with `[run:plan#<id>]` marker)\n- Manual inter-item refs (`it.dependsOn[]`)\n\nWhat's missing: **persistent multi-turn agent conversation scoped to one item**.\n\n## Five design picks\n\n| # | Question | My recommendation | Trade-off |\n|---|---|---|---|\n| **1** | Where does the conversation live? | New `it.aiChat[]` (parallel to comments) | Clean separation, dedicated lifecycle |\n| **2** | How does each user turn reach the agent? | New `[chat:plan#<id>]` marker (sister of fr-48's `[run:plan#<id>]`) | Distinct from one-shot run dispatch |\n| **3** | What context gets pulled in? | Explicit…",
+          "ts": "2026-05-24T03:18:33.692Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-24T03:16:49.193Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "plan view as the main axis we should be able to chat with AI directory from a fr/bug/td so that the ctx is focused and decision is recorded. related plan items should be brought into attention if needed.",
         "rewritten": true
-      }
+      },
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-24T03:18:33.692Z",
+          "startedAt": "2026-05-24T03:16:49.193Z",
+          "summary": "104.3s · 9→5187 tok",
+          "result": "Investigation posted as a comment on fr-76. Short version:\n\n## What already exists (so we don't re-invent)\n- Per-item comments (`it.comments[]`) — free-form, persisted\n- One-shot agent dispatch (fr-48 run-queue with `[run:plan#<id>]` marker)\n- Manual inter-item refs (`it.dependsOn[]`)\n\nWhat's missing: **persistent multi-turn agent conversation scoped to one item**.\n\n## Five design picks\n\n| # | Question | My recommendation | Trade-off |\n|---|---|---|---|\n| **1** | Where does the conversation live? | New `it.aiChat[]` (parallel to comments) | Clean separation, dedicated lifecycle |\n| **2** | How does each user turn reach the agent? | New `[chat:plan#<id>]` marker (sister of fr-48's `[run:plan#<id>]`) | Distinct from one-shot run dispatch |\n| **3** | What context gets pulled in? | Explicit (`dependsOn` / `mergedFrom`) **+** auto-detect `(bug|fr|td)-\\d+` text mentions | Predictable, no embeddings |\n| **4** | UI shape | Slide-in right panel on desktop / full-screen modal on mobile | Matches Linear/Things/GitHub Issues drawer |\n| **5** | Persistence | In `_myco_/plan.json` → git, shared across collaborators | Same multi-user model as comments |\n\n## Three-phase scope (~2 days total)\n\n- **Phase 1** (~1 day): schema + persistence + server route + minimal UI (button → slide-in/modal → text input → streaming response → history)\n- **Phase 2** (~½ day): related-item context from `dependsOn` + text-mention regex\n- **Phase 3** (~½ day): token-budget truncation, clear chat, \"export to comment\" snapshot, unread badge\n\n## Open questions (full text in plan comment)\n\n1. **Option set** — go with my picks (B / B / A+B / B+C / Phase 1 first)?\n2. **Run-queue interaction** — item with active chat AND queued for run: pause-run-resume? Or \"close chat first\"?\n3. **Edit prior chat turns** — like comments, or no (rewriting history breaks the agent's prior assumptions)?\n4. **Phase 1 scope** — minimal v1 = send + stream + persist. Anything else in v1? (re-run last, attach files, export to comment?"
+        }
+      ]
+    },
+    {
+      "id": "fr-77",
+      "text": "fr-77: 'Think out loud' ephemeral chat panel. Universal Cmd+J / 💭 button opens a slide-down chat panel for ad-hoc conversations that don't yet warrant a plan item. Three lifecycle buttons: 📋 Promote to td/fr/bug (carries full chat history into the new item via fr-76), 📌 Pin (no auto-discard), × Discard. Auto-discards after 24h inactivity. Agent soft-suggests 'Promote?' after 5+ turns OR file-modifying tool calls. Same context as today's chat pane (CLAUDE.md + recent activity + auto-detected (bug|fr|td)-\\d+ mentions). Storage: localStorage per-user with TTL — never hits plan.json unless promoted. Depends on fr-76. ~1 day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-78",
+      "text": "fr-78: Cmd+K universal quick-file. Anywhere in myco, Cmd+K opens a 1-line input → Enter creates a new td (or auto-classified bug/fr based on keywords like 'broken'/'doesn't' → bug, 'add'/'support' → fr) → opens the new item's chat panel immediately. Target: <1 second from keystroke to typing in the new item's chat. Optimistic UI: item shows a placeholder id locally, server persistence is async. Default to td if ambiguous. Re-classify pill on the item header so the initial guess is easy to correct. Depends on fr-76. ~half day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-79",
+      "text": "fr-79: Per-item agent-event stream. Each plan item's chat panel renders its own agent-event surface (tool_use cards, system_init, turn_result chips) — not the global chat pane. When the agent fires on bug-42's chat, all events bind to bug-42's panel. Multi-item runs render in parallel without contention (or sequentially via fr-48 run-queue if same session). Requires session._activeRunItem to anchor more strongly + agent-event listener to route by item. Depends on fr-76. ~1 day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-80",
+      "text": "fr-80: Permission menu anchored to active item. Today AskUserQuestion + canUseTool modals pop in the global chat pane. In the plan-driven model they anchor to the item whose chat triggered them. Two surfaces: (1) in-item indicator (orange pulse + 'permission needed' badge) on the affected item's card; (2) global chrome-cluster indicator ('⚠ 1 permission needed') that jumps to the right item on click. Existing _bindPermModal + _handleAskUserQuestion stay; the anchor changes. Depends on fr-76 + fr-79. ~1 day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-81",
+      "text": "fr-81: Read-only 'Activity' feed firehose tab. Optional but recommended for multi-user awareness once the chat pane is gone. Chronological feed of all item activity (new comments, agent turns, status changes, runs) across the session — read-only, no interaction. Like a unified GitHub Issues activity stream. Replaces the passive-watching role the chat pane plays today for teammates not actively driving an item. Depends on fr-76 + fr-79. ~half day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-82",
+      "text": "fr-82: Plan-view empty state + onboarding tour. After chat pane is phased out, brand-new users open myco to an empty Plan tab. Strong empty-state with concrete CTAs: 'Press Cmd+K to start anything' + 3-4 example inputs ('bug: login redirect broken' / 'fr: add dark mode' / 'td: explore database schema' / 'What does this codebase do?'). Optional 3-step tour: type → file → see plan item with chat panel open. Tour state in localStorage so it shows once per user-session. ~half day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-83",
+      "text": "fr-83: Phase-out chat pane. After fr-76..82 land + soak for 1+ week, retire the chat pane. Steps: (1) feature-flag the chat pane behind localStorage opt-in (rollback escape hatch); (2) hide by default + show the 'Think out loud' panel + Plan view; (3) one-week observation period; (4) delete chat pane DOM + JS + WS code paths; (5) clean up server-side chat-history routes that are no longer entered. Includes a 'chat-pane fallback' opt-in that survives for ~2 releases for anyone who needs it. ~half day.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T03:37:21.813Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T02:06:35.983Z"
+  "updatedAt": "2026-05-24T03:37:21.813Z"
 }
