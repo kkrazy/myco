@@ -1568,7 +1568,23 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   if (user === ASSISTANT_USER) return;
   if (mentionTarget) return;
 
-  if (text.startsWith('/')) {
+  // fr-86: a chat-panel submit like `[chat:plan#fr-1] /allowlist` must
+  // route to the server slash dispatcher just as if the user typed
+  // `/allowlist` in the main chat pane. Pre-fix the slash check below
+  // saw `text` starting with `[`, not `/`, so the dispatch was skipped
+  // and the slash got sent to the agent as conversation text. Strip
+  // the marker prefix here so both `[run:plan#X]` and `[chat:plan#X]`
+  // dispatches expose any trailing slash command to the dispatcher.
+  // The user-display turn (already persisted via _appendUserAiChatTurn
+  // above) keeps the marker-stripped form; this just re-uses the same
+  // strip for dispatch routing. slashText = the text the slash parser
+  // + agent-dispatch tail see; `text` is left intact for any logging
+  // that still wants the raw inbound form. (Named slashText rather
+  // than dispatchText to avoid shadowing the queue auto-dispatch
+  // function's own `dispatchText` variable elsewhere in this file.)
+  const slashText = text.replace(/^\[(?:chat|run):(?:plan|test|arch|td|fr|bug)#[A-Za-z0-9_-]+\]\s*/, '');
+
+  if (slashText.startsWith('/')) {
     const rec = sessionsMod.loadStore().sessions[sessionId];
     const absCwd = rec && rec.absCwd;
     const ctx = {
@@ -1587,9 +1603,12 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
         session.emit('chat', replyMsg);
       },
     };
-    slashcmds.dispatch(ctx, text).then((handled) => {
+    // fr-86: dispatch via slashText (marker-stripped) so commands like
+    // /allowlist routed through `[chat:plan#X] /allowlist` reach their
+    // handlers exactly as if typed in the bare chat pane.
+    slashcmds.dispatch(ctx, slashText).then((handled) => {
       if (handled) return;
-      handleChatPostfixes(sessionId, session, user, text, message);
+      handleChatPostfixes(sessionId, session, user, slashText, message);
     });
     return;
   }

@@ -2718,6 +2718,15 @@ test_chat_window() {
   # toast if the item still can't be found — silent click reported
   # by kkrazy is structurally impossible.
   node_test_result test/fr-85-chat-panel-polish.test.js "test/fr-85-chat-panel-polish.test.js (18 cases)"
+  # fr-86: marker-prefixed slash commands must reach the server slash
+  # dispatcher. Pre-fix bug: typing /allowlist in the per-item chat
+  # panel sent `[chat:plan#fr-1] /allowlist`; handleChatMessage saw
+  # text starts with `[` not `/`, skipped slash dispatch, forwarded
+  # the slash to the agent as text. Fix: strip the marker prefix into
+  # `slashText` before the slash check. Both [chat:…] and [run:…]
+  # markers covered. Static guards on the strip + dispatch wiring;
+  # behavior simulation across every layer × type combination.
+  node_test_result test/fr-86-marker-slash-routing.test.js "test/fr-86-marker-slash-routing.test.js (11 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

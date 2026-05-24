@@ -325,7 +325,7 @@
       "id": "7415cb949d79",
       "text": "allow spawn subagents for each feature request, todo, or bug fix, support viewing conversation/logs of individual feature request, todo and bug fix. all questions requires user confirmation will pop up in the main window.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-15T02:57:51.389Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -535,7 +535,7 @@
       "id": "fr-5",
       "text": "add system prompt to ensure pop up questions whenever require user attention, for example clatification to feature, approache, etc.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T09:56:12.657Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -546,7 +546,7 @@
       "id": "fr-6",
       "text": "add link to fr/td/bug for easy navigation to the specific items in the plan view",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-16T09:57:23.487Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3342,7 +3342,84 @@
         "originalText": "continuous evaluation/suggestion by research on the field. Pop up once a day when user login and allow user to add it as todo items.",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-85",
+      "text": "**Problem:** Plan-item chat is cramped and exposes slash commands (close/run/comment/upvote) that don't apply in this context.\n**Expected:** Larger chat area; slash-command menu is context-sensitive, showing only commands applicable to plan items.\n**Actual:** Chat is small and the full global slash-command list is shown, including close/run/comment/upvote.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T06:44:42.657Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "afbf408deff6",
+          "user": "kkrazy",
+          "text": "Chat area should visible when click on the chat icon.",
+          "ts": "2026-05-24T06:46:10.405Z"
+        },
+        {
+          "id": "0fdc2bd14296",
+          "user": "kkrazy",
+          "text": "It sgoyld remove the icon buttons for run/close/comment/upvote",
+          "ts": "2026-05-24T07:10:29.921Z"
+        },
+        {
+          "id": "b341bf9ecbdb",
+          "user": "claude",
+          "text": "✓ success · 1571.7s · $11.2441 · 65↓/51420↑\n\nPushed `b061eab`. Task #36 completed.\n\n---\n\n## fr-85 round 2 run summary\n\n**Status: ✅ shipped to `origin/plan-driven-ui` (commit `b061eab`)**\n\n### Plan card after\n```\n┌────────────────────────────────────────────────────────────┐\n│ [status]  fr-1  Feature                                    │\n│ ensure session is in auto mode when request is sent to…    │\n│ filed by @kkrazy · May 18                                  │\n│ 👍 5  💬 2   💬 Chat  ✎ Edit                          ×    │\n└────────────────────────────────────────────────────────────┘\n```\n↑ Status chips kept (Q2). Run/Close/Vote/Comment buttons gone — replaced by slash commands in the panel.\n\n### Inside the chat panel (autocomplete after typing `/`)\n```\n/run             — Dispatch this item to the run queue (▶ Run)\n/close           …",
+          "ts": "2026-05-24T07:36:58.653Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-24T07:10:45.107Z"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "Make that chat in a plan item larger and remove the close/run/comment/upvote a slash cmd. The slash cmd should be context sensitive, e.g. Only cmds applicable to plan items are visible and usable here.",
+        "rewritten": true
+      },
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-24T07:36:58.653Z",
+          "startedAt": "2026-05-24T07:10:45.107Z",
+          "summary": "1571.7s · 65→51420 tok",
+          "result": "Pushed `b061eab`. Task #36 completed.\n\n---\n\n## fr-85 round 2 run summary\n\n**Status: ✅ shipped to `origin/plan-driven-ui` (commit `b061eab`)**\n\n### Plan card after\n```\n┌────────────────────────────────────────────────────────────┐\n│ [status]  fr-1  Feature                                    │\n│ ensure session is in auto mode when request is sent to…    │\n│ filed by @kkrazy · May 18                                  │\n│ 👍 5  💬 2   💬 Chat  ✎ Edit                          ×    │\n└────────────────────────────────────────────────────────────┘\n```\n↑ Status chips kept (Q2). Run/Close/Vote/Comment buttons gone — replaced by slash commands in the panel.\n\n### Inside the chat panel (autocomplete after typing `/`)\n```\n/run             — Dispatch this item to the run queue (▶ Run)\n/close           — Close (or reopen) — no claude dispatch\n/upvote          — Upvote this item\n/comment <text>  — Add a comment to this item\n/edit            — Edit this item's body text (opens card editor)\n─────────────────────────────────────────────────────────────\n/task            — list internal tasks (server-side, allow-listed)\n/skip /cancel /decide /allow /deny /allowlist\n```\n\n### Dispatch contract\n- Panel virtual commands intercept BEFORE the agent-marker path in `_submitAiChat` → `_dispatchAiChatSlash` routes each to the SAME endpoint the old button hit (`/queue/add`, `/artifact/mark`, `/artifact/vote`, `/artifact/comment`). No new server handlers, no protocol changes.\n- Each command emits a one-line toast confirmation (`▶ Dispatching`, `↻ Reopened`, `👍 Vote recorded`, `💬 Comment added`, `✓ Closed`) so feedback is visible.\n- bug-8 contract (don't run done items, layer-aware verb) still enforced server-side in `/queue/add` — UI source doesn't matter.\n\n### Tests\n- `fr-85-chat-panel-polish.test.js`: 18→**30 cases**, all green; red-flip 10/30 fail against pre-fix\n- 3 stale guards from prior FRs updated surgically to match the new shape (fr-47, fr-76 Phase 3, plan-item-run-button) — explanatory c"
+        }
+      ]
+    },
+    {
+      "id": "fr-86",
+      "text": "**Problem:** Claude Code shipped `/workflows` and we don't yet know how to adopt it.\n**Expected:** Clear understanding of the `/workflows` feature and a concrete adoption path for our usage.\n**Actual:** Feature is unexplored; no evaluation or integration plan exists.\n**Context:** Investigate the Claude Code `/workflows` release and document adoption options.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T07:43:28.766Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "investigate claude code workflow and find out how we can adopt. Claude Code dropped /workflows",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-86",
+      "text": "**Problem:** Slash commands typed inside the per-item chat panel (`/allowlist`, `/task`, `/skip`, `/decide`, `/allow`, `/deny`) never reach the server-side slash dispatcher — they get sent to the agent as conversation text. Root cause: `handleChatMessage` recognizes the `[chat:plan#<id>]` marker first (sets `_activeChatItem`), then checks `text.startsWith('/')` to route slash commands. Marker-prefixed text starts with `[`, so the slash check fails.\n\n**Expected:** A panel chat like `/allowlist` should be marker-stripped before the slash check so the server dispatcher fires — same as if typed in the main chat pane.\n\n**Actual:** The slash sits unhandled, gets prepended with the marker, sent to the agent. User sees no `/allowlist` output because the server command never ran.\n\n**Fix:** In `handleChatMessage`, after marker recognition, strip the marker prefix from `text` before the `text.startsWith('/')` slash dispatch check. The user-display turn (already persisted via `_appendUserAiChatTurn`) keeps its stripped form; the dispatch path now sees the bare slash.\n\n**Reproduced:** 2026-05-24, kkrazy typed `/allowlist` in fr-1's chat panel — assistant explained the bug instead of dispatching, user confirmed \"Fix it\".",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-24T07:51:28.454Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T04:37:30.095Z"
+  "updatedAt": "2026-05-24T07:51:28.454Z"
 }
