@@ -2706,6 +2706,18 @@ test_chat_window() {
   # agent turn from meta.costUsd. Static guards on app.js + styles.css
   # + behavior simulation of marker construction.
   node_test_result test/fr-76-phase3-chat-panel-ui.test.js "test/fr-76-phase3-chat-panel-ui.test.js (25 cases)"
+  # fr-85: Phase 3 polish — chat panel was cramped, exposed global
+  # slash commands that don't apply in this context, and could
+  # silently fail to appear when clicked. Mobile sheet min-height
+  # 50→75vh, max-height 85→92vh; desktop drawer width 420→520px.
+  # Panel input gets a context-filtered autocomplete (allow-list:
+  # task/skip/cancel/decide/allow/deny/allowlist) so the
+  # plan-level commands (queue/feature/fr/td/bug/merge/dedupe/setpat/
+  # admin/git/whatsnext/clear) don't pollute the per-item chat. And
+  # onArtifactItemAiChat now retries via loadArtifact + surfaces a
+  # toast if the item still can't be found — silent click reported
+  # by kkrazy is structurally impossible.
+  node_test_result test/fr-85-chat-panel-polish.test.js "test/fr-85-chat-panel-polish.test.js (18 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

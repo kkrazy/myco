@@ -7082,12 +7082,48 @@ function _findArtifactItem(type, itemId) {
 }
 
 function onArtifactItemAiChat(type, itemId) {
-  const item = _findArtifactItem(type || 'plan', itemId);
-  if (!item) {
-    console.warn('[aichat] item not found:', type, itemId);
+  const t = type || 'plan';
+  const item = _findArtifactItem(t, itemId);
+  if (item) {
+    _openAiChatPanel(t, item);
     return;
   }
-  _openAiChatPanel(type || 'plan', item);
+  // fr-85: NEVER silently fail on chat-icon click — the user MUST
+  // see something happen. If the artifact cache hasn't loaded the
+  // item yet, try a one-shot refresh + retry. If still missing,
+  // surface a visible toast so the click is never invisible.
+  loadArtifact(t).then(() => {
+    const it = _findArtifactItem(t, itemId);
+    if (it) {
+      _openAiChatPanel(t, it);
+    } else {
+      console.warn('[aichat] item not found after reload:', t, itemId);
+      _aiChatShowToast('Couldn\'t open chat — item ' + itemId + ' not found. Try refreshing the plan.');
+    }
+  }).catch((err) => {
+    console.error('[aichat] reload failed:', err);
+    _aiChatShowToast('Couldn\'t open chat — failed to load plan. Check your connection.');
+  });
+}
+
+// fr-85: lightweight toast that auto-dismisses after 4s. Used by the
+// chat-icon click path when the item can't be opened — anything is
+// better than a silent click.
+function _aiChatShowToast(message) {
+  let toast = document.getElementById('aichat-toast');
+  if (toast) toast.remove();
+  toast = document.createElement('div');
+  toast.id = 'aichat-toast';
+  toast.className = 'aichat-toast';
+  toast.textContent = message;
+  toast.setAttribute('role', 'status');
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('is-open'));
+  setTimeout(() => {
+    if (!toast.parentNode) return;
+    toast.classList.remove('is-open');
+    setTimeout(() => toast.parentNode && toast.parentNode.removeChild(toast), 250);
+  }, 4000);
 }
 
 function _openAiChatPanel(type, item) {
@@ -7122,6 +7158,10 @@ function _openAiChatPanel(type, item) {
 
   // Mobile drag-to-dismiss: pull the drag-handle down > 60px to close.
   _bindAiChatDragHandle(panel);
+
+  // fr-85: panel-local autocomplete — slash commands filtered to the
+  // aichat allow-list; @-mentions unfiltered.
+  bindAiChatAutocomplete(panel);
 
   // Slide-in animation kick (CSS class added on next frame so the
   // initial transform takes effect).
@@ -7180,7 +7220,7 @@ function _renderAiChatPanelHtml(item) {
     </div>
     <div class="aichat-turns" role="log" aria-live="polite"></div>
     <form class="aichat-form" autocomplete="off">
-      <textarea class="aichat-input" rows="2" placeholder="Ask claude about this item… (Cmd/Ctrl-Enter to send)" maxlength="10000"></textarea>
+      <textarea class="aichat-input" data-ac-context="aichat" rows="3" placeholder="Ask claude about this item… (Cmd/Ctrl-Enter to send)" maxlength="10000"></textarea>
       <button class="aichat-send" type="submit" title="Send (Cmd/Ctrl-Enter)" aria-label="Send"><span class="btn-icon">➤</span><span class="btn-text">Send</span></button>
     </form>
   `;
@@ -7694,6 +7734,192 @@ function bindChatAutocomplete() {
     if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; render(); }
     else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(active); }
+  });
+
+  dropdown.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.ac-item');
+    if (!item) return;
+    e.preventDefault();
+    pick(parseInt(item.dataset.idx, 10));
+  });
+}
+
+// fr-85: per-item chat panel slash-command + @-mention autocomplete.
+//
+// Reuses the same /commands + /users cache as bindChatAutocomplete (via
+// _loadAcData) but renders a panel-LOCAL dropdown so it positions
+// naturally above the panel's textarea (not the main chat-form). The
+// slash-command list is filtered to commands that make sense inside a
+// per-item conversation — global plan-level ops (/queue, /merge,
+// /feature, /fr, /td, /bug, /setpat, /admin, /git, /whatsnext, /clear,
+// …) are noise in this context. @-mentions are unfiltered.
+//
+// AICHAT_ALLOWED_COMMANDS is the whitelist; anything not in it is
+// dropped from the panel autocomplete. Easier to reason about than a
+// deny-list (we curate the small useful set explicitly).
+const AICHAT_ALLOWED_COMMANDS = new Set([
+  'task', 'tasks',             // list internal tasks
+  'skip', 'cancel',            // dismiss tasks
+  'decide', 'pick', 'choose',  // answer pending claude dialog
+  'allow', 'deny', 'allowlist', // permission ops while a tool is pending
+]);
+
+function bindAiChatAutocomplete(panel) {
+  const input = panel.querySelector('.aichat-input');
+  if (!input || input.dataset.acBound) return;
+  input.dataset.acBound = '1';
+
+  // Panel-local dropdown — appended INSIDE the panel so positioning
+  // is automatic (sits just above the form via CSS).
+  const dropdown = document.createElement('div');
+  dropdown.className = 'aichat-autocomplete';
+  dropdown.hidden = true;
+  panel.appendChild(dropdown);
+
+  let items = [];
+  let active = -1;
+  let tokenStart = -1;
+  let tokenEnd = -1;
+  let open = false;
+
+  function close() {
+    open = false;
+    dropdown.hidden = true;
+    items = [];
+    active = -1;
+  }
+
+  function render() {
+    if (!items.length) {
+      dropdown.innerHTML = '<div class="ac-empty">No matches</div>';
+      return;
+    }
+    dropdown.innerHTML = items.map((it, i) =>
+      `<div class="ac-item${i === active ? ' active' : ''}" data-idx="${i}">` +
+      `<span class="ac-name">${escHtml(it.name)}</span>` +
+      `<span class="ac-desc">${escHtml(it.desc || '')}</span>` +
+      `</div>`
+    ).join('');
+  }
+
+  function pick(idx) {
+    if (idx < 0 || idx >= items.length) return;
+    const it = items[idx];
+    const before = input.value.slice(0, tokenStart);
+    const after = input.value.slice(tokenEnd);
+    const insert = it.insert + ' ';
+    input.value = before + insert + after;
+    const caret = (before + insert).length;
+    input.setSelectionRange(caret, caret);
+    close();
+    input.focus();
+  }
+
+  function _computeItemsFiltered(tok, data) {
+    const q = tok.slice(1).toLowerCase();
+    if (tok[0] === '/') {
+      // Filter: only commands whose canonical name OR any alias is
+      // in the aichat allow-list. Keeps the autocomplete tightly
+      // scoped to what's meaningful in a per-item conversation.
+      const matches = (data.commands || []).filter((c) => {
+        const inAllow = AICHAT_ALLOWED_COMMANDS.has(c.name)
+          || (c.aliases || []).some((a) => AICHAT_ALLOWED_COMMANDS.has(a));
+        if (!inAllow) return false;
+        return c.name.toLowerCase().startsWith(q)
+          || (c.aliases || []).some((a) => a.toLowerCase().startsWith(q));
+      });
+      return matches.map((c) => ({
+        name: c.usage || ('/' + c.name),
+        desc: c.summary || '',
+        insert: '/' + c.name,
+      }));
+    }
+    // @-mention branch: unfiltered (mention-by-name is always meaningful).
+    const all = (data.users || []);
+    const me = (state.chatUser || '').toLowerCase();
+    let matches = q ? all.filter((u) => u.toLowerCase().startsWith(q)) : all.slice();
+    if (q && !matches.length) {
+      matches = all.filter((u) => u.toLowerCase().includes(q));
+    }
+    matches.sort((a, b) => {
+      const am = a.toLowerCase() === me ? -1 : 0;
+      const bm = b.toLowerCase() === me ? -1 : 0;
+      if (am !== bm) return am - bm;
+      return a.localeCompare(b);
+    });
+    return matches.map((u) => ({
+      name: '@' + u,
+      desc: u.toLowerCase() === me ? '(you)' : 'mention',
+      insert: '@' + u + ' ',
+    }));
+  }
+
+  function refresh() {
+    const v = input.value;
+    const caret = input.selectionStart || 0;
+    let i = caret - 1;
+    while (i >= 0 && !/\s/.test(v[i])) i--;
+    const start = i + 1;
+    const tok = v.slice(start, caret);
+    if (!tok || (tok[0] !== '/' && tok[0] !== '@')) return close();
+    if (tok[0] === '/' && start !== 0) return close();
+    tokenStart = start;
+    tokenEnd = caret;
+
+    if (_chatAcCache.commands) {
+      items = _computeItemsFiltered(tok, _chatAcCache);
+      if (!items.length) { close(); return; }
+      active = 0;
+      open = true;
+      dropdown.hidden = false;
+      render();
+      return;
+    }
+
+    // Cache cold — prewarm + retry.
+    items = [];
+    open = true;
+    dropdown.hidden = false;
+    const label = tok[0] === '@' ? 'Loading users…' : 'Loading commands…';
+    dropdown.innerHTML = `<div class="ac-empty">${escHtml(label)}</div>`;
+    const tokAtCall = tok;
+    _loadAcData().then((data) => {
+      const cur = (() => {
+        const vNow = input.value;
+        const c = input.selectionStart || 0;
+        let j = c - 1;
+        while (j >= 0 && !/\s/.test(vNow[j])) j--;
+        return vNow.slice(j + 1, c);
+      })();
+      if (cur !== tokAtCall) return;
+      items = _computeItemsFiltered(tok, data);
+      if (!items.length) { close(); return; }
+      active = 0;
+      open = true;
+      dropdown.hidden = false;
+      render();
+    });
+  }
+
+  input.addEventListener('input', () => refresh());
+  input.addEventListener('focus', () => { _loadAcData(); refresh(); });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+
+  input.addEventListener('keydown', (e) => {
+    if (!open) return;
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (!items.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; render(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') {
+      // Only treat Enter as a pick when the dropdown is open AND the
+      // user is on a real item — otherwise let _submitAiChat handle
+      // Cmd/Ctrl-Enter normally.
+      if (active >= 0 && !(e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        pick(active);
+      }
+    }
   });
 
   dropdown.addEventListener('mousedown', (e) => {

@@ -253,11 +253,14 @@ t('styles.css: mobile breakpoint slides up from bottom (translateY)', () => {
 
 t('styles.css: desktop breakpoint slides in from right (translateX)', () => {
   // @media (min-width: 901px) — side drawer pattern: slides in
-  // from the right at a fixed width.
+  // from the right at a fixed width. Specific width is pinned by
+  // fr-85's test (currently 520px); here we just assert there IS a
+  // fixed pixel width in the 400-700 range so future tuning doesn't
+  // need to update both tests.
   assert.ok(/@media\s*\(\s*min-width:\s*901px\s*\)[\s\S]{0,2000}\.aichat-panel[\s\S]{0,400}translateX\(100%\)/.test(CSS),
     'desktop @media block must position the panel with translateX(100%) (off-screen right)');
-  assert.ok(/@media\s*\(\s*min-width:\s*901px\s*\)[\s\S]{0,2000}width:\s*420px/.test(CSS),
-    'desktop drawer must be 420px wide');
+  assert.ok(/@media\s*\(\s*min-width:\s*901px\s*\)[\s\S]{0,2000}width:\s*[4-6]\d{2}px/.test(CSS),
+    'desktop drawer must have a fixed width in 400-699px range (fr-85 set 520px)');
 });
 
 t('styles.css: mobile has a drag-handle (drag-down to dismiss)', () => {

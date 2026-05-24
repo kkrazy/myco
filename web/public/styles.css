@@ -6479,13 +6479,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   transition: none;  /* drag follows finger 1:1 */
 }
 
-/* Desktop: side drawer slides in from the right. */
+/* Desktop: side drawer slides in from the right.
+   fr-85: bumped width 420 → 520px so longer agent replies don't wrap
+   awkwardly and the conversation surface feels primary, not cramped. */
 @media (min-width: 901px) {
   .aichat-panel {
     top: 0;
     right: 0;
     bottom: 0;
-    width: 420px;
+    width: 520px;
     max-width: 100vw;
     transform: translateX(100%);
     border-left: 1px solid #30363d;
@@ -6498,14 +6500,17 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   }
 }
 
-/* Mobile: bottom sheet slides up from the bottom. */
+/* Mobile: bottom sheet slides up from the bottom.
+   fr-85: bumped peek height 50 → 75vh and max 85 → 92vh so the chat
+   thread is the dominant surface on open (user's complaint was that
+   the panel felt cramped and barely-visible on mobile). */
 @media (max-width: 900px) {
   .aichat-panel {
     left: 0;
     right: 0;
     bottom: 0;
-    max-height: 85vh;
-    min-height: 50vh;
+    max-height: 92vh;
+    min-height: 75vh;
     border-top: 1px solid #30363d;
     border-top-left-radius: 14px;
     border-top-right-radius: 14px;
@@ -6740,4 +6745,82 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 8px;
   min-width: 16px;
   text-align: center;
+}
+
+/* fr-85: per-item chat panel slash-command + @-mention dropdown.
+   Positions itself above the .aichat-form (the textarea container)
+   via absolute positioning inside the .aichat-panel. Same item +
+   active styling as the global #chat-autocomplete so users see a
+   consistent UI. */
+.aichat-autocomplete {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 64px;  /* clear of the form's height */
+  background: var(--surface, #0d1117);
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 2;
+  font-size: 0.85rem;
+}
+.aichat-autocomplete[hidden] { display: none; }
+.aichat-autocomplete .ac-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #21262d;
+}
+.aichat-autocomplete .ac-item:last-child { border-bottom: none; }
+.aichat-autocomplete .ac-item:hover,
+.aichat-autocomplete .ac-item.active {
+  background: rgba(255, 255, 255, 0.06);
+}
+.aichat-autocomplete .ac-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  color: var(--accent, #4caf50);
+  flex-shrink: 0;
+}
+.aichat-autocomplete .ac-desc {
+  color: var(--muted, #8b949e);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aichat-autocomplete .ac-empty {
+  padding: 8px 10px;
+  color: var(--muted, #8b949e);
+  font-style: italic;
+}
+
+/* fr-85: lightweight toast for chat-icon click failures (item not
+   loaded, plan fetch error). Auto-dismisses after 4s. Centred + above
+   the panel so it's visible even when a panel is being opened. */
+.aichat-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translate(-50%, 20px);
+  background: rgba(248, 81, 73, 0.92);  /* error-tinted */
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 1100;
+  max-width: 90vw;
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+}
+.aichat-toast.is-open {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
