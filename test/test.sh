@@ -2413,6 +2413,15 @@ test_chat_window() {
   # precedence (running > queued > closed > inprogress > open) +
   # defensive null-fallbacks.
   node_test_result test/fr-64-plan-item-status-chip.test.js "test/fr-64-plan-item-status-chip.test.js (16 cases)"
+  # fr-62: mobile tap-target bump for plan-item action buttons. Inside
+  # @media (max-width: 900px), every plan-item action button (vote,
+  # comment-toggle, item-run, item-close, item-delete, item-edit,
+  # comment-edit, comment-delete) gets min-height: 44px + min-width: 44px
+  # per Apple HIG + Material Design. .artifact-item-actions gap widens
+  # to 10px so adjacent buttons stay visually distinct at the bigger
+  # tap size. Desktop styling is unchanged (no min-height on the base
+  # rules). Static-grep only.
+  node_test_result test/fr-62-plan-item-mobile-tap-targets.test.js "test/fr-62-plan-item-mobile-tap-targets.test.js (9 cases)"
   # fr-39: per-session admin delegation. Owners can /admin @user to
   # grant admin (multi-admin supported); admins inherit everything
   # except DELETE-session + grant/revoke admin (those stay

@@ -2938,7 +2938,19 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": []
+      "comments": [
+        {
+          "id": "rs-970f2d256d1a",
+          "user": "claude",
+          "text": "**Shipped.**\n\n### What changed\nInside `@media (max-width: 900px)`, every plan-item action button gets a 44×44px minimum hit area:\n\n```css\n@media (max-width: 900px) {\n  .artifact-item-actions {\n    gap: 10px;        /* was 6px — adjacent buttons stay distinct at the bigger tap size */\n  }\n  .artifact-vote,\n  .artifact-comment-toggle,\n  .artifact-item-run,\n  .artifact-item-close,\n  .artifact-item-delete,\n  .artifact-item-edit,\n  .artifact-comment-edit,\n  .artifact-comment-delete {\n    min-height: 44px;\n    min-width: 44px;\n    padding-top: 8px;\n    padding-bottom: 8px;\n  }\n}\n```\n\n### Why 44px\nApple HIG and Material Design both call for ≥44pt/dp minimum hit area on touch surfaces. Pre-fix, our action buttons were ~22–24px tall on mobile — well below the threshold, leading to pinch-to-tap and accidental-neighbor-hit on phones.\n\n### Desktop unchanged\nThe bump is mobile-only. Desktop precision-pointing keeps the compact ~24px size — no visual bloat for the keyboard-and-mouse case. A negative guard in the test pins that the base (non-media) `.artifact-vote` rule does NOT carry `min-height: 44px`.\n\n### 8 buttons covered\n- `.artifact-vote` (👍 vote)\n- `.artifact-comment-toggle` (💬 comments)\n- `.artifact-item-run` (▶ Run/Fix/Implement/Do)\n- `.artifact-item-close` (Close/Reopen)\n- `.artifact-item-delete` (× delete)\n- `.artifact-item-edit` (✎ edit body)\n- `.artifact-comment-edit` (✎ edit comment)\n- `.artifact-comment-delete` (× delete comment)\n\n### Test\n`test/fr-62-plan-item-mobile-tap-targets.test.js` — 9 cases:\n- Marker block exists (anchors via the `fr-62: tap-target bump on mobile` comment so future maintainers can find/cleanup the right block)\n- Selector group lists ALL 8 action buttons (a future new button needs explicit add)\n- min-height: 44px declared\n- min-width: 44px declared (icon-only buttons too)\n- padding-top + padding-bottom bumped ≥6px so visible chrome grows with hit area\n- `.artifact-item-actions` gap bumped to ≥10px\n- Negative: base (non-media) `.artifact-vote` rule does NOT carry min-height: 44px\n- Behavior pins: 44px is the standard; 8 buttons total (tripwire for future additions)\n\n9/9 ✓ direct. **Red-flipped against pre-fix CSS** (4/9 fail with the marker missing). Adjacent fr-64 16/16 ✓ + fr-65 12/12 ✓ unaffected.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure CSS.\n\nStatus: closed.",
+          "ts": "2026-05-24T01:38:02.043Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
+      "status": "closed",
+      "closedAt": "2026-05-24T01:38:02.043Z"
     },
     {
       "id": "fr-63",
@@ -3134,5 +3146,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-24T01:33:53.548Z"
+  "updatedAt": "2026-05-24T01:38:02.043Z"
 }

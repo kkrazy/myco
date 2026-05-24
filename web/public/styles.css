@@ -2189,6 +2189,37 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin-left: auto;  /* push delete to the right edge */
 }
 
+/* fr-62: tap-target bump on mobile. Plan-item action buttons are
+   ~22–24px on desktop where mouse precision is fine; on touch
+   devices Apple HIG + Material both call for ≥44px hit area so
+   thumbs don't pinch-to-tap or hit a neighbor. Bumps min-height
+   to 44px on EVERY action button (vote, comment-toggle, item-run,
+   item-close, item-delete, item-edit, comment-edit, comment-delete)
+   inside @media (max-width: 900px). Visible chrome stays the same
+   size — only the hit area + padding grow. Wider action-row gap so
+   adjacent buttons don't visually crowd at the bigger tap size. */
+@media (max-width: 900px) {
+  .artifact-item-actions {
+    gap: 10px;        /* was 6px — keep adjacent buttons distinct */
+  }
+  .artifact-vote,
+  .artifact-comment-toggle,
+  .artifact-item-run,
+  .artifact-item-close,
+  .artifact-item-delete,
+  .artifact-item-edit,
+  .artifact-comment-edit,
+  .artifact-comment-delete {
+    min-height: 44px;
+    min-width: 44px;
+    /* Roomier text padding so the visual + hit area expand together
+       on the text-bearing buttons; icon-only buttons (delete/edit)
+       stay centered via their existing display:inline-flex rules. */
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+}
+
 /* fr-46: edit affordances. Pencil button on item header + on each
  * comment; trash button on each comment. All small / muted by default,
  * a touch brighter on hover to confirm they're interactive. Hidden for
