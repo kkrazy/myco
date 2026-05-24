@@ -2727,6 +2727,17 @@ test_chat_window() {
   # markers covered. Static guards on the strip + dispatch wiring;
   # behavior simulation across every layer × type combination.
   node_test_result test/fr-86-marker-slash-routing.test.js "test/fr-86-marker-slash-routing.test.js (11 cases)"
+  # fr-87: scope-aware /task — SDK-tool driven (NOT prompt-based per
+  # kkrazy course-correction). New mcp__myco__register_task_item tool
+  # in myco-mcp.js with task-items registry persistence at
+  # _myco_/task-items.json (committable per CLAUDE.md §5). handleTaskList
+  # reads the registry directly via myco-mcp.getTasksForItem — server-
+  # authoritative reply, no agent round-trip. /task all (--all / -a)
+  # escape hatch for the global view. attach.js ctx now carries
+  # chatItem/runItem populated from session._activeChatItem/_activeRunItem.
+  # CLAUDE.md instructs the agent to call register_task_item after every
+  # TaskCreate / TaskUpdate during chat/run turns.
+  node_test_result test/fr-87-task-item-registry.test.js "test/fr-87-task-item-registry.test.js (14 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

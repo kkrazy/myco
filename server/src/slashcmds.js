@@ -791,17 +791,64 @@ function handleAdd2Plan(ctx) {
   }
 }
 
-// /task /tasks — forward a "show your TaskList" prompt to the running
-// Claude session. The agent's CLAUDE.md task-list etiquette teaches
-// claude what to do with these phrasings (no @myco prefix any more —
-// every chat message reaches claude as a normal user turn, so we just
-// send the natural-language directive).
+// /task /tasks — show the running session's internal TaskList.
+//
+// fr-87: scope-aware. When invoked from a per-item chat panel
+// (ctx.chatItem set by handleChatMessage from session._activeChatItem)
+// OR an active run (ctx.runItem), the reply is read AUTHORITATIVELY
+// from the _myco_/task-items.json registry — the agent maintains the
+// registry via the mcp__myco__register_task_item tool after every
+// TaskCreate / TaskUpdate during chat or run turns. No prompt
+// round-trip; no reliance on the agent filtering its own list.
+//
+// `/task all` (or `/task --all`) escapes the scope and forwards the
+// global "list your TaskList" prompt to the agent — the legacy
+// behavior, useful when typing inside a panel but wanting to see
+// the cross-item picture.
+//
+// Falls back to the global prompt when there's no item context
+// (typing in the main chat pane), so the existing UX is preserved.
 function handleTaskList(ctx) {
+  const args = String((ctx && ctx.args) || '').trim().toLowerCase();
+  const wantAll = args === 'all' || args === '--all' || args === '-a';
+  const scope = wantAll ? null : (ctx.chatItem || ctx.runItem || null);
+
+  if (scope && scope.itemId) {
+    // Registry-backed reply — fully server-side, no agent round-trip.
+    const mycoMcp = require('./myco-mcp');
+    const tasks = mycoMcp.getTasksForItem(ctx.sessionId, scope.itemId, { onlyInFlight: true });
+    if (!tasks.length) {
+      ctx.reply(
+        `📋 No in-flight tasks registered for **${scope.itemId}**. ` +
+        `(If the agent has spun tasks but didn\'t call \`mcp__myco__register_task_item\`, they won\'t show here. ` +
+        `Use \`/task all\` to see every task in the session.)`,
+      );
+      return;
+    }
+    const lines = tasks.map((t, i) => {
+      const status = t.status === 'in_progress' ? '⏳' : '◯';
+      const subject = t.subject || '(no subject)';
+      return `${i + 1}. ${status} \`${t.taskId}\` — ${subject}`;
+    });
+    ctx.reply(
+      `📋 **${tasks.length} in-flight task${tasks.length === 1 ? '' : 's'} for ${scope.itemId}:**\n` +
+      lines.join('\n') +
+      `\n_Source: \`_myco_/task-items.json\` registry. Use \`/task all\` for the global list._`,
+    );
+    return;
+  }
+
+  // No item context (or user wanted the global view) — forward the
+  // legacy prompt to claude. Agent's CLAUDE.md etiquette teaches it
+  // to reply with id + subject for each pending/in-progress task.
   if (!ctx.session || !ctx.session.alive) {
     ctx.reply('(/task: session not running)');
     return;
   }
-  ctx.session.write('Please list your current pending and in-progress internal tasks (TaskList). Format as a short numbered list with id + subject.');
+  ctx.session.write(
+    'Please list your current pending and in-progress internal tasks (TaskList). ' +
+    'Format as a short numbered list with id + subject.',
+  );
 }
 
 // /skip <N> / /cancel <N> — forward a "dismiss task N" prompt. If the

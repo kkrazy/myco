@@ -1587,11 +1587,27 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   if (slashText.startsWith('/')) {
     const rec = sessionsMod.loadStore().sessions[sessionId];
     const absCwd = rec && rec.absCwd;
+    // fr-87: surface the current chat/run item context to slashcmd
+    // handlers so commands like /task can scope to the per-item panel
+    // (e.g. /task inside fr-1's chat panel → only tasks tagged for
+    // fr-1, read authoritatively from the _myco_/task-items.json
+    // registry that the agent maintains via mcp__myco__register_task_item).
+    // The marker recognition steps above already populated
+    // session._activeChatItem / _activeRunItem; we just expose them
+    // through ctx. Either may be null (typing in the main chat pane
+    // with no marker context); handlers must tolerate null and fall
+    // back to the global behavior.
     const ctx = {
       user,
       sessionId,
       absCwd,
       session,
+      chatItem: session._activeChatItem
+        ? { type: 'plan', itemId: session._activeChatItem.itemId }
+        : null,
+      runItem: session._activeRunItem
+        ? { type: session._activeRunItem.type || 'plan', itemId: session._activeRunItem.itemId }
+        : null,
       reply: (replyText, opts = {}) => {
         const replyMsg = {
           user: ASSISTANT_USER,

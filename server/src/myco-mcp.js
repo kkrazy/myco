@@ -5,11 +5,18 @@
 //     "ask claude to edit plan.json with the Edit tool" flow with
 //     a typed, server-validated call; no more reliance on claude
 //     correctly serializing JSON.
+//   mcp__myco__register_task_item (fr-87) — register a SDK-task ↔
+//     plan-item association in the session's task-items registry
+//     (_myco_/task-items.json). Lets `/task` inside a per-item chat
+//     panel filter to that item's tasks authoritatively (server reads
+//     the registry; no reliance on prompt-based filtering).
 //
 // One MCP server is created per AgentSession so the tool handler
 // can capture sessionId in closure. agent-session.js passes
 // `{ myco: createMycoMcpServer(sessionId) }` into sdkOpts.mcpServers.
 
+const fs = require('fs');
+const path = require('path');
 const { createSdkMcpServer, tool } = require('@anthropic-ai/claude-agent-sdk');
 const { z } = require('zod');
 
@@ -114,6 +121,110 @@ function _appendPlanItems(sessionId, items) {
   };
 }
 
+// fr-87: task-items registry persistence. Lives at
+// <absCwd>/_myco_/task-items.json so it travels with the project tree
+// (committable per CLAUDE.md §5 — shared team memory; future
+// collaborators see the same task ↔ item map).
+// Shape:
+//   {
+//     tasks: {
+//       "<taskId>": {
+//         itemId: "fr-1", itemType: "plan",
+//         subject: "Implement…", status: "pending"|"in_progress"|"completed"|"deleted",
+//         createdAt: "<iso>", updatedAt: "<iso>",
+//       },
+//       ...
+//     },
+//     updatedAt: "<iso>",
+//   }
+function _taskItemsFilePath(sessionId) {
+  const sessionsMod = require('./sessions');
+  const store = sessionsMod.loadStore();
+  const rec = store.sessions[sessionId];
+  if (!rec || !rec.absCwd) return null;
+  return path.join(rec.absCwd, '_myco_', 'task-items.json');
+}
+
+function loadTaskItems(sessionId) {
+  const filePath = _taskItemsFilePath(sessionId);
+  if (!filePath) return { tasks: {}, updatedAt: null };
+  try {
+    if (!fs.existsSync(filePath)) return { tasks: {}, updatedAt: null };
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || !parsed.tasks) {
+      return { tasks: {}, updatedAt: null };
+    }
+    return parsed;
+  } catch (err) {
+    console.error(`[myco-mcp] loadTaskItems failed: ${err.message}`);
+    return { tasks: {}, updatedAt: null };
+  }
+}
+
+function saveTaskItems(sessionId, registry) {
+  const filePath = _taskItemsFilePath(sessionId);
+  if (!filePath) return false;
+  try {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(registry, null, 2));
+    return true;
+  } catch (err) {
+    console.error(`[myco-mcp] saveTaskItems failed: ${err.message}`);
+    return false;
+  }
+}
+
+// Look up the task ids associated with a given plan item.
+// Returns array of { taskId, ...meta } sorted by createdAt ascending,
+// optionally filtered to in-flight statuses (pending + in_progress).
+function getTasksForItem(sessionId, itemId, opts) {
+  const onlyInFlight = !!(opts && opts.onlyInFlight);
+  const reg = loadTaskItems(sessionId);
+  const out = [];
+  for (const [taskId, info] of Object.entries(reg.tasks || {})) {
+    if (!info || info.itemId !== itemId) continue;
+    if (onlyInFlight) {
+      const s = info.status || 'pending';
+      if (s !== 'pending' && s !== 'in_progress') continue;
+    }
+    out.push({ taskId, ...info });
+  }
+  out.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  return out;
+}
+
+// Apply one register / upsert into the registry. Creates the entry
+// if new; updates subject/status/updatedAt if existing. createdAt
+// is preserved across updates.
+function _registerTaskItem(sessionId, args) {
+  const reg = loadTaskItems(sessionId);
+  if (!reg.tasks) reg.tasks = {};
+  const now = new Date().toISOString();
+  const existing = reg.tasks[args.taskId] || {};
+  const entry = {
+    itemId: String(args.itemId || ''),
+    itemType: String(args.itemType || 'plan'),
+    subject: args.subject != null ? String(args.subject) : (existing.subject || ''),
+    status: args.status != null ? String(args.status) : (existing.status || 'pending'),
+    createdAt: existing.createdAt || now,
+    updatedAt: now,
+  };
+  if (!entry.itemId) {
+    return { ok: false, message: 'itemId is required' };
+  }
+  reg.tasks[args.taskId] = entry;
+  reg.updatedAt = now;
+  if (!saveTaskItems(sessionId, reg)) {
+    return { ok: false, message: 'failed to persist task-items.json' };
+  }
+  return {
+    ok: true,
+    message: `Registered task ${args.taskId} → ${entry.itemId} (status: ${entry.status})`,
+    entry,
+  };
+}
+
 function createMycoMcpServer(sessionId) {
   return createSdkMcpServer({
     name: 'myco',
@@ -145,8 +256,49 @@ function createMycoMcpServer(sessionId) {
         },
         { alwaysLoad: true }
       ),
+      // fr-87: register a SDK task ↔ plan item association so the
+      // scoped /task slash command can read the registry directly
+      // (authoritative, not prompt-based). The agent is expected to
+      // call this AFTER every TaskCreate fired during a
+      // [chat|run:plan#<id>] turn, and again after each TaskUpdate
+      // that changes status. The registry persists at
+      // _myco_/task-items.json — committable + cross-session.
+      tool(
+        'register_task_item',
+        'Register a SDK-task ↔ plan-item association in the session\'s ' +
+        'task-items registry. Call this AFTER every TaskCreate fired ' +
+        'during a [chat:plan#<id>] or [run:plan#<id>] turn, and again ' +
+        'after each TaskUpdate that changes status — the registry is ' +
+        'what `/task` in the per-item chat panel reads to filter the ' +
+        'task list (server-authoritative, no prompt round-trip). ' +
+        'Idempotent: re-registering the same taskId updates subject/' +
+        'status while preserving createdAt.',
+        {
+          taskId: z.string().min(1).max(200).describe('The SDK task id (e.g. the id returned by TaskCreate).'),
+          itemId: z.string().min(1).max(200).describe('The plan item id this task belongs to (e.g. "fr-1", "bug-17", "td-22").'),
+          itemType: z.enum(['plan']).optional().describe('Reserved for forward-compat. Default "plan".'),
+          subject: z.string().max(500).optional().describe('Task subject (for display in /task output). Optional but helpful.'),
+          status: z.enum(['pending', 'in_progress', 'completed', 'deleted']).optional().describe('Task status. Defaults to "pending" on first register; preserved otherwise unless this call overrides it.'),
+        },
+        async (args) => {
+          const r = _registerTaskItem(sessionId, args);
+          return {
+            content: [{ type: 'text', text: r.message }],
+            isError: !r.ok,
+          };
+        },
+        { alwaysLoad: true }
+      ),
     ],
   });
 }
 
-module.exports = { createMycoMcpServer, MYCO_MCP_TOOL_PREFIX };
+module.exports = {
+  createMycoMcpServer,
+  MYCO_MCP_TOOL_PREFIX,
+  // fr-87: registry accessors exported so handleTaskList (slashcmds.js)
+  // can read the registry directly to filter /task output per-item.
+  loadTaskItems,
+  saveTaskItems,
+  getTasksForItem,
+};
