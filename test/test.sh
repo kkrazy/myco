@@ -2695,6 +2695,17 @@ test_chat_window() {
   # and chat modes can coexist. Static guards on attach.js + behavior
   # simulation of the buffer accumulate-flush pattern.
   node_test_result test/fr-76-phase2-chat-dispatch.test.js "test/fr-76-phase2-chat-dispatch.test.js (16 cases)"
+  # fr-76 Phase 3: per-item AI chat panel UI. Bottom sheet on mobile
+  # (slides up from bottom, swipe-down to dismiss), side drawer on
+  # desktop (slides in from right, Esc/× to dismiss) — same DOM,
+  # CSS does the breakpoint shape-shift. Chat-bubble button next to
+  # ▶ Run on every plan item; submit prepends [chat:<type>#<id>]
+  # marker so Phase 2's handleChatMessage routes the user turn to
+  # _appendUserAiChatTurn + agent turn back through the listener.
+  # Live-refresh via _onArtifactsCacheUpdated hook; cost chip per
+  # agent turn from meta.costUsd. Static guards on app.js + styles.css
+  # + behavior simulation of marker construction.
+  node_test_result test/fr-76-phase3-chat-panel-ui.test.js "test/fr-76-phase3-chat-panel-ui.test.js (25 cases)"
   # td-30: Plan view header + chrome icon tooltip must be the single
   # word "Plan" (was "Plan — todos extracted from session" which both
   # crowded the chrome and misled users — the view shows todos AND

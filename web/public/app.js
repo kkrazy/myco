@@ -5463,6 +5463,14 @@ function _onArtifactsCacheUpdated(type) {
   // (a no-op if there's nothing to focus or the cache doesn't yet
   // contain the requested id).
   _focusArtifactItemFromHash();
+  // fr-76 Phase 3: if a per-item chat panel is open, re-render its
+  // turns whenever the underlying plan artifact cache changes (a
+  // role:'user' or role:'agent' turn just got appended). Independent
+  // of the active-tab check below — the panel stays current even if
+  // the user navigated to a different tab while the panel was open.
+  if (!type || type === 'plan') {
+    try { _aiChatRefreshOpenPanel(); } catch (err) { console.warn('[aichat] panel refresh failed:', err); }
+  }
   if (!active) return;
   if (type && type !== active) return;
   // Re-run the existing loadArtifact path; it'll prefer the cache.
@@ -6702,6 +6710,19 @@ function renderArtifact(type, artifact) {
     const editBtn = (!state.readOnly && supportsVoting)
       ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit"><span class="btn-icon">✎</span><span class="btn-text">Edit</span></button>`
       : '';
+    // fr-76 Phase 3: per-item AI chat button. Opens the slide-in panel
+    // (bottom sheet on mobile, side drawer on desktop) that hosts a
+    // persistent multi-turn dialogue with claude scoped to this item.
+    // Sister of ▶ Run — Run is one-shot dispatch, Chat is persistent
+    // back-and-forth. The aiChat[] turn count surfaces as a badge so
+    // users can see at-a-glance which items already have a thread.
+    const aiChatTurns = Array.isArray(it.aiChat) ? it.aiChat.length : 0;
+    const chatBadge = aiChatTurns
+      ? ` <span class="aichat-count" aria-label="${aiChatTurns} chat turns">${aiChatTurns}</span>`
+      : '';
+    const chatBtn = supportsVoting
+      ? `<button class="artifact-item-chat" data-id="${escHtml(it.id)}" data-type="${escHtml(type)}" title="Chat with claude about this item" aria-label="Chat about ${escHtml(it.id || 'item')}"><span class="btn-icon">💬</span><span class="btn-text">Chat${chatBadge}</span></button>`
+      : '';
     // fr-48: per-item ⊤ Queue button was pruned after the unified
     // dispatch refactor (commit 606f14c) made the ▶ Run button itself
     // POST to /queue/add. Both buttons were functionally identical;
@@ -6736,6 +6757,7 @@ function renderArtifact(type, artifact) {
         ${itemEditedBadge}
         ${voteBlock}
         ${runBtn}
+        ${chatBtn}
         ${closeBtn}
         ${editBtn}
         <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
@@ -6836,6 +6858,10 @@ function renderArtifact(type, artifact) {
   });
   body.querySelectorAll('.artifact-item-run').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactItemRun(type, btn.dataset.id, btn.dataset.text || ''));
+  });
+  // fr-76 Phase 3: per-item AI chat — opens the slide-in panel.
+  body.querySelectorAll('.artifact-item-chat').forEach((btn) => {
+    btn.addEventListener('click', () => onArtifactItemAiChat(btn.dataset.type || type, btn.dataset.id));
   });
   // fr-46: edit affordances. The pencil on item body opens an inline
   // textarea; pencil on a comment does the same. Trash on a comment
@@ -7030,6 +7056,274 @@ async function onArtifactComment(type, itemId, text) {
   } catch (err) {
     console.error('comment failed', err);
   }
+}
+
+// fr-76 Phase 3: per-item AI chat panel. Bottom-sheet on mobile,
+// side-drawer on desktop (CSS handles the breakpoint). Reuses the
+// existing chat WS path — sendChatMessage with a [chat:plan#<id>]
+// marker prefix is the entire dispatch contract (Phase 2 handles
+// the server side: marker recognition, _activeChatItem buffering,
+// terminal-event flush to role:'agent' turn). The panel reads
+// item.aiChat[] (Phase 1's schema) from state.artifacts cache and
+// re-renders when a state-update arrives for the same item.
+//
+// One panel at a time — state.aiChatPanel tracks the open item.
+// Opening a panel while another is open replaces it (saves the
+// "click chat on a different item" flow without manual close).
+
+const AICHAT_BACKDROP_ID = 'aichat-backdrop';
+const AICHAT_PANEL_ID = 'aichat-panel';
+
+function _findArtifactItem(type, itemId) {
+  if (!state.artifacts || !state.artifacts.byType || !type || !itemId) return null;
+  const a = state.artifacts.byType[type];
+  if (!a || !Array.isArray(a.items)) return null;
+  return a.items.find((it) => it && it.id === itemId) || null;
+}
+
+function onArtifactItemAiChat(type, itemId) {
+  const item = _findArtifactItem(type || 'plan', itemId);
+  if (!item) {
+    console.warn('[aichat] item not found:', type, itemId);
+    return;
+  }
+  _openAiChatPanel(type || 'plan', item);
+}
+
+function _openAiChatPanel(type, item) {
+  // Replace any already-open panel so a second click on a different
+  // item's Chat button cleanly swaps.
+  _closeAiChatPanel({ silent: true });
+  state.aiChatPanel = { type, itemId: item.id, openedAt: Date.now() };
+
+  const backdrop = document.createElement('div');
+  backdrop.id = AICHAT_BACKDROP_ID;
+  backdrop.className = 'aichat-backdrop';
+  backdrop.addEventListener('click', () => _closeAiChatPanel());
+
+  const panel = document.createElement('div');
+  panel.id = AICHAT_PANEL_ID;
+  panel.className = 'aichat-panel';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', 'Chat about ' + (item.id || 'item'));
+  panel.innerHTML = _renderAiChatPanelHtml(item);
+
+  document.body.appendChild(backdrop);
+  document.body.appendChild(panel);
+
+  _bindAiChatPanel(panel, type, item.id);
+  _aiChatRenderTurns(item);
+  _aiChatScrollToBottom();
+
+  // Esc-to-close (desktop) — bound to document so it fires regardless
+  // of focus. Removed on _closeAiChatPanel.
+  state.aiChatEscHandler = (ev) => { if (ev.key === 'Escape') _closeAiChatPanel(); };
+  document.addEventListener('keydown', state.aiChatEscHandler);
+
+  // Mobile drag-to-dismiss: pull the drag-handle down > 60px to close.
+  _bindAiChatDragHandle(panel);
+
+  // Slide-in animation kick (CSS class added on next frame so the
+  // initial transform takes effect).
+  requestAnimationFrame(() => {
+    backdrop.classList.add('is-open');
+    panel.classList.add('is-open');
+    const input = panel.querySelector('.aichat-input');
+    if (input) input.focus();
+  });
+}
+
+function _closeAiChatPanel(opts) {
+  const silent = opts && opts.silent;
+  const panel = document.getElementById(AICHAT_PANEL_ID);
+  const backdrop = document.getElementById(AICHAT_BACKDROP_ID);
+  if (state.aiChatEscHandler) {
+    document.removeEventListener('keydown', state.aiChatEscHandler);
+    state.aiChatEscHandler = null;
+  }
+  state.aiChatPanel = null;
+  if (!panel && !backdrop) return;
+  if (silent) {
+    if (panel) panel.remove();
+    if (backdrop) backdrop.remove();
+    return;
+  }
+  // Animate out then remove.
+  if (panel) panel.classList.remove('is-open');
+  if (backdrop) backdrop.classList.remove('is-open');
+  setTimeout(() => {
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+    if (backdrop && backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+  }, 250);
+}
+
+function _renderAiChatPanelHtml(item) {
+  const idChip = item.id ? `<code class="aichat-id-chip">${escHtml(item.id)}</code>` : '';
+  const layer = (item.layer && String(item.layer).trim()) || '';
+  const layerChip = layer ? `<span class="aichat-layer-chip">${escHtml(layer)}</span>` : '';
+  // First line of body text (truncated) for the sticky header.
+  const firstLine = String(item.text || '').split(/\n/)[0].slice(0, 140);
+  const subtitle = firstLine
+    ? `<div class="aichat-subtitle" title="${escHtml(item.text || '')}">${escHtml(firstLine)}</div>`
+    : '';
+  return `
+    <button class="aichat-drag-handle" type="button" aria-label="Drag to dismiss">
+      <span class="aichat-drag-grip"></span>
+    </button>
+    <div class="aichat-header">
+      <div class="aichat-header-meta">
+        ${idChip}
+        ${layerChip}
+        ${subtitle}
+      </div>
+      <button class="aichat-close" type="button" title="Close (Esc)" aria-label="Close">×</button>
+    </div>
+    <div class="aichat-turns" role="log" aria-live="polite"></div>
+    <form class="aichat-form" autocomplete="off">
+      <textarea class="aichat-input" rows="2" placeholder="Ask claude about this item… (Cmd/Ctrl-Enter to send)" maxlength="10000"></textarea>
+      <button class="aichat-send" type="submit" title="Send (Cmd/Ctrl-Enter)" aria-label="Send"><span class="btn-icon">➤</span><span class="btn-text">Send</span></button>
+    </form>
+  `;
+}
+
+function _bindAiChatPanel(panel, type, itemId) {
+  const closeBtn = panel.querySelector('.aichat-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => _closeAiChatPanel());
+  const form = panel.querySelector('.aichat-form');
+  const input = panel.querySelector('.aichat-input');
+  if (form && input) {
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      _submitAiChat(type, itemId, input);
+    });
+    // Cmd/Ctrl-Enter to send (textarea Enter inserts a newline).
+    input.addEventListener('keydown', (ev) => {
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
+        ev.preventDefault();
+        _submitAiChat(type, itemId, input);
+      }
+    });
+  }
+}
+
+function _submitAiChat(type, itemId, input) {
+  const raw = String(input.value || '').trim();
+  if (!raw) return;
+  // Prepend the Phase-2 marker so handleChatMessage routes to
+  // _appendUserAiChatTurn + _activeChatItem. The marker is stripped
+  // server-side before persistence so it never pollutes the display.
+  const marker = `[chat:${type}#${itemId}] `;
+  const ok = sendChatMessage(marker + raw);
+  if (ok) {
+    input.value = '';
+    input.focus();
+  }
+}
+
+function _bindAiChatDragHandle(panel) {
+  const handle = panel.querySelector('.aichat-drag-handle');
+  if (!handle) return;
+  let startY = null;
+  let dy = 0;
+  const onStart = (ev) => {
+    const t = ev.touches ? ev.touches[0] : ev;
+    startY = t.clientY;
+    dy = 0;
+    panel.classList.add('is-dragging');
+  };
+  const onMove = (ev) => {
+    if (startY == null) return;
+    const t = ev.touches ? ev.touches[0] : ev;
+    dy = Math.max(0, t.clientY - startY);
+    panel.style.transform = `translateY(${dy}px)`;
+  };
+  const onEnd = () => {
+    if (startY == null) return;
+    panel.classList.remove('is-dragging');
+    if (dy > 60) {
+      _closeAiChatPanel();
+    } else {
+      panel.style.transform = '';
+    }
+    startY = null;
+    dy = 0;
+  };
+  handle.addEventListener('touchstart', onStart, { passive: true });
+  handle.addEventListener('touchmove', onMove, { passive: true });
+  handle.addEventListener('touchend', onEnd);
+  handle.addEventListener('mousedown', (ev) => {
+    onStart(ev);
+    const move = (e) => onMove(e);
+    const up = () => {
+      onEnd();
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}
+
+function _aiChatRenderTurns(item) {
+  const panel = document.getElementById(AICHAT_PANEL_ID);
+  if (!panel) return;
+  const list = panel.querySelector('.aichat-turns');
+  if (!list) return;
+  const turns = Array.isArray(item && item.aiChat) ? item.aiChat : [];
+  if (!turns.length) {
+    list.innerHTML = `<div class="aichat-empty">No turns yet — ask claude anything about this item.</div>`;
+    return;
+  }
+  list.innerHTML = turns.map((turn) => _renderAiChatTurnHtml(turn)).join('');
+}
+
+function _renderAiChatTurnHtml(turn) {
+  const role = turn.role === 'agent' ? 'agent' : 'user';
+  const who = turn.role === 'agent' ? 'claude' : ('@' + (turn.user || 'you'));
+  const ts = turn.ts ? (formatChatTsWithDate(turn.ts) || turn.ts) : '';
+  const costChip = (turn.meta && typeof turn.meta.costUsd === 'number' && turn.meta.costUsd > 0)
+    ? `<span class="aichat-cost-chip" title="cost of this turn">$${turn.meta.costUsd.toFixed(4)}</span>`
+    : '';
+  const text = role === 'agent' ? renderMd(turn.text || '') : `<div class="aichat-turn-text">${escHtml(turn.text || '')}</div>`;
+  return `
+    <div class="aichat-turn aichat-turn-${role}" data-turn-id="${escHtml(turn.id || '')}">
+      <div class="aichat-turn-head">
+        <span class="aichat-turn-who">${escHtml(who)}</span>
+        ${ts ? `<span class="aichat-turn-ts">${escHtml(ts)}</span>` : ''}
+        ${costChip}
+      </div>
+      <div class="aichat-turn-body">${text}</div>
+    </div>
+  `;
+}
+
+function _aiChatScrollToBottom() {
+  const panel = document.getElementById(AICHAT_PANEL_ID);
+  if (!panel) return;
+  const list = panel.querySelector('.aichat-turns');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+// Called from _onArtifactsCacheUpdated when a plan state-update lands.
+// If the open panel's item just got new turns, re-render in place and
+// scroll to bottom (preserves the user's typed-but-unsent draft).
+function _aiChatRefreshOpenPanel() {
+  if (!state.aiChatPanel) return;
+  const { type, itemId } = state.aiChatPanel;
+  const item = _findArtifactItem(type, itemId);
+  if (!item) {
+    // Item was deleted — close the panel.
+    _closeAiChatPanel();
+    return;
+  }
+  // Preserve scroll-to-bottom heuristic: only auto-scroll if user is
+  // already at the bottom (within 40px). Otherwise leave the scroll
+  // position alone so we don't yank them away from an older turn.
+  const panel = document.getElementById(AICHAT_PANEL_ID);
+  const list = panel && panel.querySelector('.aichat-turns');
+  const wasAtBottom = list && (list.scrollHeight - list.scrollTop - list.clientHeight < 40);
+  _aiChatRenderTurns(item);
+  if (wasAtBottom) _aiChatScrollToBottom();
 }
 
 // fr-46: edit an item's body text. Pencil click → swap the rendered
