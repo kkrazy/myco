@@ -247,14 +247,25 @@ t('behavior: @-mentions are unfiltered (work in any context)', () => {
 t('app.js: AICHAT_VIRTUAL_COMMANDS panel-virtual commands defined', () => {
   // These are CLIENT-SIDE only — not registered in server's
   // /commands. The panel autocomplete merges them with the filtered
-  // server allow-list so users see /run /close /upvote /comment /edit
-  // as first-class options in the dropdown.
+  // server allow-list so users see /run /close /upvote /comment as
+  // first-class options in the dropdown. /edit was removed in fr-85 r3
+  // (jarring two-step UX: panel slides out → card-side editor appears
+  // in the dimmed list); body edits stay on the card ✎ button instead.
   assert.ok(/const\s+AICHAT_VIRTUAL_COMMANDS\s*=\s*\[/.test(APP),
     'AICHAT_VIRTUAL_COMMANDS array must be defined');
-  for (const cmd of ['run', 'close', 'upvote', 'comment', 'edit']) {
+  for (const cmd of ['run', 'close', 'upvote', 'comment']) {
     assert.ok(new RegExp(`name:\\s*['"]${cmd}['"]`).test(APP),
       'AICHAT_VIRTUAL_COMMANDS must include /' + cmd);
   }
+  // fr-85 r3: /edit explicitly NOT in the virtual command list.
+  // The AICHAT_VIRTUAL_COMMANDS array sits inside a single statement
+  // (`const ... = [ ... ];`); look ONLY in that statement to avoid
+  // matching the rationale comment that mentions the removed command.
+  const arrayIdx = APP.search(/const\s+AICHAT_VIRTUAL_COMMANDS\s*=\s*\[/);
+  const arrayEnd = APP.indexOf('];', arrayIdx);
+  const arrayBody = APP.slice(arrayIdx, arrayEnd);
+  assert.ok(!/name:\s*['"]edit['"]/.test(arrayBody),
+    'AICHAT_VIRTUAL_COMMANDS must NOT include /edit (removed in r3 — bad two-step handoff)');
 });
 
 t('app.js: virtual commands merged into panel autocomplete dropdown', () => {
@@ -275,21 +286,21 @@ t('app.js: _dispatchAiChatSlash router exists', () => {
     '_dispatchAiChatSlash(type, itemId, raw) must be defined');
 });
 
-t('app.js: _dispatchAiChatSlash routes /run /close /upvote /comment /edit', () => {
+t('app.js: _dispatchAiChatSlash routes /run /close /upvote /comment (NOT /edit)', () => {
   const idx = APP.search(/function\s+_dispatchAiChatSlash\s*\(/);
   const win = APP.slice(idx, idx + 3000);
   // Each case: pin that the command name appears in the regex/switch
-  // and the existing handler is invoked.
+  // and the existing handler is invoked. /edit was removed in r3.
   assert.ok(/['"]run['"][^:]{0,5}:\s*[\s\S]{0,200}onArtifactItemRun/.test(win),
     '/run case must call onArtifactItemRun');
   assert.ok(/['"]close['"][^:]{0,5}:\s*[\s\S]{0,200}_closeItemFromPanel/.test(win),
     '/close case must invoke _closeItemFromPanel (panel-specific close helper)');
   assert.ok(/['"]vote['"][^:]{0,5}:\s*[\s\S]{0,200}onArtifactVote/.test(win),
     '/vote (alias /upvote) case must call onArtifactVote');
+  assert.ok(!/case\s+['"]edit['"]/.test(win),
+    'fr-85 r3: case "edit": must NOT exist in _dispatchAiChatSlash (removed — bad UX)');
   assert.ok(/['"]comment['"][^:]{0,5}:\s*[\s\S]{0,200}onArtifactComment/.test(win),
     '/comment case must call onArtifactComment with the args text');
-  assert.ok(/['"]edit['"][^:]{0,5}:\s*[\s\S]{0,500}onArtifactItemEdit/.test(win),
-    '/edit case must call onArtifactItemEdit');
 });
 
 t('app.js: _submitAiChat consults _dispatchAiChatSlash BEFORE marker-dispatch', () => {
@@ -373,22 +384,42 @@ t('styles.css: .artifact-vote-chip + .artifact-comment-chip styled', () => {
 });
 
 // Behavior simulation: the slash router pattern (independent of source).
-t('behavior: /run /close /upvote /vote /comment /edit are recognized; others fall through', () => {
-  const re = /^\/(run|close|upvote|vote|comment|edit)\b\s*(.*)$/i;
-  const ok = ['/run', '/close', '/upvote', '/vote', '/comment hello world', '/edit'];
+t('behavior: /run /close /upvote /vote /comment are recognized; /edit + others fall through', () => {
+  // fr-85 r3: /edit no longer in the regex.
+  const re = /^\/(run|close|upvote|vote|comment)\b\s*(.*)$/i;
+  const ok = ['/run', '/close', '/upvote', '/vote', '/comment hello world'];
   for (const s of ok) assert.ok(re.test(s), s + ' must match the slash regex');
-  const skip = ['/task', '/help', 'just text', '/runner', 'hi /run'];
+  const skip = ['/task', '/help', 'just text', '/runner', 'hi /run', '/edit'];
   for (const s of skip) {
-    // 'hi /run' has the / in middle — should not match (^/ anchor).
     if (re.test(s)) assert.fail(s + ' must NOT match (would mis-route)');
   }
 });
 
 t('behavior: /comment captures the args after the command name', () => {
-  const m = '/comment This looks great, ship it'.match(/^\/(run|close|upvote|vote|comment|edit)\b\s*(.*)$/i);
+  const m = '/comment This looks great, ship it'.match(/^\/(run|close|upvote|vote|comment)\b\s*(.*)$/i);
   assert.ok(m);
   assert.strictEqual(m[1], 'comment');
   assert.strictEqual(m[2], 'This looks great, ship it');
+});
+
+t('fr-85 r3: chatBtn (💬) and comment-chip (📝) use DISTINCT icons', () => {
+  // User reported (kkrazy 2026-05-24): on the plan card, the
+  // 💬 Chat button and the 💬 comment-count chip used the SAME
+  // bubble icon — visually indistinguishable. Round 3: comment chip
+  // moves to 📝 (note/memo metaphor) so the two affordances read
+  // separately at a glance. chatBtn keeps 💬 (it's the primary
+  // conversation entry point).
+  // chatBtn render: <button class="artifact-item-chat" …><span class="btn-icon">💬</span>…
+  assert.ok(/artifact-item-chat[\s\S]{0,400}btn-icon[\s\S]{0,40}💬/.test(APP),
+    'chatBtn must keep the 💬 speech-bubble icon (primary AI conversation)');
+  // comment-chip render: <span class="artifact-comment-chip" …>📝<span class="comment-count">…
+  assert.ok(/artifact-comment-chip[\s\S]{0,300}📝[\s\S]{0,80}comment-count/.test(APP),
+    'comment-chip must render the 📝 note icon (distinct from chatBtn\'s 💬)');
+  // Defensive: the comment-chip must NOT use 💬 (the pre-fix icon).
+  const chipIdx = APP.search(/artifact-comment-chip/);
+  const chipWin = APP.slice(chipIdx, chipIdx + 300);
+  assert.ok(!/💬/.test(chipWin),
+    'comment-chip must not carry 💬 — it would visually conflict with chatBtn');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

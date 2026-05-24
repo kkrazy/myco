@@ -103,6 +103,57 @@
           "text": "the purpose is to reduce duplicate permission asks",
           "ts": "2026-05-18T14:55:45.768Z"
         }
+      ],
+      "aiChat": [
+        {
+          "id": "935b7a706a9e",
+          "user": "kkrazy",
+          "role": "user",
+          "text": "/allowlist",
+          "ts": "2026-05-24T07:44:21.673Z"
+        },
+        {
+          "id": "582c23912c13",
+          "user": "claude",
+          "role": "agent",
+          "text": "Caught a real bug — your `/allowlist` got sent as `[chat:plan#fr-1] /allowlist` to claude (me), NOT routed through the server's slash parser. Let me explain, get you the actual allowlist data, then offer to fix.\n\n**Why `/allowlist` didn't fire:**\n\nThe panel's `_submitAiChat` flow goes:\n1. `_dispatchAiChatSlash` checks panel-virtual commands (`/run /close /upvote /comment /edit`) → no match for `/allowlist` → returns false\n2. Falls through to marker-prepend: `sendChatMessage('[chat:plan#fr-1] /allowlist')`\n3. Server's `handleChatMessage` sees the marker (not a `/` at index 0) → routes as a chat message TO the agent\n\nSo `/allowlist` arrived to me as agent text, not as a server command. The autocomplete LISTED it (it's in `AICHAT_ALLOWED_COMMANDS`) but the dispatch path doesn't honour it.\n\n**The actual allow/deny lists for this session:**Let me also verify whether slash commands fire after marker handling in `handleChatMessage`:Confirmed the bug: in `server/src/attach.js` line 1556 the marker is recognized, but line 1571 checks `if (text.startsWith('/'))` — your text is `[chat:plan#fr-1] /allowlist` which starts with `[`, so the slash dispatcher never fires. The text gets sent to me (the agent) as plain conversation instead.\n\n**📋 Your session's permission lists (the equivalent `/allowlist` output):**\n\n- **Server-side allow / deny** (`rec.allow`/`rec.deny` in `/data/sessions.json` — what `/allow` and `/deny` slash commands modify): **both empty** for `myco-kkrazy-f80476dd`. No entries.\n- **SDK-side \"Allow always\" list** (`.claude/settings.local.json` `permissions.allow` — what the SDK's permission menu adds when you click \"Allow always\"): **~100 entries** accumulated over the session's life. Notable patterns:\n\n| Category | Examples |\n|---|---|\n| Test runners | `Bash(./test/test.sh)`, `Bash(node test/*.test.js)` (~20 specific tests) |\n| Lean-ctx MCP | `mcp__lean-ctx__ctx_read`, `ctx_shell`, `ctx_search`, `ctx_overview`, `ctx_tree` |\n| Git | `Bash(git add *)`, `Bash(git config *)`, `Bash(git rm *)`, `Bash(git mv *)`, GitHub OAuth-token push helpers |\n| Network probes | `Bash(curl -s …example.com)`, `Bash(ping -c 1 …)`, `WebFetch(domain:github.com/anthropic.com/example.com)` |\n| Package mgmt | `Bash(npm init *)`, `Bash(npm install *)`, `Bash(apk add *)`, `Bash(apt list *)` |\n| Workflow misc | `Bash(/wks/.../test.sh)`, `Bash(./scripts/deploy.sh --dry-run --skip-tests)`, `Bash(./node_modules/.bin/lean-ctx --version)` |\n\nNo deny entries on either side.\n\n---\n\n**This is a real fr-86. Want me to file + fix?**\n\nThe fix is small: in `handleChatMessage`, strip the `[chat:…]` and `[run:…]` markers from the text BEFORE the `text.startsWith('/')` slash dispatch. That way:\n- `[chat:plan#fr-1] /allowlist` → marker stripped → `/allowlist` → dispatches to server's `handleAllowList` → reply lands in chat\n- Panel autocomplete's allow-listed commands (`/task /skip /cancel /decide /allow /deny /allowlist`) actually become functional, matching the user expectation set by listing them in the dropdown\n\nWithout the fix, those entries in `AICHAT_ALLOWED_COMMANDS` are dishonestly listed — they look usable but silently route to the agent as text. Either:\n- **(A) Fix the dispatcher** (route them server-side as intended)\n- **(B) Remove them from the allow-list** (don't promise something the dispatch can't deliver)\n\nSay \"fix it\" and I'll file fr-86 + ship (A) with a regression test. Or \"remove them\" for (B). Or describe a different fix you want.",
+          "ts": "2026-05-24T07:46:18.952Z",
+          "meta": {
+            "kind": "turn_result",
+            "subtype": "success",
+            "usage": {
+              "input_tokens": 17,
+              "cache_creation_input_tokens": 30650,
+              "cache_read_input_tokens": 2644066,
+              "output_tokens": 6713,
+              "server_tool_use": {
+                "web_search_requests": 0,
+                "web_fetch_requests": 0
+              },
+              "service_tier": "standard",
+              "cache_creation": {
+                "ephemeral_1h_input_tokens": 30650,
+                "ephemeral_5m_input_tokens": 0
+              },
+              "inference_geo": "",
+              "iterations": [
+                {
+                  "input_tokens": 1,
+                  "output_tokens": 1651,
+                  "cache_read_input_tokens": 384844,
+                  "cache_creation_input_tokens": 16188,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 16188
+                  },
+                  "type": "message"
+                }
+              ],
+              "speed": "standard"
+            },
+            "costUsd": 1.6815055
+          }
+        }
       ]
     },
     {
@@ -3410,39 +3461,32 @@
       }
     },
     {
-      "id": "fr-86",
-      "text": "**Problem:** Slash commands typed inside the per-item chat panel (`/allowlist`, `/task`, `/skip`, `/decide`, `/allow`, `/deny`) never reach the server-side slash dispatcher — they get sent to the agent as conversation text. Root cause: `handleChatMessage` recognizes the `[chat:plan#<id>]` marker first (sets `_activeChatItem`), then checks `text.startsWith('/')` to route slash commands. Marker-prefixed text starts with `[`, so the slash check fails.\n\n**Expected:** A panel chat like `/allowlist` should be marker-stripped before the slash check so the server dispatcher fires — same as if typed in the main chat pane.\n\n**Actual:** The slash sits unhandled, gets prepended with the marker, sent to the agent. User sees no `/allowlist` output because the server command never ran.\n\n**Fix:** In `handleChatMessage`, after marker recognition, strip the marker prefix from `text` before the `text.startsWith('/')` slash dispatch check. The user-display turn (already persisted via `_appendUserAiChatTurn`) keeps its stripped form; the dispatch path now sees the bare slash.\n\n**Reproduced:** 2026-05-24, kkrazy typed `/allowlist` in fr-1's chat panel — assistant explained the bug instead of dispatching, user confirmed \"Fix it\".",
-      "layer": "Bug",
+      "id": "fr-87",
+      "text": "**Problem:** New users have no quick path to get started — no demo or sample project to clone and run.\n**Expected:** An onboarding guide that bootstraps users via either a built-in demo or a project pulled from GitHub/Gitee.\n**Actual:** No onboarding flow exists; users must figure out setup from scratch.",
+      "layer": "Feature",
       "done": false,
-      "addedAt": "2026-05-24T07:51:28.454Z",
+      "addedAt": "2026-05-24T08:25:56.205Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "add a onboarding guide to get users kick start quickly, either a demo or a project from github/gitee",
+        "rewritten": true
+      }
+    },
+    {
+      "id": "fr-88",
+      "text": "**Problem:** Slash commands today live in `server/src/slashcmds.js` as a switch over `text.startsWith(\"/cmd\")` patterns with handlers that either ctx.reply, ctx.session.write a prompt, or call HTTP endpoints. The agent can't INVOKE them directly — it has to wait for a user to type. This makes complex workflows (e.g. claude wants to add a comment to fr-1 after finishing a task) hard to express; claude has to ask the user to type `/comment …`.\n\n**Expected (design principle, kkrazy 2026-05-24):** *All slash commands should be implemented as MCP tools whenever possible.* The slash command in chat becomes a thin wrapper that calls the corresponding tool; the agent can also invoke the tool directly via the SDK. Single source of truth for each operation.\n\n**Migration pattern** (mirrors fr-87's `register_task_item` and `/task` shape):\n\n1. Expose each plan-item operation as an `mcp__myco__*` tool in `server/src/myco-mcp.js` (or another in-process MCP server if size grows): `add_comment`, `mark_done`, `vote`, `add_dep`, `set_layer`, `merge_items`, etc. Each tool takes typed args (zod schemas), returns `{content, isError}`.\n2. Refactor the slashcmd handler to delegate to the tool. `handleClose(ctx)` calls the same code path the tool calls. The `ctx.reply` formatting stays in the slashcmd layer (slashcmds are user-facing; tools are agent-facing — both speak to the same backend).\n3. Add the tool to the agent-side rule set: \"after doing X for a plan item, call `mcp__myco__add_comment({itemId, text: '<closeout summary>'})` to leave a trail.\" Removes the user-as-intermediary step.\n\n**Candidate first targets** (high-value, low-risk):\n- `/comment <text>` → `mcp__myco__add_comment({itemId, text})` — closeout summaries become tool calls instead of prompted text\n- `/close` → `mcp__myco__set_item_done({itemId, done: true/false})` — agent can mark fr-X done after shipping\n- `/upvote` → `mcp__myco__vote_item({itemId})` — less interesting but mirrors the pattern\n- `/queue` → `mcp__myco__queue_add({itemId})` — agent can self-queue follow-up items\n\n**Out of scope for v1:** auth/permission commands (`/admin`, `/setpat`, `/strict`) stay slashcmd-only — they're user-trust boundaries the agent shouldn't cross.\n\n**Test cadence:** each migration ships its own fr-87-shape test (static guards on the tool definition + slashcmd delegation + behavior simulation against a fake session). No big-bang migration; one tool per commit.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T08:28:01.960Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
       "comments": []
-    },
-    {
-      "id": "fr-87",
-      "text": "**Problem:** `/task` typed inside a per-item chat panel returns the entire global TaskList instead of filtering to that item. So in fr-1's chat panel, you see tasks for fr-86, fr-85, plan-driven-ui sprint — everything mixed together. Defeats the \"panel = item workspace\" intent.\n\n**Expected:** `/task` inside fr-1's panel → only tasks tagged `meta.planItem == \"fr-1\"`. `/task all` (or `/task --all`) → global list. `/task` in the main chat pane (no item context) → global, same as today.\n\n**Actual:** `handleTaskList` writes a generic prompt with no item context, so claude lists everything.\n\n**Fix (two changes):**\n\n1. `handleChatMessage` extends `ctx` (passed to slashcmd handlers) with `chatItem` + `runItem` slots populated from `session._activeChatItem` / `_activeRunItem`. Lets any slashcmd handler scope by current item.\n2. `handleTaskList` reads `ctx.chatItem` (or `runItem`) and templates a scoped prompt; supports `/task all` escape hatch.\n\nPlus a one-line addition to the best-practices template instructing the agent to tag `TaskCreate` calls with `metadata.planItem = \"<id>\"` during `[run:plan#X]` or `[chat:plan#X]` turns, so the scoped prompt has real tags to filter on.",
-      "layer": "Feature",
-      "done": false,
-      "addedAt": "2026-05-24T08:06:56.709Z",
-      "addedBy": "kkrazy",
-      "source": "user",
-      "voters": [],
-      "comments": [
-        {
-          "id": "claude-fr87-sdk-tool-design-20260524081003",
-          "user": "claude",
-          "text": "**Preferred design (kkrazy 2026-05-24): SDK-tool driven, not prompt-driven.**\n\nThe first-pass implementation uses a *natural-language scoped prompt* — handleTaskList sends \"list tasks tagged for fr-1\" and claude inspects its own TaskList + filters by metadata.planItem. That works as long as the agent (a) remembers to tag TaskCreate calls and (b) honors the filter request. Both are soft constraints — easy to drift.\n\nThe stronger design replaces both with **authoritative SDK-level association**:\n\n1. **New MCP tool** (e.g. `myco_register_task_item`) exposed by the in-process myco-mcp server. Signature: `registerTaskForItem(taskId, itemId, itemType=\"plan\")`. The agent calls this RIGHT AFTER each `TaskCreate` during a `[chat|run:plan#X]` turn. Implementation = append `{taskId, itemId, ts}` to `_myco_/task-items.json` (or in-memory + persisted on writes).\n2. **Registry-backed `/task`**: handleTaskList reads `task-items.json` to pull the set of taskIds for `ctx.chatItem`/`ctx.runItem`, then EITHER (a) calls the SDK's TaskList API directly server-side to fetch task details for those ids, OR (b) sends a focused prompt \"show me tasks: t-12, t-37, t-44\" — much more reliable than \"show me tasks tagged with planItem=…\".\n3. **TaskUpdate manipulation via SDK API**: `/skip <N>` and any future per-item bulk ops (e.g. \"cancel all tasks for fr-1 because the item was deleted\") call the SDK's TaskUpdate authoritatively, not via prompt. The agent doesn't need to be involved in mechanical lifecycle work — that's a server concern once the registry exists.\n\n**Why it's strictly better:**\n- Hard enforcement: the registry IS the truth. Claude's memory + prompt-following can't drift.\n- Audit trail: `task-items.json` is committable to `_myco_/` (per CLAUDE.md §5) — every collaborator sees the same task↔item links.\n- Bulk ops become possible: \"delete fr-1\" can cancel its in-flight tasks; \"merge fr-1 into fr-2\" reassigns; \"what tasks blocked on fr-3?\" becomes a registry query.\n- The reverse direction also unlocks: each plan item could surface \"currently 3 active tasks for me\" as a chip on the card, sourced directly from the registry. No prompt round-trip.\n\n**Migration path:** keep the v1 prompt-based scoping shipping (already in progress) so users get *some* filter today, then layer the registry on top — the handleTaskList prompt template just switches from \"tasks tagged with X\" to \"tasks {ids…}\" when the registry is populated. v1 = soft, v2 = hard, no breaking change between.",
-          "ts": "2026-05-24T08:10:03.261Z",
-          "meta": {
-            "kind": "design",
-            "topic": "fr-87 SDK-tool replacement for prompt-based filter",
-            "author": "kkrazy (proposed)"
-          }
-        }
-      ]
     }
   ],
-  "updatedAt": "2026-05-24T08:10:03.261Z"
+  "updatedAt": "2026-05-24T08:28:01.960Z"
 }

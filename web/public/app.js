@@ -6585,7 +6585,7 @@ function renderArtifact(type, artifact) {
         <span class="vote-icon">👍</span><span class="vote-count">${points}</span>
       </span>
       ${comments.length ? `<span class="artifact-comment-chip" title="${comments.length} comment${comments.length === 1 ? '' : 's'} · use /comment &lt;text&gt; in chat to add">
-        💬<span class="comment-count">${comments.length}</span>
+        📝<span class="comment-count">${comments.length}</span>
       </span>` : ''}` : '';
     // fr-46: pencil/trash on each comment, gated on !state.readOnly
     // (owner+admin only). meta.editedBy/editedAt → small "edited" badge
@@ -7255,7 +7255,7 @@ function _submitAiChat(type, itemId, input) {
 // for unknown commands (e.g. /task, /skip — those still flow through
 // the agent so claude can act on them).
 function _dispatchAiChatSlash(type, itemId, raw) {
-  const m = raw.match(/^\/(run|close|upvote|vote|comment|edit)\b\s*(.*)$/i);
+  const m = raw.match(/^\/(run|close|upvote|vote|comment)\b\s*(.*)$/i);
   if (!m) return false;
   const cmd = m[1].toLowerCase();
   const args = (m[2] || '').trim();
@@ -7279,16 +7279,13 @@ function _dispatchAiChatSlash(type, itemId, raw) {
         return true;   // consumed; just no-op'd usefully
       }
       onArtifactComment(type, itemId, args);
-      _aiChatShowToast('💬 Comment added to ' + itemId);
+      _aiChatShowToast('📝 Comment added to ' + itemId);
       return true;
-    case 'edit':
-      // Inline body editor lives on the plan card, not the panel.
-      // Closing the panel first + invoking the existing editor gives
-      // the user a clean handoff. (If we ever want in-panel editing,
-      // that's a separate iteration.)
-      _closeAiChatPanel();
-      setTimeout(() => onArtifactItemEdit(type, itemId), 260);
-      return true;
+    // fr-85 r3: /edit removed — closing the panel + re-opening the
+    // card-side inline editor was a jarring two-step UX (panel slides
+    // out, then a hidden editor appears in the dimmed plan list).
+    // Body edits stay on the card via the ✎ Edit button (still
+    // rendered). Re-add /edit only if/when an in-panel editor lands.
     default:
       return false;
   }
@@ -7834,12 +7831,17 @@ const AICHAT_ALLOWED_COMMANDS = new Set([
 // the same HTTP endpoints the old action-row buttons hit. Each entry
 // mirrors the {name, summary, usage} shape returned by /commands so
 // _computeItemsFiltered can render them uniformly with server commands.
+// fr-85 r3: /edit removed — closing the panel + opening the card
+// editor was a jarring handoff (user reported "doesn't provide good
+// ux"). Inline body editing is still reachable via the ✎ Edit button
+// on the plan card itself (not removed by fr-85 round 2 — only
+// run/close/upvote/comment moved to slash). Re-add /edit only if the
+// in-panel editor is built out.
 const AICHAT_VIRTUAL_COMMANDS = [
   { name: 'run',     summary: 'Dispatch this item to the run queue (▶ Run)',         usage: '/run' },
   { name: 'close',   summary: 'Close (or reopen) this item — no claude dispatch',    usage: '/close' },
   { name: 'upvote',  summary: 'Upvote this item — toggles your 👍',                  usage: '/upvote', aliases: ['vote'] },
   { name: 'comment', summary: 'Add a comment to this item',                          usage: '/comment <text>' },
-  { name: 'edit',    summary: 'Edit this item\'s body text (opens the card editor)', usage: '/edit' },
 ];
 
 function bindAiChatAutocomplete(panel) {
