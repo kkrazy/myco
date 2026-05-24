@@ -1948,6 +1948,43 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin-bottom: 14px;
 }
 .artifact-layer-group:last-child { margin-bottom: 0; }
+/* fr-65: per-layer "▶ N closed" accordion. Rolls done items into a
+   collapsible footer beneath each layer's open items so closed work
+   doesn't bury the active list. Default collapsed; expand state
+   persisted in localStorage.myco_plan_layer_expand_<key>. */
+.artifact-layer-accordion {
+  margin-top: 6px;
+}
+.artifact-layer-accordion-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px dashed rgba(255,255,255,.12);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: .76rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.artifact-layer-accordion-toggle:hover {
+  color: var(--text);
+  border-color: rgba(255,255,255,.25);
+  background: rgba(255,255,255,.03);
+}
+.artifact-layer-accordion-toggle .accordion-caret {
+  display: inline-block;
+  width: 0.8em;
+  font-size: .7em;
+  color: var(--muted);
+}
+.artifact-layer-accordion.is-expanded .accordion-caret { color: var(--text); }
+.artifact-items-done {
+  margin-top: 6px;
+  opacity: .82;          /* dim done items slightly to keep focus on open ones */
+}
 .artifact-layer-name {
   margin: 0 0 6px 0;
   padding: 4px 8px;

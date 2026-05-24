@@ -2389,6 +2389,17 @@ test_chat_window() {
   # the substring/type/done/intersect semantics are pinned without a
   # browser.
   node_test_result test/fr-56-plan-filter-search.test.js "test/fr-56-plan-filter-search.test.js (20 cases)"
+  # fr-65: per-layer "▶ N closed (tap to expand)" accordion that rolls
+  # done plan items into a collapsible footer beneath each layer's open
+  # items. Replaces the all-or-nothing bug-15 "Open only" toggle with
+  # finer-grained per-layer control; the two interact cleanly (when
+  # Open only is on, displayItems has no done items so the accordion's
+  # done bucket is empty and the accordion doesn't render). Per-layer
+  # expand state persisted in localStorage.myco_plan_layer_expand_<key>.
+  # Static guards on the partition shape + helpers + DOM + click
+  # handler + CSS, plus behavior simulation of the partition + the
+  # bug-15 interaction.
+  node_test_result test/fr-65-plan-layer-done-accordion.test.js "test/fr-65-plan-layer-done-accordion.test.js (12 cases)"
   # fr-39: per-session admin delegation. Owners can /admin @user to
   # grant admin (multi-admin supported); admins inherit everything
   # except DELETE-session + grant/revoke admin (those stay

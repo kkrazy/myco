@@ -6738,12 +6738,39 @@ function renderArtifact(type, artifact) {
       if (!buckets.has(layer)) { layers.push(layer); buckets.set(layer, []); }
       buckets.get(layer).push(it);
     }
-    bodyHtml = layers.map((layer) => `
-      <div class="artifact-layer-group">
-        <h4 class="artifact-layer-name">${escHtml(layer)}</h4>
-        <ul class="artifact-items">${buckets.get(layer).map(renderItem).join('')}</ul>
-      </div>
-    `).join('');
+    // fr-65: within each layer, partition open vs done. Open items render
+    // at the top; done items roll up into a "▶ N closed (tap to expand)"
+    // accordion footer so they don't bury the open work. Per-layer
+    // expand state persisted in localStorage.myco_plan_layer_expand_<key>.
+    // Degrades cleanly with the bug-15 "Open only" toggle: when on,
+    // displayItems has no done items → doneItems is empty → no accordion
+    // renders. When off, accordion is the per-layer alternative to the
+    // all-or-nothing toggle.
+    bodyHtml = layers.map((layer) => {
+      const items = buckets.get(layer);
+      const openItems = items.filter((it) => !it.done);
+      const doneItems = items.filter((it) => it.done);
+      const layerKey = _planLayerStorageKey(layer);
+      const expanded = _readPlanLayerExpanded(layerKey);
+      const accordion = doneItems.length > 0 ? `
+        <div class="artifact-layer-accordion ${expanded ? 'is-expanded' : ''}" data-layer="${escHtml(layerKey)}">
+          <button class="artifact-layer-accordion-toggle" data-layer="${escHtml(layerKey)}" type="button"
+                  aria-expanded="${expanded ? 'true' : 'false'}"
+                  title="${expanded ? 'Hide closed items in this layer' : 'Show closed items in this layer'}">
+            <span class="accordion-caret">${expanded ? '▼' : '▶'}</span>
+            <span class="accordion-count">${doneItems.length} closed</span>
+          </button>
+          ${expanded ? `<ul class="artifact-items artifact-items-done">${doneItems.map(renderItem).join('')}</ul>` : ''}
+        </div>
+      ` : '';
+      return `
+        <div class="artifact-layer-group">
+          <h4 class="artifact-layer-name">${escHtml(layer)}</h4>
+          <ul class="artifact-items">${openItems.map(renderItem).join('')}</ul>
+          ${accordion}
+        </div>
+      `;
+    }).join('');
   } else {
     bodyHtml = `<ul class="artifact-items">${displayItems.map(renderItem).join('')}</ul>`;
   }
@@ -6811,6 +6838,20 @@ function renderArtifact(type, artifact) {
         const id = btn.dataset.id;
         const panel = body.querySelector(`.artifact-comments[data-id="${CSS.escape(id)}"]`);
         if (panel) panel.hidden = !panel.hidden;
+      });
+    });
+    // fr-65: per-layer "▶ N closed" accordion toggle. Flips the persisted
+    // expand state for this layer's key + re-renders the cached plan
+    // artifact so the done-items <ul> appears/disappears immediately
+    // without an HTTP round-trip.
+    body.querySelectorAll('.artifact-layer-accordion-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.layer;
+        if (!key) return;
+        const cur = _readPlanLayerExpanded(key);
+        _writePlanLayerExpanded(key, !cur);
+        const cached = state.artifacts && state.artifacts.byType && state.artifacts.byType.plan;
+        if (cached) renderArtifact('plan', cached);
       });
     });
     body.querySelectorAll('.artifact-comment-form').forEach((form) => {
@@ -9001,6 +9042,25 @@ function bindPlanSearch() {
       if (cached) renderArtifact('plan', cached);
     }, 150);
   });
+}
+
+// fr-65: per-layer "closed items" accordion state. Each layer
+// (Bug / Feature / Todo / Other / future layers) has its own
+// expand/collapse state persisted in localStorage. Key shape:
+//   myco_plan_layer_expand_<sanitized-layer-name>  → '1' | '0'
+// Default '0' (collapsed). Sanitization (_planLayerStorageKey) strips
+// non-alnum so unusual layer names from the extractor don't break the
+// key format.
+function _planLayerStorageKey(layer) {
+  return String(layer || 'Other').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+function _readPlanLayerExpanded(layerKey) {
+  try {
+    return (localStorage.getItem('myco_plan_layer_expand_' + layerKey) || '0') === '1';
+  } catch { return false; }
+}
+function _writePlanLayerExpanded(layerKey, expanded) {
+  try { localStorage.setItem('myco_plan_layer_expand_' + layerKey, expanded ? '1' : '0'); } catch {}
 }
 
 // fr-56: pure filter function shared by renderArtifact('plan', ...).

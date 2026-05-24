@@ -2830,12 +2830,13 @@
           "ts": "2026-05-24T00:55:43.854Z"
         },
         {
-          "id": "rs-b350329f304d",
+          "id": "50c27908a9ea",
           "user": "claude",
-          "text": "**Fourth pass — pane-level clearance.**\n\n### What the third pass missed\nPut the chrome-clearance padding on `.files-view-header-nav` (the inner row). The calc was mathematically correct on both desktop and mobile, BUT on mobile the parent `#files-view-header` has its own `padding: 6px 8px` override (line 4061 inside `@media (max-width: 900px)`). The combination of:\n- nested parent-padding + child-padding\n- two `@media (max-width: 900px)` blocks that both write `--chrome-btn-size` (line 1170 sets 40px, line 4046 sets 36px — last-write-wins is the cascade rule, but it's fragile to spot)\n- the possibility of other inner-cascade overrides I didn't grep\n\n...made the third-pass approach fragile. Padding cascades across nested elements are subject to lots of subtle interactions.\n\n### Fourth-pass fix — move clearance to the pane container\n\nApply the chrome-clearance padding to `#files-view-pane` (the OUTER pane), not the inner row. The WHOLE pane shifts down, so its content (header + body + action bar + action row) starts unambiguously below the chrome cluster — independent of any inner-cascade quirks.\n\n```css\n#files-view-pane {\n  padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 18px);\n  box-sizing: border-box;          /* padding included in flex height */\n}\n\n.files-view-header-nav {\n  padding: 8px 12px;               /* normal layout, no chrome clearance */\n}\n```\n\n| Viewport | Pane padding-top | Notes |\n|---|---|---|\n| Desktop (chrome-btn-size 32) | safe-area + 60px | 18px buffer below chrome |\n| Mobile (chrome-btn-size 36) | safe-area + 64px | 18px buffer below chrome |\n| iPhone-notch | + notch | shifts together with chrome |\n\nThe pane background (`#0d1117`) fills the cleared band above the content, so the area behind the chrome cluster looks clean.\n\n### Why this is more robust\n- No nested cascades. The padding is on the same element that contains the entire pane content.\n- box-sizing: border-box ensures the pane's flex height includes the padding (otherwise the pane would overflow the viewport).\n- Mobile-specific override no longer needed — the same calc works for both viewport sizes because `var(--chrome-btn-size)` auto-adapts.\n- Future-proof: if someone adds a NEW row above the breadcrumb later, it'll also be below the chrome automatically.\n\n### Test\n`test/bug-33-file-viewer-breadcrumb-row.test.js` (10 cases):\n- New guard: `#files-view-pane` must have padding-top calc referencing `env(safe-area-inset-top, 0px)` + `var(--chrome-btn-size)`\n- New guard: `#files-view-pane` must declare `box-sizing: border-box` (so padding is in the flex height)\n- Updated guard: `.files-view-header-nav` uses normal padding (chrome-clearance is now at the pane level)\n- Three negative guards reject re-introduction of the dead first-pass (`92px` right), second-pass (`+50px` hardcoded), AND third-pass (calc on `.files-view-header-nav`) approaches — none can silently come back.\n\n10/10 ✓ direct. Adjacent fr-50-edit-button-visible 5/5 ✓ + fr-50-file-editor 17/17 ✓.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure CSS change. Hard-refresh recommended (Cmd+Shift+R on desktop, \"Clear and reload\" on mobile Safari/Chrome).\n\n### Cache-bust note\nIf you've redeployed but still see the old layout: that's the browser's CSS cache holding the stale stylesheet. Hard-refresh or open in an incognito window to bypass.\n\nStatus: closed (fourth time). Apologies for the iteration — should have moved to the pane-level approach earlier rather than fighting the inner cascade three times.",
-          "ts": "2026-05-24T01:08:28.109Z",
+          "text": "✓ success · 794.1s · $17.6315 · 27↓/29060↑\n\nPushed `6efa127` to `origin/main`.\n\n## bug-33 fourth pass — pane-level clearance\n\n**Root cause this round:** the third-pass per-row padding was fragile under nested parent-child padding cascades on mobile (line 4061 has its own `padding: 6px 8px` on the parent `#files-view-header`; multiple `@media (max-width: 900px)` blocks both write `--chrome-btn-size`; other subtle cascades possible).\n\n**Robust fix:** moved chrome-clearance from the inner nav row to the OUTER `#files-view-pane`:\n\n```css\n#files-view-pane {\n  padding-top: calc(env(safe-area-inset-top, 0px)\n                    + 10px                     /* chrome-top */\n                    + var(--chrome-btn-size)   /* button height */\n                    + 18px                     /* buffer */\n                   );\n  box-sizing: borde…",
+          "ts": "2026-05-24T01:09:08.483Z",
           "meta": {
-            "kind": "run-summary"
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-24T00:55:54.240Z"
           }
         }
       ],
@@ -2845,7 +2846,16 @@
         "rewritten": true
       },
       "status": "closed",
-      "closedAt": "2026-05-24T01:08:28.109Z"
+      "closedAt": "2026-05-23T05:21:03.039Z",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-24T01:09:08.483Z",
+          "startedAt": "2026-05-24T00:55:54.240Z",
+          "summary": "794.1s · 27→29060 tok",
+          "result": "Pushed `6efa127` to `origin/main`.\n\n## bug-33 fourth pass — pane-level clearance\n\n**Root cause this round:** the third-pass per-row padding was fragile under nested parent-child padding cascades on mobile (line 4061 has its own `padding: 6px 8px` on the parent `#files-view-header`; multiple `@media (max-width: 900px)` blocks both write `--chrome-btn-size`; other subtle cascades possible).\n\n**Robust fix:** moved chrome-clearance from the inner nav row to the OUTER `#files-view-pane`:\n\n```css\n#files-view-pane {\n  padding-top: calc(env(safe-area-inset-top, 0px)\n                    + 10px                     /* chrome-top */\n                    + var(--chrome-btn-size)   /* button height */\n                    + 18px                     /* buffer */\n                   );\n  box-sizing: border-box;\n}\n.files-view-header-nav { padding: 8px 12px; }   /* normal — no clearance */\n```\n\nWhole pane shifts down. No more dependency on the inner padding cascade. Works for desktop, mobile, and iPhone-notch via the same calc. Future rows added inside the pane automatically inherit the clearance.\n\n**Cache-bust note:** after redeploy, hard-refresh (Cmd+Shift+R desktop / \"Clear and reload\" mobile Safari/Chrome) — browser CSS cache will otherwise hold the stale stylesheet, which may explain why the prior pass appeared to not take effect.\n\nCommit `6efa127` live on `origin/main`. Three defensive negative guards now reject re-introduction of every dead historical approach (first/second/third pass).\n\n---\n\n## UX improvements for the plan view (your follow-up ask)\n\nThe plan view is your central workspace now. Here's a prioritized list of high-impact UX improvements, **mobile-first**:\n\n### Tier 1 — Mobile readability + thumb ergonomics (likely highest impact)\n\n1. **Sticky filter row on scroll.** Today fr-56's filter chips + search input scroll away with the list. On a 600-item plan they're gone after one swipe. Make `#plan-filter-row` `position: sticky; top: 0` so type/search controls stay reach"
+        }
+      ]
     },
     {
       "id": "bug-34",
@@ -2894,14 +2904,192 @@
       "addedAt": "2026-05-23T04:11:51.799Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "for plan items added to the queue, it should try to run to its completion without user interaction. Should ask up front question when submitting to the queue and then go into autopilot mode",
         "rewritten": true
       }
+    },
+    {
+      "id": "fr-61",
+      "text": "Plan tab: sticky filter row on scroll. Today fr-56's type chips + search input scroll away after one swipe on a long plan list (119+ items now). Make #plan-filter-row `position: sticky; top: 0` with the artifact-body background so the filters stay reachable while scrolling. CSS-only change. Test: static guard that `position: sticky` is set on #plan-filter-row.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": []
+    },
+    {
+      "id": "fr-62",
+      "text": "Plan items: bigger tap targets on mobile. Vote / comment / Run / Close buttons are ~24px today — Apple HIG + Material both call for 44px minimum. Bump button hit area (padding + min-size) on mobile only. Eliminates pinch-to-tap on phones. CSS-only inside `@media (max-width: 900px)`. Test: grep guards that artifact-vote / artifact-comment-toggle / artifact-run / artifact-close min-size ≥ 44px in the mobile block.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": []
+    },
+    {
+      "id": "fr-63",
+      "text": "Plan items: collapse byline behind ⓘ on mobile. Post-bug-34 the 'filed by @user · MMM D, YYYY, HH:MM' line eats a row of vertical space. On mobile, hide by default behind a tap-to-expand ⓘ icon; info one tap away, list density tight. CSS (mobile media query hides .artifact-item-by) + small JS handler that toggles a `.show-byline` class on tap. Test: static guards on the ⓘ button + the mobile-hide rule + the toggle handler.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": []
+    },
+    {
+      "id": "fr-64",
+      "text": "Plan items: status chip on the item header. Add a small color-coded chip at the start of each item row: 🟢 closed, ▶ running, ⏸ queued, 📌 pinned, ⚪ open. Renders from existing state (item.done, runQueue entry status, runQueuePaused) — no new schema. Quick at-a-glance scan. ~30 min. Test: rendering snippet asserts the chip class maps correctly for each status.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": []
+    },
+    {
+      "id": "fr-65",
+      "text": "Plan items: collapse done items per-layer accordion. Today 'Open only' is all-or-nothing; per-layer collapse is friendlier: closed items roll up into a '▶ N closed items in this layer (tap to expand)' footer beneath each Bug/Feature/Todo group. State persisted in localStorage per-layer. Test: rendering asserts the accordion appears when >0 done items exist + click toggles the expanded state.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "rs-f5bc0a87af13",
+          "user": "claude",
+          "text": "**Shipped.**\n\n### Layout\nWithin each layer (Bug / Feature / Todo / Other), items now partition:\n\n```\n▼ BUG\n  □  bug-42  Latest open bug\n  □  bug-41  Another open one\n  ▶ 28 closed                        ← accordion (default collapsed)\n\n▼ FEATURE\n  □  fr-67  / focus shortcut\n  □  fr-66  sparkline\n  ▶ 12 closed                        ← accordion\n```\n\nClick the dashed \"▶ N closed\" button → expands the done items below, persisted across reloads.\n\n### Implementation\n- `renderArtifact('plan')` partitions each layer's items into `openItems` + `doneItems` (`it.done` flag, same field bug-15 + fr-47 already use).\n- Open items render first. If `doneItems.length > 0`, the accordion appears with `▶ N closed` (or `▼ N closed` when expanded).\n- Click handler on `.artifact-layer-accordion-toggle` flips persisted state + re-renders the cached plan artifact for instant feedback.\n- Per-layer expand state stored as `localStorage.myco_plan_layer_expand_<key>` where `<key>` = sanitized layer name (e.g. `bug`, `feature`, `todo`).\n- Default: collapsed. Opt-in expansion per layer.\n\n### Interaction with bug-15 \"Open only\" toggle\nClean degradation: when Open only is ON, displayItems already has no done items → each layer's doneItems is empty → no accordion renders. When Open only is OFF (default), the accordion replaces the all-or-nothing experience with finer-grained per-layer control.\n\n### Files touched\n- `web/public/app.js`: partition + accordion render in `renderArtifact`; click handler binding next to the existing artifact-comment toggle; 3 helpers (`_planLayerStorageKey`, `_readPlanLayerExpanded`, `_writePlanLayerExpanded`).\n- `web/public/styles.css`: `.artifact-layer-accordion-toggle` (dashed-border pill with hover state), `.accordion-caret` (▶/▼ glyph), `.artifact-items-done` (opacity .82 to de-emphasize done items below open ones).\n\n### Test\n`test/fr-65-plan-layer-done-accordion.test.js` — 12 cases:\n- Static: helpers (`_planLayerStorageKey`, `_readPlanLayerExpanded`, `_writePlanLayerExpanded`) defined; localStorage key shape pinned\n- Static: partition uses `items.filter((it) => !it.done)` + `items.filter((it) => it.done)` inside the layer-rendering block\n- Static: accordion gated on `doneItems.length > 0` (no done = no accordion)\n- Static: toggle button carries `data-layer` + `aria-expanded` for a11y\n- Static: click handler binding wired via `querySelectorAll(.artifact-layer-accordion-toggle)` + calls `_writePlanLayerExpanded` + `renderArtifact('plan', ...)`\n- CSS: `.artifact-layer-accordion-toggle` styled (with hover); `.artifact-items-done` has opacity < 1\n- Behavior simulation: partition splits by done flag; storageKey sanitization shape; bug-15 interaction (done bucket empty under Open only)\n\n12/12 ✓ direct. **Red-flipped against pre-fix code (8/12 failed via git stash)** — confirms the test catches the regression.\n\nAdjacent plan-tab tests stay green: fr-56-plan-filter-search 20/20 ✓, plan-open-only-toggle 9/9 ✓. Full `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure web/public/ change.\n\nStatus: closed.",
+          "ts": "2026-05-24T01:26:24.923Z",
+          "meta": {
+            "kind": "run-summary"
+          }
+        }
+      ],
+      "status": "closed",
+      "closedAt": "2026-05-24T01:26:24.923Z"
+    },
+    {
+      "id": "fr-66",
+      "text": "Plan items: inline run-history sparkline. Items with multiple runs (recurring bugs like bug-33) show a compact `●●●●` strip color-coded by each run's status (green=success, red=failed, yellow=aborted). Hover/tap tooltip names the run + ts. Surfaces iteration pattern without expanding the comment thread. Reads from item.runs[]. Test: rendering asserts N dots == N runs + color class matches each status.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-67",
+      "text": "Plan tab: '/' focuses search, Esc clears. Single-character global hotkey listener (GitHub-style). When user presses '/' (and no input is focused), focus the fr-56 #plan-search input. When Esc is pressed inside #plan-search, clear the query + blur. Fast triage shortcut. Test: keydown handler bound + handler short-circuits when target is an input/textarea.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-68",
+      "text": "Plan tab: ↑/↓ navigate items, Enter opens. Vim-style list navigation — after pressing '/' (fr-XX above) cursor up/down through the FILTERED list, Enter expands the item's comment thread. Visual focus ring on the active row. Depends on the '/' shortcut + a state.planFocusedItemId field. Test: static guards on the keydown branches + state-effect simulation.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-69",
+      "text": "Plan tab: '× Clear filters' button in empty state. When fr-56 filters narrow to zero matches, the empty-state message names which filters are active but offers no escape — add a one-click reset that clears type chips (re-enables all 3) + clears search input. Tiny UX win for the dead-end case. CSS + handler. ~15 min. Test: static guard the button appears in the empty-state branch.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-70",
+      "text": "Plan layers: visual separation via indent + colored accent strip. Today Bug/Feature/Todo render as flat text headers between items; hurts scannability on mobile. Add a 3px-wide colored vertical accent strip on each layer's items (red=Bug, blue=Feature, green=Todo) + 4px left indent. CSS-only. ~20 min. Test: per-layer color rule + indent assertion.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-71",
+      "text": "Plan items: linkable URL anchors (`#bug-33` deep-link). `myco.../session/X#bug-33` scrolls to that item + briefly highlights it (yellow flash 1s). 'Copy link' affordance next to the existing comment-toggle. Read URL hash on plan-tab open + on artifact re-render. Useful for sharing in chat with collaborators. ~45 min. Test: hash-parse helper + render-highlight asserts.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-72",
+      "text": "Plan items: swipe gestures on mobile (left=Run, right=Close/Reopen). Touch gesture: swipe an item-row left → reveal a Run button + tap or full-swipe to dispatch. Swipe right → reveal a Close/Reopen button. Matches iOS Mail / Things / Linear patterns. Shared touchstart/touchmove/touchend handler. Owner+admin only (read-only viewers should not swipe-mutate). ~2 hours. Test: handler binding + state-mutation guards.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-73",
+      "text": "Plan items: long-press multi-select + 'Queue N selected' bulk action. Long-press a plan item enters selection mode (checkbox per item, header turns into an action bar). Tap others to add to selection. 'Queue all (N)' button dispatches every selected item to the run-queue in order. Common workflow ('dispatch the next 5 bugs') today requires 5 separate Run clicks. ~2 hours. Owner+admin only. Test: state machine for selection mode + bulk-dispatch loop.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-74",
+      "text": "Plan items: drag-to-reorder priority within a layer. Add a numeric `priority` field on each plan item (default 0); items within each layer sort by priority desc, then by addedAt. Touch + mouse drag handler swaps two items' priority values. Server persists via /artifact/item/edit (already exists). Combined with fr-56 type-filter this lets users build a working triage queue by drag. ~2 hours. Test: priority schema + sort assertion + drag-handler unit test.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-24T01:17:28.013Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-05-24T01:08:28.109Z"
+  "updatedAt": "2026-05-24T01:26:24.923Z"
 }
