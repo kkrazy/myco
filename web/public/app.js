@@ -6687,7 +6687,8 @@ function renderArtifact(type, artifact) {
         : !enoughVotes
           ? `Needs ${RUN_VOTE_THRESHOLD} upvote${RUN_VOTE_THRESHOLD === 1 ? '' : 's'} to run (currently ${points}). Click 👍 above to vote.`
           : `Blocked by unmet prereq${unmetDeps.length === 1 ? '' : 's'}: ${unmetDeps.join(', ')}. Mark them done first.`;
-    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="${escHtml(runLabel)}">▶ ${escHtml(runLabel)}</button>`;
+    // Mobile hides .btn-text via CSS (icon-only); desktop keeps both.
+    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="${escHtml(runLabel)}"><span class="btn-icon">▶</span><span class="btn-text">${escHtml(runLabel)}</span></button>`;
     // fr-46: edit pencil for item body text. Gated on !state.readOnly
     // (owner+admin only — viewers don't see it). meta.editedBy chip
     // surfaces the audit trail for everyone.
@@ -6695,7 +6696,7 @@ function renderArtifact(type, artifact) {
       ? `<span class="artifact-item-edited" title="edited by ${escHtml(it.meta.editedBy)} at ${escHtml(it.meta.editedAt || '')}${it.meta.originalText ? ' · original preserved' : ''}">· edited</span>`
       : '';
     const editBtn = (!state.readOnly && supportsVoting)
-      ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit">✎ Edit</button>`
+      ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit"><span class="btn-icon">✎</span><span class="btn-text">Edit</span></button>`
       : '';
     // fr-48: per-item ⊤ Queue button was pruned after the unified
     // dispatch refactor (commit 606f14c) made the ▶ Run button itself
@@ -6718,8 +6719,11 @@ function renderArtifact(type, artifact) {
     const closeTitle = it.done
       ? 'Reopen this item (clears done state)'
       : 'Close this item (marks done — no claude dispatch)';
+    // Close icon = ✓ (mark done); Reopen icon = ↻ (restart). Mobile
+    // shows just the icon; desktop adds the text label after.
+    const closeIcon = it.done ? '↻' : '✓';
     const closeBtn = supportsVoting
-      ? `<button class="artifact-item-close" data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" data-done="${it.done ? '1' : '0'}" title="${escHtml(closeTitle)}">${closeLabel}</button>`
+      ? `<button class="artifact-item-close" data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" data-done="${it.done ? '1' : '0'}" title="${escHtml(closeTitle)}" aria-label="${escHtml(closeLabel)}"><span class="btn-icon">${closeIcon}</span><span class="btn-text">${escHtml(closeLabel)}</span></button>`
       : '';
     const actionsRow = `<div class="artifact-item-actions">
         ${mergedBadge}

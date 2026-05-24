@@ -2324,6 +2324,28 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin-left: auto;  /* push delete to the right edge */
 }
 
+/* Mobile: action-row buttons drop their text label and keep just the
+   icon to save horizontal room (the row was wrapping to 2-3 lines).
+   Desktop keeps both icon + text. Buttons that have NO text label
+   (vote/comment have a number after the icon, delete is a plain X)
+   are unaffected. tooltips + aria-label still convey the action's
+   name for accessibility + hover-discovery.
+
+   Tiny visual touch: when text is hidden, give the icon a small
+   horizontal padding so the button doesn't look cramped. */
+@media (max-width: 900px) {
+  .artifact-item-run .btn-text,
+  .artifact-item-close .btn-text,
+  .artifact-item-edit .btn-text {
+    display: none;
+  }
+  .artifact-item-run .btn-icon,
+  .artifact-item-close .btn-icon,
+  .artifact-item-edit .btn-icon {
+    padding: 0 4px;
+  }
+}
+
 /* fr-62: tap-target bump on mobile. Plan-item action buttons are
    ~22–24px on desktop where mouse precision is fine; on touch
    devices Apple HIG + Material both call for ≥44px hit area so
