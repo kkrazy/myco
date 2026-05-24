@@ -2822,6 +2822,21 @@
           "meta": {
             "kind": "run-summary"
           }
+        },
+        {
+          "id": "07ba51054445",
+          "user": "kkrazy",
+          "text": "on mobile its still showing right beside the back to home icon.",
+          "ts": "2026-05-24T00:55:43.854Z"
+        },
+        {
+          "id": "rs-b350329f304d",
+          "user": "claude",
+          "text": "**Fourth pass — pane-level clearance.**\n\n### What the third pass missed\nPut the chrome-clearance padding on `.files-view-header-nav` (the inner row). The calc was mathematically correct on both desktop and mobile, BUT on mobile the parent `#files-view-header` has its own `padding: 6px 8px` override (line 4061 inside `@media (max-width: 900px)`). The combination of:\n- nested parent-padding + child-padding\n- two `@media (max-width: 900px)` blocks that both write `--chrome-btn-size` (line 1170 sets 40px, line 4046 sets 36px — last-write-wins is the cascade rule, but it's fragile to spot)\n- the possibility of other inner-cascade overrides I didn't grep\n\n...made the third-pass approach fragile. Padding cascades across nested elements are subject to lots of subtle interactions.\n\n### Fourth-pass fix — move clearance to the pane container\n\nApply the chrome-clearance padding to `#files-view-pane` (the OUTER pane), not the inner row. The WHOLE pane shifts down, so its content (header + body + action bar + action row) starts unambiguously below the chrome cluster — independent of any inner-cascade quirks.\n\n```css\n#files-view-pane {\n  padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 18px);\n  box-sizing: border-box;          /* padding included in flex height */\n}\n\n.files-view-header-nav {\n  padding: 8px 12px;               /* normal layout, no chrome clearance */\n}\n```\n\n| Viewport | Pane padding-top | Notes |\n|---|---|---|\n| Desktop (chrome-btn-size 32) | safe-area + 60px | 18px buffer below chrome |\n| Mobile (chrome-btn-size 36) | safe-area + 64px | 18px buffer below chrome |\n| iPhone-notch | + notch | shifts together with chrome |\n\nThe pane background (`#0d1117`) fills the cleared band above the content, so the area behind the chrome cluster looks clean.\n\n### Why this is more robust\n- No nested cascades. The padding is on the same element that contains the entire pane content.\n- box-sizing: border-box ensures the pane's flex height includes the padding (otherwise the pane would overflow the viewport).\n- Mobile-specific override no longer needed — the same calc works for both viewport sizes because `var(--chrome-btn-size)` auto-adapts.\n- Future-proof: if someone adds a NEW row above the breadcrumb later, it'll also be below the chrome automatically.\n\n### Test\n`test/bug-33-file-viewer-breadcrumb-row.test.js` (10 cases):\n- New guard: `#files-view-pane` must have padding-top calc referencing `env(safe-area-inset-top, 0px)` + `var(--chrome-btn-size)`\n- New guard: `#files-view-pane` must declare `box-sizing: border-box` (so padding is in the flex height)\n- Updated guard: `.files-view-header-nav` uses normal padding (chrome-clearance is now at the pane level)\n- Three negative guards reject re-introduction of the dead first-pass (`92px` right), second-pass (`+50px` hardcoded), AND third-pass (calc on `.files-view-header-nav`) approaches — none can silently come back.\n\n10/10 ✓ direct. Adjacent fr-50-edit-button-visible 5/5 ✓ + fr-50-file-editor 17/17 ✓.\n\nFull `./test/test.sh` aborts on host BusyBox `grep -P` (pre-existing env limit per CLAUDE.md §Pre-Commit-1).\n\n### Takes effect on browser reload after next `./scripts/deploy.sh` push\nPure CSS change. Hard-refresh recommended (Cmd+Shift+R on desktop, \"Clear and reload\" on mobile Safari/Chrome).\n\n### Cache-bust note\nIf you've redeployed but still see the old layout: that's the browser's CSS cache holding the stale stylesheet. Hard-refresh or open in an incognito window to bypass.\n\nStatus: closed (fourth time). Apologies for the iteration — should have moved to the pane-level approach earlier rather than fighting the inner cascade three times.",
+          "ts": "2026-05-24T01:08:28.109Z",
+          "meta": {
+            "kind": "run-summary"
+          }
         }
       ],
       "meta": {
@@ -2830,7 +2845,7 @@
         "rewritten": true
       },
       "status": "closed",
-      "closedAt": "2026-05-23T05:21:03.039Z"
+      "closedAt": "2026-05-24T01:08:28.109Z"
     },
     {
       "id": "bug-34",
@@ -2888,5 +2903,5 @@
       }
     }
   ],
-  "updatedAt": "2026-05-23T09:08:41.135Z"
+  "updatedAt": "2026-05-24T01:08:28.109Z"
 }

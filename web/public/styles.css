@@ -3516,6 +3516,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
   background: #0d1117;
   position: relative;       /* anchor for the floating action bar */
+  /* bug-33 (fourth pass): chrome-cluster clearance applied at the
+     PANE level rather than the nav-row level. The third-pass nav-row
+     padding-top was fragile under nested-cascade overrides on mobile.
+     Moving the calc here means the WHOLE pane shifts down so the
+     chrome cluster (5× `position:fixed; top:10px` buttons) sits in
+     the cleared band above the pane content. Inner row padding stays
+     small + layout-only. Math:
+       safe-area-top + chrome-top(10px) + var(--chrome-btn-size) + 18px buffer
+     Desktop --chrome-btn-size=32 → 60px above safe-area
+     Mobile  --chrome-btn-size=36 → 64px above safe-area
+     iPhone notch shifts both the chrome and this padding together. */
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 18px);
+  box-sizing: border-box;
 }
 /* bug-33: two-row layout. Row 1 holds back-button + breadcrumb (the
    "nav + context" row, padded right to clear the floating chrome).
@@ -3540,25 +3553,12 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
 }
 .files-view-header-nav {
-  /* bug-33 (third pass — mobile fix): the floating chrome cluster
-     has FIVE `position: fixed; top: 10px` buttons (Plan / Arch /
-     Test / Files / Chat). On desktop --chrome-btn-size=32px so the
-     chrome bottom edge is at safe-area + 42px. On MOBILE the
-     variable bumps to 40px (line ~1170) so the chrome bottom is
-     at safe-area + 50px — the second-pass hardcoded `+50px` landed
-     exactly on the chrome bottom with zero buffer, so the
-     breadcrumb still touched the icons on mobile. Use the variable
-     so the buffer auto-adapts across viewport sizes:
-
-       padding-top = safe-area-top + chrome-top(10px) + chrome-btn-size + buffer(18px)
-
-     Desktop: 0 + 10 + 32 + 18 =  60px  → 18px buffer below chrome
-     Mobile:  0 + 10 + 40 + 18 =  68px  → 18px buffer below chrome
-     iPhone:  notch + 60/68     → same 18px buffer (notch shifts everything)
-
-     No right padding — breadcrumb gets full pane width on its
-     dedicated row. */
-  padding: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 18px) 12px 8px 12px;
+  /* bug-33 (fourth pass): chrome clearance moved to the parent
+     `#files-view-pane padding-top` so the WHOLE pane sits below
+     the chrome cluster — the third-pass per-row padding-top was
+     fragile under mobile-CSS cascade overrides. With the pane-level
+     clearance in place, this row just needs normal layout padding. */
+  padding: 8px 12px;
   min-height: var(--pane-header-h);
 }
 .files-view-header-actions {
@@ -4059,6 +4059,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   /* (No popover input mode anymore — Add comment opens an inline editor in
      the code body. The popover stays small and selection-anchored.) */
   #files-view-header { padding: 6px 8px; gap: 4px; }
+  /* bug-33 (fourth pass): chrome-cluster clearance lives on
+     #files-view-pane itself (above, viewport-agnostic) so the
+     WHOLE pane shifts down below the floating chrome — works on
+     mobile without depending on the parent-child padding cascade
+     that was breaking before. No mobile-specific override needed. */
   .claude-card .cc-q { font-size: 12px; }
   .claude-card .cc-a { font-size: 13px; }
 }

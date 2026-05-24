@@ -93,34 +93,48 @@ t('CSS: #files-view-header is flex-column (stacks the two rows)', () => {
     '#files-view-header must declare flex-direction: column so the two rows stack vertically');
 });
 
-t('CSS: .files-view-header-nav pushes breadcrumb BELOW the chrome cluster (mobile-aware)', () => {
-  // bug-33 third pass (mobile fix): the chrome cluster has FIVE
-  // position:fixed buttons (Plan / Arch / Test / Files / Chat).
-  // --chrome-btn-size is 32px on desktop but 40px on mobile (media
-  // query at line ~1170). The second pass hardcoded +50px which
-  // landed exactly on the mobile chrome bottom (zero buffer) and
-  // still looked cluttered. Fix: use the --chrome-btn-size variable
-  // in the padding calc so the buffer auto-adapts across viewport
-  // sizes. Required shape:
+t('CSS: #files-view-pane padding-top pushes the WHOLE pane below the chrome cluster', () => {
+  // bug-33 fourth pass: third-pass put the padding-top on
+  // .files-view-header-nav (the inner row), but the user reported
+  // the breadcrumb still appeared beside the chrome on mobile —
+  // diagnosed as fragile parent-child padding cascade interactions
+  // inside the mobile @media block. Moved the chrome-clearance to
+  // #files-view-pane (the outer pane container) so the WHOLE pane
+  // — header, body, action bar, action row — shifts below the
+  // chrome cluster, independent of inner-padding cascades. Required
+  // shape on #files-view-pane:
   //
-  //   padding-top = safe-area-inset-top + 10px + var(--chrome-btn-size) + buffer
+  //   padding-top: calc(env(safe-area-inset-top, 0px) + 10px
+  //                     + var(--chrome-btn-size) + ≥10px buffer)
   //
-  // where buffer is ≥10px so the gap is visible at both desktop (32px)
-  // and mobile (40px) sizes.
+  // The var() makes it auto-adapt to mobile vs desktop chrome sizes
+  // and iPhone-notch safe-area insets.
+  const paneBlock = CSS.match(/#files-view-pane\s*\{[\s\S]*?\}/);
+  assert.ok(paneBlock, '#files-view-pane rule must exist');
+  const topCalcRe = /padding-top:\s*calc\([^)]*env\(safe-area-inset-top[^)]*\)[^)]*var\(--chrome-btn-size\)[^)]*\)/;
+  assert.ok(topCalcRe.test(paneBlock[0]),
+    '#files-view-pane must have a padding-top calc() that references BOTH env(safe-area-inset-top, 0px) AND var(--chrome-btn-size) so the WHOLE pane sits below the floating chrome cluster — third-pass nav-row-level padding was fragile under mobile cascade overrides.');
+  // box-sizing must be border-box so the padding is included in
+  // the pane's flex sizing — otherwise the padding stacks on top
+  // of the flex height and the pane overflows.
+  assert.ok(/box-sizing:\s*border-box/.test(paneBlock[0]),
+    '#files-view-pane must declare box-sizing: border-box so the chrome-clearance padding is included in its flex height (otherwise pane overflows the viewport)');
+});
+
+t('CSS: .files-view-header-nav uses normal padding (chrome clearance moved to pane)', () => {
+  // After bug-33 fourth pass, the nav-row no longer needs the heavy
+  // chrome-clearance padding — that's handled at the pane level.
+  // The nav row uses normal layout padding. Negative guards confirm
+  // the dead first/second/third-pass nav-row paddings are all gone.
   const navBlock = CSS.match(/\.files-view-header-nav\s*\{[\s\S]*?\}/);
   assert.ok(navBlock, '.files-view-header-nav rule must exist');
-  // The padding-top calc must reference var(--chrome-btn-size) AND
-  // env(safe-area-inset-top) so it adapts to both mobile chrome-size
-  // bumps + iPhone-notch insets.
-  const topCalcRe = /padding:\s*calc\([^)]*env\(safe-area-inset-top[^)]*\)[^)]*var\(--chrome-btn-size\)[^)]*\)/;
-  assert.ok(topCalcRe.test(navBlock[0]),
-    '.files-view-header-nav padding-top must be a calc() that references BOTH env(safe-area-inset-top, 0px) AND var(--chrome-btn-size) so the breadcrumb sits below the chrome on every viewport size — pre-third-pass it hardcoded 50px which landed exactly on the mobile chrome bottom (40px-tall buttons, 0 buffer).');
-  // Defensive: must NOT carry the dead first-pass 92px right-padding
-  // OR the dead second-pass hardcoded +50px.
+  // Negative guards on all three dead historical paddings:
   assert.ok(!/padding:\s*8px\s+92px/.test(navBlock[0]),
     '.files-view-header-nav must NOT still carry the dead 92px right-padding from the first-pass bug-33 fix');
   assert.ok(!/padding:\s*calc\(\s*env\(safe-area-inset-top[^)]*\)\s*\+\s*50px\s*\)/.test(navBlock[0]),
-    '.files-view-header-nav must NOT still carry the dead +50px hardcoded top-padding from the second-pass bug-33 fix — that value lands exactly on mobile chrome bottom (zero buffer)');
+    '.files-view-header-nav must NOT still carry the dead +50px hardcoded top-padding from the second-pass bug-33 fix');
+  assert.ok(!/padding:\s*calc\([^)]*var\(--chrome-btn-size\)[^)]*\)\s+[0-9]/.test(navBlock[0]),
+    '.files-view-header-nav must NOT still carry the third-pass chrome-clearance calc — that work moved to #files-view-pane padding-top in the fourth pass');
 });
 
 t('CSS: .files-view-header-actions defaults to display:none + :has auto-show', () => {
