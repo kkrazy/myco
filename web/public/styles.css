@@ -6322,7 +6322,18 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
-  cursor: pointer;       /* click-outside-to-defer */
+  /* bug-41: NOT clickable to dismiss. Pre-fix the cursor:pointer + the
+     "click outside to defer" hint suggested click-outside-dismiss, but
+     the bug-31 fix removed the actual data-perm-defer attribute from
+     the backdrop (in index.html) — so the cursor was misleading. Now
+     the cursor stays default (no pointer affordance) AND
+     pointer-events:none ensures clicks pass through to whatever's
+     behind, NOT triggering any spurious modal dismiss path.
+     The agent stays blocked on AskUserQuestion until the user
+     explicitly picks an option / clicks X / hits Esc — no surprise
+     loss of the modal from an accidental tap. */
+  cursor: default;
+  pointer-events: none;
 }
 .perm-modal-box {
   position: relative;

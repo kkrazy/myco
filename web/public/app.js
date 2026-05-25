@@ -2404,7 +2404,17 @@ function _renderPermModal() {
 
 // Modal click handler — single delegated listener. Handles option pick
 // (single-select), checkbox toggle (multi-select), Submit, prev/next
-// navigation, and the various defer affordances (X, backdrop click).
+// navigation, and the X defer button.
+// bug-41: backdrop click is NOT a defer affordance. Pre-fix (and per
+// the stale comment that used to live here) clicking outside the box
+// would defer the modal — but bug-31 already removed the
+// data-perm-defer attribute from the backdrop in index.html (outside-
+// click was the most common ACCIDENTAL dismiss path). bug-41 follow-
+// up: also removed the misleading cursor:pointer + hint text + added
+// pointer-events:none on the backdrop so even the click event never
+// reaches this listener. Only Esc (handled in the keydown handler at
+// _bindPermKeys) or the X button (.perm-modal-close with
+// data-perm-defer="1") will defer.
 function _bindPermModal() {
   const modal = document.getElementById('perm-modal');
   if (!modal || modal.dataset.bound === '1') return;

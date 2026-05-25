@@ -2779,6 +2779,17 @@ test_chat_window() {
   # browser chrome edge (mobile already reserves the chrome band via
   # artifact-main-view's padding-top, so this is desktop-only).
   node_test_result test/bug-40-plan-view-desktop-layout.test.js "test/bug-40-plan-view-desktop-layout.test.js (4 cases)"
+  # bug-41 (user-reported 2026-05-25): "click outside of the askuserquestion
+  # won't have opportunity to bring it back again, the askuserquestion
+  # shouldn't disappear when click outside." Defense-in-depth follow-up
+  # to bug-31 (which removed data-perm-defer from the backdrop in
+  # index.html but left misleading visual cues): backdrop CSS now has
+  # cursor: default + pointer-events: none (clicks cannot even reach
+  # the handler); hint text drops "click outside to defer"; JS handler
+  # comment updated. Pins exactly TWO permModalDismissed=true sites
+  # (Esc + X button) so any future "outside-click dismiss" patch would
+  # red-flip the test.
+  node_test_result test/bug-41-perm-modal-backdrop-no-dismiss.test.js "test/bug-41-perm-modal-backdrop-no-dismiss.test.js (8 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-

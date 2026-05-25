@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=254" />
+  <link rel="stylesheet" href="styles.css?v=255" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -440,7 +440,11 @@
       <div class="perm-modal-question" id="perm-modal-question"></div>
       <div class="perm-modal-opts" id="perm-modal-opts"></div>
       <div class="perm-modal-hint">
-        <kbd>Esc</kbd> defers · click outside to defer · digit keys (1, 2, 3…) also pick
+        <!-- bug-41: removed "click outside to defer" — backdrop is no
+             longer a dismiss affordance (would silently strand the agent
+             on AskUserQuestion). Only Esc or the X button defer; digit
+             keys pick options. -->
+        <kbd>Esc</kbd> or <kbd>×</kbd> defers · digit keys (1, 2, 3…) also pick
       </div>
     </div>
   </div>
