@@ -1400,6 +1400,18 @@ module.exports = {
   // queueItemForRun to stamp entry.overlapWarning for UI surface.
   _extractFilePaths,
   _findPathOverlap,
+  // bug-38: persistArtifact exposed publicly so chat-mode helpers
+  // in attach.js can mirror plan-item mutations to the project's
+  // _myco_/plan.json file (not just /data/sessions.json). Pre-fix,
+  // chat-mode helpers called saveStore() alone — the mirror stayed
+  // stale, so the next HTTP mutation's _loadArtifactIntoRecFromFile
+  // (called at top of every artifact mutation) reloaded the stale
+  // mirror and WIPED the just-stamped runs[]/aiChat[] entries.
+  // Manifested as "fr-58 chat history wiped after fr-59 submitted"
+  // on opti 2026-05-25 — both items dispatched, neither got their
+  // runs[]/aiChat[] persisted because the mirror was stale + got
+  // reloaded on each subsequent mutation.
+  persistArtifact,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

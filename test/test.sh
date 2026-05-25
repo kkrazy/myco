@@ -2854,6 +2854,22 @@ test_chat_window() {
   # member's claude subprocess is truly isolated — SDK can't batch
   # across separate query() calls.
   node_test_result test/fr-90-phase1-pool-dispatch.test.js "test/fr-90-phase1-pool-dispatch.test.js (14 cases)"
+  # bug-38 (user-reported on opti 2026-05-25 03:04): submit fr-58 +
+  # fr-59 to run → fr-58's chat history wiped after fr-59 submitted.
+  # Root cause: chat-mode plan-item mutations (running stamp + user-
+  # turn aiChat append + agent-turn aiChat + run-outcome stamp) used
+  # bare sessionsMod.saveStore() which writes ONLY /data/sessions.json
+  # — NOT the project's _myco_/plan.json mirror. HTTP-route mutations
+  # call _loadArtifactIntoRecFromFile at the top of every mutation,
+  # which reloads the stale mirror file + REPLACES rec.artifacts.plan
+  # in memory → wipes the just-stamped chat-mode mutations. Fix: all
+  # 4 chat-mode helpers (_stampPlanItemStatus / _stampPlanItemRunOutcome
+  # / _appendUserAiChatTurn / _appendAgentAiChatTurn) now call
+  # artifactsMod.persistArtifact(rec, 'plan', planArtifact) which
+  # does saveStore + writeArtifactToFile + writeMycoReadmeIfMissing —
+  # mirror stays in sync, next reload is harmless. persistArtifact
+  # promoted from __test to public exports.
+  node_test_result test/bug-38-mirror-stale-reload-wipes-chat.test.js "test/bug-38-mirror-stale-reload-wipes-chat.test.js (7 cases)"
   # fr-90 Phase 0: worktree MCP tools (worktree_create / remove / list)
   # + registry at <absCwd>/_myco_/worktrees.json + helpers exported
   # for Phase 1 dispatch use. Foundation for parallel item runs (Phase

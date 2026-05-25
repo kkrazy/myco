@@ -309,7 +309,12 @@ function _stampPlanItemStatus(sessionId, itemId, status, summary) {
   });
   // Cap runs[] at the last 10 so a busy item doesn't bloat plan.json.
   if (item.runs.length > 10) item.runs = item.runs.slice(-10);
-  sessionsMod.saveStore();
+  // bug-38: persist to BOTH /data/sessions.json AND the project's
+  // _myco_/plan.json mirror. The mirror is what HTTP-route mutations
+  // reload on entry (via _loadArtifactIntoRecFromFile), so if we
+  // only call saveStore here the mirror stays stale and the next
+  // mutation reloads it + wipes this runs[] entry.
+  getArtifactsMod().persistArtifact(rec, 'plan', planArtifact);
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
@@ -429,7 +434,9 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   // chatty item doesn't bloat plan.json. Oldest dropped first.
   if (item.comments.length > 50) item.comments = item.comments.slice(-50);
 
-  sessionsMod.saveStore();
+  // bug-38: mirror to project _myco_/plan.json too (NOT just sessions.json).
+  // See _stampPlanItemStatus for the rationale.
+  getArtifactsMod().persistArtifact(rec, 'plan', planArtifact);
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
@@ -464,7 +471,9 @@ function _appendUserAiChatTurn(sessionId, itemId, user, fullText) {
   if (!text) return;
   const artifactsMod = getArtifactsMod();
   artifactsMod.appendAiChatTurn(item, { user, role: 'user', text });
-  sessionsMod.saveStore();
+  // bug-38: mirror to project _myco_/plan.json too. See _stampPlanItemStatus
+  // for the rationale.
+  artifactsMod.persistArtifact(rec, 'plan', planArtifact);
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
@@ -508,7 +517,9 @@ function _appendAgentAiChatTurn(sessionId, itemId, ev, accumulatedText) {
       costUsd: (ev && ev.totalCostUsd) || null,
     },
   });
-  sessionsMod.saveStore();
+  // bug-38: mirror to project _myco_/plan.json too. See _stampPlanItemStatus
+  // for the rationale.
+  artifactsMod.persistArtifact(rec, 'plan', planArtifact);
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
