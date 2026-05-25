@@ -2841,6 +2841,19 @@ test_chat_window() {
   # context (no SDK batching) but related items (dependsOn or text-
   # mention) reuse the same pool session for accumulated context.
   node_test_result test/fr-90-session-pool.test.js "test/fr-90-session-pool.test.js (27 cases)"
+  # fr-90 Phase 1: SessionPool wired into attach.js queue dispatch
+  # behind rec.sessionPoolEnabled opt-in flag. Each pool member
+  # (own AgentSession / own claude subprocess / own SDK conversation)
+  # gets the bug-37 FIFO + bind logic via DI bindFns from attach.js
+  # (avoids circular import). When pool-enabled + has marker + item
+  # exists: route via pool.dispatch instead of parent session.write.
+  # SessionPool routes per Phase 0 rules (dependsOn > mention > LRU >
+  # spawn-under-cap > queue-if-busy); the per-pool-member listener
+  # handles turn_start counting + N-pop on terminal + variant-B
+  # shared-buffer distribution + onTerminal slot release. Each pool
+  # member's claude subprocess is truly isolated — SDK can't batch
+  # across separate query() calls.
+  node_test_result test/fr-90-phase1-pool-dispatch.test.js "test/fr-90-phase1-pool-dispatch.test.js (14 cases)"
   # fr-90 Phase 0: worktree MCP tools (worktree_create / remove / list)
   # + registry at <absCwd>/_myco_/worktrees.json + helpers exported
   # for Phase 1 dispatch use. Foundation for parallel item runs (Phase

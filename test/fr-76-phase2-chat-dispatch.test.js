@@ -62,9 +62,11 @@ t('handleChatMessage pushes a chatBound entry to the FIFO _activeItemQueue', () 
   assert.ok(/session\._activeItemQueue\.push\s*\(/.test(ATTACH),
     'attach.js must push to _activeItemQueue (FIFO of in-flight item bindings)');
   const idx = ATTACH.search(/session\._activeItemQueue\.push\s*\(/);
-  // Window covers the push call + a few lines before (the targetId
-  // derivation reads chatMatch[2] / runMatch[2]).
-  const window = ATTACH.slice(Math.max(0, idx - 400), idx + 600);
+  // Window covers the push call + plenty of lines before — fr-90
+  // Phase 1 added the pool gate (which also derives itemId from
+  // chatMatch[2]) between the marker-parse block and the push site,
+  // so the legacy chatMatch[2] reference now lives further up.
+  const window = ATTACH.slice(Math.max(0, idx - 2500), idx + 600);
   // Allow bare chatMatch OR the hotfix _chatMatch (handleChatPostfixes
   // re-derives the match locally to avoid out-of-scope reference).
   assert.ok(/chatBound:\s*!!_?chatMatch/.test(window),

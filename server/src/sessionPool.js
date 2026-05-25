@@ -102,6 +102,11 @@ class SessionPool {
     if (!opts.parentSessionId) throw new Error('SessionPool: parentSessionId is required');
     this.cwd = opts.cwd;
     this.parentSessionId = opts.parentSessionId;
+    // fr-90 Phase 1: parentSession is the chat session's AgentSession.
+    // Used as the `session` arg when invoking _advanceRunQueue —
+    // queue auto-dispatch fires handleChatMessage on the parent so
+    // it re-enters this pool path for the next pending item.
+    this.parentSession = opts.parentSession || null;
     this.maxSize = Number.isInteger(opts.maxSize) && opts.maxSize > 0
       ? opts.maxSize : DEFAULT_MAX_SIZE;
     this.idleTimeoutMs = Number.isInteger(opts.idleTimeoutMs) && opts.idleTimeoutMs >= 0
@@ -112,6 +117,19 @@ class SessionPool {
     this._now = typeof opts.now === 'function' ? opts.now : Date.now;
     this.bootId = opts.bootId || crypto.randomBytes(8).toString('hex');
     this._log = opts.logger || console;
+    // fr-90 Phase 1: DI seam for binding functions. attach.js wires
+    // its _stampPlanItemRunOutcome / _stampPlanItemStatus /
+    // _advanceRunQueue / _appendAgentAiChatTurn here. Avoids
+    // circular import (sessionPool.js → attach.js → sessionPool.js).
+    // Tests inject mocks via the same seam to capture binding calls
+    // without touching the real chat-session record.
+    this._bindFns = opts.bindFns || {
+      stampPlanItemRunOutcome: () => {},
+      stampPlanItemStatus: () => {},
+      advanceRunQueue: () => {},
+      appendAgentAiChatTurn: () => {},
+      getSessionRecord: () => null,
+    };
     // Runtime state.
     this.sessions = new Map();        // poolId → SessionEntry
     this.affinity = new Map();        // itemId → poolId (current-boot live mapping)
@@ -258,6 +276,12 @@ class SessionPool {
     const childSessionId = this.parentSessionId + ':' + poolId;
     const agent = this._spawnAgentFn(childSessionId, { cwd: this.cwd });
     const now = this._now();
+    // fr-90 Phase 1: each pool member has its own bug-37 FIFO state
+    // on its agent. The merged listener installed below pops heads
+    // on terminal events + distributes shared buffer to each (variant
+    // B), then calls this.onTerminal(poolId) to free the slot.
+    agent._activeItemQueue = [];
+    agent._pendingTurnStarts = 0;
     const entry = {
       poolId,
       agent,
@@ -268,8 +292,107 @@ class SessionPool {
       deps: new Set(),       // dep itemIds carried by those items
     };
     this.sessions.set(poolId, entry);
+    // Install the agent-event listener on this pool member. Mirrors
+    // the bug-37 merged listener in attach.js _registerExternalSession
+    // — but scoped to THIS pool member's queue + counter, and binds
+    // via DI bindFns so we don't have to import attach.js (circular).
+    if (typeof agent.on === 'function') {
+      agent.on('agent-event', (ev) => this._handleAgentEvent(poolId, agent, ev));
+    }
     this._log.log('[sessionPool] spawned ' + poolId + ' (' + this.sessions.size + '/' + this.maxSize + ')');
     return poolId;
+  }
+
+  // fr-90 Phase 1: per-pool-member agent-event listener. Mirrors the
+  // bug-37 + bug-36 design from attach.js _registerExternalSession,
+  // but each pool member has its own _activeItemQueue + counter so
+  // pool members can run in true parallel (each is its own claude
+  // subprocess with its own SDK conversation — the SDK can't batch
+  // across separate query() calls).
+  //
+  // After binding all popped heads, calls this.onTerminal(poolId)
+  // to free the pool slot + drain pendingDispatches.
+  _handleAgentEvent(poolId, agent, ev) {
+    if (!ev) return;
+    if (!Array.isArray(agent._activeItemQueue)) agent._activeItemQueue = [];
+    if (typeof agent._pendingTurnStarts !== 'number') agent._pendingTurnStarts = 0;
+    const queue = agent._activeItemQueue;
+
+    // bug-37: count turn_start events between terminals.
+    if (ev.type === 'turn_start') {
+      agent._pendingTurnStarts += 1;
+      return;
+    }
+    // bug-37 variant B: always buffer into queue[0]; distributed to
+    // every popped head on terminal.
+    if (ev.type === 'assistant_text' && typeof ev.text === 'string') {
+      if (queue.length > 0) queue[0]._buffer += ev.text;
+      return;
+    }
+    const terminalTypes = new Set(['turn_result', 'iteration_aborted', 'fatal']);
+    if (!terminalTypes.has(ev.type)) return;
+
+    // Pop count = min(max(1, pendingTurnStarts), queue.length).
+    let popCount = Math.max(1, agent._pendingTurnStarts);
+    agent._pendingTurnStarts = 0;
+
+    if (queue.length === 0) {
+      // Pool members don't have the fr-51 rec.runQueue fallback
+      // because their dispatch path is well-defined (via
+      // pool.dispatch). If queue is empty on terminal, nothing to
+      // bind. Free the slot + log.
+      this._log.warn('[sessionPool] ' + poolId + ' terminal=' + ev.type + ' with empty queue; freeing slot');
+      this.onTerminal(poolId);
+      return;
+    }
+    popCount = Math.min(popCount, queue.length);
+    const sharedBuffer = queue[0]._buffer || '';
+    for (let i = 0; i < popCount; i++) {
+      const head = queue.shift();
+      if (!head) break;
+      this._bindHead(head, ev, sharedBuffer);
+    }
+    this.onTerminal(poolId);
+  }
+
+  // Per-head binding — same logic as attach.js _bindHeadToTerminal,
+  // but calls through DI bindFns so SessionPool doesn't import
+  // attach.js. The bound data lives on the PARENT chat session's
+  // plan.json (per-item runs[]/aiChat[]) — pool members are pure
+  // execution contexts.
+  _bindHead(head, ev, sharedBuffer) {
+    const fns = this._bindFns;
+    if (head.runBound) {
+      if (ev.type === 'turn_result') {
+        try {
+          fns.stampPlanItemRunOutcome(this.parentSessionId, head.itemId, ev, head.startedAt);
+        } catch (err) {
+          this._log.error('[sessionPool] stamp outcome failed:', err.message);
+        }
+      } else {
+        const synthStatus = ev.type === 'iteration_aborted' ? 'aborted' : 'error';
+        try {
+          fns.stampPlanItemStatus(this.parentSessionId, head.itemId, synthStatus,
+            ev.type === 'iteration_aborted' ? 'interrupted by Stop' : (ev.error || 'fatal'));
+        } catch (err) {
+          this._log.error('[sessionPool] stamp status failed:', err.message);
+        }
+      }
+      try {
+        // _advanceRunQueue needs the parent session (for state-update
+        // broadcasts + handleChatMessage re-entry on next dispatch).
+        fns.advanceRunQueue(this.parentSessionId, this.parentSession, head.itemId, ev);
+      } catch (err) {
+        this._log.error('[sessionPool] advance run queue failed:', err.message);
+      }
+    }
+    if (head.chatBound) {
+      try {
+        fns.appendAgentAiChatTurn(this.parentSessionId, head.itemId, ev, sharedBuffer);
+      } catch (err) {
+        this._log.error('[sessionPool] append agent ai chat turn failed:', err.message);
+      }
+    }
   }
 
   _reapIdle() {
@@ -338,11 +461,33 @@ class SessionPool {
     }
     this.affinity.set(item.id, pick.poolId);
     this._persistAffinity();
+    // fr-90 Phase 1: push to the pool member's bug-37 FIFO. The
+    // item._chatBound / item._runBound flags are set by the caller
+    // (attach.js handleChatPostfixes derives them from the dispatch
+    // text markers). They survive on the entry so the per-pool
+    // listener's _bindHead can decide which side(s) to bind on
+    // terminal events.
+    if (!Array.isArray(sess.agent._activeItemQueue)) {
+      sess.agent._activeItemQueue = [];
+    }
+    sess.agent._activeItemQueue.push({
+      itemId: item.id,
+      type: 'plan',
+      chatBound: item._chatBound !== false,   // default true (queue dispatch carries [chat:])
+      runBound: item._runBound !== false,     // default true (queue dispatch carries [run:])
+      startedAt: new Date(this._now()).toISOString(),
+      _buffer: '',
+    });
+    if (sess.agent._activeItemQueue.length > 50) {
+      sess.agent._activeItemQueue = sess.agent._activeItemQueue.slice(-50);
+    }
     try {
       sess.agent.write(text);
     } catch (err) {
-      // Write failed — undo the busy flag so the pool isn't stuck.
+      // Write failed — undo the busy flag + pop the FIFO entry so
+      // the pool isn't stuck.
       sess.busy = false;
+      sess.agent._activeItemQueue.pop();
       this._log.error('[sessionPool] write to ' + pick.poolId + ' failed:', err.message);
       return { ok: false, reason: 'write-failed', error: err.message };
     }

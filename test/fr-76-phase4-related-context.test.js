@@ -84,7 +84,7 @@ t('attach.js: handleChatMessage injects context for [chat:...] markers', () => {
   // injection and the actual session.write call).
   const idx = ATTACH_SRC.search(/fr-76 Phase 4: when a chat-panel marker/);
   assert.ok(idx > -1, 'fr-76 Phase 4 context-injection block must exist');
-  const win = ATTACH_SRC.slice(idx, idx + 4000);
+  const win = ATTACH_SRC.slice(idx, idx + 6000);
   assert.ok(/chatMarkerMatch/.test(win),
     'must compute chatMarkerMatch from input');
   assert.ok(/getRelatedItemsContext/.test(win),
@@ -95,7 +95,7 @@ t('attach.js: handleChatMessage injects context for [chat:...] markers', () => {
 
 t('attach.js: context injection is in try/catch (graceful skip)', () => {
   const idx = ATTACH_SRC.search(/fr-76 Phase 4: when a chat-panel marker/);
-  const win = ATTACH_SRC.slice(idx, idx + 4000);
+  const win = ATTACH_SRC.slice(idx, idx + 6000);
   assert.ok(/try\s*\{[\s\S]{0,800}getRelatedItemsContext[\s\S]{0,400}\}\s*catch/.test(win),
     'context lookup must be in try/catch — failure must not break the dispatch');
 });

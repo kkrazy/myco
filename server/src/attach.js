@@ -1934,10 +1934,48 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
   const _runMatch = text.match(/\[run:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
   const _chatMatch = text.match(/\[chat:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
   if (_chatMatch || _runMatch) {
+    // fr-90 Phase 1: when rec.sessionPoolEnabled === true, route the
+    // dispatch through a SessionPool member instead of the parent
+    // agent. Each pool member is its own AgentSession with its own
+    // _activeItemQueue + agent-event listener (installed by
+    // sessionPool.SessionPool._spawnSession). This means parallel
+    // dispatches each run in their OWN claude subprocess context —
+    // no SDK batching possible (bug-37's limitation). Related items
+    // (dependsOn / text-mention) reuse the same pool member so the
+    // agent there retains accumulated context.
+    //
+    // Opt-in via rec.sessionPoolEnabled flag (default false). When
+    // off, the legacy parent-FIFO push below runs as today.
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    const itemId = (_chatMatch && _chatMatch[2]) || (_runMatch && _runMatch[2]);
+    const item = rec && rec.artifacts && rec.artifacts.plan
+      && Array.isArray(rec.artifacts.plan.items)
+      ? rec.artifacts.plan.items.find((i) => i && i.id === itemId)
+      : null;
+    if (rec && rec.sessionPoolEnabled === true && item) {
+      try {
+        const pool = _getOrCreatePool(sessionId, rec, session);
+        // Snapshot the marker flags onto the item-shaped payload pool
+        // expects — pool uses item.id + item.dependsOn + item.text +
+        // item.comments for routing; chatBound/runBound come from
+        // markers present in the dispatch text.
+        const r = pool.dispatch(
+          { ...item, _chatBound: !!_chatMatch, _runBound: !!_runMatch },
+          agentText);
+        console.log(`[sessionPool] dispatch ${item.id} → ${r.ok ? r.poolId + ' (' + r.reason + ')' : r.reason + ' (queuePos=' + (r.queuePos || '?') + ')'}`);
+        // Pool path is terminal — DO NOT also push to parent FIFO
+        // (would double-bind) and DO NOT call session.write below.
+        return;
+      } catch (err) {
+        console.error(`[sessionPool] dispatch failed, falling back to parent: ${err.message}`);
+        // Fall through to the legacy parent path on error.
+      }
+    }
+    // Legacy bug-36+bug-37 FIFO push on the parent session.
     if (!Array.isArray(session._activeItemQueue)) {
       session._activeItemQueue = [];
     }
-    const targetId = (_chatMatch && _chatMatch[2]) || (_runMatch && _runMatch[2]);
+    const targetId = itemId;
     session._activeItemQueue.push({
       itemId: targetId,
       type: 'plan',
@@ -1957,6 +1995,44 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
   // Normal forward — pushes into the SDK streaming-input queue.
   console.log(`[chat→agent] ${user}: ${input.substring(0, 80)}`);
   session.write(agentText);
+}
+
+// fr-90 Phase 1: per-chat-session SessionPool registry. Created
+// lazily on the first pool-routed dispatch. Wires the bug-37 FIFO
+// + binding helpers into each pool member via DI bindFns so the
+// SessionPool module doesn't have to import attach.js (would
+// circular-import).
+const _sessionPools = new Map();   // sessionId → SessionPool
+
+function _getOrCreatePool(sessionId, rec, parentSession) {
+  let pool = _sessionPools.get(sessionId);
+  if (pool) return pool;
+  const { SessionPool } = require('./sessionPool');
+  const opts = {
+    cwd: rec && rec.absCwd,
+    parentSessionId: sessionId,
+    parentSession,    // for _advanceRunQueue's session arg
+    maxSize: (rec && Number.isInteger(rec.sessionPoolMaxSize)) ? rec.sessionPoolMaxSize : undefined,
+    bindFns: {
+      stampPlanItemRunOutcome: _stampPlanItemRunOutcome,
+      stampPlanItemStatus: _stampPlanItemStatus,
+      advanceRunQueue: _advanceRunQueue,
+      appendAgentAiChatTurn: _appendAgentAiChatTurn,
+      getSessionRecord: sessionsMod.getSessionRecord,
+    },
+  };
+  pool = new SessionPool(opts);
+  pool.startReaper();
+  _sessionPools.set(sessionId, pool);
+  console.log(`[sessionPool] created pool for ${sessionId} (cwd=${opts.cwd}, maxSize=${pool.maxSize})`);
+  return pool;
+}
+
+function _shutdownPoolFor(sessionId) {
+  const pool = _sessionPools.get(sessionId);
+  if (!pool) return;
+  pool.shutdown();
+  _sessionPools.delete(sessionId);
 }
 
 async function runAssistant(sessionId, session, lastMessage) {
@@ -1997,6 +2073,9 @@ module.exports = {
   // time, so rec.admins changes don't reach in-flight viewer WSes
   // without a reconnect).
   _kickViewerByLogin,
+  // fr-90 Phase 1: pool registry surface for opt-in opt-out + shutdown hooks.
+  _getOrCreatePool,
+  _shutdownPoolFor,
   // Re-export menu helpers so callers that historically grabbed them off
   // ptyMod continue to find them.
   handleSessionMenu: menuMod.handleSessionMenu,
