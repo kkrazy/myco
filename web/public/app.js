@@ -1124,6 +1124,14 @@ function _teardownPreviousSession() {
 // list, chat panes, etc.). Does not start any network I/O.
 function _resetUiForNewSession(id) {
   state.activeId = id;
+  // fr-78: per-session chat-input history. Cleared on session switch
+  // so each session starts with a fresh recall buffer (a different
+  // session's history would be irrelevant context). Live for the
+  // duration of this session attach + this page-load only — no
+  // localStorage persistence.
+  state.chatInputHistory = [];
+  state.chatHistoryIdx = null;
+  state.chatHistoryDraft = null;
   // ryan-blues bug fix: re-init the artifact cache bound to the new
   // session id. The loadArtifact lookup guard handles the same case,
   // but resetting here is belt-and-suspenders — guarantees the next
@@ -5852,7 +5860,26 @@ function bindChatUi() {
   _syncGuestSendState();
 
   function submitChat() {
-    if (sendChatMessage(input.value)) {
+    const submitted = input.value;
+    if (sendChatMessage(submitted)) {
+      // fr-78: in-memory chat-input history. Push the just-sent text
+      // onto state.chatInputHistory (capped 200 entries; skip empty +
+      // skip duplicates of the immediate previous entry — common
+      // pattern from bash readline). Reset the browsing cursor +
+      // saved-draft state so the next ArrowUp starts from the most
+      // recent entry. Per-page-load + per-session: cleared on
+      // openSession in openSession (see fr-78 reset hook there).
+      const trimmed = String(submitted || '').trim();
+      if (trimmed) {
+        if (!Array.isArray(state.chatInputHistory)) state.chatInputHistory = [];
+        const hist = state.chatInputHistory;
+        if (hist.length === 0 || hist[hist.length - 1] !== submitted) {
+          hist.push(submitted);
+          if (hist.length > 200) hist.splice(0, hist.length - 200);
+        }
+      }
+      state.chatHistoryIdx = null;
+      state.chatHistoryDraft = null;
       input.value = '';
       autoResize();
       // Lazily ask for desktop-notification permission on the user's
@@ -5862,6 +5889,97 @@ function bindChatUi() {
       _maybeRequestNotificationPermission();
     }
   }
+
+  // fr-78: Up/Down history recall. Bash-readline semantics:
+  //   - Up at start-of-input → step back to older entry
+  //   - Down at end-of-input → step forward to newer; past the most
+  //     recent restores the in-progress draft the user was typing
+  //     when they started browsing
+  //   - Multi-line guard: only hijack when cursor is at the extreme
+  //     start (Up) / end (Down) AND there's no selection. Mid-line
+  //     arrow nav within a multi-line draft keeps working.
+  //   - Defer to autocomplete + IME when those are active
+  //   - Any non-arrow keystroke resets the browsing cursor so the
+  //     user can mutate the recalled entry without trapping arrows
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    const ac = document.getElementById('chat-autocomplete');
+    if (ac && !ac.hidden) return;
+    const hist = Array.isArray(state.chatInputHistory) ? state.chatInputHistory : [];
+    if (hist.length === 0) return;
+    // Cursor-position guard. Up only fires at the start, Down only
+    // at the end. The selection must be collapsed (no range).
+    const selStart = input.selectionStart;
+    const selEnd = input.selectionEnd;
+    const value = input.value;
+    if (selStart !== selEnd) return;
+    if (e.key === 'ArrowUp') {
+      if (selStart !== 0) return;
+      // Step BACK. null → most recent (idx = hist.length - 1).
+      // From 0 → bounce (no older entry).
+      let next;
+      if (state.chatHistoryIdx == null) {
+        // Save the current draft so Down past the most recent restores it.
+        state.chatHistoryDraft = value;
+        next = hist.length - 1;
+      } else if (state.chatHistoryIdx > 0) {
+        next = state.chatHistoryIdx - 1;
+      } else {
+        return;  // already at oldest; let default (no-op)
+      }
+      e.preventDefault();
+      state.chatHistoryIdx = next;
+      input.value = hist[next];
+      autoResize();
+      // Cursor at end so the user can append immediately.
+      input.selectionStart = input.selectionEnd = input.value.length;
+    } else {
+      // ArrowDown.
+      if (state.chatHistoryIdx == null) return;  // not browsing → default
+      if (selEnd !== value.length) return;
+      if (state.chatHistoryIdx < hist.length - 1) {
+        e.preventDefault();
+        state.chatHistoryIdx += 1;
+        input.value = hist[state.chatHistoryIdx];
+        autoResize();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      } else {
+        // Past the most recent → restore the saved draft + exit browsing.
+        e.preventDefault();
+        const draft = state.chatHistoryDraft || '';
+        state.chatHistoryIdx = null;
+        state.chatHistoryDraft = null;
+        input.value = draft;
+        autoResize();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      }
+    }
+  });
+  // Any non-arrow keystroke while browsing exits browsing mode (so
+  // the user can mutate the recalled entry without arrows trapping
+  // them in history). Caps the listener at one extra check.
+  input.addEventListener('keydown', (e) => {
+    if (state.chatHistoryIdx == null) return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') return;
+    if (e.isComposing || e.keyCode === 229) return;
+    // Modifier-only keys (Shift, Ctrl, Meta, Alt by themselves) don't
+    // exit browsing — only actual content-mutating or navigation keys.
+    if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Meta' || e.key === 'Alt') return;
+    // Esc exits browsing AND clears the input (escape hatch).
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      state.chatHistoryIdx = null;
+      state.chatHistoryDraft = null;
+      input.value = '';
+      autoResize();
+      return;
+    }
+    // Any other key: keep the recalled text + exit browsing.
+    state.chatHistoryIdx = null;
+    state.chatHistoryDraft = null;
+  });
 
   // Enter sends, Shift+Enter inserts a newline — the dominant chat-app
   // pattern (Slack/Discord/iMessage/Claude.ai/ChatGPT/etc). Ctrl/⌘+Enter

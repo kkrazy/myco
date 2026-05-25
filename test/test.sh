@@ -2805,6 +2805,17 @@ test_chat_window() {
   # (so the chip count tracks edits). Tree-collapsed mode hides the
   # new section. Diff view hides the Edit button (read-only).
   node_test_result test/fr-77-files-changed-diff.test.js "test/fr-77-files-changed-diff.test.js (25 cases)"
+  # fr-78 (user-reported 2026-05-25): "Chat pane has no in-memory history,
+  # so users can't quickly recall prior inputs. Up/down arrow keys cycle
+  # through previously submitted messages in the current session."
+  # Implementation: state.chatInputHistory (capped 200, dup-of-prev skipped),
+  # state.chatHistoryIdx (null when not browsing), state.chatHistoryDraft
+  # (saved when browsing starts, restored on Down past most recent).
+  # ArrowUp/Down handler in bindChatUi: defers to autocomplete + IME;
+  # cursor-position guard preserves multi-line nav (Up only at start, Down
+  # only at end). Any non-arrow keystroke exits browsing (keeps recalled
+  # text); Esc explicitly clears. Per-session reset via _resetUiForNewSession.
+  node_test_result test/fr-78-chat-input-history.test.js "test/fr-78-chat-input-history.test.js (12 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-
