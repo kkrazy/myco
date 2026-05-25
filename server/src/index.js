@@ -710,6 +710,76 @@ app.get('/sessions/:id/files/diff', async (req, res) => {
   } catch (e) { fileApiError(res, e); }
 });
 
+// fr-77 r12: accept / reject a changed file. Owner-only because these
+// mutate the worktree (`git add` to stage, `git checkout HEAD -- <path>`
+// to revert, fs.unlink to delete untracked). Both routes accept either
+// { path } for one file or { paths: [...] } for a batch (used by the
+// Accept all / Reject all header buttons). Each path is run through
+// safeJoin + git-root resolution inside filesApi so traversal + outside-
+// repo paths reject with the existing error codes.
+app.post('/sessions/:id/files/accept', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const body = req.body || {};
+  const paths = Array.isArray(body.paths) ? body.paths
+              : (body.path ? [body.path] : []);
+  if (!paths.length) return res.status(400).json({ error: 'path or paths[] required' });
+  const results = [];
+  for (const p of paths) {
+    try { results.push(await filesApi.acceptFile(ctx.root, p)); }
+    catch (e) { results.push({ ok: false, path: p, error: e.code || 'ERR', message: e.message }); }
+  }
+  res.json({ results });
+});
+
+app.post('/sessions/:id/files/reject', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const body = req.body || {};
+  const paths = Array.isArray(body.paths) ? body.paths
+              : (body.path ? [body.path] : []);
+  if (!paths.length) return res.status(400).json({ error: 'path or paths[] required' });
+  const results = [];
+  for (const p of paths) {
+    try { results.push(await filesApi.rejectFile(ctx.root, p)); }
+    catch (e) { results.push({ ok: false, path: p, error: e.code || 'ERR', message: e.message }); }
+  }
+  res.json({ results });
+});
+
+// fr-77 r12: "ask AI to reconsider" — wrap the user's comment with the
+// chat:reconsider#<path> marker and route through the same chat path
+// as a typed message. The agent sees the marker prefix and knows the
+// comment is about that file. Viewer-readable (viewers can chat).
+app.post('/sessions/:id/files/reconsider', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const { path: relPath, comment, lineNo } = req.body || {};
+  if (!relPath) return res.status(400).json({ error: 'path required' });
+  if (!comment || typeof comment !== 'string' || !comment.trim()) {
+    return res.status(400).json({ error: 'comment required' });
+  }
+  // Validate the path lives inside the session root (don't actually
+  // need its contents — just the rejection-on-traversal side-effect).
+  try { await filesApi.safeJoin(ctx.root, relPath); }
+  catch (e) { return fileApiError(res, e); }
+  const session = getPtySession(ctx.id);
+  if (!session) return res.status(409).json({ error: 'session not running' });
+  // Marker shape: file-level "[chat:reconsider#path]" OR line-level
+  // "[chat:reconsider#path:L<n>]" — agent sees the suffix and knows
+  // which line the comment is anchored to. Line number is the post-
+  // change line (new side) per the user's choice in r12.
+  const lineSuffix = Number.isFinite(+lineNo) && +lineNo > 0
+    ? ':L' + Math.floor(+lineNo) : '';
+  const text = '[chat:reconsider#' + relPath + lineSuffix + '] ' + comment.trim();
+  try {
+    handleChatMessage(ctx.id, session, ctx.user, text);
+    res.json({ ok: true, sent: text });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'send failed' });
+  }
+});
+
 app.get('/sessions/:id/file', async (req, res) => {
   const ctx = fileApiPreamble(req, res, 'viewer');
   if (!ctx) return;

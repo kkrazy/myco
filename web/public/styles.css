@@ -3962,6 +3962,172 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font-style: italic;
 }
 
+/* fr-77 r12: per-row Accept (✓) / Reject (✕) buttons in the changed-
+   files list. Sit at the right edge of each row after the +N/−M chip.
+   Hidden via JS for read-only viewers (not rendered into the DOM). */
+.pcf-row-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted, #8b949e);
+  padding: 0 6px;
+  margin-left: 2px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  border-radius: 3px;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.pcf-row-btn.pcf-accept:hover {
+  background: rgba(46, 160, 67, .18);
+  color: #6fdc97;
+  border-color: rgba(46, 160, 67, .45);
+}
+.pcf-row-btn.pcf-reject:hover {
+  background: rgba(248, 81, 73, .18);
+  color: #ff8a8a;
+  border-color: rgba(248, 81, 73, .45);
+}
+
+/* fr-77 r12: header bulk-action buttons (Accept all / Reject all).
+   Sit alongside the refresh / collapse chevrons. Hidden by JS for
+   read-only viewers. */
+.pcf-bulk-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .08);
+  color: var(--muted, #8b949e);
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.pcf-bulk-btn.pcf-accept:hover {
+  background: rgba(46, 160, 67, .15);
+  color: #6fdc97;
+  border-color: rgba(46, 160, 67, .4);
+}
+.pcf-bulk-btn.pcf-reject:hover {
+  background: rgba(248, 81, 73, .15);
+  color: #ff8a8a;
+  border-color: rgba(248, 81, 73, .4);
+}
+.pcf-bulk-btn .ft-svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+.pcf-bulk-btn[hidden] { display: none; }
+
+/* fr-77 r12: file-level "ask AI to reconsider" form. Sits below the
+   diff body. Compact textarea + Send button. */
+.pcf-reconsider {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid rgba(255, 255, 255, .04);
+  background: rgba(255, 255, 255, .02);
+}
+.pcf-reconsider-input {
+  flex: 1 1 auto;
+  background: rgba(13, 17, 23, .9);
+  border: 1px solid rgba(255, 255, 255, .08);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  padding: 6px 8px;
+  border-radius: 3px;
+  resize: vertical;
+  min-height: 38px;
+  outline: none;
+}
+.pcf-reconsider-input:focus {
+  border-color: rgba(56, 139, 253, .5);
+}
+.pcf-reconsider-send {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  background: rgba(56, 139, 253, .15);
+  border: 1px solid rgba(56, 139, 253, .35);
+  color: #58a6ff;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  transition: background .12s;
+}
+.pcf-reconsider-send:hover { background: rgba(56, 139, 253, .25); }
+
+/* fr-77 r12: per-line click-to-comment. Clickable + / context lines get
+   .pcf-line-clickable so the cursor + hover state advertise the affordance.
+   When the user clicks, a sibling .pcf-line-comment block is inserted
+   right below; the clicked line gets .pcf-line-commenting to show it's
+   the active anchor. */
+.pcf-diff-body .pcf-line-clickable {
+  cursor: pointer;
+}
+.pcf-diff-body .pcf-line-clickable:hover {
+  outline: 1px dashed rgba(56, 139, 253, .35);
+  outline-offset: -1px;
+}
+.pcf-diff-body .pcf-diff-line.pcf-line-commenting {
+  outline: 1px solid rgba(56, 139, 253, .5);
+  outline-offset: -1px;
+}
+.pcf-line-comment {
+  padding: 8px 16px 10px;
+  background: rgba(56, 139, 253, .06);
+  border-top: 1px solid rgba(56, 139, 253, .15);
+  border-bottom: 1px solid rgba(56, 139, 253, .15);
+}
+.pcf-line-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pcf-line-input {
+  width: 100%;
+  background: rgba(13, 17, 23, .9);
+  border: 1px solid rgba(255, 255, 255, .1);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  padding: 6px 8px;
+  border-radius: 3px;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+.pcf-line-input:focus { border-color: rgba(56, 139, 253, .5); }
+.pcf-line-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.pcf-line-cancel, .pcf-line-send {
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .12);
+  color: var(--text);
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  border-radius: 3px;
+}
+.pcf-line-send {
+  background: rgba(56, 139, 253, .15);
+  border-color: rgba(56, 139, 253, .35);
+  color: #58a6ff;
+}
+.pcf-line-send:hover { background: rgba(56, 139, 253, .25); }
+.pcf-line-cancel:hover { background: rgba(255, 255, 255, .08); }
+
 /* Inline file editor — fills the files-view-body with a monospace
    textarea. The Save / Cancel buttons live in the files-view-header
    (toggled visible in renderViewerHeader when v.editing). */

@@ -585,6 +585,193 @@ t('app.js: _saveFileEdit success path refreshes the Plan changed-files section',
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// fr-77 r12 — accept / reject / reconsider (file + per-line)
+// ──────────────────────────────────────────────────────────────────────
+
+t('files.js exports acceptFile + rejectFile', () => {
+  const m = require('../server/src/files');
+  assert.strictEqual(typeof m.acceptFile, 'function');
+  assert.strictEqual(typeof m.rejectFile, 'function');
+});
+
+await tAsync('behavior: acceptFile stages a tracked-modified file (`git add`)', async () => {
+  const root = mkTempRepo();
+  try {
+    fs.writeFileSync(path.join(root, 'a.txt'), 'modified\n');
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.acceptFile(root, 'a.txt');
+    assert.strictEqual(out.ok, true);
+    assert.strictEqual(out.action, 'accepted');
+    // Verify via git status: M in index, no worktree mark.
+    const st = execFileSync('git', ['-C', root, 'status', '--porcelain']).toString().trim();
+    assert.ok(/^M  a\.txt$/m.test(st),
+      `a.txt must be staged after accept; status was: ${JSON.stringify(st)}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await tAsync('behavior: rejectFile DELETES an untracked file', async () => {
+  const root = mkTempRepo();
+  try {
+    fs.writeFileSync(path.join(root, 'new.txt'), 'new\n');
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.rejectFile(root, 'new.txt');
+    assert.strictEqual(out.ok, true);
+    assert.strictEqual(out.action, 'rejected');
+    assert.strictEqual(out.mode, 'deleted');
+    assert.strictEqual(fs.existsSync(path.join(root, 'new.txt')), false,
+      'untracked file must be removed from disk');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await tAsync('behavior: rejectFile REVERTS a tracked-modified file to HEAD', async () => {
+  const root = mkTempRepo();
+  try {
+    fs.writeFileSync(path.join(root, 'a.txt'), 'modified\n');
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.rejectFile(root, 'a.txt');
+    assert.strictEqual(out.mode, 'reverted');
+    const txt = fs.readFileSync(path.join(root, 'a.txt'), 'utf8');
+    assert.strictEqual(txt, 'hello\n',
+      'tracked file must be restored to HEAD content');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await tAsync('behavior: rejectFile + ERR_NO_GIT in repo-less workspace', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nogit-'));
+  try {
+    fs.writeFileSync(path.join(root, 'x.txt'), 'x');
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    let threw = false;
+    try { await filesMod.rejectFile(root, 'x.txt'); }
+    catch (e) { threw = true; assert.strictEqual(e.code, 'ERR_NO_GIT'); }
+    assert.ok(threw, 'must throw ERR_NO_GIT for non-git workspaces');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+t('index.js: POST /sessions/:id/files/accept + /reject + /reconsider routes registered', () => {
+  assert.ok(/app\.post\(['"]\/sessions\/:id\/files\/accept['"]/.test(INDEX_SRC),
+    'POST /files/accept route must be registered');
+  assert.ok(/app\.post\(['"]\/sessions\/:id\/files\/reject['"]/.test(INDEX_SRC),
+    'POST /files/reject route must be registered');
+  assert.ok(/app\.post\(['"]\/sessions\/:id\/files\/reconsider['"]/.test(INDEX_SRC),
+    'POST /files/reconsider route must be registered');
+});
+
+t('index.js: accept + reject are owner-only (mutate worktree)', () => {
+  // Walk each route block + assert fileApiPreamble uses 'owner'.
+  for (const route of ['accept', 'reject']) {
+    const idx = INDEX_SRC.search(new RegExp(`app\\.post\\(['"]\\/sessions\\/:id\\/files\\/${route}['"]`));
+    assert.ok(idx > -1);
+    const win = INDEX_SRC.slice(idx, idx + 500);
+    assert.ok(/fileApiPreamble\([^)]*,\s*['"]owner['"]/.test(win),
+      `/files/${route} must call fileApiPreamble with 'owner' role`);
+  }
+});
+
+t('index.js: reconsider route emits [chat:reconsider#<path>] marker (with optional :L<n>)', () => {
+  const idx = INDEX_SRC.search(/app\.post\(['"]\/sessions\/:id\/files\/reconsider['"]/);
+  const win = INDEX_SRC.slice(idx, idx + 1500);
+  assert.ok(/\[chat:reconsider#/.test(win),
+    'must construct a [chat:reconsider#path] marker');
+  assert.ok(/:L/.test(win) && /lineNo/.test(win),
+    'must support optional :L<lineNo> suffix when lineNo is provided');
+  assert.ok(/handleChatMessage\(/.test(win),
+    'must forward via handleChatMessage to the active session');
+});
+
+t('app.js: _planChangedFilesAction (accept/reject) + _sendReconsider defined', () => {
+  assert.ok(/async\s+function\s+_planChangedFilesAction\s*\(/.test(APP),
+    '_planChangedFilesAction must be defined');
+  assert.ok(/async\s+function\s+_sendReconsider\s*\(/.test(APP),
+    '_sendReconsider must be defined');
+  assert.ok(/function\s+_togglePcfLineComment\s*\(/.test(APP),
+    '_togglePcfLineComment must be defined for per-line click-to-comment');
+});
+
+t('app.js: reject path asks window.confirm before destructive action', () => {
+  const idx = APP.search(/async\s+function\s+_planChangedFilesAction\s*\(/);
+  const win = APP.slice(idx, idx + 2000);
+  assert.ok(/window\.confirm\(/.test(win),
+    'reject must prompt window.confirm before deleting/reverting');
+});
+
+t('app.js: _renderPlanChangedFiles emits per-row ✓ + ✕ buttons when not readOnly', () => {
+  const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
+  const win = APP.slice(idx, idx + 3500);
+  assert.ok(/data-pcf-action=['"]accept['"]/.test(win),
+    'rows must include an accept button with data-pcf-action="accept"');
+  assert.ok(/data-pcf-action=['"]reject['"]/.test(win),
+    'rows must include a reject button with data-pcf-action="reject"');
+  // Buttons must be gated on canMutate / !state.readOnly.
+  assert.ok(/state\.readOnly/.test(win) || /canMutate/.test(win),
+    'per-row actions must be gated on readOnly state');
+});
+
+t('app.js: _highlightDiffWithLang tracks post-change line numbers (data-line-no) + clickable class', () => {
+  const idx = APP.search(/function\s+_highlightDiffWithLang\s*\(/);
+  const win = APP.slice(idx, idx + 5000);
+  assert.ok(/newLineNo/.test(win),
+    'must maintain a post-change line counter for per-line comment marker');
+  assert.ok(/data-line-no=/.test(win),
+    'must attach data-line-no to clickable lines');
+  assert.ok(/pcf-line-clickable/.test(win),
+    'add + context lines must get .pcf-line-clickable when !readOnly');
+  assert.ok(/\\\+\(\\d\+\)/.test(win) || /\+\(\\d\+\)/.test(win),
+    'must parse the +<start>,<count> segment of the @@ hunk header to seed the counter');
+});
+
+t('app.js: _renderInlineDiffBody includes the reconsider form (file-level)', () => {
+  const idx = APP.search(/function\s+_renderInlineDiffBody\s*\(/);
+  const win = APP.slice(idx, idx + 3000);
+  assert.ok(/pcf-reconsider/.test(win),
+    'inline diff must include a .pcf-reconsider form below the diff');
+  assert.ok(/pcf-reconsider-input/.test(win),
+    'reconsider form must contain a .pcf-reconsider-input textarea');
+  assert.ok(/_bindDiffInteractions/.test(win),
+    'must invoke _bindDiffInteractions after the innerHTML write to wire submit + per-line clicks');
+});
+
+t('app.js: _sendReconsider passes optional lineNo through to /files/reconsider', () => {
+  const idx = APP.search(/async\s+function\s+_sendReconsider\s*\(/);
+  const win = APP.slice(idx, idx + 1500);
+  assert.ok(/files\/reconsider/.test(win),
+    'must POST to /files/reconsider');
+  assert.ok(/lineNo/.test(win),
+    'must include the lineNo when provided');
+});
+
+t('index.html: header includes accept-all + reject-all buttons', () => {
+  assert.ok(/id="plan-changed-files-accept-all"/.test(HTML),
+    'header must include the Accept-all button');
+  assert.ok(/id="plan-changed-files-reject-all"/.test(HTML),
+    'header must include the Reject-all button');
+});
+
+t('styles.css: pcf-row-btn + pcf-bulk-btn + pcf-reconsider + pcf-line-comment classes defined', () => {
+  for (const cls of [
+    'pcf-row-btn', 'pcf-bulk-btn',
+    'pcf-reconsider', 'pcf-reconsider-input', 'pcf-reconsider-send',
+    'pcf-line-clickable', 'pcf-line-comment', 'pcf-line-form', 'pcf-line-input',
+    'pcf-line-cancel', 'pcf-line-send',
+  ]) {
+    assert.ok(new RegExp('\\.' + cls + '\\b').test(CSS),
+      `.${cls} CSS rule must be defined`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // fr-77 r11 — visible decorator between plan items and Changed-files
 // ──────────────────────────────────────────────────────────────────────
 

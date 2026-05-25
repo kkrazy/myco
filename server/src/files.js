@@ -654,4 +654,86 @@ async function _synthDiffForUntracked(absFilePath, displayPath) {
   });
 }
 
-module.exports = { safeJoin, listDir, readFile, writeFile, listChangedFiles, readDiff };
+// fr-77 r12: stage a single changed file. Wraps `git add <gitRelPath>`
+// with the same safeJoin + _findGitRoot guards as readDiff. Returns
+// { ok: true, path, action: 'accepted' } on success; throws ERR_NO_GIT
+// for repo-less workspaces, ERR_GIT_ADD on git failure.
+async function acceptFile(absRoot, relPath) {
+  await safeJoin(absRoot, relPath);
+  const gitInfo = _findGitRoot(absRoot);
+  if (!gitInfo) throw err('ERR_NO_GIT', 'not a git workspace');
+  const { gitRoot, relPrefix } = gitInfo;
+  let gitRelPath = relPath;
+  if (relPrefix && relPath.startsWith(relPrefix)) {
+    gitRelPath = relPath.slice(relPrefix.length);
+  } else if (relPrefix && !relPath.startsWith(relPrefix)) {
+    throw err('ERR_OUTSIDE', 'file outside git repo root');
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      execFile('git', ['-C', gitRoot, 'add', '--', gitRelPath],
+        { timeout: 5000, maxBuffer: 64 * 1024 },
+        (e) => e ? reject(e) : resolve());
+    });
+  } catch (e) {
+    throw err('ERR_GIT_ADD', 'git add failed: ' + e.message);
+  }
+  return { ok: true, path: relPath, action: 'accepted' };
+}
+
+// fr-77 r12: discard a single changed file's worktree changes.
+// • Untracked ('?'): delete the file from disk.
+// • Staged-add (status 'A' from index alone): unstage + delete.
+// • Tracked changes (M, D, U, R, C): `git checkout HEAD -- <path>` to
+//   restore the HEAD version. Picks up both worktree + staged changes.
+// Throws ERR_NO_GIT in repo-less workspaces. Caller is expected to
+// have asked the user to confirm (it's destructive).
+async function rejectFile(absRoot, relPath) {
+  await safeJoin(absRoot, relPath);
+  const gitInfo = _findGitRoot(absRoot);
+  if (!gitInfo) throw err('ERR_NO_GIT', 'not a git workspace');
+  const { gitRoot, relPrefix } = gitInfo;
+  let gitRelPath = relPath;
+  if (relPrefix && relPath.startsWith(relPrefix)) {
+    gitRelPath = relPath.slice(relPrefix.length);
+  } else if (relPrefix && !relPath.startsWith(relPrefix)) {
+    throw err('ERR_OUTSIDE', 'file outside git repo root');
+  }
+  // Look up current status so we know whether to delete (untracked /
+  // staged-add) or git-checkout (tracked changes).
+  const gitMap = await _gitStatusMap(absRoot);
+  const status = gitMap ? gitMap.get(relPath) : null;
+  const absPath = path.join(absRoot, relPath);
+  if (status === '?' || status === 'A') {
+    // Untracked → just delete. Staged-add → unstage first, then delete.
+    if (status === 'A') {
+      try {
+        await new Promise((resolve, reject) => {
+          execFile('git', ['-C', gitRoot, 'reset', 'HEAD', '--', gitRelPath],
+            { timeout: 5000, maxBuffer: 64 * 1024 },
+            (e) => e ? reject(e) : resolve());
+        });
+      } catch (e) { throw err('ERR_GIT_RESET', 'git reset failed: ' + e.message); }
+    }
+    try { await fsp.unlink(absPath); }
+    catch (e) {
+      if (e.code !== 'ENOENT') throw err('ERR_DELETE', 'delete failed: ' + e.message);
+    }
+    return { ok: true, path: relPath, action: 'rejected', mode: 'deleted' };
+  }
+  // Tracked changes (M / D / R / C / U): restore the HEAD version.
+  // `git checkout HEAD -- <path>` covers both worktree-modify (reverts
+  // the change) and worktree-delete (recreates the file from HEAD).
+  try {
+    await new Promise((resolve, reject) => {
+      execFile('git', ['-C', gitRoot, 'checkout', 'HEAD', '--', gitRelPath],
+        { timeout: 5000, maxBuffer: 64 * 1024 },
+        (e) => e ? reject(e) : resolve());
+    });
+  } catch (e) {
+    throw err('ERR_GIT_CHECKOUT', 'git checkout failed: ' + e.message);
+  }
+  return { ok: true, path: relPath, action: 'rejected', mode: 'reverted' };
+}
+
+module.exports = { safeJoin, listDir, readFile, writeFile, listChangedFiles, readDiff, acceptFile, rejectFile };

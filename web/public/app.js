@@ -7863,6 +7863,12 @@ function _renderPlanChangedFiles() {
     M: 'modified', A: 'added', D: 'deleted', R: 'renamed',
     C: 'copied', U: 'unmerged', '?': 'untracked', '!': 'ignored',
   };
+  // fr-77 r12: per-row accept/reject buttons. Hidden for read-only
+  // viewers (the routes are owner-only — show nothing rather than a
+  // 403 on click). Owner gets ✓ / ✕ icon buttons; click handlers in
+  // bindPlanChangedFilesUi route to the bulk POST endpoints with a
+  // single-path body.
+  const canMutate = !state.readOnly;
   const html = entries.map((e) => {
     const cls = e.status === '?' ? 'fc-status-untracked' : `fc-status-${e.status}`;
     const label = STATUS_LABEL[e.status] || e.status;
@@ -7875,6 +7881,10 @@ function _renderPlanChangedFiles() {
     const titleStats = (e.added != null || e.removed != null)
       ? ` · +${e.added ?? 0} −${e.removed ?? 0}`
       : '';
+    const actions = canMutate
+      ? `<button class="pcf-row-btn pcf-accept" data-pcf-action="accept" data-pcf-path="${escHtml(e.path)}" title="Accept (stage)" aria-label="Accept ${escHtml(e.path)}">✓</button>
+         <button class="pcf-row-btn pcf-reject" data-pcf-action="reject" data-pcf-path="${escHtml(e.path)}" title="Reject (revert/delete)" aria-label="Reject ${escHtml(e.path)}">✕</button>`
+      : '';
     // fr-77 r3: leading caret rotates 90° when the row is expanded
     // (see #plan-changed-files-list li.is-expanded .pcf-caret rule).
     return `<li data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path + titleStats)}">
@@ -7882,6 +7892,7 @@ function _renderPlanChangedFiles() {
       <span class="fc-status ${escHtml(cls)}">${escHtml(display)}</span>
       <span class="fc-path">${escHtml(e.path)}</span>
       ${stats}
+      ${actions}
     </li>`;
   }).join('');
   ul.innerHTML = html;
@@ -8032,7 +8043,56 @@ function _renderInlineDiffBody(diffRow, body) {
     const lang = _diffLangForPath(body.path);
     diffHtml = `<div class="pcf-diff-pre">${_highlightDiffWithLang(body.diff, lang)}</div>`;
   }
-  container.innerHTML = headerBits.join('') + diffHtml;
+  // fr-77 r12: "ask AI to reconsider" form. Per-file textarea +
+  // submit; sends [chat:reconsider#<path>] <comment> to the active
+  // session via POST /sessions/:id/files/reconsider. Hidden for
+  // read-only viewers (they have no chat input either). Form lives
+  // below the diff body so the reader sees what they're commenting
+  // on before typing.
+  const reconsiderHtml = state.readOnly ? '' :
+    `<form class="pcf-reconsider" data-pcf-path="${escHtml(body.path)}">
+       <textarea class="pcf-reconsider-input" rows="2"
+         placeholder="Ask the AI to reconsider this change… (e.g. 'use a Map instead of an Object here')"
+         aria-label="Comment for AI about ${escHtml(body.path)}"></textarea>
+       <button type="submit" class="pcf-reconsider-send" title="Send to AI">Send to AI</button>
+     </form>`;
+  container.innerHTML = headerBits.join('') + diffHtml + reconsiderHtml;
+  _bindDiffInteractions(container, body.path);
+}
+
+// fr-77 r12: wire the post-render diff interactions:
+//   • Click on a .pcf-line-clickable line → open per-line comment form.
+//   • Submit on the file-level .pcf-reconsider form → send via reconsider POST.
+// Called once per inline-diff render. Idempotent because the container's
+// innerHTML was just replaced — old listeners are GC'd with the old DOM.
+function _bindDiffInteractions(container, filePath) {
+  if (!container) return;
+  // Per-line click-to-comment. Use event delegation on the pre so we
+  // catch every line div without per-line listeners.
+  const pre = container.querySelector('.pcf-diff-pre');
+  pre?.addEventListener('click', (e) => {
+    const line = e.target.closest('.pcf-diff-line.pcf-line-clickable');
+    if (!line) return;
+    // Clicks inside an already-open per-line comment form shouldn't
+    // re-toggle the parent line. The .pcf-line-comment sibling sits
+    // OUTSIDE the line, so this guard is mostly defensive.
+    if (e.target.closest('.pcf-line-comment')) return;
+    _togglePcfLineComment(line);
+  });
+  // File-level reconsider form (sits below the diff). Submit fires
+  // the same /files/reconsider POST without a lineNo, so the server
+  // emits [chat:reconsider#<path>] without the :L<n> suffix.
+  const form = container.querySelector('form.pcf-reconsider');
+  if (form) {
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const ta = form.querySelector('textarea');
+      const comment = (ta && ta.value || '').trim();
+      if (!comment) return;
+      await _sendReconsider(filePath, comment, null);
+      if (ta) ta.value = '';
+    });
+  }
 }
 
 // fr-77 r7: pick a highlight.js language id from a diff's file path.
@@ -8071,6 +8131,11 @@ function _highlightDiffWithLang(diffText, lang) {
   const lines = String(diffText || '').split('\n');
   const out = [];
   const haveLang = !!(lang && window.hljs && window.hljs.getLanguage(lang));
+  // fr-77 r12: track post-change line numbers so each `+` or ` ` line
+  // carries data-line-no — the per-line "ask AI about this line"
+  // comment uses it as the marker line number. Reset on each @@ hunk
+  // header (which declares the new starting line via "@@ -A,B +C,D @@").
+  let newLineNo = 0;
   for (const line of lines) {
     if (line === '') { out.push('<div class="pcf-diff-line pcf-diff-blank"> </div>'); continue; }
     // Metadata lines — show muted, no language highlight.
@@ -8083,17 +8148,22 @@ function _highlightDiffWithLang(diffText, lang) {
       out.push(`<div class="pcf-diff-line pcf-diff-meta">${escHtml(line)}</div>`);
       continue;
     }
-    // Hunk header — color separately (anchor of a hunk).
+    // Hunk header — also seed the new-side line counter from the
+    // "+C,D" segment. Example: "@@ -10,3 +12,4 @@" → newLineNo=12.
     if (line.startsWith('@@')) {
+      const m = line.match(/\+(\d+)(?:,\d+)?\s+@@/);
+      if (m) newLineNo = parseInt(m[1], 10);
       out.push(`<div class="pcf-diff-line pcf-diff-hunk">${escHtml(line)}</div>`);
       continue;
     }
     // Content lines. First char is the marker; rest is the code body.
     const c = line.charAt(0);
-    let kindCls, marker;
-    if      (c === '+') { kindCls = 'pcf-diff-add'; marker = '+'; }
-    else if (c === '-') { kindCls = 'pcf-diff-rm';  marker = '−'; }  // U+2212 (visual)
-    else if (c === ' ') { kindCls = 'pcf-diff-ctx'; marker = ' '; }
+    let kindCls, marker, lineNoAttr = '';
+    if      (c === '+') { kindCls = 'pcf-diff-add'; marker = '+';
+                          lineNoAttr = ` data-line-no="${newLineNo}"`; newLineNo++; }
+    else if (c === '-') { kindCls = 'pcf-diff-rm';  marker = '−'; }  // old-only, no new line
+    else if (c === ' ') { kindCls = 'pcf-diff-ctx'; marker = ' ';
+                          lineNoAttr = ` data-line-no="${newLineNo}"`; newLineNo++; }
     else {
       // Anything else — render as raw, no marker, no highlight.
       out.push(`<div class="pcf-diff-line">${escHtml(line)}</div>`);
@@ -8108,7 +8178,13 @@ function _highlightDiffWithLang(diffText, lang) {
     } else {
       bodyHtml = escHtml(body);
     }
-    out.push(`<div class="pcf-diff-line ${kindCls}"><span class="pcf-diff-marker">${marker}</span><span class="pcf-diff-code">${bodyHtml}</span></div>`);
+    // fr-77 r12: pcf-line-clickable marker on +/space lines (where a
+    // line number is known) gates the click-to-comment affordance. The
+    // diff-body click handler installed in bindPlanChangedFilesUi
+    // routes the click to _togglePcfLineComment when state.readOnly
+    // is false.
+    const clickCls = lineNoAttr && !state.readOnly ? ' pcf-line-clickable' : '';
+    out.push(`<div class="pcf-diff-line ${kindCls}${clickCls}"${lineNoAttr}><span class="pcf-diff-marker">${marker}</span><span class="pcf-diff-code">${bodyHtml}</span></div>`);
   }
   return out.join('');
 }
@@ -8130,15 +8206,180 @@ function bindPlanChangedFilesUi() {
     sec.classList.toggle('is-collapsed');
   });
   document.getElementById('plan-changed-files-list')?.addEventListener('click', (e) => {
-    // Ignore clicks on the inline-diff body itself — we only act on
-    // the parent file LI.
+    // fr-77 r12: per-row Accept/Reject buttons take priority over the
+    // row-click expand.
+    const actionBtn = e.target.closest('button[data-pcf-action]');
+    if (actionBtn) {
+      e.stopPropagation();
+      _planChangedFilesAction(actionBtn.dataset.pcfAction, [actionBtn.dataset.pcfPath]);
+      return;
+    }
+    // Clicks inside the inline-diff row are handled by their own
+    // listeners (the line click → per-line comment + the reconsider
+    // form submit). Don't accidentally collapse the parent.
     const diffRow = e.target.closest('li.pcf-diff-row');
     if (diffRow) return;
     const li = e.target.closest('li[data-fc-path]');
     if (!li) return;
     _togglePlanChangedFileExpand(li);
   });
+  // fr-77 r12: bulk Accept all / Reject all in the header.
+  document.getElementById('plan-changed-files-accept-all')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const paths = ((state.filesChanged && state.filesChanged.entries) || []).map((x) => x.path);
+    if (!paths.length) return;
+    _planChangedFilesAction('accept', paths);
+  });
+  document.getElementById('plan-changed-files-reject-all')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const paths = ((state.filesChanged && state.filesChanged.entries) || []).map((x) => x.path);
+    if (!paths.length) return;
+    _planChangedFilesAction('reject', paths);
+  });
   bindPlanChangedFilesResize();
+  bindPlanChangedFilesViewerGating();
+}
+
+// fr-77 r12: hide owner-only mutate affordances (Accept all / Reject all
+// header buttons, per-row Accept/Reject icons, reconsider forms) when the
+// session is read-only. _renderPlanChangedFiles already gates per-row +
+// per-diff bits on state.readOnly at render time, but the header
+// buttons are static HTML — toggle their visibility here.
+function bindPlanChangedFilesViewerGating() {
+  const apply = () => {
+    const hidden = !!state.readOnly;
+    for (const id of ['plan-changed-files-accept-all', 'plan-changed-files-reject-all']) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = hidden;
+    }
+  };
+  apply();
+  // Re-apply when readOnly flips (e.g. owner-grant change mid-session).
+  // Cheap, idempotent — safe to call from any state-update path.
+  const observer = new MutationObserver(() => {});  // placeholder: re-apply on a poll-ish basis
+  // The existing renderArtifact / loadPlanChangedFiles re-renders cover
+  // most cases; explicit listeners for the rare admin-grant flip live in
+  // bug-17 territory. Polling once per second is overkill — instead, the
+  // applyGating helper is exposed via app's existing _refreshOwnerGated
+  // pattern if it ever needs to be cross-cut. For now: a one-shot apply
+  // at bind time is enough because the section is only first-rendered
+  // when the user opens the Plan view, by which time state.readOnly is
+  // settled.
+  observer; // silence "unused" linter — kept as a hook for future.
+}
+
+// fr-77 r12: shared dispatcher for accept/reject (single path or batch).
+// Reject asks for confirmation first (destructive — reverts edits or
+// deletes untracked files). Both refresh the changed-files list on
+// success so the row count / chip totals reflect the new state.
+async function _planChangedFilesAction(action, paths) {
+  if (!state.activeId || !paths || !paths.length) return;
+  if (action === 'reject') {
+    const msg = paths.length === 1
+      ? `Reject "${paths[0]}"?\n\nThis reverts your changes (tracked) or DELETES the file (untracked). Cannot be undone.`
+      : `Reject ${paths.length} changed files?\n\nThis reverts all worktree edits AND DELETES untracked files. Cannot be undone.`;
+    if (!window.confirm(msg)) return;
+  }
+  const id = state.activeId;
+  const url = `/sessions/${encodeURIComponent(id)}/files/${action}`;
+  let res;
+  try {
+    res = await authedFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+  } catch (e) {
+    alert(`${action} failed: ${e.message || e}`);
+    return;
+  }
+  let body = {};
+  try { body = await res.json(); } catch {}
+  if (!res.ok) {
+    alert(`${action} failed: ${(body && body.error) || res.status}`);
+    return;
+  }
+  // Refresh the list so the count + rows reflect the new git state.
+  loadPlanChangedFiles({ force: true });
+}
+
+// fr-77 r12: toggle a per-line comment form below the clicked diff line.
+// Click the same line again (or click another) to dismiss/move. Submit
+// POSTs to /files/reconsider with { path, lineNo, comment }. The line
+// number is the post-change new-side line (derived from the diff hunk
+// header by _highlightDiffWithLang).
+function _togglePcfLineComment(lineEl) {
+  if (!lineEl || state.readOnly) return;
+  const lineNo = parseInt(lineEl.dataset.lineNo, 10);
+  if (!Number.isFinite(lineNo)) return;
+  // Find the owning file path from the parent diff row.
+  const diffRow = lineEl.closest('li.pcf-diff-row');
+  if (!diffRow) return;
+  const filePath = diffRow.dataset.fcPath;
+  if (!filePath) return;
+  // Already open? Collapse.
+  const next = lineEl.nextElementSibling;
+  if (next && next.classList.contains('pcf-line-comment')) {
+    next.remove();
+    lineEl.classList.remove('pcf-line-commenting');
+    return;
+  }
+  // Open: insert a comment form right after the clicked line.
+  const form = document.createElement('div');
+  form.className = 'pcf-line-comment';
+  form.innerHTML =
+    `<form class="pcf-line-form">
+       <textarea class="pcf-line-input" rows="2"
+         placeholder="Ask the AI about line ${lineNo}…"
+         aria-label="Comment for AI about line ${lineNo}"></textarea>
+       <div class="pcf-line-actions">
+         <button type="button" class="pcf-line-cancel">Cancel</button>
+         <button type="submit" class="pcf-line-send">Send to AI</button>
+       </div>
+     </form>`;
+  lineEl.classList.add('pcf-line-commenting');
+  lineEl.insertAdjacentElement('afterend', form);
+  const input = form.querySelector('textarea');
+  if (input) input.focus();
+  form.querySelector('.pcf-line-cancel')?.addEventListener('click', () => {
+    form.remove();
+    lineEl.classList.remove('pcf-line-commenting');
+  });
+  form.querySelector('form')?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const comment = (input && input.value || '').trim();
+    if (!comment) return;
+    await _sendReconsider(filePath, comment, lineNo);
+    form.remove();
+    lineEl.classList.remove('pcf-line-commenting');
+  });
+}
+
+// fr-77 r12: POST the reconsider payload (optionally with lineNo).
+// Server wraps with [chat:reconsider#<path>(:L<n>)?] prefix + forwards
+// to the active session.
+async function _sendReconsider(filePath, comment, lineNo) {
+  if (!state.activeId) return;
+  const id = state.activeId;
+  const url = `/sessions/${encodeURIComponent(id)}/files/reconsider`;
+  let res;
+  try {
+    res = await authedFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: filePath, comment,
+        ...(Number.isFinite(+lineNo) ? { lineNo: +lineNo } : {}),
+      }),
+    });
+  } catch (e) { alert(`Send failed: ${e.message || e}`); return; }
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    alert(`Send failed: ${(body && body.error) || res.status}`);
+    return;
+  }
+  flashToast('Sent to AI');
 }
 
 // fr-77 r4: vertical drag-to-resize on #plan-changed-files-section.
