@@ -392,16 +392,24 @@ t('styles.css: #plan-changed-files-section has max-height + flex-direction colum
     'must stack header + desc + list vertically');
 });
 
-t('styles.css: fr-77 r8 — section matches plan body desktop width (no 880 cap)', () => {
-  // bug-40 relaxed #artifact-body-plan to max-width:none on desktop so
-  // the plan items span the full lane. Without the section in the same
-  // relaxation rule, the section would stay capped at 880px while the
-  // plan items go full-width — visible width mismatch the user reported.
-  // Pin: the bug-40 relaxation rule MUST list both #artifact-body-plan
-  // AND #plan-changed-files-section as targets.
-  const re = /@media\s*\(\s*min-width:\s*901px\s*\)\s*\{[\s\S]{0,400}#artifact-body-plan[\s\S]{0,80},[\s\S]{0,80}#plan-changed-files-section[\s\S]{0,200}max-width:\s*none/;
-  assert.ok(re.test(CSS),
+t('styles.css: fr-77 r9 — section matches plan body desktop width (no 880 cap)', () => {
+  // The section MUST share the plan body's full-width lane on desktop
+  // (bug-40's max-width:none relaxation), AND must NOT appear in the
+  // shared 880px-cap centering selector — at equal specificity, cascade
+  // order makes the shared rule win and re-introduces the 880px cap.
+  //
+  // Pin 1: bug-40 relaxation covers BOTH #artifact-body-plan AND
+  //        #plan-changed-files-section.
+  const reBugFix = /@media\s*\(\s*min-width:\s*901px\s*\)\s*\{[\s\S]{0,400}#artifact-body-plan[\s\S]{0,80},[\s\S]{0,80}#plan-changed-files-section[\s\S]{0,200}max-width:\s*none/;
+  assert.ok(reBugFix.test(CSS),
     'bug-40 desktop max-width:none relaxation must cover both #artifact-body-plan AND #plan-changed-files-section so they share the full-width lane');
+  // Pin 2: the section MUST NOT appear in the shared 880px-cap rule.
+  //        Strip line comments first so the cascade-order note in the
+  //        adjacent comment doesn't false-positive.
+  const cssNoComments = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  const reBadCap = /\.artifact-main-view\s+\.artifact-header[\s\S]{0,400}#plan-changed-files-section[\s\S]{0,400}max-width:\s*880px/;
+  assert.ok(!reBadCap.test(cssNoComments),
+    'section must NOT be in the shared 880px-cap selector — cascade order would override bug-40 and re-cap at 880px');
 });
 
 t('styles.css: status colors mapped (.fc-status-M / -A / -D / -R / -U)', () => {

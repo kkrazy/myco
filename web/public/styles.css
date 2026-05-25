@@ -3472,24 +3472,22 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    centered, so opening Plan / Arch / Test feels visually continuous
    with the conversation underneath. The whole artifact-main-view
    surface (background) still fills the main pane edge-to-edge; only
-   the header + body + Plan-view changed-files section are constrained
-   to the same 880px lane.
-   fr-77 r8: #plan-changed-files-section folded into the same selector
-   list (was a separate @media block earlier) so all three centered
-   children share IDENTICAL CSS — no chance for a subtle width drift. */
+   the header + body content are constrained to the same 880px lane.
+   fr-77 r9: #plan-changed-files-section deliberately NOT included
+   here — it must always take the plan body's lane (full-width via
+   bug-40's max-width:none relaxation, not the 880 cap). Including it
+   in this selector AFTER the bug-40 rule would override bug-40 at
+   equal specificity due to cascade order, capping the section at
+   880px on desktop while the plan body next to it stayed full-width.
+   That was the visual mismatch users kept reporting. */
 @media (min-width: 901px) {
   .artifact-main-view .artifact-header,
-  .artifact-main-view .artifact-body,
-  .artifact-main-view #plan-changed-files-section {
+  .artifact-main-view .artifact-body {
     width: 100%;
     max-width: 880px;
     margin-left: auto;
     margin-right: auto;
     box-sizing: border-box;
-    /* align-self: center belt-and-braces — auto margins on flex column
-       children usually handle cross-axis centering, but explicit align-
-       self forces it even on browsers where stretch would otherwise win. */
-    align-self: center;
   }
 }
 
