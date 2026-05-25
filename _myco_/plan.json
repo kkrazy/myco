@@ -3601,14 +3601,134 @@
           "user": "claude",
           "text": "Shipped — FIFO refactor.\n\nRoot cause: `_activeChatItem`+`_activeRunItem` were 1-slot each; parallel handleChatMessage calls overwrote each other. fr-89's preempt-flush only helped when stale buffer non-empty, so parallel /run (cap=3) clobbered.\n\nFix: `session._activeItemQueue` FIFO. handleChatMessage pushes one entry right before session.write. ONE merged agent-event listener pops head on terminal events + binds chat/run sides via chatBound/runBound flags. SDK serializes per session → FIFO matches arrival order.\n\nFiles: server/src/attach.js, new test/bug-36-parallel-run-clobber.test.js (11 cases incl. end-to-end repro), + updates to fr-89, fr-76-phase2, fr-87, fr-51, fr-76-phase4, plan-run-comment tests + test.sh.\n\nTests: per-file sweep all 101 test/*.test.js → 0 failures. bug-36 11/11 ✓.",
           "ts": "2026-05-24T14:49:38.780Z"
+        },
+        {
+          "id": "62026782bba3",
+          "user": "claude",
+          "text": "✓ success · 2032.1s · $24.9730 · 91↓/82161↑\n\nbug-36 race fix shipped. Here's the summary:\n\n**Root cause**: `session._activeChatItem` + `session._activeRunItem` were one slot each. Two `handleChatMessage` calls in quick succession overwrote them before the first `turn_result` arrived. fr-89's preempt-flush only helped when the stale buffer was non-empty, so parallel `/run` (fr-90 cap=3) hit empty buffers and silently dropped all bindings — both responses ended up bound to the wrong items and leaked into the main chat pane.\n\n**Fix** (`server/src/attach.js`):\n- `session._activeItemQueue` (FIFO) replaces both singular slots.\n- `handleChatMessage` pushes one `{itemId, chatBound, runBound, _buffer, startedAt}` entry per marker-bearing turn — right before `session.write` (not in the top-of-function marker block, since slashcmds short-cir…",
+          "ts": "2026-05-24T14:50:20.081Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-24T14:16:27.749Z"
+          }
         }
       ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "Send /run on two plan items, the first run's response seems to be wiped out by the second run. Eventually the second run's response is wiped out too. Everything goea to the chat pane.",
         "rewritten": true
+      },
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-05-24T14:50:20.081Z",
+          "startedAt": "2026-05-24T14:16:27.749Z",
+          "summary": "2032.1s · 91→82161 tok",
+          "result": "bug-36 race fix shipped. Here's the summary:\n\n**Root cause**: `session._activeChatItem` + `session._activeRunItem` were one slot each. Two `handleChatMessage` calls in quick succession overwrote them before the first `turn_result` arrived. fr-89's preempt-flush only helped when the stale buffer was non-empty, so parallel `/run` (fr-90 cap=3) hit empty buffers and silently dropped all bindings — both responses ended up bound to the wrong items and leaked into the main chat pane.\n\n**Fix** (`server/src/attach.js`):\n- `session._activeItemQueue` (FIFO) replaces both singular slots.\n- `handleChatMessage` pushes one `{itemId, chatBound, runBound, _buffer, startedAt}` entry per marker-bearing turn — right before `session.write` (not in the top-of-function marker block, since slashcmds short-circuit there and would leak entries that no terminal event ever pops).\n- ONE merged agent-event listener in `_registerExternalSession` (was two — one per mode). On `assistant_text` it buffers into the head when `chatBound`; on terminal events it `.shift()`s the head and binds chat-side via `_appendAgentAiChatTurn` and/or run-side via `_stampPlanItemRunOutcome` + `_advanceRunQueue` according to the flags.\n- fr-51 fallback preserved (null head + `rec.runQueue` running entry → synthesize a run-bound head).\n- ctx.chatItem/runItem in slashcmd ctx now derive from this turn's local matches (no shared state).\n- Defensive 50-entry cap on the FIFO.\n\n**Why FIFO is sound**: SDK queries are serialized per session (CLAUDE.md §Code Style #3), so even with parallel-cap=3 in the run queue, the SDK processes turns one at a time in dispatch order — events naturally arrive in push order.\n\n**Tests** — per-file sweep of all 101 `*.test.js` files: **0 failures**.\n- NEW `test/bug-36-parallel-run-clobber.test.js` (11 cases): 6 source-shape guards + 5 end-to-end behavior cases against a real `EventEmitter`. The marquee case dispatches fr-A and fr-B before either `turn_result`, then asserts each item retains its ",
+          "worktree": {
+            "path": "_myco_/worktrees/bug-36",
+            "branch": "wt-bug-36",
+            "mergeStatus": "branched"
+          }
+        }
+      ],
+      "aiChat": [
+        {
+          "id": "4ef5c230672b",
+          "user": "claude",
+          "role": "agent",
+          "text": "Real bug, sharp diagnosis. The fr-89 preempt-flush only protected the case where one chat turn was in flight + another arrived — it didn't anticipate the **parallel-dispatch** case (cap=3 + multiple `/run` clicks). The session-singular slots `_activeChatItem` / `_activeRunItem` get clobbered when handleChatMessage fires twice before the SDK terminal events arrive.\n\n(One housekeeping note: my last commit shipped bug-36 with different content — the test-shape-guard fix. Your `/run` overwrote bug-36's body with this new race-condition report. I'll treat this as the live bug-36, re-open it, and ship the fix — both the test fix AND the race fix can co-exist under the same id.)\n\nLet me confirm my model of the race before coding:Confirmed — both listeners (lines 175-204 run-mode, 210-227 chat-mode) read SINGLE slots. Two handleChatMessage calls clobber them. Let me find all reader sites for the refactor:Confirmed the race. Plan: replace single-slot `_activeChatItem` / `_activeRunItem` with a FIFO `_activeItemQueue` shared by ONE merged agent-event listener. Each turn pushes one entry; terminal events pop the head + bind correctly.\n\nI'll re-open bug-36 to track this fix (the test-shape-guard work is already shipped under same id — both can co-exist on the item history).Let me look at the marker-handling block in `handleChatMessage` (writers for the slots) and the ctx surface:Now let me find the `session.write(...)` call site to know exactly where to push the queue entry:Let me check the relevant tests that probe the listener shape so I know what guards to update:I have everything I need to implement the fix. Let me start by refactoring the agent-event listeners in attach.js:Now update the writer block in `handleChatMessage` (lines 1586-1633):Now update the slashcmd ctx to derive chatItem/runItem from local matches instead of session slots:Now add the FIFO push right before `session.write(agentText)`:Now let me check for any other references in attach.js that I might have missed:Need to fix the stale `_appendAgentAiChatTurn` comment at line 435:Now let me write the new bug-36 regression test and update the affected existing tests. Let me start with the new regression test:Now I need to update the affected existing tests. Let me start by rewriting fr-89's source-shape guards to point at the new FIFO:Now update fr-76-phase2 which has heavy pins on the old slot/listener shape:Now the behavior simulation block at the end of fr-76-phase2 and the \"chat-mode listener is SEPARATE\" test:Now update fr-87 for the new ctx source:Now update fr-51 to recognize the new fallback wiring (it pins on `_activeRunItem` text in the listener):Now update plan-run-comment.test.js to push to the FIFO queue instead of setting the singular slot:Now wire bug-36 test into test.sh + update the affected block comments:Now let me also update the fr-87 block comment, and inspect what the test.sh shape guard at 1880-1921 (the embedded node -e block) expects since I changed dispatch text and may have affected those:Now let me run the tests to verify everything passes. First the new bug-36 regression test:All 11 bug-36 tests pass. Now run the affected pre-existing tests:All 16 fr-76-phase2 tests pass. Let me now run the full test suite to make sure nothing else regressed:Now run the full per-file sweep again to find any remaining regressions:No failures across all `.test.js` files. Now let me run the full `./test/test.sh` to verify the embedded shape guards still hold:While `./test/test.sh` runs in the background, let me also check there are no other tests with `node -e` blocks in test.sh that pin against the old listener structure:bug-36 race fix shipped. Here's the summary:\n\n**Root cause**: `session._activeChatItem` + `session._activeRunItem` were one slot each. Two `handleChatMessage` calls in quick succession overwrote them before the first `turn_result` arrived. fr-89's preempt-flush only helped when the stale buffer was non-empty, so parallel `/run` (fr-90 cap=3) hit empty buffers and silently dropped all bindings — both responses ended up bound to the wrong items and leaked into the main chat pane.\n\n**Fix** (`server/src/attach.js`):\n- `session._activeItemQueue` (FIFO) replaces both singular slots.\n- `handleChatMessage` pushes one `{itemId, chatBound, runBound, _buffer, startedAt}` entry per marker-bearing turn — right before `session.write` (not in the top-of-function marker block, since slashcmds short-circuit there and would leak entries that no terminal event ever pops).\n- ONE merged agent-event listener in `_registerExternalSession` (was two — one per mode). On `assistant_text` it buffers into the head when `chatBound`; on terminal events it `.shift()`s the head and binds chat-side via `_appendAgentAiChatTurn` and/or run-side via `_stampPlanItemRunOutcome` + `_advanceRunQueue` according to the flags.\n- fr-51 fallback preserved (null head + `rec.runQueue` running entry → synthesize a run-bound head).\n- ctx.chatItem/runItem in slashcmd ctx now derive from this turn's local matches (no shared state).\n- Defensive 50-entry cap on the FIFO.\n\n**Why FIFO is sound**: SDK queries are serialized per session (CLAUDE.md §Code Style #3), so even with parallel-cap=3 in the run queue, the SDK processes turns one at a time in dispatch order — events naturally arrive in push order.\n\n**Tests** — per-file sweep of all 101 `*.test.js` files: **0 failures**.\n- NEW `test/bug-36-parallel-run-clobber.test.js` (11 cases): 6 source-shape guards + 5 end-to-end behavior cases against a real `EventEmitter`. The marquee case dispatches fr-A and fr-B before either `turn_result`, then asserts each item retains its own response — pre-fix this would have failed.\n- Updates to `fr-89`, `fr-76-phase2`, `fr-87`, `fr-51`, `fr-76-phase4`, `plan-run-comment` tests to point at the new FIFO shape.\n- `test/test.sh` block-comments updated + new `node_test_result` line wired in.\n\nbug-36 marked done with a closeout comment. Modified files: `attach.js` + 6 test files + `test.sh`, new `bug-36-parallel-run-clobber.test.js`. Ready for your next directive (commit/push/deploy/something else).",
+          "ts": "2026-05-24T14:50:20.171Z",
+          "meta": {
+            "kind": "turn_result",
+            "subtype": "success",
+            "usage": {
+              "input_tokens": 91,
+              "cache_creation_input_tokens": 219253,
+              "cache_read_input_tokens": 16477187,
+              "output_tokens": 82161,
+              "server_tool_use": {
+                "web_search_requests": 0,
+                "web_fetch_requests": 0
+              },
+              "service_tier": "standard",
+              "cache_creation": {
+                "ephemeral_1h_input_tokens": 219253,
+                "ephemeral_5m_input_tokens": 0
+              },
+              "inference_geo": "",
+              "iterations": [
+                {
+                  "input_tokens": 1,
+                  "output_tokens": 996,
+                  "cache_read_input_tokens": 226213,
+                  "cache_creation_input_tokens": 122,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 122
+                  },
+                  "type": "message"
+                }
+              ],
+              "speed": "standard"
+            },
+            "costUsd": 24.972962500000005
+          }
+        }
+      ]
+    },
+    {
+      "id": "bug-37",
+      "text": "bug-37: SDK batches rapid session.write calls (cap>1 dispatches) into one logical turn, so N writes → M ≤ N turn_results. The bug-36 FIFO assumed 1:1 and popped only ONE head per terminal event, leaving the rest stranded + every subsequent turn bound to the wrong item. Verified via opti events.jsonl (3 writes → 1 turn_result). Fix variant B: count turn_start events, pop max(1, pendingTurnStarts) heads on terminal (capped at queue.length), distribute the SHARED agent response to every popped head's chat-side binding (each item's panel gets a full copy of the agent's reply since the SDK batched them into one logical turn). _bindHeadToTerminal helper factored out. Ship: 5e6bb6f. Test: bug-37-sdk-batched-turn-distribution.test.js (8 cases — incl. the exact 3-write/1-turn_result repro). Deployed to opti 2026-05-24.",
+      "layer": "Bug",
+      "done": true,
+      "addedAt": "2026-05-24T23:09:32.986Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "f8571fb556c4",
+          "user": "claude",
+          "text": "Shipped + deployed to opti.\n\nHypothesis verified from opti events.jsonl (15:54 bug-31/32/33 burst): 3 writes in 17s → 4× assistant_text → ONE turn_result. Confirmed SDK streaming-input mode coalesces rapid writes into one logical turn.\n\nFix (variant B): session._pendingTurnStarts counter incremented on each turn_start; on terminal popCount=min(max(1, _pendingTurnStarts), queue.length); sharedBuffer captured before shift loop, distributed to every popped head; assistant_text always buffers (chatBound gate dropped); _bindHeadToTerminal helper factored out.\n\nShip: 5e6bb6f on plan-driven-ui, deployed to opti at 23:09:11Z. Live grep confirms _pendingTurnStarts + _bindHeadToTerminal in /app/server/src/attach.js. Zero errors in logs.\n\nTests: 12+8 cases (bug-36 + bug-37) all green; per-file sweep all 102 *.test.js → 0 failures. The marquee case is the literal opti repro.",
+          "ts": "2026-05-24T23:11:38.674Z"
+        }
+      ]
+    },
+    {
+      "id": "fr-90",
+      "text": "**SessionPool with affinity-based routing** (design discussion, kkrazy 2026-05-24).\n\n**Goal:** Each plan item runs in its own AgentSession context (no SDK batching, no clobber). Related items (dependsOn, text-mentioned) reuse the same session so the agent retains context. Pool bounded (default 5/chat); idle reaper bounds RAM.\n\n**Routing (priority):**\n1. item.dependsOn → reuse dep's session\n2. Text-mention regex `\\b(fr|bug|td)-\\d+\\b` → reuse mentioned session\n3. LRU free session (warm cache)\n4. Spawn new under maxSize\n5. All busy + capped → item stays pending\n\n**State:** in-mem sessionPool Map; `_myco_/session-affinity.json` (committable per §5); bootId integration per fr-91.\n\n**Lifecycle:** pool empty at start; each session = claude subprocess + lean-ctx (~200MB); idle reaper at 10min; cold-restart logs `[pool-cold-restart]` + leans on getRelatedItemsContext (fr-76 P4); bug-37 FIFO still applies within each pool session.\n\n**Cost vs alternatives:**\n- 1 session today: batches; ~200MB; full forced sharing\n- cap=1: no batch + no parallel; ~200MB\n- per-item AgentSession: no batch + no sharing; ~600MB; cold cache each spawn\n- **SessionPool**: no batch + selective sharing; ~1GB (5-pool); LRU warm reuse\n\n**Tokens:** first spawn ~$0.03; cached within 5min ~$0.003; related reuse ~$0.\n\n**Implementation: ~300 LOC + ~15 test cases.** New sessionPool.js (~200 LOC); attach.js dispatch wiring (~50 LOC); rec.sessionPoolEnabled opt-in flag (~20 LOC); fr-93 test (~150 LOC).\n\n**Subtleties:** affinity drift on reap (fresh + log); cross-pool isolation (coord via plan.json); migration via opt-in flag (flip default after 1wk stable).\n\nFiled for discussion; NOT scheduled. Revisit when bug-37 proves insufficient or parallel workload grows.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-25T00:31:59.099Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "660021139dde",
+          "user": "claude",
+          "text": "Phase 0 shipped (c2a2754).\n\nserver/src/sessionPool.js (~340 LOC) — SessionPool class with 5-rule routing, lifecycle, affinity persistence, bootId integration. Pure data structure, DI seams for spawnAgent/now/logger so tests don't fork real claude subprocesses.\n\ntest/fr-90-session-pool.test.js (27 cases) all green:\n- All 5 routing rules + priority interactions\n- Spawn/dispatch/shutdown lifecycle\n- Reaper time behavior (idle reap, busy-skip, persist after reap)\n- Persistence round-trip + bootId epoch isolation\n- Cold-restart detection (Phase 2 hook already plumbed)\n- Snapshot observability + invalid-input defenses\n\nPer-file sweep across 103 test/*.test.js: 0 regressions (Phase 0 is dark code, no callers).\n\nNext: Phase 1 wires SessionPool.dispatch into attach.js queue path behind rec.sessionPoolEnabled opt-in flag. bug-37 FIFO logic moves into each pool member's per-agent listener so the bug-36+bug-37 fixes apply per-pool.",
+          "ts": "2026-05-25T01:00:57.024Z"
+        }
+      ]
+    },
+    {
+      "id": "fr-91",
+      "text": "**Problem:** The file explorer's directory section makes it hard to see which files have changed and quickly open a diff view.\n**Expected:** Split the directory section into two sections; the bottom section lists all changed files and lets the user open a diff view from there.\n**Actual:** Directory section is a single list with no dedicated changed-files view or diff entry point.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-05-25T12:42:42.518Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "file explorer directory section should be break into two sections, the bottom section shows all of the files changed so that user can easily see what files are changed and allow bring up a diff view.",
+        "rewritten": true
       }
     }
   ],
-  "updatedAt": "2026-05-24T14:16:10.428Z"
+  "updatedAt": "2026-05-25T12:42:50.532Z"
 }
