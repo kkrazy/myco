@@ -2755,6 +2755,30 @@ test_chat_window() {
   # ISO inputs, and a negative guard that the wider formatChatTs use
   # wasn't accidentally swept (scope-creep tripwire).
   node_test_result test/bug-34-plan-item-create-time-shows-date.test.js "test/bug-34-plan-item-create-time-shows-date.test.js (10 cases)"
+  # bug-39 (user-reported 2026-05-25): plan-item action-row chips +
+  # buttons had drifted to inconsistent heights (font-size 0.7rem to
+  # 0.85rem; vertical padding 0-2px; border-radius 3px to 12px; delete
+  # button fixed 22×22 while everything else let content drive). One
+  # CSS rule under .artifact-item-actions normalizes every chip /
+  # button class to min-height: 22px + box-sizing: border-box +
+  # display: inline-flex + align-items: center + line-height: 1 — the
+  # box stretches to 22px, content vertical-centers, tall emoji glyphs
+  # don't push past the declared min-height. Mobile already bumps to
+  # 44px via the fr-62 tap-target rule; bug-39 fixes desktop where
+  # there was no min-height before.
+  node_test_result test/bug-39-action-row-uniform-height.test.js "test/bug-39-action-row-uniform-height.test.js (5 cases)"
+  # bug-40 (user-reported 2026-05-25): "plan view has a width limit
+  # on desktop there shouldn't be a width limit, also its header
+  # should have a padding on top so that the Bug/Feature/Todo buttons
+  # have space from the browser boundary." Two CSS fixes inside the
+  # @media (min-width: 901px) desktop block: (1) max-width: none on
+  # #artifact-body-plan (arch + test keep the 880px readable-line cap
+  # since they're prose-heavy; plan items are short rows with chip
+  # clusters that just leave wide unused gutters); (2) padding-top:
+  # 12px on #plan-filter-row so the sticky filter chips clear the
+  # browser chrome edge (mobile already reserves the chrome band via
+  # artifact-main-view's padding-top, so this is desktop-only).
+  node_test_result test/bug-40-plan-view-desktop-layout.test.js "test/bug-40-plan-view-desktop-layout.test.js (4 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-

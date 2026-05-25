@@ -1829,6 +1829,29 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
      horizontal overlap. */
   #plan-filter-row {
     padding-right: 232px;
+    /* bug-40: breathing room above the Bug/Feature/Todo filter chips on
+       desktop. Pre-fix the sticky row hugged the top edge of the artifact
+       area because the artifact-main-view's desktop padding-top is just
+       env(safe-area-inset-top, 0px) = 0 in a normal browser. The chips
+       visually butted against the browser chrome with no margin. */
+    padding-top: 12px;
+  }
+}
+/* bug-40: relax the desktop max-width:880px column constraint for the
+   plan view specifically. Arch is markdown prose + Test is structured
+   docs — both benefit from the ~880px readable-line cap. Plan items
+   are short rows with chip clusters; constraining them to 880px leaves
+   wide gutters on big monitors that waste useful real estate (and the
+   action-row buttons wrap awkwardly inside the narrower lane). Plan
+   takes the full available width on desktop; arch + test keep the cap. */
+@media (min-width: 901px) {
+  .artifact-main-view #artifact-body-plan {
+    max-width: none;
+  }
+  /* If the plan view ever regains an .artifact-header sibling (it's
+     currently dropped per fr-61 follow-up), relax that too. */
+  #plan-wrap.artifact-main-view .artifact-header {
+    max-width: none;
   }
 }
 /* Open only checkbox now lives inside the filter row alongside the
@@ -2336,6 +2359,38 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .artifact-item-actions .artifact-item-delete {
   margin-left: auto;  /* push delete to the right edge */
+}
+
+/* bug-39: uniform height across every chip / badge / button in the
+   actions row. Pre-fix, individual rules had drifted: font-size from
+   0.7rem to 0.85rem, vertical padding 0-2px, border-radius 3px to
+   12px, some with fixed 22px height (delete), most letting content
+   drive the height. Visually they staggered side-by-side. Normalize
+   to a single ACTION_ROW_HEIGHT (22px to match the existing delete
+   button's fixed size) + inline-flex + align-items:center so the box
+   stretches and content vertically-centers. line-height:1 stops tall
+   glyphs (emoji 🔀/✎/⚠️) from pushing the box larger than the
+   declared min-height. box-sizing:border-box so padding doesn't add
+   to the total. Listed explicitly (not `.artifact-item-actions > *`)
+   so future random children that aren't action chips don't get
+   styled accidentally. Note: mobile already bumps min-height to
+   44px (fr-62) via a later @media rule — that takes precedence on
+   touch viewports. */
+.artifact-item-actions .artifact-item-merged,
+.artifact-item-actions .artifact-item-deps,
+.artifact-item-actions .artifact-item-run-status,
+.artifact-item-actions .artifact-item-edited,
+.artifact-item-actions .artifact-vote,
+.artifact-item-actions .artifact-comment-toggle,
+.artifact-item-actions .artifact-item-run,
+.artifact-item-actions .artifact-item-close,
+.artifact-item-actions .artifact-item-edit,
+.artifact-item-actions .artifact-item-delete {
+  min-height: 22px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
 }
 
 /* Mobile: action-row buttons drop their text label and keep just the
