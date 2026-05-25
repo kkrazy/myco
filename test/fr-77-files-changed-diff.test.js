@@ -6,35 +6,44 @@
 //    with the bottom section listing all changed files and supporting
 //    click-to-open diff view."
 //
-// Server scope:
-//   - listChangedFiles(absRoot) → { entries: [{path, status}], truncated }
-//     Reuses _gitStatusMap (no extra git fork). Caps at 500 entries.
+//   r2 comment: "on top of the file changes add a description on
+//     what has changed, idea with reference to bug/td/fr."
+//   r3 comment: "move the changed files to the lower portion of the
+//     plan view. click on a changed file expand it, with feature to
+//     collapse it."
+//
+// Server scope (unchanged across r1 / r2 / r3):
+//   - listChangedFiles(absRoot) → { entries: [{path, status}], truncated,
+//                                   mentions, recentCommits }
+//     Reuses _gitStatusMap (no extra git fork). Caps entries at 500.
 //   - readDiff(absRoot, relPath) → { path, diff, head, exists, gitless }
 //     git diff HEAD -- <path>, with safeJoin guarding traversal.
 //   - GET /sessions/:id/files-changed   (viewer-readable)
 //   - GET /sessions/:id/files/diff?path=...   (viewer-readable)
 //
-// UI scope:
-//   - #files-tree-pane split vertically: top = #files-tree (existing),
-//     bottom = #files-changed-section (new)
-//   - JS loadFilesChanged() fetches + renders the bottom list, with
-//     refresh button + collapse chevron; click opens openFileDiffViewer.
-//   - openFileDiffViewer renders unified diff (highlight.js
-//     language-diff) into the right pane with a "diff vs <head>"
-//     header chip. Edit button hidden in diff mode.
-//   - Tree-collapsed CSS hides the changed-files section (no room).
-//   - loadFilesChanged auto-fires on showFilesView mount + after a
-//     successful _saveFileEdit (so the chip count refreshes when an
-//     edit changes a file's git status).
+// UI scope (r3 — relocated):
+//   - #plan-changed-files-section lives inside #plan-wrap as a peer of
+//     #artifact-body-plan (was: inside #files-tree-pane). Removed from
+//     the Files view entirely.
+//   - bindPlanChangedFilesUi binds refresh / collapse / list-click on
+//     first Plan-show.
+//   - Clicking a file row toggles an INLINE diff body (was: opened the
+//     right-pane viewer). The diff renders as a sibling <li.pcf-diff-row>
+//     inserted immediately after the clicked row. Click again to remove.
+//   - showArtifactView('plan') triggers bindPlanChangedFilesUi +
+//     loadPlanChangedFiles({force:false}) so the section is populated
+//     when the user opens the Plan tab.
 //
 // Tests cover:
 //   1. Server module shape — exports + signatures
 //   2. listChangedFiles behavior — git-status round-trip in a temp repo
 //   3. readDiff behavior — diff output for a modified file
 //   4. HTTP routes registered
-//   5. HTML shell present
+//   5. HTML shell present (Plan-view location)
 //   6. CSS rules present + correct scoping
 //   7. JS functions exist + wire to the buttons
+//   8. fr-77 r2 — mentions + recent commits surfaced from server
+//   9. fr-77 r3 — inline-expand behavior shape
 
 const assert = require('assert');
 const fs = require('fs');
@@ -63,22 +72,19 @@ const CSS = fs.readFileSync(
 const APP = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'public', 'app.js'), 'utf8');
 
-console.log('── fr-77: changed-files section + diff viewer ──');
+console.log('── fr-77: Changed-files section (in Plan view, r3) + inline diff ──');
 
 // ──────────────────────────────────────────────────────────────────────
-// Server module shape
+// Server module shape (unchanged)
 // ──────────────────────────────────────────────────────────────────────
 
 t('files.js exports listChangedFiles + readDiff', () => {
   const m = require('../server/src/files');
-  assert.strictEqual(typeof m.listChangedFiles, 'function',
-    'listChangedFiles must be exported as a function');
-  assert.strictEqual(typeof m.readDiff, 'function',
-    'readDiff must be exported as a function');
+  assert.strictEqual(typeof m.listChangedFiles, 'function');
+  assert.strictEqual(typeof m.readDiff, 'function');
 });
 
 t('files.js: listChangedFiles caps at 500 entries (truncated flag)', () => {
-  // Pin the cap so future "raise the limit" patches show up explicitly.
   const idx = FILES_SRC.search(/function\s+listChangedFiles\s*\(/);
   assert.ok(idx > -1);
   const win = FILES_SRC.slice(idx, idx + 1500);
@@ -92,19 +98,15 @@ t('files.js: readDiff guards path traversal via safeJoin', () => {
   const idx = FILES_SRC.search(/function\s+readDiff\s*\(/);
   assert.ok(idx > -1);
   const win = FILES_SRC.slice(idx, idx + 2000);
-  assert.ok(/safeJoin\(absRoot,\s*relPath\)/.test(win),
-    'readDiff must call safeJoin to reject path-traversal attacks');
+  assert.ok(/safeJoin\(absRoot,\s*relPath\)/.test(win));
 });
 
 t('files.js: readDiff uses git diff HEAD --no-color --no-ext-diff', () => {
   const idx = FILES_SRC.search(/function\s+readDiff\s*\(/);
   const win = FILES_SRC.slice(idx, idx + 3000);
-  assert.ok(/--no-color/.test(win),
-    '--no-color so the response is plain text');
-  assert.ok(/--no-ext-diff/.test(win),
-    '--no-ext-diff so a user git-config\'d external differ doesn\'t change the shape');
-  assert.ok(/'HEAD'/.test(win),
-    'diff vs HEAD (not staging/working-tree split)');
+  assert.ok(/--no-color/.test(win));
+  assert.ok(/--no-ext-diff/.test(win));
+  assert.ok(/'HEAD'/.test(win));
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -123,29 +125,22 @@ function mkTempRepo() {
   return root;
 }
 
-// Async behavior tests must be awaited in sequence, otherwise the
-// final process.exit fires before they finish. Wrap in an IIFE.
 (async () => {
 
 await tAsync('behavior: listChangedFiles returns modified + untracked + deleted files', async () => {
   const root = mkTempRepo();
   try {
-    // Modify a.txt, delete b.txt, add a new untracked c.txt.
     fs.writeFileSync(path.join(root, 'a.txt'), 'hello modified\n');
     fs.unlinkSync(path.join(root, 'b.txt'));
     fs.writeFileSync(path.join(root, 'c.txt'), 'new\n');
     const filesMod = require('../server/src/files');
     const out = await filesMod.listChangedFiles(root);
-    assert.ok(Array.isArray(out.entries), 'entries must be an array');
+    assert.ok(Array.isArray(out.entries));
     const map = new Map(out.entries.map((e) => [e.path, e.status]));
-    assert.strictEqual(map.get('a.txt'), 'M',
-      'a.txt should be M (modified); got ' + map.get('a.txt'));
-    assert.strictEqual(map.get('b.txt'), 'D',
-      'b.txt should be D (deleted); got ' + map.get('b.txt'));
-    assert.strictEqual(map.get('c.txt'), '?',
-      'c.txt should be ? (untracked); got ' + map.get('c.txt'));
+    assert.strictEqual(map.get('a.txt'), 'M');
+    assert.strictEqual(map.get('b.txt'), 'D');
+    assert.strictEqual(map.get('c.txt'), '?');
     assert.strictEqual(out.truncated, false);
-    // Sorted by path.
     const paths = out.entries.map((e) => e.path);
     assert.deepStrictEqual(paths, [...paths].sort(),
       'entries must be sorted by path for deterministic UI');
@@ -154,18 +149,16 @@ await tAsync('behavior: listChangedFiles returns modified + untracked + deleted 
   }
 });
 
-await tAsync('behavior: listChangedFiles returns empty in a clean repo', async () => {
+await tAsync('behavior: listChangedFiles returns empty entries in a clean repo (but recentCommits stays)', async () => {
   const root = mkTempRepo();
   try {
     const filesMod = require('../server/src/files');
     const out = await filesMod.listChangedFiles(root);
     assert.deepStrictEqual(out.entries, []);
     assert.strictEqual(out.truncated, false);
-    // fr-77 r2: mentions are [] (no diff in a clean repo); recentCommits
-    // includes the seed commit (subject = 'init') with empty mentions.
     assert.deepStrictEqual(out.mentions, []);
     assert.ok(Array.isArray(out.recentCommits) && out.recentCommits.length >= 1,
-      'recentCommits must include at least the seed commit');
+      'recentCommits must still surface in a clean repo (last activity context)');
     assert.strictEqual(out.recentCommits[0].subject, 'init');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -178,8 +171,6 @@ await tAsync('behavior: listChangedFiles tolerates non-git workspaces (empty)', 
     fs.writeFileSync(path.join(root, 'x.txt'), 'x');
     const filesMod = require('../server/src/files');
     const out = await filesMod.listChangedFiles(root);
-    // fr-77 r2: shape stays `{ entries, truncated, mentions, recentCommits }`
-    // — all empty for a non-git workspace.
     assert.deepStrictEqual(out, {
       entries: [], truncated: false, mentions: [], recentCommits: [],
     });
@@ -195,17 +186,12 @@ await tAsync('behavior: readDiff returns unified diff for a modified file', asyn
     const filesMod = require('../server/src/files');
     const out = await filesMod.readDiff(root, 'a.txt');
     assert.strictEqual(out.path, 'a.txt');
-    assert.ok(typeof out.diff === 'string' && out.diff.length > 0,
-      'diff must be a non-empty string for a modified file');
-    assert.ok(/^diff --git/m.test(out.diff),
-      'diff output must contain a `diff --git` header');
-    assert.ok(/-hello$/m.test(out.diff) || /^-hello/m.test(out.diff),
-      'diff must show the removed line');
-    assert.ok(/\+hello modified$/m.test(out.diff) || /^\+hello modified/m.test(out.diff),
-      'diff must show the added line');
+    assert.ok(typeof out.diff === 'string' && out.diff.length > 0);
+    assert.ok(/^diff --git/m.test(out.diff));
+    assert.ok(/-hello$/m.test(out.diff) || /^-hello/m.test(out.diff));
+    assert.ok(/\+hello modified$/m.test(out.diff) || /^\+hello modified/m.test(out.diff));
     assert.strictEqual(out.exists, true);
-    assert.ok(out.head && /^[0-9a-f]{4,}$/.test(out.head),
-      'head must be a short SHA; got ' + out.head);
+    assert.ok(out.head && /^[0-9a-f]{4,}$/.test(out.head));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -217,8 +203,7 @@ await tAsync('behavior: readDiff signals exists=false for deleted file', async (
     fs.unlinkSync(path.join(root, 'b.txt'));
     const filesMod = require('../server/src/files');
     const out = await filesMod.readDiff(root, 'b.txt');
-    assert.strictEqual(out.exists, false,
-      'deleted file must have exists: false');
+    assert.strictEqual(out.exists, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -230,8 +215,7 @@ await tAsync('behavior: readDiff signals gitless=true in non-git workspace', asy
     fs.writeFileSync(path.join(root, 'x.txt'), 'x');
     const filesMod = require('../server/src/files');
     const out = await filesMod.readDiff(root, 'x.txt');
-    assert.strictEqual(out.gitless, true,
-      'non-git workspace must surface gitless:true');
+    assert.strictEqual(out.gitless, true);
     assert.strictEqual(out.diff, '');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -239,10 +223,6 @@ await tAsync('behavior: readDiff signals gitless=true in non-git workspace', asy
 });
 
 await tAsync('behavior: NESTED repo layout — list + diff resolve via project subdir', async () => {
-  // fr-77 hotfix repro: session.absCwd has no .git, but a single
-  // immediate subdir does (the common /wks/<user>/<sess>/<project>
-  // layout). Pre-hotfix returned empty + showed "No changes vs HEAD"
-  // even though the user could see `git status` listing files.
   const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), 'fr77-nested-'));
   const inner = path.join(wrapper, 'myco');
   fs.mkdirSync(inner, { recursive: true });
@@ -252,159 +232,21 @@ await tAsync('behavior: NESTED repo layout — list + diff resolve via project s
   fs.writeFileSync(path.join(inner, 'a.txt'), 'first\n');
   execFileSync('git', ['-C', inner, 'add', '.']);
   execFileSync('git', ['-C', inner, 'commit', '-q', '-m', 'init']);
-  // Modify a.txt — should show in the changed list as 'myco/a.txt'
-  // (NOT 'a.txt'), so the UI's openFileDiffViewer click sends the
-  // correct path that resolves under wrapper via safeJoin.
   fs.writeFileSync(path.join(inner, 'a.txt'), 'second\n');
   try {
-    // Force-clear the require cache so the updated files.js is loaded.
     delete require.cache[require.resolve('../server/src/files')];
     const filesMod = require('../server/src/files');
     const list = await filesMod.listChangedFiles(wrapper);
-    const entries = list.entries || [];
-    const paths = entries.map((e) => e.path);
+    const paths = (list.entries || []).map((e) => e.path);
     assert.ok(paths.includes('myco/a.txt'),
-      `nested-repo paths must include the subdir prefix; got: ${JSON.stringify(paths)}`);
-    // And readDiff with the prefixed path returns the actual diff.
+      `nested-repo paths must include subdir prefix; got: ${JSON.stringify(paths)}`);
     const diff = await filesMod.readDiff(wrapper, 'myco/a.txt');
-    assert.ok(diff.diff && /first/.test(diff.diff) && /second/.test(diff.diff),
-      'diff must show the modification for the nested-repo file');
-    assert.strictEqual(diff.path, 'myco/a.txt',
-      'returned path must keep the subdir prefix');
-    assert.strictEqual(diff.gitless, undefined,
-      'nested-repo case must NOT report gitless');
+    assert.ok(diff.diff && /first/.test(diff.diff) && /second/.test(diff.diff));
+    assert.strictEqual(diff.path, 'myco/a.txt');
+    assert.strictEqual(diff.gitless, undefined);
   } finally {
     fs.rmSync(wrapper, { recursive: true, force: true });
   }
-});
-
-// ──────────────────────────────────────────────────────────────────────
-// fr-77 r2 — description (mentions from diff + recent commits)
-// ──────────────────────────────────────────────────────────────────────
-
-await tAsync('fr-77 r2: listChangedFiles surfaces bug/fr/td mentions from diff text', async () => {
-  const root = mkTempRepo();
-  try {
-    // Insert a line mentioning bug-99 + fr-100. Both should land in mentions
-    // because they appear inside the unified diff output.
-    fs.writeFileSync(path.join(root, 'a.txt'),
-      'hello\n// touches bug-99 and fr-100 (also td-7)\n');
-    const filesMod = require('../server/src/files');
-    const out = await filesMod.listChangedFiles(root);
-    assert.ok(Array.isArray(out.mentions),
-      'mentions field must be an array');
-    // Deduped + sorted — the regex picks all three.
-    assert.deepStrictEqual(out.mentions, ['bug-99', 'fr-100', 'td-7'].sort());
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-await tAsync('fr-77 r2: listChangedFiles surfaces last-5 commit subjects with per-commit mentions', async () => {
-  const root = mkTempRepo();
-  try {
-    // Layer two more commits whose subjects reference work items.
-    fs.writeFileSync(path.join(root, 'a.txt'), 'v2\n');
-    execFileSync('git', ['-C', root, 'commit', '-aqm', 'feat(fr-200): pretty diffs']);
-    fs.writeFileSync(path.join(root, 'a.txt'), 'v3\n');
-    execFileSync('git', ['-C', root, 'commit', '-aqm', 'fix(bug-300): handle edge case']);
-    const filesMod = require('../server/src/files');
-    const out = await filesMod.listChangedFiles(root);
-    assert.ok(Array.isArray(out.recentCommits),
-      'recentCommits must be an array');
-    assert.ok(out.recentCommits.length >= 3,
-      'recentCommits must include the three commits we made');
-    // Most-recent first (git log default order).
-    assert.ok(/bug-300/.test(out.recentCommits[0].subject),
-      'first recent commit must be the bug-300 one');
-    assert.deepStrictEqual(out.recentCommits[0].mentions, ['bug-300']);
-    assert.deepStrictEqual(out.recentCommits[1].mentions, ['fr-200']);
-    // Each commit carries a short SHA.
-    for (const c of out.recentCommits) {
-      assert.ok(/^[0-9a-f]{4,}$/.test(c.sha),
-        `sha must be a short hex SHA; got ${JSON.stringify(c.sha)}`);
-      assert.strictEqual(typeof c.subject, 'string');
-      assert.ok(Array.isArray(c.mentions));
-    }
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-t('fr-77 r2 server: _extractMentions caps at 50 entries (defense)', () => {
-  // Static-shape guard — the cap is what prevents an absurdly mention-
-  // heavy diff from exploding the response payload.
-  const idx = FILES_SRC.search(/function\s+_extractMentions\s*\(/);
-  assert.ok(idx > -1, '_extractMentions must be defined');
-  const win = FILES_SRC.slice(idx, idx + 600);
-  assert.ok(/found\.size\s*>=\s*50/.test(win),
-    '_extractMentions must cap at 50 entries');
-  // Regex catches bug-N / fr-N / td-N tokens.
-  assert.ok(/fr\|bug\|td|bug\|fr\|td|td\|fr\|bug/.test(win),
-    '_extractMentions regex must include fr|bug|td alternation');
-});
-
-t('fr-77 r2 server: log parser uses NUL separator (%h%x00%s) safely', () => {
-  // The pretty-format key + the indexOf must agree on NUL as the
-  // separator. Regression guard against the literal-newline bug
-  // that briefly shipped during fr-77 r2 development.
-  const idx = FILES_SRC.search(/--pretty=format:%h%x00%s/);
-  assert.ok(idx > -1, 'git log must use %h%x00%s (NUL between sha+subject)');
-  const win = FILES_SRC.slice(idx, idx + 600);
-  assert.ok(/line\.indexOf\('\\0'\)/.test(win),
-    "parser must call indexOf('\\\\0') — NUL byte split, not newline");
-});
-
-t('app.js: _renderFilesChangedDesc renders mentions + recent rows', () => {
-  assert.ok(/function\s+_renderFilesChangedDesc\s*\(/.test(APP),
-    '_renderFilesChangedDesc helper must be defined');
-  const idx = APP.search(/function\s+_renderFilesChangedDesc\s*\(/);
-  const win = APP.slice(idx, idx + 2500);
-  assert.ok(/fc-mention-chip/.test(win),
-    'mentions must render as .fc-mention-chip spans');
-  assert.ok(/fc-recent-line/.test(win),
-    'recent commits must render as .fc-recent-line blocks');
-  assert.ok(/fc-recent-sha/.test(win) && /fc-recent-subject/.test(win),
-    'each recent line must split sha + subject for separate styling');
-  // Hidden when both empty.
-  assert.ok(/mentions\.length\s*===\s*0\s*&&\s*recent\.length\s*===\s*0/.test(win),
-    'both-empty case must hide the desc element');
-});
-
-t('app.js: _renderFilesChanged calls _renderFilesChangedDesc on every render', () => {
-  const idx = APP.search(/function\s+_renderFilesChanged\s*\(/);
-  const win = APP.slice(idx, idx + 2500);
-  assert.ok(/_renderFilesChangedDesc\(/.test(win),
-    '_renderFilesChanged must invoke the desc helper');
-});
-
-t('app.js: loadFilesChanged captures mentions + recentCommits into state', () => {
-  const idx = APP.search(/async\s+function\s+loadFilesChanged\s*\(/);
-  assert.ok(idx > -1);
-  const win = APP.slice(idx, idx + 2000);
-  assert.ok(/mentions:\s*Array\.isArray\(data\.mentions\)/.test(win),
-    'loadFilesChanged must mirror data.mentions into state.filesChanged');
-  assert.ok(/recentCommits:\s*Array\.isArray\(data\.recentCommits\)/.test(win),
-    'loadFilesChanged must mirror data.recentCommits into state.filesChanged');
-});
-
-t('index.html: #files-changed-desc container present (above the list)', () => {
-  assert.ok(/id="files-changed-desc"/.test(HTML),
-    '#files-changed-desc container must exist for the description rows');
-  // Ordering: desc sits between header and list, not after.
-  const descIdx = HTML.indexOf('id="files-changed-desc"');
-  const listIdx = HTML.indexOf('id="files-changed-list"');
-  assert.ok(descIdx > -1 && listIdx > -1 && descIdx < listIdx,
-    'desc must render BEFORE the list element');
-});
-
-t('styles.css: description-row classes present (.fc-mention-chip + .fc-recent-line)', () => {
-  assert.ok(/\.fc-mention-chip\b/.test(CSS),
-    '.fc-mention-chip rule must be defined');
-  assert.ok(/\.fc-recent-line\b/.test(CSS),
-    '.fc-recent-line rule must be defined');
-  assert.ok(/\.fc-desc-label\b/.test(CSS),
-    '.fc-desc-label rule must be defined');
 });
 
 await tAsync('behavior: readDiff rejects path traversal', async () => {
@@ -421,93 +263,132 @@ await tAsync('behavior: readDiff rejects path traversal', async () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// fr-77 r2 — description (mentions from diff + recent commits)
+// ──────────────────────────────────────────────────────────────────────
+
+await tAsync('fr-77 r2: listChangedFiles surfaces bug/fr/td mentions from diff text', async () => {
+  const root = mkTempRepo();
+  try {
+    fs.writeFileSync(path.join(root, 'a.txt'),
+      'hello\n// touches bug-99 and fr-100 (also td-7)\n');
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.listChangedFiles(root);
+    assert.ok(Array.isArray(out.mentions));
+    assert.deepStrictEqual(out.mentions, ['bug-99', 'fr-100', 'td-7'].sort());
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await tAsync('fr-77 r2: listChangedFiles surfaces last-5 commit subjects with per-commit mentions', async () => {
+  const root = mkTempRepo();
+  try {
+    fs.writeFileSync(path.join(root, 'a.txt'), 'v2\n');
+    execFileSync('git', ['-C', root, 'commit', '-aqm', 'feat(fr-200): pretty diffs']);
+    fs.writeFileSync(path.join(root, 'a.txt'), 'v3\n');
+    execFileSync('git', ['-C', root, 'commit', '-aqm', 'fix(bug-300): handle edge case']);
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.listChangedFiles(root);
+    assert.ok(Array.isArray(out.recentCommits));
+    assert.ok(out.recentCommits.length >= 3);
+    assert.ok(/bug-300/.test(out.recentCommits[0].subject));
+    assert.deepStrictEqual(out.recentCommits[0].mentions, ['bug-300']);
+    assert.deepStrictEqual(out.recentCommits[1].mentions, ['fr-200']);
+    for (const c of out.recentCommits) {
+      assert.ok(/^[0-9a-f]{4,}$/.test(c.sha),
+        `sha must be a short hex SHA; got ${JSON.stringify(c.sha)}`);
+      assert.strictEqual(typeof c.subject, 'string');
+      assert.ok(Array.isArray(c.mentions));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+t('fr-77 r2 server: _extractMentions caps at 50 entries (defense)', () => {
+  const idx = FILES_SRC.search(/function\s+_extractMentions\s*\(/);
+  assert.ok(idx > -1, '_extractMentions must be defined');
+  const win = FILES_SRC.slice(idx, idx + 600);
+  assert.ok(/found\.size\s*>=\s*50/.test(win));
+  assert.ok(/fr\|bug\|td|bug\|fr\|td|td\|fr\|bug/.test(win));
+});
+
+t('fr-77 r2 server: log parser uses NUL separator (%h%x00%s) safely', () => {
+  const idx = FILES_SRC.search(/--pretty=format:%h%x00%s/);
+  assert.ok(idx > -1, 'git log must use %h%x00%s');
+  const win = FILES_SRC.slice(idx, idx + 600);
+  assert.ok(/line\.indexOf\('\\0'\)/.test(win),
+    "parser must call indexOf('\\\\0') — NUL byte split, not newline");
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // HTTP routes
 // ──────────────────────────────────────────────────────────────────────
 
 t('index.js: GET /sessions/:id/files-changed route registered', () => {
-  assert.ok(/app\.get\(['"]\/sessions\/:id\/files-changed['"]/.test(INDEX_SRC),
-    'files-changed route must be registered');
-  // And must call listChangedFiles.
+  assert.ok(/app\.get\(['"]\/sessions\/:id\/files-changed['"]/.test(INDEX_SRC));
   const idx = INDEX_SRC.search(/files-changed/);
   const win = INDEX_SRC.slice(idx, idx + 800);
-  assert.ok(/listChangedFiles/.test(win),
-    'files-changed handler must call listChangedFiles');
+  assert.ok(/listChangedFiles/.test(win));
 });
 
 t('index.js: GET /sessions/:id/files/diff route registered', () => {
-  assert.ok(/app\.get\(['"]\/sessions\/:id\/files\/diff['"]/.test(INDEX_SRC),
-    'files/diff route must be registered');
-  // Anchor on the actual app.get() line, not the first substring
-  // match (which lands in a comment higher up).
+  assert.ok(/app\.get\(['"]\/sessions\/:id\/files\/diff['"]/.test(INDEX_SRC));
   const idx = INDEX_SRC.search(/app\.get\(['"]\/sessions\/:id\/files\/diff['"]/);
   const win = INDEX_SRC.slice(idx, idx + 800);
-  assert.ok(/readDiff/.test(win),
-    'files/diff handler must call readDiff');
+  assert.ok(/readDiff/.test(win));
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// HTML shell
+// HTML shell — fr-77 r3 location
 // ──────────────────────────────────────────────────────────────────────
 
-t('index.html: #files-changed-section + list + refresh + collapse buttons present', () => {
-  assert.ok(/id="files-changed-section"/.test(HTML),
-    '#files-changed-section element must exist');
-  assert.ok(/id="files-changed-list"/.test(HTML),
-    '#files-changed-list ul must exist');
-  assert.ok(/id="files-changed-refresh"/.test(HTML),
-    'refresh button must exist');
-  assert.ok(/id="files-changed-collapse"/.test(HTML),
-    'collapse button must exist');
-  assert.ok(/id="files-changed-count"/.test(HTML),
-    'count chip must exist (aria-live updates)');
+t('index.html: #plan-changed-files-section + list + refresh + collapse + desc present', () => {
+  for (const id of [
+    'plan-changed-files-section',
+    'plan-changed-files-list',
+    'plan-changed-files-refresh',
+    'plan-changed-files-collapse',
+    'plan-changed-files-count',
+    'plan-changed-files-desc',
+  ]) {
+    assert.ok(new RegExp(`id="${id}"`).test(HTML),
+      `#${id} element must exist in Plan-view section`);
+  }
 });
 
-t('index.html: section sits INSIDE #files-tree-pane (split-pane structure)', () => {
-  // Anchor: the bottom section is rendered as a sibling of #files-tree
-  // within #files-tree-pane.
-  const paneIdx = HTML.indexOf('id="files-tree-pane"');
-  assert.ok(paneIdx > -1);
-  const paneEnd = HTML.indexOf('</div>', HTML.indexOf('id="files-changed-section"', paneIdx));
-  const inside = HTML.slice(paneIdx, paneEnd);
-  assert.ok(/files-tree-pane/.test(inside) && /files-changed-section/.test(inside),
-    'changed-files section must live inside files-tree-pane');
+t('index.html: #plan-changed-files-section lives INSIDE #plan-wrap (Plan view)', () => {
+  const planIdx = HTML.indexOf('id="plan-wrap"');
+  assert.ok(planIdx > -1);
+  // Walk from #plan-wrap forward looking for the section and the closing
+  // </div> of plan-wrap. Section must be inside plan-wrap.
+  const tail = HTML.slice(planIdx);
+  const secOff = tail.indexOf('id="plan-changed-files-section"');
+  const archOff = tail.indexOf('id="arch-wrap"');
+  assert.ok(secOff > -1 && (archOff === -1 || secOff < archOff),
+    'changed-files section must live INSIDE plan-wrap (before #arch-wrap)');
+});
+
+t('index.html: #files-changed-section is GONE from Files view (r3 relocation)', () => {
+  assert.ok(!/id="files-changed-section"/.test(HTML),
+    '#files-changed-section was moved to Plan view — must not remain in Files view');
+  assert.ok(!/id="files-changed-list"/.test(HTML),
+    '#files-changed-list must be gone from Files view');
 });
 
 // ──────────────────────────────────────────────────────────────────────
 // CSS
 // ──────────────────────────────────────────────────────────────────────
 
-t('styles.css: #files-tree-pane is flex container; #files-tree scrolls itself', () => {
-  // Pre-fix the pane had `overflow-y: auto` which conflicted with the
-  // nested scrolls. fr-77 changed it to `overflow: hidden` so the two
-  // stacked sections each scroll independently.
-  const idx = CSS.indexOf('#files-tree-pane {');
-  assert.ok(idx > -1);
-  const blockEnd = CSS.indexOf('}', idx);
-  const block = CSS.slice(idx, blockEnd);
-  // Strip comments.
-  const noComments = block.replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.ok(/overflow:\s*hidden/.test(noComments),
-    '#files-tree-pane must use overflow: hidden (children scroll)');
-  // And #files-tree itself has overflow-y: auto.
-  const treeIdx = CSS.indexOf('#files-tree-pane #files-tree {');
-  assert.ok(treeIdx > -1, '#files-tree-pane #files-tree rule must exist');
-});
-
-t('styles.css: #files-changed-section has max-height + flex-direction column', () => {
-  const idx = CSS.indexOf('#files-changed-section {');
-  assert.ok(idx > -1);
+t('styles.css: #plan-changed-files-section has max-height + flex-direction column', () => {
+  const idx = CSS.indexOf('#plan-changed-files-section {');
+  assert.ok(idx > -1, '#plan-changed-files-section rule must exist');
   const blockEnd = CSS.indexOf('}', idx);
   const block = CSS.slice(idx, blockEnd);
   assert.ok(/max-height:\s*\d+vh/.test(block),
     'must cap height with vh-relative max-height');
   assert.ok(/flex-direction:\s*column/.test(block),
-    'must stack header + list vertically');
-});
-
-t('styles.css: tree-collapsed mode hides the changed-files section', () => {
-  assert.ok(/#files-wrap\.files-tree-collapsed\s+#files-changed-section\s*\{[\s\S]{0,80}display:\s*none/.test(CSS),
-    'when tree pane is collapsed to a thin strip, the changed section must hide too');
+    'must stack header + desc + list vertically');
 });
 
 t('styles.css: status colors mapped (.fc-status-M / -A / -D / -R / -U)', () => {
@@ -517,58 +398,134 @@ t('styles.css: status colors mapped (.fc-status-M / -A / -D / -R / -U)', () => {
   }
 });
 
-// ──────────────────────────────────────────────────────────────────────
-// JS
-// ──────────────────────────────────────────────────────────────────────
-
-t('app.js: loadFilesChanged + openFileDiffViewer functions exist', () => {
-  assert.ok(/function\s+loadFilesChanged\s*\(/.test(APP),
-    'loadFilesChanged must be defined');
-  assert.ok(/function\s+openFileDiffViewer\s*\(/.test(APP),
-    'openFileDiffViewer must be defined');
-  assert.ok(/function\s+_renderFilesChanged\s*\(/.test(APP),
-    '_renderFilesChanged helper must be defined');
-  assert.ok(/function\s+_renderDiffViewerBody\s*\(/.test(APP),
-    '_renderDiffViewerBody helper must be defined');
+t('styles.css: description-row classes present (.fc-mention-chip + .fc-recent-line + .fc-desc-label)', () => {
+  assert.ok(/\.fc-mention-chip\b/.test(CSS));
+  assert.ok(/\.fc-recent-line\b/.test(CSS));
+  assert.ok(/\.fc-desc-label\b/.test(CSS));
 });
 
-t('app.js: showFilesView calls loadFilesChanged so the section refreshes on open', () => {
-  const idx = APP.search(/function\s+showFilesView\s*\(/);
-  assert.ok(idx > -1);
+t('styles.css: fr-77 r3 inline-diff styles present (.pcf-diff-body + .pcf-caret)', () => {
+  assert.ok(/\.pcf-diff-body\b/.test(CSS),
+    '.pcf-diff-body rule must exist for the inline-expand diff body');
+  assert.ok(/\.pcf-caret\b/.test(CSS),
+    '.pcf-caret rule must exist for the per-row chevron');
+  // Rotated caret on expand.
+  assert.ok(/li\.is-expanded\s+\.pcf-caret\b[\s\S]{0,150}transform:\s*rotate\(90deg\)/.test(CSS),
+    '.is-expanded li must rotate the caret 90deg');
+});
+
+t('styles.css: stale #files-changed-* rules removed (r3 relocation)', () => {
+  for (const id of [
+    '#files-changed-section', '#files-changed-list', '#files-changed-header',
+    '#files-changed-desc', '#files-changed-refresh', '#files-changed-collapse',
+    '#files-changed-count', '#files-changed-msg', '#files-changed-title',
+  ]) {
+    assert.ok(!CSS.includes(id),
+      `${id} rule must be removed — relocated to plan-changed-files-* in r3`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// JS — fr-77 r3 functions + bindings
+// ──────────────────────────────────────────────────────────────────────
+
+t('app.js: loadPlanChangedFiles + _renderPlanChangedFiles + _renderPlanChangedFilesDesc defined', () => {
+  assert.ok(/async\s+function\s+loadPlanChangedFiles\s*\(/.test(APP),
+    'loadPlanChangedFiles must be defined');
+  assert.ok(/function\s+_renderPlanChangedFiles\s*\(/.test(APP),
+    '_renderPlanChangedFiles must be defined');
+  assert.ok(/function\s+_renderPlanChangedFilesDesc\s*\(/.test(APP),
+    '_renderPlanChangedFilesDesc must be defined');
+});
+
+t('app.js: _togglePlanChangedFileExpand + _renderInlineDiffBody defined (inline-expand path)', () => {
+  assert.ok(/async\s+function\s+_togglePlanChangedFileExpand\s*\(/.test(APP),
+    '_togglePlanChangedFileExpand must be defined');
+  assert.ok(/function\s+_renderInlineDiffBody\s*\(/.test(APP),
+    '_renderInlineDiffBody must be defined');
+});
+
+t('app.js: bindPlanChangedFilesUi defined and idempotent (dataset.bound guard)', () => {
+  assert.ok(/function\s+bindPlanChangedFilesUi\s*\(/.test(APP));
+  const idx = APP.search(/function\s+bindPlanChangedFilesUi\s*\(/);
   const win = APP.slice(idx, idx + 1500);
-  assert.ok(/loadFilesChanged\s*\(/.test(win),
-    'showFilesView must call loadFilesChanged on mount');
-});
-
-t('app.js: refresh / collapse / list-click handlers bound in bindFilesUi', () => {
-  const idx = APP.search(/function\s+bindFilesUi\s*\(/);
-  const win = APP.slice(idx, idx + 3000);
-  assert.ok(/files-changed-refresh/.test(win),
+  assert.ok(/dataset\.bound/.test(win),
+    'bind must be guarded so re-shows of the Plan view do not double-bind');
+  assert.ok(/plan-changed-files-refresh/.test(win),
     'refresh button must be bound');
-  assert.ok(/files-changed-collapse/.test(win),
+  assert.ok(/plan-changed-files-collapse/.test(win),
     'collapse button must be bound');
-  assert.ok(/files-changed-list/.test(win),
+  assert.ok(/plan-changed-files-list/.test(win),
     'list element must have a click handler bound');
-  assert.ok(/data-fc-path/.test(win) || /data-fc-path/.test(APP),
-    'list items carry data-fc-path so the click handler picks the path');
 });
 
-t('app.js: _saveFileEdit refreshes the changed list on success', () => {
-  // Anchor on the saveFileEdit success path; the loadFilesChanged
-  // call should fire right after _exitFileEditMode.
-  const idx = APP.search(/_exitFileEditMode\s*\(\)\s*;\s*\n[\s\S]{0,400}loadFilesChanged/);
+t('app.js: showArtifactView("plan") triggers loadPlanChangedFiles + bindPlanChangedFilesUi', () => {
+  const idx = APP.search(/function\s+showArtifactView\s*\(/);
+  assert.ok(idx > -1);
+  const win = APP.slice(idx, idx + 3000);
+  assert.ok(/type\s*===\s*['"]plan['"]/.test(win),
+    'showArtifactView must gate the changed-files load on type === "plan"');
+  assert.ok(/bindPlanChangedFilesUi\(/.test(win),
+    'showArtifactView must call bindPlanChangedFilesUi on the plan branch');
+  assert.ok(/loadPlanChangedFiles\(/.test(win),
+    'showArtifactView must call loadPlanChangedFiles on the plan branch');
+});
+
+t('app.js: inline-expand toggles a sibling li.pcf-diff-row (not the right pane)', () => {
+  const idx = APP.search(/async\s+function\s+_togglePlanChangedFileExpand\s*\(/);
+  const win = APP.slice(idx, idx + 4000);
+  assert.ok(/createElement\(['"]li['"]\)/.test(win),
+    'inline expand must create a new LI sibling for the diff body');
+  assert.ok(/pcf-diff-row/.test(win),
+    'the new LI must carry the .pcf-diff-row class');
+  assert.ok(/is-expanded/.test(win),
+    'parent row must get an is-expanded marker');
+  // Collapse path: remove the sibling, drop the marker.
+  assert.ok(/diffRow\.remove\(\)/.test(win),
+    'collapse must remove the inline diff row');
+  // Cached path skips the fetch.
+  assert.ok(/_planChangedDiffCache/.test(win),
+    'inline-expand must consult a per-row diff cache for instant re-expand');
+});
+
+t('app.js: inline-expand uses /files/diff endpoint (reuses readDiff route)', () => {
+  const idx = APP.search(/async\s+function\s+_togglePlanChangedFileExpand\s*\(/);
+  const win = APP.slice(idx, idx + 4000);
+  assert.ok(/\/files\/diff\?path=/.test(win),
+    'inline-expand must reuse the existing /files/diff endpoint');
+});
+
+t('app.js: _renderPlanChangedFiles list items carry data-fc-path + .pcf-caret', () => {
+  const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
+  const win = APP.slice(idx, idx + 3000);
+  assert.ok(/data-fc-path=/.test(win),
+    'list items must carry data-fc-path so the click handler picks the path');
+  assert.ok(/pcf-caret/.test(win),
+    'each row must render a .pcf-caret chevron for the expand affordance');
+});
+
+t('app.js: _saveFileEdit success path refreshes the Plan changed-files section', () => {
+  const idx = APP.search(/loadPlanChangedFiles\s*\(\s*\{\s*force:\s*true\s*\}/);
   assert.ok(idx > -1,
-    '_saveFileEdit success path must call loadFilesChanged({force:true}) so the chip count refreshes');
+    '_saveFileEdit must call loadPlanChangedFiles({force:true}) on save so the chip count refreshes');
 });
 
-t('app.js: openFileDiffViewer hides the Edit button (no edit on diff)', () => {
-  const idx = APP.search(/function\s+_renderDiffViewerBody\s*\(/);
-  const win = APP.slice(idx, idx + 2500);
-  assert.ok(/files-edit['"]?\)[\s\S]{0,80}hidden\s*=\s*true/.test(win),
-    'diff view must hide the Edit button — diff is read-only');
+t('app.js: stale fr-77 r1/r2 symbols removed (openFileDiffViewer / _renderDiffViewerBody / loadFilesChanged / _renderFilesChanged)', () => {
+  // Comments stripped so a leftover "// see openFileDiffViewer" doesn't
+  // false-positive — we want to assert the actual symbol is gone.
+  const code = APP.replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/\bopenFileDiffViewer\b/.test(code),
+    'openFileDiffViewer must be removed (r3 replaced right-pane viewer with inline expand)');
+  assert.ok(!/\b_renderDiffViewerBody\b/.test(code),
+    '_renderDiffViewerBody must be removed');
+  assert.ok(!/\bloadFilesChanged\b/.test(code),
+    'loadFilesChanged must be removed (renamed to loadPlanChangedFiles)');
+  assert.ok(!/\b_renderFilesChanged\b/.test(code),
+    '_renderFilesChanged must be removed (renamed to _renderPlanChangedFiles)');
+  assert.ok(!/files-changed-(list|desc|count|msg|section|header|title|refresh|collapse)/.test(code),
+    'all files-changed-* element IDs must be gone (renamed to plan-changed-files-*)');
 });
 
-  // Close the async IIFE.
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 })();

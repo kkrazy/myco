@@ -3502,27 +3502,22 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 220px;
   min-width: 180px;
   border-right: 1px solid rgba(255, 255, 255, .06);
-  /* fr-77: pane is the FLEX CONTAINER; scroll happens inside the
-     two stacked sections (#files-tree + #files-changed-section).
-     Pre-fix this had overflow-y: auto which conflicted with the
-     nested scroll regions (whole pane scrolled instead of each
-     section independently). */
-  overflow: hidden;
+  /* fr-77 r3: the changed-files section moved to the Plan view, so
+     the pane is back to a single scroll region (tree only). overflow-y
+     handles the scroll directly. (Pre-r3 this needed a flex split to
+     host two stacked sections; that's gone now.) */
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   background: #0a0e14;
   transition: width .15s ease;
-}
-/* fr-77: top section — the existing directory tree. Takes the
-   remaining vertical space + scrolls its own overflow. */
-#files-tree-pane #files-tree {
-  flex: 1 1 auto;
-  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
+}
+#files-tree-pane #files-tree {
   margin: 0;
 }
-#files-tree-pane #files-tree::-webkit-scrollbar { width: 8px; }
+#files-tree-pane::-webkit-scrollbar { width: 8px; }
 /* Collapsed-tree state: tree pane drops to a thin strip, just wide
    enough to show the ▶ expand button. The viewer pane fills the
    rest of the wrap. Triggered by the ◀ button in files-header
@@ -3555,37 +3550,48 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 #files-tree-collapse:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
 
-/* fr-77: bottom "Changed files" section. Stacks under #files-tree
-   inside the tree pane. Default ~30vh tall (capped 120px-280px),
-   scrolls its own overflow, collapsible via the chevron in the
-   header. Hidden in tree-collapsed mode (the thin-strip layout
-   has no room for a second section). */
-#files-changed-section {
+/* fr-77 r3: "Changed files" section moved from Files view → Plan view.
+   Sits as a peer of #artifact-body-plan inside #plan-wrap (which is
+   `display:flex; flex-direction:column`). Default capped at ~40vh so
+   the plan-items body still has room to breathe; user can hide the
+   whole section via the chevron in the header. Centered to the same
+   880px max-width as the rest of the Plan view content on desktop. */
+#plan-changed-files-section {
   flex: 0 0 auto;
-  max-height: 30vh;
+  max-height: 40vh;
   min-height: 80px;
   display: flex;
   flex-direction: column;
   border-top: 1px solid rgba(255, 255, 255, .08);
   background: rgba(255, 255, 255, .02);
+  box-sizing: border-box;
+  width: 100%;
 }
-#files-changed-section.is-collapsed {
+@media (min-width: 901px) {
+  #plan-changed-files-section {
+    max-width: 880px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+#plan-changed-files-section.is-collapsed {
   max-height: none;
   min-height: 0;
 }
-#files-changed-section.is-collapsed #files-changed-list,
-#files-changed-section.is-collapsed #files-changed-msg {
+#plan-changed-files-section.is-collapsed #plan-changed-files-list,
+#plan-changed-files-section.is-collapsed #plan-changed-files-desc,
+#plan-changed-files-section.is-collapsed #plan-changed-files-msg {
   display: none;
 }
-#files-changed-section.is-collapsed #files-changed-collapse svg {
+#plan-changed-files-section.is-collapsed #plan-changed-files-collapse svg {
   /* Chevron points up when section is collapsed (click to expand). */
   transform: rotate(180deg);
 }
-#files-changed-header {
+#plan-changed-files-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 6px 12px;
   font-size: 0.78rem;
   color: var(--muted, #8b949e);
   letter-spacing: 0.04em;
@@ -3593,15 +3599,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   flex: 0 0 auto;
   user-select: none;
 }
-#files-changed-title { flex: 1; }
-#files-changed-count {
+#plan-changed-files-title { flex: 1; }
+#plan-changed-files-count {
   font-variant-numeric: tabular-nums;
   font-size: 0.72rem;
   opacity: 0.7;
   margin-right: 4px;
 }
-#files-changed-refresh,
-#files-changed-collapse {
+#plan-changed-files-refresh,
+#plan-changed-files-collapse {
   background: transparent;
   border: 0;
   color: var(--muted, #8b949e);
@@ -3613,12 +3619,12 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   align-items: center;
   transition: color .12s, background .12s;
 }
-#files-changed-refresh:hover,
-#files-changed-collapse:hover {
+#plan-changed-files-refresh:hover,
+#plan-changed-files-collapse:hover {
   background: rgba(255, 255, 255, .06);
   color: var(--text);
 }
-#files-changed-list {
+#plan-changed-files-list {
   flex: 1 1 auto;
   overflow-y: auto;
   margin: 0;
@@ -3627,13 +3633,13 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
 }
-#files-changed-list::-webkit-scrollbar { width: 8px; }
-#files-changed-list li {
+#plan-changed-files-list::-webkit-scrollbar { width: 8px; }
+#plan-changed-files-list li {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 8px;
-  font-size: 0.78rem;
+  padding: 4px 12px;
+  font-size: 0.82rem;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -3641,13 +3647,27 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   color: var(--text);
   transition: background .1s;
 }
-#files-changed-list li:hover {
+#plan-changed-files-list li:hover {
   background: rgba(56, 139, 253, .12);
   color: #58a6ff;
 }
-#files-changed-list li.is-active {
-  background: rgba(56, 139, 253, .2);
+/* fr-77 r3: expanded-row marker (replaces .is-active from the
+   right-pane click-to-open era). Row stays highlighted as long as
+   its inline diff body is open. */
+#plan-changed-files-list li.is-expanded {
+  background: rgba(56, 139, 253, .15);
   color: #58a6ff;
+}
+#plan-changed-files-list li .pcf-caret {
+  flex: 0 0 12px;
+  display: inline-block;
+  font-size: 0.7rem;
+  opacity: 0.6;
+  transition: transform .12s;
+}
+#plan-changed-files-list li.is-expanded .pcf-caret {
+  transform: rotate(90deg);
+  opacity: 1;
 }
 .fc-status {
   flex: 0 0 14px;
@@ -3670,8 +3690,8 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#files-changed-msg {
-  padding: 8px;
+#plan-changed-files-msg {
+  padding: 8px 12px;
   font-size: 0.78rem;
   color: var(--muted, #8b949e);
   font-style: italic;
@@ -3679,8 +3699,8 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 /* fr-77 r2: description rows (Mentions + Recent commits) above the
    file list. Static text, no hover/click affordances — purely for
    context. Compact so the file list stays the focal point. */
-#files-changed-desc {
-  padding: 6px 8px 4px;
+#plan-changed-files-desc {
+  padding: 6px 12px 4px;
   font-size: 0.72rem;
   color: var(--muted, #8b949e);
   border-bottom: 1px solid rgba(255, 255, 255, .04);
@@ -3688,7 +3708,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   flex-direction: column;
   gap: 4px;
 }
-#files-changed-desc[hidden] { display: none; }
+#plan-changed-files-desc[hidden] { display: none; }
 .fc-desc-row {
   display: flex;
   align-items: flex-start;
@@ -3742,53 +3762,73 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   white-space: nowrap;
   color: var(--fg, #c9d1d9);
 }
-/* In tree-collapsed mode the whole bottom section disappears. */
-#files-wrap.files-tree-collapsed #files-changed-section {
-  display: none;
-}
 
-/* fr-77: diff viewer body (right pane content when a changed-file
-   list item is clicked). The actual diff text uses highlight.js
-   language-diff via _renderDiffViewerBody; this CSS frames the
-   small "diff vs <head>" header and the empty/notice states. */
-.fc-diff-header {
-  padding: 8px 16px;
-  font-size: 0.78rem;
+/* fr-77 r3: inline diff body. Rendered as a sibling LI inserted
+   directly after the clicked row when the user expands it. Click
+   the parent row again to collapse — the body is removed from DOM
+   (cheap re-fetch via the 2s cache + per-row .pcf-diff-cache map,
+   so a quick re-expand is instant). */
+#plan-changed-files-list li.pcf-diff-row {
+  /* This LI is a container, not a clickable file row — drop the
+     row hover + cursor. */
+  padding: 0;
+  cursor: default;
+  background: #0d1117;
+  border-top: 1px solid rgba(255, 255, 255, .04);
+  border-bottom: 1px solid rgba(255, 255, 255, .04);
+}
+#plan-changed-files-list li.pcf-diff-row:hover {
+  background: #0d1117;
+  color: var(--text);
+}
+.pcf-diff-body {
+  width: 100%;
+  max-height: 60vh;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pcf-diff-body .fc-diff-header {
+  padding: 6px 12px;
+  font-size: 0.74rem;
   color: var(--muted, #8b949e);
   border-bottom: 1px solid rgba(255, 255, 255, .06);
   background: rgba(255, 255, 255, .02);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.fc-diff-header code {
+.pcf-diff-body .fc-diff-header code {
   color: #58a6ff;
   background: rgba(56, 139, 253, .08);
   padding: 1px 4px;
   border-radius: 3px;
 }
-.fc-deleted {
+.pcf-diff-body .fc-deleted {
   color: #ff8a8a;
   font-weight: 600;
 }
-.fc-diff-notice,
-.fc-diff-empty {
-  padding: 16px;
-  font-size: 0.88rem;
+.pcf-diff-body .fc-diff-notice,
+.pcf-diff-body .fc-diff-empty {
+  padding: 8px 12px;
+  font-size: 0.78rem;
   color: var(--muted, #8b949e);
   font-style: italic;
 }
-.fc-diff {
+.pcf-diff-body pre.fc-diff {
   margin: 0;
   padding: 0;
   background: #0d1117;
 }
-.fc-diff code.language-diff {
+.pcf-diff-body pre.fc-diff code.language-diff {
   display: block;
-  padding: 12px 16px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
-  line-height: 1.5;
+  padding: 8px 12px;
   white-space: pre;
   overflow-x: auto;
+}
+.pcf-diff-loading {
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  color: var(--muted, #8b949e);
+  font-style: italic;
 }
 
 /* Inline file editor — fills the files-view-body with a monospace

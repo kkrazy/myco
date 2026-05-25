@@ -3248,6 +3248,12 @@
           "user": "kkrazy",
           "text": "on top of the file changes add a description on what has changed, idea with reference to bug/td/fr",
           "ts": "2026-05-25T13:59:14.643Z"
+        },
+        {
+          "id": "8b1810568a12",
+          "user": "kkrazy",
+          "text": "move the changed files to the lower portion of the plan view. click on a changed file expand it, with feature to collapse it.",
+          "ts": "2026-05-25T14:38:10.041Z"
         }
       ],
       "meta": {

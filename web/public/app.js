@@ -6328,6 +6328,14 @@ function showArtifactView(type) {
     document.getElementById('btn-' + t)?.classList.toggle('active', t === type);
   }
   loadArtifact(type).catch(() => {});
+  // fr-77 r3: when the Plan view is shown, also refresh the bottom
+  // Changed-files section (2s cache prevents thrash from rapid
+  // re-shows). The handlers (refresh button, collapse, click-to-
+  // expand) are bound exactly once on first Plan-show.
+  if (type === 'plan') {
+    bindPlanChangedFilesUi();
+    loadPlanChangedFiles({ force: false });
+  }
   updateChatButton();
   _updateMainPaneLayout();
 }
@@ -7643,22 +7651,8 @@ function bindFilesUi() {
   document.getElementById('files-copy')?.addEventListener('click', copyFileContents);
   document.getElementById('files-wrap-toggle')?.addEventListener('click', toggleWrap);
   document.getElementById('files-tree-collapse')?.addEventListener('click', _toggleFilesTreeCollapsed);
-  // fr-77: changed-files section bindings.
-  document.getElementById('files-changed-refresh')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    loadFilesChanged({ force: true });
-  });
-  document.getElementById('files-changed-collapse')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    const sec = document.getElementById('files-changed-section');
-    if (sec) sec.classList.toggle('is-collapsed');
-  });
-  document.getElementById('files-changed-list')?.addEventListener('click', (e) => {
-    const li = e.target.closest('li[data-fc-path]');
-    if (!li) return;
-    const p = li.dataset.fcPath;
-    if (p) openFileDiffViewer(p);
-  });
+  // fr-77 r3: changed-files section moved to the Plan view; the refresh /
+  // collapse / list-click bindings live in bindPlanChangedFilesUi() now.
   document.getElementById('files-edit')?.addEventListener('click', _enterFileEditMode);
   document.getElementById('files-edit-save')?.addEventListener('click', () => _saveFileEdit());
   document.getElementById('files-edit-cancel')?.addEventListener('click', _exitFileEditMode);
@@ -7747,11 +7741,8 @@ function showFilesView() {
   // there per _hideMainPaneSiblings).
   if (window.innerWidth > 900) setChatPane(true);
   loadFileTree(state.files.currentPath || '.');
-  // fr-77: refresh the bottom changed-files section every time the
-  // files view is opened so it reflects whatever git changes have
-  // landed since last visit. The list also auto-refreshes after
-  // _saveFileEdit succeeds (see fr-77 hook there).
-  loadFilesChanged({ force: false });
+  // fr-77 r3: changed-files refresh moved to the Plan view. The Files
+  // view stays focused on tree browsing.
   updateChatButton();
   _updateMainPaneLayout();
 }
@@ -7794,37 +7785,33 @@ function showFilesTreeError(msg) {
   errEl.hidden = false;
 }
 
-// fr-77: fetch + render the flat list of git-status-changed files in
-// the project root. Powers the bottom "Changed files" section. Called
-// on showFilesView mount, on the refresh button, and after a file
-// edit lands. Forces a fetch on { force: true }; otherwise piggybacks
-// on a small in-memory cache to avoid double-fetching during a single
-// user action.
-async function loadFilesChanged({ force } = {}) {
+// fr-77 r3: fetch + render the flat list of git-status-changed files
+// at the project root, in the Plan view's bottom "Changed files"
+// section. Called on Plan-view show, on the refresh button, and after
+// a file edit lands. Forces a fetch on { force: true }; otherwise
+// piggybacks on a small in-memory cache (2s) to avoid double-fetching
+// during a single user action (e.g. when both showArtifactView('plan')
+// and a state-update WS frame trigger a load in quick succession).
+async function loadPlanChangedFiles({ force } = {}) {
   if (!state.activeId) return;
   if (!state.filesChanged) state.filesChanged = { entries: [], loadedAt: 0 };
-  // Cache for 2s — useful when showFilesView + a subsequent state-
-  // update both trigger a load in quick succession.
   const now = Date.now();
   if (!force && (now - state.filesChanged.loadedAt) < 2000) return;
-  const ul = document.getElementById('files-changed-list');
-  const msgEl = document.getElementById('files-changed-msg');
-  const countEl = document.getElementById('files-changed-count');
+  const ul    = document.getElementById('plan-changed-files-list');
+  const msgEl = document.getElementById('plan-changed-files-msg');
   if (!ul) return;
   const id = state.activeId;
   let res;
   try {
     res = await authedFetch(`/sessions/${encodeURIComponent(id)}/files-changed`);
   } catch (e) {
-    msgEl.textContent = `Failed: ${e.message || e}`;
-    msgEl.hidden = false;
+    if (msgEl) { msgEl.textContent = `Failed: ${e.message || e}`; msgEl.hidden = false; }
     return;
   }
   if (!res.ok) {
     let body = {};
     try { body = await res.json(); } catch {}
-    msgEl.textContent = body.error || `HTTP ${res.status}`;
-    msgEl.hidden = false;
+    if (msgEl) { msgEl.textContent = body.error || `HTTP ${res.status}`; msgEl.hidden = false; }
     return;
   }
   const data = await res.json();
@@ -7838,17 +7825,24 @@ async function loadFilesChanged({ force } = {}) {
     mentions: Array.isArray(data.mentions) ? data.mentions : [],
     recentCommits: Array.isArray(data.recentCommits) ? data.recentCommits : [],
   };
-  _renderFilesChanged();
+  _renderPlanChangedFiles();
 }
 
-function _renderFilesChanged() {
-  const ul = document.getElementById('files-changed-list');
-  const msgEl = document.getElementById('files-changed-msg');
-  const countEl = document.getElementById('files-changed-count');
+// fr-77 r3: per-file inline-diff cache so a quick collapse+re-expand
+// is instant (no extra round-trip). Cleared whenever the changed-files
+// list is re-rendered — fresh data invalidates the per-file diffs.
+let _planChangedDiffCache = new Map();
+
+function _renderPlanChangedFiles() {
+  const ul     = document.getElementById('plan-changed-files-list');
+  const msgEl  = document.getElementById('plan-changed-files-msg');
+  const countEl= document.getElementById('plan-changed-files-count');
   if (!ul) return;
   const fc = state.filesChanged || { entries: [] };
   const entries = fc.entries || [];
-  // Count chip.
+  // Wipe the inline-diff cache — the list changed under us, any cached
+  // diffs may now be stale.
+  _planChangedDiffCache = new Map();
   if (countEl) {
     countEl.textContent = entries.length === 0 ? '' :
       (fc.truncated ? `(${entries.length}+)` : `(${entries.length})`);
@@ -7856,29 +7850,27 @@ function _renderFilesChanged() {
   // fr-77 r2: description rows (mentions + recent commits). Rendered
   // even when entries.length === 0 IF recentCommits has anything —
   // a clean repo with prior history still benefits from the context.
-  _renderFilesChangedDesc(fc);
+  _renderPlanChangedFilesDesc(fc);
   if (entries.length === 0) {
     ul.innerHTML = '';
-    msgEl.textContent = 'No changes vs HEAD.';
-    msgEl.hidden = false;
+    if (msgEl) { msgEl.textContent = 'No changes vs HEAD.'; msgEl.hidden = false; }
     return;
   }
-  msgEl.hidden = true;
-  msgEl.textContent = '';
+  if (msgEl) { msgEl.hidden = true; msgEl.textContent = ''; }
   // Status letter mapping: '?' → 'Q' (CSS class friendly), keep
   // others as-is. Title text spells out the human meaning.
   const STATUS_LABEL = {
     M: 'modified', A: 'added', D: 'deleted', R: 'renamed',
     C: 'copied', U: 'unmerged', '?': 'untracked', '!': 'ignored',
   };
-  const activeDiff = (state.files.viewing && state.files.viewing.isDiff)
-    ? state.files.viewing.path : null;
   const html = entries.map((e) => {
     const cls = e.status === '?' ? 'fc-status-untracked' : `fc-status-${e.status}`;
     const label = STATUS_LABEL[e.status] || e.status;
-    const isActive = e.path === activeDiff ? ' is-active' : '';
     const display = e.status === '?' ? '?' : e.status;
-    return `<li class="${escHtml(isActive.trim())}" data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path)}">
+    // fr-77 r3: leading caret rotates 90° when the row is expanded
+    // (see #plan-changed-files-list li.is-expanded .pcf-caret rule).
+    return `<li data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path)}">
+      <span class="pcf-caret">▶</span>
       <span class="fc-status ${escHtml(cls)}">${escHtml(display)}</span>
       <span class="fc-path">${escHtml(e.path)}</span>
     </li>`;
@@ -7889,8 +7881,8 @@ function _renderFilesChanged() {
 // fr-77 r2: render the optional "Mentions" + "Recent" description rows
 // above the file list. Static text — no click handlers. Hidden when
 // both lists are empty so the section stays compact for a clean repo.
-function _renderFilesChangedDesc(fc) {
-  const el = document.getElementById('files-changed-desc');
+function _renderPlanChangedFilesDesc(fc) {
+  const el = document.getElementById('plan-changed-files-desc');
   if (!el) return;
   const mentions = Array.isArray(fc.mentions) ? fc.mentions : [];
   const recent   = Array.isArray(fc.recentCommits) ? fc.recentCommits : [];
@@ -7927,44 +7919,68 @@ function _renderFilesChangedDesc(fc) {
   el.hidden = false;
 }
 
-// fr-77: open the diff viewer for a single file. Mirrors the shape of
-// openFileInViewer but populates the right pane with a unified-diff
-// view (highlight.js with language-diff) instead of the normal source
-// view. The state.files.viewing flag `isDiff: true` distinguishes
-// the two modes so the breadcrumb + edit-button gates can branch.
-async function openFileDiffViewer(relPath) {
+// fr-77 r3: click-to-expand-inline-diff on a Plan-view changed-file row.
+// First click fetches /files/diff for the path, inserts a .pcf-diff-row
+// LI immediately after the clicked one with the rendered unified diff
+// inside .pcf-diff-body (highlight.js language-diff). Second click on
+// the same row removes the diff LI. Multiple rows can be open at once.
+// Per-file diffs cached in _planChangedDiffCache so a quick collapse +
+// re-expand is instant (no re-fetch).
+async function _togglePlanChangedFileExpand(li) {
+  if (!li || !li.dataset || !li.dataset.fcPath) return;
+  const path = li.dataset.fcPath;
+  // Already expanded? Collapse: remove the next sibling diff LI + drop
+  // the row's is-expanded marker.
+  if (li.classList.contains('is-expanded')) {
+    const diffRow = li.nextElementSibling;
+    if (diffRow && diffRow.classList.contains('pcf-diff-row')) {
+      diffRow.remove();
+    }
+    li.classList.remove('is-expanded');
+    return;
+  }
+  // First click — mark expanded immediately so a fast double-click
+  // doesn't double-fetch, then insert a loading placeholder LI.
+  li.classList.add('is-expanded');
+  const diffRow = document.createElement('li');
+  diffRow.className = 'pcf-diff-row';
+  diffRow.dataset.fcPath = path;
+  diffRow.innerHTML = '<div class="pcf-diff-body"><div class="pcf-diff-loading">Loading diff…</div></div>';
+  li.parentElement.insertBefore(diffRow, li.nextSibling);
+  // Cached? Render synchronously, skip the round-trip.
+  const cached = _planChangedDiffCache.get(path);
+  if (cached) {
+    _renderInlineDiffBody(diffRow, cached);
+    return;
+  }
+  // Fetch + render.
   if (!state.activeId) return;
   const id = state.activeId;
-  const url = `/sessions/${encodeURIComponent(id)}/files/diff?path=${encodeURIComponent(relPath)}`;
+  const url = `/sessions/${encodeURIComponent(id)}/files/diff?path=${encodeURIComponent(path)}`;
   let res;
   try { res = await authedFetch(url); }
-  catch (e) { alert(`Failed to open diff: ${e.message || e}`); return; }
+  catch (e) {
+    diffRow.querySelector('.pcf-diff-body').innerHTML =
+      `<div class="fc-diff-empty">Failed to open diff: ${escHtml(e.message || String(e))}</div>`;
+    return;
+  }
   let body = {};
   try { body = await res.json(); } catch {}
   if (!res.ok) {
-    alert(`Diff failed: ${body.error || res.status}`);
+    diffRow.querySelector('.pcf-diff-body').innerHTML =
+      `<div class="fc-diff-empty">Diff failed: ${escHtml((body && body.error) || String(res.status))}</div>`;
     return;
   }
-  // Mark the matching item active in the changed list.
-  state.files.viewing = {
-    path: body.path, isDiff: true, diff: body.diff || '',
-    head: body.head || null, exists: body.exists !== false,
-    gitless: !!body.gitless,
-    content: '', binary: false, cards: [], selection: null,
-    pending: null, commentDraft: null, wrap: false, size: 0,
-  };
-  showFileViewerPane(body.path);
-  renderViewerHeader(body.path);
-  _renderFilesChanged(); // refresh active highlight
-  _renderDiffViewerBody(body);
+  // If the user collapsed the row while we were waiting, the diffRow
+  // is gone — bail.
+  if (!diffRow.isConnected) return;
+  _planChangedDiffCache.set(path, body);
+  _renderInlineDiffBody(diffRow, body);
 }
 
-function _renderDiffViewerBody(body) {
-  const viewBody = document.getElementById('files-view-body');
-  if (!viewBody) return;
-  // Header summary: "diff vs <head>" or "untracked file" (no HEAD ref
-  // because the file didn't exist at HEAD). Renders inline above the
-  // diff text so the user always knows what they're looking at.
+function _renderInlineDiffBody(diffRow, body) {
+  const container = diffRow.querySelector('.pcf-diff-body');
+  if (!container) return;
   const headerBits = [];
   if (body.gitless) {
     headerBits.push('<div class="fc-diff-notice">Not a git repository — no diff available.</div>');
@@ -7973,32 +7989,46 @@ function _renderDiffViewerBody(body) {
     const existBit = body.exists ? '' : ' · <span class="fc-deleted">file deleted</span>';
     headerBits.push(`<div class="fc-diff-header">${headBit}${existBit}</div>`);
   }
-  // Empty-diff guard: untracked files don't show in `git diff HEAD`,
-  // they only show in `git status`. The diff endpoint returns ''.
-  // Surface a useful message instead of a blank pane.
   let diffHtml;
   if (!body.diff || !body.diff.trim()) {
-    diffHtml = '<div class="fc-diff-empty">(no diff — file may be untracked or unchanged vs HEAD; the file content viewer shows the current source)</div>';
+    diffHtml = '<div class="fc-diff-empty">(no diff — file may be untracked or unchanged vs HEAD)</div>';
   } else {
-    const escaped = escHtml(body.diff);
-    diffHtml = `<pre class="fc-diff"><code class="language-diff">${escaped}</code></pre>`;
+    diffHtml = `<pre class="fc-diff"><code class="language-diff">${escHtml(body.diff)}</code></pre>`;
   }
-  viewBody.innerHTML = headerBits.join('') + diffHtml;
-  // Apply highlight.js if available, scoped to the new code block.
+  container.innerHTML = headerBits.join('') + diffHtml;
   try {
     if (window.hljs) {
-      const codeEl = viewBody.querySelector('code.language-diff');
+      const codeEl = container.querySelector('code.language-diff');
       if (codeEl) window.hljs.highlightElement(codeEl);
     }
-  } catch (err) { /* hljs missing on this build — leave the plain pre */ }
-  // Show the viewer pane + hide editor-only chrome (no Edit on diff
-  // views; user has to switch back via the changed-list or tree).
-  const msg = document.getElementById('files-view-msg');
-  if (msg) { msg.hidden = true; msg.textContent = ''; }
-  const actionBar = document.getElementById('files-action-bar');
-  if (actionBar) actionBar.hidden = true;
-  const editBtn = document.getElementById('files-edit');
-  if (editBtn) editBtn.hidden = true;
+  } catch (err) { /* hljs missing — leave the plain pre */ }
+}
+
+// fr-77 r3: bind the Plan-view changed-files section once. Called from
+// bindArtifactTabs (alongside the rest of the plan-tab bindings) so the
+// refresh / collapse / list-click handlers are live before any user
+// interaction.
+function bindPlanChangedFilesUi() {
+  const sec = document.getElementById('plan-changed-files-section');
+  if (!sec || sec.dataset.bound) return;
+  sec.dataset.bound = '1';
+  document.getElementById('plan-changed-files-refresh')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    loadPlanChangedFiles({ force: true });
+  });
+  document.getElementById('plan-changed-files-collapse')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    sec.classList.toggle('is-collapsed');
+  });
+  document.getElementById('plan-changed-files-list')?.addEventListener('click', (e) => {
+    // Ignore clicks on the inline-diff body itself — we only act on
+    // the parent file LI.
+    const diffRow = e.target.closest('li.pcf-diff-row');
+    if (diffRow) return;
+    const li = e.target.closest('li[data-fc-path]');
+    if (!li) return;
+    _togglePlanChangedFileExpand(li);
+  });
 }
 
 function renderFilesList(entries, truncated, relPath) {
@@ -8491,12 +8521,12 @@ async function _saveFileEdit({ force = false } = {}) {
     v.mtimeMs = body.mtimeMs;
     v.size = body.size;
     _exitFileEditMode();
-    // fr-77: a successful save likely changes the git-status of this
+    // fr-77 r3: a successful save likely changes the git-status of this
     // file (clean → modified, or modified → clean depending on what
-    // the edit did). Refresh the changed-files section so the chip
-    // count + list reflect the new state. force=true bypasses the
+    // the edit did). Refresh the Plan-view changed-files section so the
+    // chip count + list reflect the new state. force=true bypasses the
     // 2s cache so the user sees the update immediately.
-    if (typeof loadFilesChanged === 'function') loadFilesChanged({ force: true });
+    if (typeof loadPlanChangedFiles === 'function') loadPlanChangedFiles({ force: true });
   } catch (err) {
     alert(`Save failed: ${err.message || err}`);
   } finally {
