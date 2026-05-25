@@ -2828,6 +2828,19 @@ test_chat_window() {
   # always buffers into queue[0] (chatBound gate dropped) so mixed
   # batches still capture text.
   node_test_result test/bug-37-sdk-batched-turn-distribution.test.js "test/bug-37-sdk-batched-turn-distribution.test.js (8 cases)"
+  # fr-90 Phase 0: SessionPool data structure + affinity-based routing.
+  # New server/src/sessionPool.js exports a SessionPool class with
+  # 5-rule pickSession (dependsOn > text-mention > LRU > spawn-under-cap
+  # > queue-if-busy), per-pool-session lifecycle (spawn/kill/idle-reap),
+  # affinity persistence to <cwd>/_myco_/session-affinity.json
+  # (committable per CLAUDE.md §5), bootId integration (fr-91 pattern)
+  # so cross-boot affinity entries populate historicalAffinity for
+  # cold-restart detection. Pure data structure — Phase 1 wires it
+  # into attach.js queue dispatch behind rec.sessionPoolEnabled
+  # opt-in flag. Goal: each plan item runs in its own AgentSession
+  # context (no SDK batching) but related items (dependsOn or text-
+  # mention) reuse the same pool session for accumulated context.
+  node_test_result test/fr-90-session-pool.test.js "test/fr-90-session-pool.test.js (27 cases)"
   # fr-90 Phase 0: worktree MCP tools (worktree_create / remove / list)
   # + registry at <absCwd>/_myco_/worktrees.json + helpers exported
   # for Phase 1 dispatch use. Foundation for parallel item runs (Phase
