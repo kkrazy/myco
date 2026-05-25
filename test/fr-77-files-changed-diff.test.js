@@ -381,14 +381,27 @@ t('index.html: #files-changed-section is GONE from Files view (r3 relocation)', 
 // ──────────────────────────────────────────────────────────────────────
 
 t('styles.css: #plan-changed-files-section has max-height + flex-direction column', () => {
-  const idx = CSS.indexOf('#plan-changed-files-section {');
-  assert.ok(idx > -1, '#plan-changed-files-section rule must exist');
-  const blockEnd = CSS.indexOf('}', idx);
-  const block = CSS.slice(idx, blockEnd);
+  // Anchor on the line-starting standalone rule (not the combined
+  // centering selector list that also contains #plan-changed-files-section).
+  const m = CSS.match(/\n#plan-changed-files-section\s*\{[\s\S]*?\n\}/);
+  assert.ok(m, '#plan-changed-files-section base rule must exist');
+  const block = m[0];
   assert.ok(/max-height:\s*\d+vh/.test(block),
     'must cap height with vh-relative max-height');
   assert.ok(/flex-direction:\s*column/.test(block),
     'must stack header + desc + list vertically');
+});
+
+t('styles.css: fr-77 r8 — section matches plan body desktop width (no 880 cap)', () => {
+  // bug-40 relaxed #artifact-body-plan to max-width:none on desktop so
+  // the plan items span the full lane. Without the section in the same
+  // relaxation rule, the section would stay capped at 880px while the
+  // plan items go full-width — visible width mismatch the user reported.
+  // Pin: the bug-40 relaxation rule MUST list both #artifact-body-plan
+  // AND #plan-changed-files-section as targets.
+  const re = /@media\s*\(\s*min-width:\s*901px\s*\)\s*\{[\s\S]{0,400}#artifact-body-plan[\s\S]{0,80},[\s\S]{0,80}#plan-changed-files-section[\s\S]{0,200}max-width:\s*none/;
+  assert.ok(re.test(CSS),
+    'bug-40 desktop max-width:none relaxation must cover both #artifact-body-plan AND #plan-changed-files-section so they share the full-width lane');
 });
 
 t('styles.css: status colors mapped (.fc-status-M / -A / -D / -R / -U)', () => {
@@ -702,10 +715,10 @@ t('styles.css: .pcf-resize-handle has cursor row-resize + touch-action none', ()
 });
 
 t('styles.css: section has fixed height (not max-height) with min/max bounds', () => {
-  const idx = CSS.indexOf('#plan-changed-files-section {');
-  assert.ok(idx > -1);
-  const blockEnd = CSS.indexOf('}', idx);
-  const block = CSS.slice(idx, blockEnd);
+  // Anchor on the line-starting standalone rule.
+  const m = CSS.match(/\n#plan-changed-files-section\s*\{[\s\S]*?\n\}/);
+  assert.ok(m, '#plan-changed-files-section base rule must exist');
+  const block = m[0];
   // r4 switched from max-height → height so the drag can grow the section.
   assert.ok(/\bheight:\s*\d+vh/.test(block),
     'section must use explicit `height` (not just max-height) so JS can override');

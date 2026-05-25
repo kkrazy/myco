@@ -44,8 +44,10 @@ t('styles.css: bug-40 max-width relaxation for #artifact-body-plan on desktop', 
   const idx = CSS.indexOf('bug-40');
   assert.ok(idx > -1);
   const win = CSS.slice(idx, idx + 1500);
-  assert.ok(/#artifact-body-plan\s*\{[\s\S]{0,200}max-width:\s*none/.test(win),
-    'must set max-width: none on #artifact-body-plan to relax the 880px desktop cap');
+  // Accept #artifact-body-plan alone OR in a combined selector list
+  // (e.g. `#artifact-body-plan, #plan-changed-files-section { max-width: none }`).
+  assert.ok(/#artifact-body-plan[,\s][\s\S]{0,400}max-width:\s*none/.test(win),
+    'must set max-width: none on #artifact-body-plan (alone or in a combined selector) to relax the 880px desktop cap');
   // And must be inside a desktop media query.
   const mediaIdx = CSS.lastIndexOf('@media', idx + win.indexOf('max-width: none'));
   const mediaWin = CSS.slice(mediaIdx, mediaIdx + 200);
@@ -57,8 +59,11 @@ t('styles.css: arch + test artifact bodies KEEP the 880px desktop cap', () => {
   // Defensive — confirm the existing rule for the GENERIC artifact body
   // (used by arch + test) is preserved. We don't want to accidentally
   // remove the readable-line cap from prose-heavy artifact views.
-  assert.ok(/\.artifact-main-view\s+\.artifact-body\s*\{[\s\S]{0,400}max-width:\s*880px/.test(CSS),
-    'generic .artifact-main-view .artifact-body { max-width: 880px } must still exist for arch + test');
+  // Accept `.artifact-body` as the FINAL selector OR followed by a comma
+  // (other selectors added to the same rule are fine as long as
+  // .artifact-body is still in the list and the rule sets max-width:880px).
+  assert.ok(/\.artifact-main-view\s+\.artifact-body[,\s][\s\S]{0,400}max-width:\s*880px/.test(CSS),
+    'generic .artifact-main-view .artifact-body must still get max-width: 880px (alone or in a combined selector) for arch + test');
 });
 
 t('styles.css: bug-40 top padding on #plan-filter-row on desktop', () => {

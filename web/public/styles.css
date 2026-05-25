@@ -1843,9 +1843,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    are short rows with chip clusters; constraining them to 880px leaves
    wide gutters on big monitors that waste useful real estate (and the
    action-row buttons wrap awkwardly inside the narrower lane). Plan
-   takes the full available width on desktop; arch + test keep the cap. */
+   takes the full available width on desktop; arch + test keep the cap.
+
+   fr-77 r8: same relaxation for #plan-changed-files-section — without
+   this the section was centered at 880px while the plan body next to
+   it was full-width, so the file rows appeared narrower than the plan
+   items above. Section now matches the plan body's full-width lane. */
 @media (min-width: 901px) {
-  .artifact-main-view #artifact-body-plan {
+  .artifact-main-view #artifact-body-plan,
+  .artifact-main-view #plan-changed-files-section {
     max-width: none;
   }
   /* If the plan view ever regains an .artifact-header sibling (it's
@@ -3466,15 +3472,24 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    centered, so opening Plan / Arch / Test feels visually continuous
    with the conversation underneath. The whole artifact-main-view
    surface (background) still fills the main pane edge-to-edge; only
-   the header + body content are constrained to the same 880px lane. */
+   the header + body + Plan-view changed-files section are constrained
+   to the same 880px lane.
+   fr-77 r8: #plan-changed-files-section folded into the same selector
+   list (was a separate @media block earlier) so all three centered
+   children share IDENTICAL CSS — no chance for a subtle width drift. */
 @media (min-width: 901px) {
   .artifact-main-view .artifact-header,
-  .artifact-main-view .artifact-body {
+  .artifact-main-view .artifact-body,
+  .artifact-main-view #plan-changed-files-section {
     width: 100%;
     max-width: 880px;
     margin-left: auto;
     margin-right: auto;
     box-sizing: border-box;
+    /* align-self: center belt-and-braces — auto margins on flex column
+       children usually handle cross-axis centering, but explicit align-
+       self forces it even on browsers where stretch would otherwise win. */
+    align-self: center;
   }
 }
 
@@ -3575,13 +3590,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 100%;
   position: relative;
 }
-@media (min-width: 901px) {
-  #plan-changed-files-section {
-    max-width: 880px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-}
+/* fr-77 r8: desktop centering (max-width 880px + margin auto) is now
+   set by the shared `.artifact-main-view .artifact-header, …` selector
+   higher up in this file so the section, header, and body cannot drift
+   apart visually. */
 #plan-changed-files-section.is-collapsed {
   /* Collapsed mode: only the header strip is visible — drop the
      fixed-height + min so it shrinks to header-only. */
