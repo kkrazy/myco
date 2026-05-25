@@ -3726,16 +3726,31 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: rgba(56, 139, 253, .15);
   color: #58a6ff;
 }
+/* fr-77 r3 + r13: leading caret. r13 swapped the ▶ Unicode triangle
+   (which rendered as emoji on some platforms, breaking line height
+   + couldn't take currentColor) for a Lucide chevron-right SVG, sized
+   to the same 14px family as the row's accept/reject icons. The wrap
+   is what gets rotated on expand; the SVG fills the wrap. */
 #plan-changed-files-list li .pcf-caret {
-  flex: 0 0 12px;
-  display: inline-block;
-  font-size: 0.7rem;
+  flex: 0 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
   opacity: 0.6;
-  transition: transform .12s;
+  color: currentColor;
+  transition: transform .12s, opacity .12s;
+}
+#plan-changed-files-list li .pcf-caret-svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
 }
 #plan-changed-files-list li.is-expanded .pcf-caret {
   transform: rotate(90deg);
   opacity: 1;
+  color: #58a6ff;
 }
 .fc-status {
   flex: 0 0 14px;
@@ -3962,21 +3977,34 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font-style: italic;
 }
 
-/* fr-77 r12: per-row Accept (✓) / Reject (✕) buttons in the changed-
-   files list. Sit at the right edge of each row after the +N/−M chip.
-   Hidden via JS for read-only viewers (not rendered into the DOM). */
+/* fr-77 r12+r13: per-row Accept (✓) / Reject (✕) buttons. Inner SVG is
+   a Lucide-style icon matching the chrome cluster (.chrome-icon-svg) —
+   24x24 viewBox, stroke 1.75, currentColor, round caps — at a compact
+   16px size that fits inside a list row without dominating the file
+   path. Button wrapper has the same dark-glass + subtle-border chrome
+   as the top-right cluster, scaled down. Hidden via JS for read-only
+   viewers (not rendered into the DOM). */
 .pcf-row-btn {
   flex: 0 0 auto;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--muted, #8b949e);
-  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   margin-left: 2px;
+  background: rgba(40, 40, 40, .55);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 5px;
+  color: var(--muted, #8b949e);
   cursor: pointer;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  border-radius: 3px;
   transition: background .12s, color .12s, border-color .12s;
+}
+.pcf-row-btn .ft-svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  pointer-events: none;
 }
 .pcf-row-btn.pcf-accept:hover {
   background: rgba(46, 160, 67, .18);
@@ -4019,9 +4047,14 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-color: rgba(248, 81, 73, .4);
 }
 .pcf-bulk-btn .ft-svg {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
+  /* fr-77 r13: bump to 14px so the icon is comfortably readable + visually
+     paired with the per-row 14px SVGs and the 18px chrome-cluster icons
+     (the latter sit alone in a 32px button; ours sit alongside text in
+     a smaller bar, so 14px keeps the row compact). */
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  pointer-events: none;
 }
 .pcf-bulk-btn[hidden] { display: none; }
 

@@ -571,7 +571,10 @@ t('app.js: inline-expand uses /files/diff endpoint (reuses readDiff route)', () 
 
 t('app.js: _renderPlanChangedFiles list items carry data-fc-path + .pcf-caret', () => {
   const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
-  const win = APP.slice(idx, idx + 3000);
+  // r13 inlines Lucide SVG markup into each row → function body grew
+  // substantially. Bump the slice to 5500 chars to still capture the
+  // row HTML.
+  const win = APP.slice(idx, idx + 5500);
   assert.ok(/data-fc-path=/.test(win),
     'list items must carry data-fc-path so the click handler picks the path');
   assert.ok(/pcf-caret/.test(win),
@@ -707,9 +710,9 @@ t('app.js: reject path asks window.confirm before destructive action', () => {
     'reject must prompt window.confirm before deleting/reverting');
 });
 
-t('app.js: _renderPlanChangedFiles emits per-row ✓ + ✕ buttons when not readOnly', () => {
+t('app.js: _renderPlanChangedFiles emits per-row accept + reject buttons when not readOnly', () => {
   const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
-  const win = APP.slice(idx, idx + 3500);
+  const win = APP.slice(idx, idx + 5500);
   assert.ok(/data-pcf-action=['"]accept['"]/.test(win),
     'rows must include an accept button with data-pcf-action="accept"');
   assert.ok(/data-pcf-action=['"]reject['"]/.test(win),
@@ -717,6 +720,60 @@ t('app.js: _renderPlanChangedFiles emits per-row ✓ + ✕ buttons when not read
   // Buttons must be gated on canMutate / !state.readOnly.
   assert.ok(/state\.readOnly/.test(win) || /canMutate/.test(win),
     'per-row actions must be gated on readOnly state');
+});
+
+t('fr-77 r13: per-row + caret icons are Lucide SVGs matching the chrome cluster (stroke 1.75, viewBox 24x24)', () => {
+  // The chrome cluster (#btn-files/plan/arch/test/chat) uses Lucide-
+  // style inline SVGs with viewBox="0 0 24 24" stroke-width="1.75"
+  // round caps + currentColor. r13 normalized the per-row Accept ✓ /
+  // Reject ✕ buttons + the leading caret ▶ to the SAME family so the
+  // whole UI reads as one icon system.
+  const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
+  const win = APP.slice(idx, idx + 5500);
+  // pcf-row-btn must contain SVG (not Unicode ✓/✕).
+  const acceptBlock = win.slice(win.indexOf('data-pcf-action="accept"'));
+  assert.ok(/<svg[^>]*viewBox="0 0 24 24"[^>]*stroke-width="1\.75"/.test(acceptBlock),
+    'accept button must use a Lucide-style SVG (viewBox 24x24, stroke 1.75)');
+  const rejectBlock = win.slice(win.indexOf('data-pcf-action="reject"'));
+  assert.ok(/<svg[^>]*viewBox="0 0 24 24"[^>]*stroke-width="1\.75"/.test(rejectBlock),
+    'reject button must use a Lucide-style SVG (viewBox 24x24, stroke 1.75)');
+  // pcf-caret must contain a Lucide chevron SVG (not the ▶ char).
+  assert.ok(/pcf-caret-svg[\s\S]{0,200}viewBox="0 0 24 24"[\s\S]{0,200}stroke-width="1\.75"/.test(win),
+    'caret must be a Lucide-style chevron SVG, not the ▶ Unicode triangle');
+  // Defensive: assert NO Unicode ✓ or ✕ characters in the row markup
+  // (they crept in during r12; r13 removed them).
+  const rowSection = win.slice(win.indexOf('return `<li'));
+  assert.ok(!/✓|✕|▶/.test(rowSection),
+    'row markup must not embed ✓/✕/▶ Unicode characters (r12 → r13 swap to SVG)');
+});
+
+t('index.html: bulk Accept all + Reject all buttons use stroke-width 1.75 (chrome family)', () => {
+  // r12 shipped them at stroke-width="2" which clashed visually with
+  // the chrome cluster icons (1.75). r13 normalized.
+  const sec = HTML.slice(HTML.indexOf('id="plan-changed-files-section"'));
+  const acceptIdx = sec.indexOf('id="plan-changed-files-accept-all"');
+  const acceptBlock = sec.slice(acceptIdx, acceptIdx + 600);
+  assert.ok(/stroke-width="1\.75"/.test(acceptBlock),
+    'Accept-all SVG must use stroke-width="1.75" to match the chrome cluster family');
+  const rejectIdx = sec.indexOf('id="plan-changed-files-reject-all"');
+  const rejectBlock = sec.slice(rejectIdx, rejectIdx + 600);
+  assert.ok(/stroke-width="1\.75"/.test(rejectBlock),
+    'Reject-all SVG must use stroke-width="1.75" to match the chrome cluster family');
+});
+
+t('styles.css: pcf-row-btn is a square chrome-style button with sized SVG', () => {
+  // Anchor on the line-starting base rule.
+  const m = CSS.match(/\n\.pcf-row-btn\s*\{[\s\S]*?\n\}/);
+  assert.ok(m, '.pcf-row-btn rule must exist');
+  const block = m[0];
+  // Square dimensions + dark glass + subtle border = mini chrome button.
+  assert.ok(/width:\s*\d+px/.test(block) && /height:\s*\d+px/.test(block),
+    'pcf-row-btn must declare an explicit square width + height');
+  assert.ok(/border-radius/.test(block),
+    'pcf-row-btn must have border-radius (chrome family uses rounded squares)');
+  // Inner SVG sized via a child selector (not the SVG's own width attr).
+  assert.ok(/\.pcf-row-btn\s+\.ft-svg\s*\{[\s\S]{0,200}width:\s*\d+px/.test(CSS),
+    '.pcf-row-btn .ft-svg child rule must size the icon (consistent with chrome-icon-svg)');
 });
 
 t('app.js: _highlightDiffWithLang tracks post-change line numbers (data-line-no) + clickable class', () => {

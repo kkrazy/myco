@@ -7881,14 +7881,21 @@ function _renderPlanChangedFiles() {
     const titleStats = (e.added != null || e.removed != null)
       ? ` · +${e.added ?? 0} −${e.removed ?? 0}`
       : '';
+    // fr-77 r13: Lucide-style SVGs to match the chrome cluster's icon
+    // family (24x24 viewBox, stroke 1.75, round caps, currentColor).
+    // Replaces Unicode ✓/✕/▶ from r12 which rendered with varying
+    // fonts + couldn't take the chrome icon styling.
     const actions = canMutate
-      ? `<button class="pcf-row-btn pcf-accept" data-pcf-action="accept" data-pcf-path="${escHtml(e.path)}" title="Accept (stage)" aria-label="Accept ${escHtml(e.path)}">✓</button>
-         <button class="pcf-row-btn pcf-reject" data-pcf-action="reject" data-pcf-path="${escHtml(e.path)}" title="Reject (revert/delete)" aria-label="Reject ${escHtml(e.path)}">✕</button>`
+      ? `<button class="pcf-row-btn pcf-accept" data-pcf-action="accept" data-pcf-path="${escHtml(e.path)}" title="Accept (stage)" aria-label="Accept ${escHtml(e.path)}"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+         <button class="pcf-row-btn pcf-reject" data-pcf-action="reject" data-pcf-path="${escHtml(e.path)}" title="Reject (revert/delete)" aria-label="Reject ${escHtml(e.path)}"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`
       : '';
     // fr-77 r3: leading caret rotates 90° when the row is expanded
     // (see #plan-changed-files-list li.is-expanded .pcf-caret rule).
+    // r13: Lucide chevron-right SVG instead of the ▶ Unicode triangle
+    // (which rendered as emoji on some platforms, breaking line height).
+    const caret = `<svg class="pcf-caret-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>`;
     return `<li data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path + titleStats)}">
-      <span class="pcf-caret">▶</span>
+      <span class="pcf-caret">${caret}</span>
       <span class="fc-status ${escHtml(cls)}">${escHtml(display)}</span>
       <span class="fc-path">${escHtml(e.path)}</span>
       ${stats}
