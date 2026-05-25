@@ -2804,7 +2804,7 @@ test_chat_window() {
   # Section refreshes on showFilesView mount + after _saveFileEdit
   # (so the chip count tracks edits). Tree-collapsed mode hides the
   # new section. Diff view hides the Edit button (read-only).
-  node_test_result test/fr-77-files-changed-diff.test.js "test/fr-77-files-changed-diff.test.js (17 cases)"
+  node_test_result test/fr-77-files-changed-diff.test.js "test/fr-77-files-changed-diff.test.js (25 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-

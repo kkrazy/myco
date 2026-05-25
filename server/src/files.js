@@ -27,6 +27,47 @@ const HEAVY_DIRS = new Set([
   'node_modules', '.git', '.venv', '__pycache__', 'dist', 'build', '.next',
 ]);
 
+// fr-77: find the actual git repo root for a session workspace. Two
+// supported layouts (mirrors artifacts.js findProjectRoot):
+//   1. absRoot itself is a git checkout:  <absRoot>/.git exists
+//   2. absRoot wraps a single project subdir whose checkout has .git:
+//      <absRoot>/<subdir>/.git (e.g. /wks/labxnow/myco-labxnow-xxx/myco/.git)
+// Returns { gitRoot, relPrefix } where:
+//   - gitRoot is the absolute path to the dir containing .git
+//   - relPrefix is the path from absRoot to gitRoot ('' if same, else
+//     '<subdir>/'). Used to PREFIX paths returned by `git status` /
+//     `git diff` so the UI sees paths rooted at absRoot (the same
+//     namespace as listDir + the editor's safeJoin).
+// Returns null when no .git is reachable from absRoot.
+function _findGitRoot(absRoot) {
+  // Direct hit.
+  try {
+    if (fs.statSync(path.join(absRoot, '.git')).isDirectory() ||
+        fs.statSync(path.join(absRoot, '.git')).isFile()) {
+      // .git can be a dir OR a file (gitlink for worktrees).
+      return { gitRoot: absRoot, relPrefix: '' };
+    }
+  } catch {}
+  // Nested hit: scan immediate subdirs alphabetically.
+  let entries;
+  try {
+    entries = fs.readdirSync(absRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !HEAVY_DIRS.has(d.name))
+      .map((d) => d.name)
+      .sort();
+  } catch { return null; }
+  for (const name of entries) {
+    try {
+      const gp = path.join(absRoot, name, '.git');
+      const st = fs.statSync(gp);
+      if (st.isDirectory() || st.isFile()) {
+        return { gitRoot: path.join(absRoot, name), relPrefix: name + '/' };
+      }
+    } catch {}
+  }
+  return null;
+}
+
 // fr-9: read `git status --porcelain` from a directory and return a
 // Map<relpath-from-git-root, statusChar>. The status char is the
 // 2-char git index+worktree code collapsed to a single user-facing
@@ -44,20 +85,20 @@ const HEAVY_DIRS = new Set([
 // Tolerates non-git workspaces (returns empty Map). Cached at the
 // request scope by the caller — single execFile per listDir call.
 async function _gitStatusMap(absRoot) {
-  // Quick check: is this a git working tree?
-  try {
-    await fsp.access(path.join(absRoot, '.git'));
-  } catch {
-    // Could be in a subdir of a git repo; try `git rev-parse` instead
-    // — but that costs a fork. For now, only enrich when .git exists
-    // at the session root. The common case (per-session workspace =
-    // git repo) is covered.
-    return new Map();
-  }
+  // fr-77: resolve the actual git root. Pre-fix this required .git to
+  // live AT absRoot — but many session layouts wrap the project in a
+  // subdir (e.g. /wks/labxnow/myco-labxnow-xxx/myco/.git), and the
+  // function silently returned an empty map for those. Now we descend
+  // one level when needed + prefix the returned paths with the
+  // subdir name so they're addressable from absRoot (the namespace
+  // listDir + safeJoin use).
+  const gitInfo = _findGitRoot(absRoot);
+  if (!gitInfo) return new Map();
+  const { gitRoot, relPrefix } = gitInfo;
   let stdout = '';
   try {
     stdout = await new Promise((resolve, reject) => {
-      execFile('git', ['-C', absRoot, 'status', '--porcelain', '-uall'],
+      execFile('git', ['-C', gitRoot, 'status', '--porcelain', '-uall'],
         { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
         (err, stdout) => err ? reject(err) : resolve(stdout));
     });
@@ -85,10 +126,10 @@ async function _gitStatusMap(absRoot) {
     if (idxChar === 'R' && arrowIdx >= 0) {
       const oldPath = rest.slice(0, arrowIdx);
       const newPath = rest.slice(arrowIdx + 4);
-      map.set(oldPath, 'R');
-      map.set(newPath, 'R');
+      map.set(relPrefix + oldPath, 'R');
+      map.set(relPrefix + newPath, 'R');
     } else {
-      map.set(rest, primary);
+      map.set(relPrefix + rest, primary);
     }
   }
   return map;
@@ -375,21 +416,35 @@ async function listChangedFiles(absRoot) {
 // and exists = true unless the path is deleted in the worktree.
 async function readDiff(absRoot, relPath) {
   // safeJoin guards traversal + symlink-escape — same shape as the
-  // existing readFile / writeFile paths.
+  // existing readFile / writeFile paths. The returned `relPath` stays
+  // in the absRoot namespace (caller-facing); we translate to the
+  // git-root namespace below for the actual git invocation.
   await safeJoin(absRoot, relPath);
-  // Repo presence check — non-git workspaces give an empty-diff
-  // response so the UI shows an explanatory "not a git repo" notice
-  // instead of a 500.
-  try {
-    await fsp.access(path.join(absRoot, '.git'));
-  } catch {
+  // fr-77: resolve git root (handles nested project layouts —
+  // /wks/<user>/<sess>/<project>/.git instead of /wks/<user>/<sess>/.git).
+  // Repo-less workspaces get an empty diff + gitless:true so the UI
+  // shows an explanatory notice instead of a 500.
+  const gitInfo = _findGitRoot(absRoot);
+  if (!gitInfo) {
     return { path: relPath, diff: '', head: null, exists: true, gitless: true };
+  }
+  const { gitRoot, relPrefix } = gitInfo;
+  // Strip the relPrefix (e.g. 'myco/') so we pass the git-root-relative
+  // path to `git diff`. If the path doesn't start with relPrefix the
+  // file lives outside the git repo — surface gitless rather than ask
+  // git about a path it doesn't know.
+  let gitRelPath = relPath;
+  if (relPrefix && relPath.startsWith(relPrefix)) {
+    gitRelPath = relPath.slice(relPrefix.length);
+  } else if (relPrefix && !relPath.startsWith(relPrefix)) {
+    return { path: relPath, diff: '', head: null, exists: true,
+             gitless: true, note: 'file outside git repo root' };
   }
   // Short HEAD SHA. Useful for the UI to label "diff vs abc1234".
   let head = null;
   try {
     head = await new Promise((resolve, reject) => {
-      execFile('git', ['-C', absRoot, 'rev-parse', '--short', 'HEAD'],
+      execFile('git', ['-C', gitRoot, 'rev-parse', '--short', 'HEAD'],
         { timeout: 2000, maxBuffer: 64 * 1024 },
         (err, stdout) => err ? reject(err) : resolve(String(stdout).trim()));
     });
@@ -402,7 +457,7 @@ async function readDiff(absRoot, relPath) {
   try {
     diff = await new Promise((resolve, reject) => {
       execFile('git',
-        ['-C', absRoot, 'diff', '--no-color', '--no-ext-diff', 'HEAD', '--', relPath],
+        ['-C', gitRoot, 'diff', '--no-color', '--no-ext-diff', 'HEAD', '--', gitRelPath],
         { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
         (err, stdout) => err ? reject(err) : resolve(String(stdout)));
     });

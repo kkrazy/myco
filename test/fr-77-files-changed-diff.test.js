@@ -123,7 +123,11 @@ function mkTempRepo() {
   return root;
 }
 
-tAsync('behavior: listChangedFiles returns modified + untracked + deleted files', async () => {
+// Async behavior tests must be awaited in sequence, otherwise the
+// final process.exit fires before they finish. Wrap in an IIFE.
+(async () => {
+
+await tAsync('behavior: listChangedFiles returns modified + untracked + deleted files', async () => {
   const root = mkTempRepo();
   try {
     // Modify a.txt, delete b.txt, add a new untracked c.txt.
@@ -150,7 +154,7 @@ tAsync('behavior: listChangedFiles returns modified + untracked + deleted files'
   }
 });
 
-tAsync('behavior: listChangedFiles returns empty in a clean repo', async () => {
+await tAsync('behavior: listChangedFiles returns empty in a clean repo', async () => {
   const root = mkTempRepo();
   try {
     const filesMod = require('../server/src/files');
@@ -161,7 +165,7 @@ tAsync('behavior: listChangedFiles returns empty in a clean repo', async () => {
   }
 });
 
-tAsync('behavior: listChangedFiles tolerates non-git workspaces (empty)', async () => {
+await tAsync('behavior: listChangedFiles tolerates non-git workspaces (empty)', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fr77-nongit-'));
   try {
     fs.writeFileSync(path.join(root, 'x.txt'), 'x');
@@ -173,7 +177,7 @@ tAsync('behavior: listChangedFiles tolerates non-git workspaces (empty)', async 
   }
 });
 
-tAsync('behavior: readDiff returns unified diff for a modified file', async () => {
+await tAsync('behavior: readDiff returns unified diff for a modified file', async () => {
   const root = mkTempRepo();
   try {
     fs.writeFileSync(path.join(root, 'a.txt'), 'hello modified\n');
@@ -196,7 +200,7 @@ tAsync('behavior: readDiff returns unified diff for a modified file', async () =
   }
 });
 
-tAsync('behavior: readDiff signals exists=false for deleted file', async () => {
+await tAsync('behavior: readDiff signals exists=false for deleted file', async () => {
   const root = mkTempRepo();
   try {
     fs.unlinkSync(path.join(root, 'b.txt'));
@@ -209,7 +213,7 @@ tAsync('behavior: readDiff signals exists=false for deleted file', async () => {
   }
 });
 
-tAsync('behavior: readDiff signals gitless=true in non-git workspace', async () => {
+await tAsync('behavior: readDiff signals gitless=true in non-git workspace', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fr77-nongit-'));
   try {
     fs.writeFileSync(path.join(root, 'x.txt'), 'x');
@@ -223,7 +227,47 @@ tAsync('behavior: readDiff signals gitless=true in non-git workspace', async () 
   }
 });
 
-tAsync('behavior: readDiff rejects path traversal', async () => {
+await tAsync('behavior: NESTED repo layout — list + diff resolve via project subdir', async () => {
+  // fr-77 hotfix repro: session.absCwd has no .git, but a single
+  // immediate subdir does (the common /wks/<user>/<sess>/<project>
+  // layout). Pre-hotfix returned empty + showed "No changes vs HEAD"
+  // even though the user could see `git status` listing files.
+  const wrapper = fs.mkdtempSync(path.join(os.tmpdir(), 'fr77-nested-'));
+  const inner = path.join(wrapper, 'myco');
+  fs.mkdirSync(inner, { recursive: true });
+  execFileSync('git', ['-C', inner, 'init', '-q', '-b', 'main']);
+  execFileSync('git', ['-C', inner, 'config', 'user.email', 'test@example.com']);
+  execFileSync('git', ['-C', inner, 'config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(inner, 'a.txt'), 'first\n');
+  execFileSync('git', ['-C', inner, 'add', '.']);
+  execFileSync('git', ['-C', inner, 'commit', '-q', '-m', 'init']);
+  // Modify a.txt — should show in the changed list as 'myco/a.txt'
+  // (NOT 'a.txt'), so the UI's openFileDiffViewer click sends the
+  // correct path that resolves under wrapper via safeJoin.
+  fs.writeFileSync(path.join(inner, 'a.txt'), 'second\n');
+  try {
+    // Force-clear the require cache so the updated files.js is loaded.
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    const list = await filesMod.listChangedFiles(wrapper);
+    const entries = list.entries || [];
+    const paths = entries.map((e) => e.path);
+    assert.ok(paths.includes('myco/a.txt'),
+      `nested-repo paths must include the subdir prefix; got: ${JSON.stringify(paths)}`);
+    // And readDiff with the prefixed path returns the actual diff.
+    const diff = await filesMod.readDiff(wrapper, 'myco/a.txt');
+    assert.ok(diff.diff && /first/.test(diff.diff) && /second/.test(diff.diff),
+      'diff must show the modification for the nested-repo file');
+    assert.strictEqual(diff.path, 'myco/a.txt',
+      'returned path must keep the subdir prefix');
+    assert.strictEqual(diff.gitless, undefined,
+      'nested-repo case must NOT report gitless');
+  } finally {
+    fs.rmSync(wrapper, { recursive: true, force: true });
+  }
+});
+
+await tAsync('behavior: readDiff rejects path traversal', async () => {
   const root = mkTempRepo();
   try {
     const filesMod = require('../server/src/files');
@@ -384,5 +428,7 @@ t('app.js: openFileDiffViewer hides the Edit button (no edit on diff)', () => {
     'diff view must hide the Edit button — diff is read-only');
 });
 
-console.log('\n' + passed + ' passed, ' + failed + ' failed');
-process.exit(failed ? 1 : 0);
+  // Close the async IIFE.
+  console.log('\n' + passed + ' passed, ' + failed + ' failed');
+  process.exit(failed ? 1 : 0);
+})();
