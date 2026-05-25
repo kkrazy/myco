@@ -3735,6 +3735,25 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* fr-77 r6: per-file line-count chip. Sits at the right edge of each
+   file row, monospace + tabular numerics so columns of stats align
+   visually across rows. Green +N for additions, red −M for removals;
+   "bin" badge replaces both for binary files (numstat returns -/-). */
+.pcf-stats {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pcf-stats-add { color: #6fdc97; }
+.pcf-stats-rm  { color: #ff8a8a; }
+.pcf-stats-bin {
+  color: #8b949e;
+  font-style: italic;
+}
 #plan-changed-files-msg {
   /* fr-77 r5: 16px horizontal matches plan-body padding. */
   padding: 8px 16px;

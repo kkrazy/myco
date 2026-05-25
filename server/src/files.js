@@ -423,35 +423,92 @@ async function listChangedFiles(absRoot) {
   // git root (same _findGitRoot helper used by _gitStatusMap).
   let mentions = [];
   let recentCommits = [];
-  {
-    const { gitRoot } = gitInfo;
-    // Mentions — single `git diff HEAD` call covers all changed files.
-    // Cap output at 1MB; if the diff is huge, we still scan whatever
-    // came back (best-effort).
+  const { gitRoot, relPrefix } = gitInfo;
+  // Mentions — single `git diff HEAD` call covers all changed files.
+  // Cap output at 1MB; if the diff is huge, we still scan whatever
+  // came back (best-effort).
+  try {
+    const diffAll = await new Promise((resolve, reject) => {
+      execFile('git', ['-C', gitRoot, 'diff', '--no-color', '--no-ext-diff', 'HEAD'],
+        { timeout: 5000, maxBuffer: 1 * 1024 * 1024 },
+        (err, stdout) => err ? reject(err) : resolve(String(stdout)));
+    });
+    mentions = _extractMentions(diffAll);
+  } catch { /* timeout / huge diff / other — leave mentions=[] */ }
+  // Recent commits — last 5. NUL-separator between record fields
+  // so subjects with embedded tabs survive intact.
+  try {
+    const log = await new Promise((resolve, reject) => {
+      execFile('git', ['-C', gitRoot, 'log', '-5', '--pretty=format:%h%x00%s'],
+        { timeout: 3000, maxBuffer: 64 * 1024 },
+        (err, stdout) => err ? reject(err) : resolve(String(stdout)));
+    });
+    for (const line of log.split('\n')) {
+      const nul = line.indexOf('\0');
+      if (nul < 0) continue;
+      const sha = line.slice(0, nul);
+      const subject = line.slice(nul + 1);
+      recentCommits.push({ sha, subject, mentions: _extractMentions(subject) });
+    }
+  } catch { /* shallow repo with no commits / other — leave empty */ }
+
+  // fr-77 r6: per-file line counts. `git diff --numstat HEAD` returns
+  // one tab-separated row per tracked-changed file: <added>\t<removed>\t<path>.
+  // Binary files show `-\t-\tpath`; surfaced as added/removed = null so
+  // the UI can render a "binary" badge instead of bogus zeros. Untracked
+  // files don't appear in numstat (they have no diff vs HEAD) — we
+  // count them per-file from the worktree (cheap: only run if untracked
+  // count is small + file is under 1MB). The map is keyed by the path
+  // shape the entries[] carry (relPrefix-prepended) so a Map lookup
+  // attaches the counts in O(1).
+  const lineStats = new Map();
+  try {
+    const numstat = await new Promise((resolve, reject) => {
+      execFile('git', ['-C', gitRoot, 'diff', '--numstat', '--no-color', 'HEAD'],
+        { timeout: 5000, maxBuffer: 1 * 1024 * 1024 },
+        (err, stdout) => err ? reject(err) : resolve(String(stdout)));
+    });
+    for (const line of numstat.split('\n')) {
+      if (!line) continue;
+      // Tab-separated: added \t removed \t path. Renames show
+      // `added\tremoved\told => new` or `added\tremoved\told\0new`
+      // with -z; we don't use -z here, so a "=>" path means a rename
+      // and we key on the new-path segment.
+      const parts = line.split('\t');
+      if (parts.length < 3) continue;
+      const a = parts[0], r = parts[1];
+      let p = parts.slice(2).join('\t');
+      const arrow = p.indexOf(' => ');
+      if (arrow > -1) p = p.slice(arrow + 4);
+      const added   = (a === '-') ? null : (Number.isFinite(+a) ? +a : null);
+      const removed = (r === '-') ? null : (Number.isFinite(+r) ? +r : null);
+      // Key the map by the entries[]-shaped path (with relPrefix).
+      lineStats.set(relPrefix + p, { added, removed });
+    }
+  } catch { /* timeout / huge diff / other — leave lineStats empty */ }
+  // Untracked files: count lines from disk. Skip files >1MB to avoid
+  // OOM on a stray log dump or binary blob. status '?' is the only
+  // status _gitStatusMap surfaces for untracked.
+  for (const e of out) {
+    if (e.status !== '?') continue;
     try {
-      const diffAll = await new Promise((resolve, reject) => {
-        execFile('git', ['-C', gitRoot, 'diff', '--no-color', '--no-ext-diff', 'HEAD'],
-          { timeout: 5000, maxBuffer: 1 * 1024 * 1024 },
-          (err, stdout) => err ? reject(err) : resolve(String(stdout)));
-      });
-      mentions = _extractMentions(diffAll);
-    } catch { /* timeout / huge diff / other — leave mentions=[] */ }
-    // Recent commits — last 5. NUL-separator between record fields
-    // so subjects with embedded tabs survive intact.
-    try {
-      const log = await new Promise((resolve, reject) => {
-        execFile('git', ['-C', gitRoot, 'log', '-5', '--pretty=format:%h%x00%s'],
-          { timeout: 3000, maxBuffer: 64 * 1024 },
-          (err, stdout) => err ? reject(err) : resolve(String(stdout)));
-      });
-      for (const line of log.split('\n')) {
-        const nul = line.indexOf('\0');
-        if (nul < 0) continue;
-        const sha = line.slice(0, nul);
-        const subject = line.slice(nul + 1);
-        recentCommits.push({ sha, subject, mentions: _extractMentions(subject) });
-      }
-    } catch { /* shallow repo with no commits / other — leave empty */ }
+      const abs = path.join(absRoot, e.path);
+      const st = fs.statSync(abs);
+      if (st.size > 1 * 1024 * 1024) { lineStats.set(e.path, { added: null, removed: 0 }); continue; }
+      const txt = fs.readFileSync(abs, 'utf8');
+      // Match git's "added" count for a new file: number of \n; if the
+      // last char isn't \n, that final partial line counts too.
+      let n = 0; for (let i = 0; i < txt.length; i++) if (txt.charCodeAt(i) === 10) n++;
+      if (txt.length > 0 && txt[txt.length - 1] !== '\n') n++;
+      lineStats.set(e.path, { added: n, removed: 0 });
+    } catch { /* unreadable / deleted between status and stat — skip */ }
+  }
+  // Attach to each entry. Tracked files with no numstat hit (e.g. mode-
+  // only changes) get { added: 0, removed: 0 }.
+  for (const e of out) {
+    const s = lineStats.get(e.path);
+    if (s) { e.added = s.added; e.removed = s.removed; }
+    else   { e.added = 0; e.removed = 0; }
   }
 
   return {

@@ -511,6 +511,95 @@ t('app.js: _saveFileEdit success path refreshes the Plan changed-files section',
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// fr-77 r6 — per-file line-count chips (+N / −M)
+// ──────────────────────────────────────────────────────────────────────
+
+await tAsync('fr-77 r6 server: each entry carries added + removed line counts', async () => {
+  const root = mkTempRepo();
+  try {
+    // Tracked modification: 1 line added, 1 line removed (replace contents).
+    fs.writeFileSync(path.join(root, 'a.txt'), 'hello modified\n');
+    // Tracked deletion: 1 line removed.
+    fs.unlinkSync(path.join(root, 'b.txt'));
+    // Untracked add: 3 lines added.
+    fs.writeFileSync(path.join(root, 'c.txt'), 'one\ntwo\nthree\n');
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.listChangedFiles(root);
+    const byPath = new Map(out.entries.map((e) => [e.path, e]));
+    const a = byPath.get('a.txt');
+    const b = byPath.get('b.txt');
+    const c = byPath.get('c.txt');
+    assert.ok(a, 'a.txt entry present');
+    assert.strictEqual(a.added, 1, `a.txt added expected 1, got ${a.added}`);
+    assert.strictEqual(a.removed, 1, `a.txt removed expected 1, got ${a.removed}`);
+    assert.ok(b, 'b.txt entry present');
+    assert.strictEqual(b.added, 0);
+    assert.strictEqual(b.removed, 1, `b.txt removed expected 1, got ${b.removed}`);
+    assert.ok(c, 'c.txt entry present');
+    assert.strictEqual(c.added, 3, `untracked c.txt added expected 3, got ${c.added}`);
+    assert.strictEqual(c.removed, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await tAsync('fr-77 r6 server: binary file reports null added/removed (numstat -/-)', async () => {
+  const root = mkTempRepo();
+  try {
+    // Create a tiny binary blob + commit, then modify it. git diff
+    // --numstat will emit `-\t-\tbin.dat` for binaries.
+    fs.writeFileSync(path.join(root, 'bin.dat'), Buffer.from([0,1,2,0,3,4,5]));
+    execFileSync('git', ['-C', root, 'add', 'bin.dat']);
+    execFileSync('git', ['-C', root, 'commit', '-qm', 'add bin']);
+    fs.writeFileSync(path.join(root, 'bin.dat'), Buffer.from([9,8,7,0,6,5,4,3,2,1]));
+    delete require.cache[require.resolve('../server/src/files')];
+    const filesMod = require('../server/src/files');
+    const out = await filesMod.listChangedFiles(root);
+    const bin = out.entries.find((e) => e.path === 'bin.dat');
+    assert.ok(bin, 'bin.dat entry present');
+    assert.strictEqual(bin.added, null,
+      'binary file must report added=null so UI shows "bin" badge');
+    assert.strictEqual(bin.removed, null,
+      'binary file must report removed=null');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+t('app.js: _planChangedFileStatsHtml renders +N / −M chips + bin badge', () => {
+  assert.ok(/function\s+_planChangedFileStatsHtml\s*\(/.test(APP),
+    '_planChangedFileStatsHtml helper must be defined');
+  const idx = APP.search(/function\s+_planChangedFileStatsHtml\s*\(/);
+  const win = APP.slice(idx, idx + 1500);
+  // Bin badge for null/null.
+  assert.ok(/pcf-stats-bin/.test(win),
+    'null counts must render a .pcf-stats-bin badge');
+  // +N for additions; −M for removals; using minus or hyphen.
+  assert.ok(/pcf-stats-add/.test(win) && /\+\$\{a\}/.test(win),
+    'positive added must render as .pcf-stats-add with +N');
+  assert.ok(/pcf-stats-rm/.test(win),
+    'positive removed must render as .pcf-stats-rm');
+  // 0/0 returns empty string (no clutter on mode-only changes).
+  assert.ok(/a\s*===\s*0\s*&&\s*r\s*===\s*0[\s\S]{0,80}return\s+['"]['"]/.test(win),
+    '0/0 must short-circuit to empty string');
+});
+
+t('app.js: _renderPlanChangedFiles list items include the stats chip', () => {
+  const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
+  const win = APP.slice(idx, idx + 3500);
+  assert.ok(/_planChangedFileStatsHtml\s*\(/.test(win),
+    'row HTML must invoke _planChangedFileStatsHtml');
+});
+
+t('styles.css: .pcf-stats / .pcf-stats-add / .pcf-stats-rm / .pcf-stats-bin defined', () => {
+  for (const cls of ['pcf-stats', 'pcf-stats-add', 'pcf-stats-rm', 'pcf-stats-bin']) {
+    assert.ok(new RegExp('\\.' + cls + '\\b').test(CSS),
+      `.${cls} CSS rule must be defined`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // fr-77 r4 — vertical drag-to-resize on the Plan changed-files section
 // ──────────────────────────────────────────────────────────────────────
 

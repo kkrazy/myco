@@ -7867,15 +7867,45 @@ function _renderPlanChangedFiles() {
     const cls = e.status === '?' ? 'fc-status-untracked' : `fc-status-${e.status}`;
     const label = STATUS_LABEL[e.status] || e.status;
     const display = e.status === '?' ? '?' : e.status;
+    // fr-77 r6: per-file line-count chips (`+N`, `-M`). Server attaches
+    // {added, removed} from `git diff --numstat HEAD`; binary files have
+    // null counts → render "bin" badge instead. Tracked file with 0/0
+    // (e.g. mode-only change) → render nothing.
+    const stats = _planChangedFileStatsHtml(e);
+    const titleStats = (e.added != null || e.removed != null)
+      ? ` · +${e.added ?? 0} −${e.removed ?? 0}`
+      : '';
     // fr-77 r3: leading caret rotates 90° when the row is expanded
     // (see #plan-changed-files-list li.is-expanded .pcf-caret rule).
-    return `<li data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path)}">
+    return `<li data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path + titleStats)}">
       <span class="pcf-caret">▶</span>
       <span class="fc-status ${escHtml(cls)}">${escHtml(display)}</span>
       <span class="fc-path">${escHtml(e.path)}</span>
+      ${stats}
     </li>`;
   }).join('');
   ul.innerHTML = html;
+}
+
+// fr-77 r6: per-row line-count chip HTML. Renders:
+//   - "+N −M" pair (green / red, monospace) for tracked changes
+//   - "bin" badge for binary files (numstat null/null)
+//   - empty string for tracked files with 0/0 (e.g. mode-only change)
+//   - just "+N" for new untracked files (removed=0)
+// Used by _renderPlanChangedFiles.
+function _planChangedFileStatsHtml(e) {
+  const added = e && e.added;
+  const removed = e && e.removed;
+  if (added == null && removed == null) {
+    return '<span class="pcf-stats pcf-stats-bin" title="binary file">bin</span>';
+  }
+  const a = Number.isFinite(added) ? added : 0;
+  const r = Number.isFinite(removed) ? removed : 0;
+  if (a === 0 && r === 0) return '';
+  const parts = [];
+  if (a > 0) parts.push(`<span class="pcf-stats-add">+${a}</span>`);
+  if (r > 0) parts.push(`<span class="pcf-stats-rm">−${r}</span>`);
+  return `<span class="pcf-stats">${parts.join('')}</span>`;
 }
 
 // fr-77 r2: render the optional "Mentions" + "Recent" description rows
