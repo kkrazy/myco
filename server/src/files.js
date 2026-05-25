@@ -339,4 +339,86 @@ async function writeFile(absRoot, relPath, { content, expectedMtimeMs }) {
   return { mtimeMs: newSt.mtimeMs, size: newSt.size };
 }
 
-module.exports = { safeJoin, listDir, readFile, writeFile };
+// fr-77: flat list of all git-status-changed files at the project root.
+// Powers the file explorer's bottom "Changed files" section. Reuses
+// _gitStatusMap (so we don't re-fork git status). Returns:
+//   { entries: [{path, status}], truncated: false }
+// where status is the same single-letter primary code _gitStatusMap
+// already returns. Sorted by path for deterministic UI render order.
+// Renamed files surface as the NEW path only (the old path is implicit
+// in the rename + would clutter the list).
+async function listChangedFiles(absRoot) {
+  const gitMap = await _gitStatusMap(absRoot);
+  if (!gitMap || gitMap.size === 0) {
+    return { entries: [], truncated: false };
+  }
+  const entries = [];
+  for (const [p, s] of gitMap) entries.push({ path: p, status: s });
+  // De-dup by path (rename produces both old + new — both got 'R' via
+  // _gitStatusMap; keep one). And sort by path for deterministic render.
+  const byPath = new Map();
+  for (const e of entries) byPath.set(e.path, e);
+  const out = Array.from(byPath.values()).sort((a, b) => a.path.localeCompare(b.path));
+  // Cap to 500 entries to bound the response on busy worktrees. UI
+  // surfaces truncated=true so the user knows to use the terminal for
+  // the full picture if it hits the cap.
+  const MAX = 500;
+  const truncated = out.length > MAX;
+  return { entries: truncated ? out.slice(0, MAX) : out, truncated };
+}
+
+// fr-77: read the unified diff for a single file relative to HEAD.
+// `git diff HEAD -- <path>` covers both worktree + staged changes
+// against the last commit. Path is run through safeJoin first so we
+// can't escape the session root. Returns { path, diff, head, exists }
+// where head = short SHA of HEAD (so the UI can show "diff vs <sha>")
+// and exists = true unless the path is deleted in the worktree.
+async function readDiff(absRoot, relPath) {
+  // safeJoin guards traversal + symlink-escape — same shape as the
+  // existing readFile / writeFile paths.
+  await safeJoin(absRoot, relPath);
+  // Repo presence check — non-git workspaces give an empty-diff
+  // response so the UI shows an explanatory "not a git repo" notice
+  // instead of a 500.
+  try {
+    await fsp.access(path.join(absRoot, '.git'));
+  } catch {
+    return { path: relPath, diff: '', head: null, exists: true, gitless: true };
+  }
+  // Short HEAD SHA. Useful for the UI to label "diff vs abc1234".
+  let head = null;
+  try {
+    head = await new Promise((resolve, reject) => {
+      execFile('git', ['-C', absRoot, 'rev-parse', '--short', 'HEAD'],
+        { timeout: 2000, maxBuffer: 64 * 1024 },
+        (err, stdout) => err ? reject(err) : resolve(String(stdout).trim()));
+    });
+  } catch { /* fresh repo with no commits, etc. — leave head=null */ }
+  // The diff itself. Use --no-color so the output is plain unified
+  // diff (highlight.js can syntax-color client-side); --no-ext-diff
+  // so a user's git-config'd external differ doesn't change the
+  // shape; -- separates path from flags so a file named -M is safe.
+  let diff = '';
+  try {
+    diff = await new Promise((resolve, reject) => {
+      execFile('git',
+        ['-C', absRoot, 'diff', '--no-color', '--no-ext-diff', 'HEAD', '--', relPath],
+        { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
+        (err, stdout) => err ? reject(err) : resolve(String(stdout)));
+    });
+  } catch (e) {
+    // git error (timeout, etc.) — surface a structured failure so
+    // the UI can show the message rather than a generic 500.
+    throw err('ERR_GIT_DIFF', 'git diff failed: ' + e.message);
+  }
+  // exists check: if the worktree file is gone (deleted in workdir
+  // OR staged delete), surface that on the response so the UI can
+  // render a "deleted" badge instead of trying to also show the
+  // current source.
+  let exists = true;
+  try { await fsp.stat(path.join(absRoot, relPath)); }
+  catch { exists = false; }
+  return { path: relPath, diff, head, exists };
+}
+
+module.exports = { safeJoin, listDir, readFile, writeFile, listChangedFiles, readDiff };

@@ -3502,18 +3502,27 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 220px;
   min-width: 180px;
   border-right: 1px solid rgba(255, 255, 255, .06);
-  overflow-y: auto;
+  /* fr-77: pane is the FLEX CONTAINER; scroll happens inside the
+     two stacked sections (#files-tree + #files-changed-section).
+     Pre-fix this had overflow-y: auto which conflicted with the
+     nested scroll regions (whole pane scrolled instead of each
+     section independently). */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: #0a0e14;
   transition: width .15s ease;
-  /* Match the thin scrollbar used by #chat-messages, #conv-messages,
-     and the xterm viewport so the file explorer doesn't stand out
-     with the browser's default OS-styled scrollbar. */
+}
+/* fr-77: top section — the existing directory tree. Takes the
+   remaining vertical space + scrolls its own overflow. */
+#files-tree-pane #files-tree {
+  flex: 1 1 auto;
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
+  margin: 0;
 }
-#files-tree-pane::-webkit-scrollbar { width: 8px; }
+#files-tree-pane #files-tree::-webkit-scrollbar { width: 8px; }
 /* Collapsed-tree state: tree pane drops to a thin strip, just wide
    enough to show the ▶ expand button. The viewer pane fills the
    rest of the wrap. Triggered by the ◀ button in files-header
@@ -3545,6 +3554,176 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   flex: 0 0 auto;
 }
 #files-tree-collapse:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+
+/* fr-77: bottom "Changed files" section. Stacks under #files-tree
+   inside the tree pane. Default ~30vh tall (capped 120px-280px),
+   scrolls its own overflow, collapsible via the chevron in the
+   header. Hidden in tree-collapsed mode (the thin-strip layout
+   has no room for a second section). */
+#files-changed-section {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(255, 255, 255, .02);
+}
+#files-changed-section.is-collapsed {
+  max-height: none;
+  min-height: 0;
+}
+#files-changed-section.is-collapsed #files-changed-list,
+#files-changed-section.is-collapsed #files-changed-msg {
+  display: none;
+}
+#files-changed-section.is-collapsed #files-changed-collapse svg {
+  /* Chevron points up when section is collapsed (click to expand). */
+  transform: rotate(180deg);
+}
+#files-changed-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  color: var(--muted, #8b949e);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+  user-select: none;
+}
+#files-changed-title { flex: 1; }
+#files-changed-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  opacity: 0.7;
+  margin-right: 4px;
+}
+#files-changed-refresh,
+#files-changed-collapse {
+  background: transparent;
+  border: 0;
+  color: var(--muted, #8b949e);
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  transition: color .12s, background .12s;
+}
+#files-changed-refresh:hover,
+#files-changed-collapse:hover {
+  background: rgba(255, 255, 255, .06);
+  color: var(--text);
+}
+#files-changed-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 130, 145, .35) transparent;
+}
+#files-changed-list::-webkit-scrollbar { width: 8px; }
+#files-changed-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  transition: background .1s;
+}
+#files-changed-list li:hover {
+  background: rgba(56, 139, 253, .12);
+  color: #58a6ff;
+}
+#files-changed-list li.is-active {
+  background: rgba(56, 139, 253, .2);
+  color: #58a6ff;
+}
+.fc-status {
+  flex: 0 0 14px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+.fc-status-M { color: #f0b440; }     /* modified — amber */
+.fc-status-A { color: #6fdc97; }     /* added — green */
+.fc-status-D { color: #ff8a8a; }     /* deleted — red */
+.fc-status-R { color: #c792ea; }     /* renamed — purple */
+.fc-status-C { color: #c792ea; }     /* copied — purple */
+.fc-status-U { color: #ff8a8a; }     /* unmerged — red */
+.fc-status-Q { color: #8b949e; }     /* untracked (? mapped) — muted */
+.fc-status-untracked { color: #8b949e; }
+.fc-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#files-changed-msg {
+  padding: 8px;
+  font-size: 0.78rem;
+  color: var(--muted, #8b949e);
+  font-style: italic;
+}
+/* In tree-collapsed mode the whole bottom section disappears. */
+#files-wrap.files-tree-collapsed #files-changed-section {
+  display: none;
+}
+
+/* fr-77: diff viewer body (right pane content when a changed-file
+   list item is clicked). The actual diff text uses highlight.js
+   language-diff via _renderDiffViewerBody; this CSS frames the
+   small "diff vs <head>" header and the empty/notice states. */
+.fc-diff-header {
+  padding: 8px 16px;
+  font-size: 0.78rem;
+  color: var(--muted, #8b949e);
+  border-bottom: 1px solid rgba(255, 255, 255, .06);
+  background: rgba(255, 255, 255, .02);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.fc-diff-header code {
+  color: #58a6ff;
+  background: rgba(56, 139, 253, .08);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.fc-deleted {
+  color: #ff8a8a;
+  font-weight: 600;
+}
+.fc-diff-notice,
+.fc-diff-empty {
+  padding: 16px;
+  font-size: 0.88rem;
+  color: var(--muted, #8b949e);
+  font-style: italic;
+}
+.fc-diff {
+  margin: 0;
+  padding: 0;
+  background: #0d1117;
+}
+.fc-diff code.language-diff {
+  display: block;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
 
 /* Inline file editor — fills the files-view-body with a monospace
    textarea. The Save / Cancel buttons live in the files-view-header

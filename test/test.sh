@@ -2790,6 +2790,21 @@ test_chat_window() {
   # (Esc + X button) so any future "outside-click dismiss" patch would
   # red-flip the test.
   node_test_result test/bug-41-perm-modal-backdrop-no-dismiss.test.js "test/bug-41-perm-modal-backdrop-no-dismiss.test.js (8 cases)"
+  # fr-77 (user-reported 2026-05-25): "File explorer makes it hard to
+  # see which files have changed and quickly open a diff view."
+  # Implementation: split the tree pane vertically — top section is
+  # the existing #files-tree (scrollable), new bottom section
+  # #files-changed-section lists all git-status-changed files at the
+  # project root. Click on a row opens a unified-diff view in the
+  # right pane (highlight.js language-diff) instead of the normal
+  # editor. New server helpers in files.js: listChangedFiles (caps
+  # 500 entries; reuses _gitStatusMap) + readDiff (git diff HEAD --,
+  # via safeJoin). Two new viewer-readable routes:
+  # /sessions/:id/files-changed + /sessions/:id/files/diff?path=.
+  # Section refreshes on showFilesView mount + after _saveFileEdit
+  # (so the chip count tracks edits). Tree-collapsed mode hides the
+  # new section. Diff view hides the Edit button (read-only).
+  node_test_result test/fr-77-files-changed-diff.test.js "test/fr-77-files-changed-diff.test.js (17 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-

@@ -679,6 +679,37 @@ app.get('/sessions/:id/files', async (req, res) => {
   } catch (e) { fileApiError(res, e); }
 });
 
+// fr-77: flat list of all git-changed files in the project root. Used
+// by the file explorer's bottom "Changed files" section (which splits
+// the tree pane into [tree, changed-files] stacked sections + lets a
+// click open the diff view via /files/diff below). Viewer-readable
+// since the regular /files list is too — git status isn't a secret.
+app.get('/sessions/:id/files-changed', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  try {
+    const out = await filesApi.listChangedFiles(ctx.root);
+    res.json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
+// fr-77: unified diff for a single file vs HEAD. Powers the
+// "click-to-open diff view" affordance on the changed-files list.
+// Path goes through safeJoin so the same traversal guards as
+// /file / /file/download apply. Returns 200 with diff text body +
+// metadata (head sha, exists flag, gitless flag for non-repo
+// workspaces). Viewer-readable.
+app.get('/sessions/:id/files/diff', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const relPath = req.query.path;
+  if (!relPath) return res.status(400).json({ error: 'path required' });
+  try {
+    const out = await filesApi.readDiff(ctx.root, relPath);
+    res.json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
 app.get('/sessions/:id/file', async (req, res) => {
   const ctx = fileApiPreamble(req, res, 'viewer');
   if (!ctx) return;

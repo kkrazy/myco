@@ -7509,6 +7509,22 @@ function bindFilesUi() {
   document.getElementById('files-copy')?.addEventListener('click', copyFileContents);
   document.getElementById('files-wrap-toggle')?.addEventListener('click', toggleWrap);
   document.getElementById('files-tree-collapse')?.addEventListener('click', _toggleFilesTreeCollapsed);
+  // fr-77: changed-files section bindings.
+  document.getElementById('files-changed-refresh')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    loadFilesChanged({ force: true });
+  });
+  document.getElementById('files-changed-collapse')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const sec = document.getElementById('files-changed-section');
+    if (sec) sec.classList.toggle('is-collapsed');
+  });
+  document.getElementById('files-changed-list')?.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-fc-path]');
+    if (!li) return;
+    const p = li.dataset.fcPath;
+    if (p) openFileDiffViewer(p);
+  });
   document.getElementById('files-edit')?.addEventListener('click', _enterFileEditMode);
   document.getElementById('files-edit-save')?.addEventListener('click', () => _saveFileEdit());
   document.getElementById('files-edit-cancel')?.addEventListener('click', _exitFileEditMode);
@@ -7597,6 +7613,11 @@ function showFilesView() {
   // there per _hideMainPaneSiblings).
   if (window.innerWidth > 900) setChatPane(true);
   loadFileTree(state.files.currentPath || '.');
+  // fr-77: refresh the bottom changed-files section every time the
+  // files view is opened so it reflects whatever git changes have
+  // landed since last visit. The list also auto-refreshes after
+  // _saveFileEdit succeeds (see fr-77 hook there).
+  loadFilesChanged({ force: false });
   updateChatButton();
   _updateMainPaneLayout();
 }
@@ -7637,6 +7658,159 @@ function showFilesTreeError(msg) {
   ul.innerHTML = '';
   errEl.textContent = msg;
   errEl.hidden = false;
+}
+
+// fr-77: fetch + render the flat list of git-status-changed files in
+// the project root. Powers the bottom "Changed files" section. Called
+// on showFilesView mount, on the refresh button, and after a file
+// edit lands. Forces a fetch on { force: true }; otherwise piggybacks
+// on a small in-memory cache to avoid double-fetching during a single
+// user action.
+async function loadFilesChanged({ force } = {}) {
+  if (!state.activeId) return;
+  if (!state.filesChanged) state.filesChanged = { entries: [], loadedAt: 0 };
+  // Cache for 2s — useful when showFilesView + a subsequent state-
+  // update both trigger a load in quick succession.
+  const now = Date.now();
+  if (!force && (now - state.filesChanged.loadedAt) < 2000) return;
+  const ul = document.getElementById('files-changed-list');
+  const msgEl = document.getElementById('files-changed-msg');
+  const countEl = document.getElementById('files-changed-count');
+  if (!ul) return;
+  const id = state.activeId;
+  let res;
+  try {
+    res = await authedFetch(`/sessions/${encodeURIComponent(id)}/files-changed`);
+  } catch (e) {
+    msgEl.textContent = `Failed: ${e.message || e}`;
+    msgEl.hidden = false;
+    return;
+  }
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    msgEl.textContent = body.error || `HTTP ${res.status}`;
+    msgEl.hidden = false;
+    return;
+  }
+  const data = await res.json();
+  state.filesChanged = { entries: data.entries || [], loadedAt: now, truncated: !!data.truncated };
+  _renderFilesChanged();
+}
+
+function _renderFilesChanged() {
+  const ul = document.getElementById('files-changed-list');
+  const msgEl = document.getElementById('files-changed-msg');
+  const countEl = document.getElementById('files-changed-count');
+  if (!ul) return;
+  const fc = state.filesChanged || { entries: [] };
+  const entries = fc.entries || [];
+  // Count chip.
+  if (countEl) {
+    countEl.textContent = entries.length === 0 ? '' :
+      (fc.truncated ? `(${entries.length}+)` : `(${entries.length})`);
+  }
+  if (entries.length === 0) {
+    ul.innerHTML = '';
+    msgEl.textContent = 'No changes vs HEAD.';
+    msgEl.hidden = false;
+    return;
+  }
+  msgEl.hidden = true;
+  msgEl.textContent = '';
+  // Status letter mapping: '?' → 'Q' (CSS class friendly), keep
+  // others as-is. Title text spells out the human meaning.
+  const STATUS_LABEL = {
+    M: 'modified', A: 'added', D: 'deleted', R: 'renamed',
+    C: 'copied', U: 'unmerged', '?': 'untracked', '!': 'ignored',
+  };
+  const activeDiff = (state.files.viewing && state.files.viewing.isDiff)
+    ? state.files.viewing.path : null;
+  const html = entries.map((e) => {
+    const cls = e.status === '?' ? 'fc-status-untracked' : `fc-status-${e.status}`;
+    const label = STATUS_LABEL[e.status] || e.status;
+    const isActive = e.path === activeDiff ? ' is-active' : '';
+    const display = e.status === '?' ? '?' : e.status;
+    return `<li class="${escHtml(isActive.trim())}" data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path)}">
+      <span class="fc-status ${escHtml(cls)}">${escHtml(display)}</span>
+      <span class="fc-path">${escHtml(e.path)}</span>
+    </li>`;
+  }).join('');
+  ul.innerHTML = html;
+}
+
+// fr-77: open the diff viewer for a single file. Mirrors the shape of
+// openFileInViewer but populates the right pane with a unified-diff
+// view (highlight.js with language-diff) instead of the normal source
+// view. The state.files.viewing flag `isDiff: true` distinguishes
+// the two modes so the breadcrumb + edit-button gates can branch.
+async function openFileDiffViewer(relPath) {
+  if (!state.activeId) return;
+  const id = state.activeId;
+  const url = `/sessions/${encodeURIComponent(id)}/files/diff?path=${encodeURIComponent(relPath)}`;
+  let res;
+  try { res = await authedFetch(url); }
+  catch (e) { alert(`Failed to open diff: ${e.message || e}`); return; }
+  let body = {};
+  try { body = await res.json(); } catch {}
+  if (!res.ok) {
+    alert(`Diff failed: ${body.error || res.status}`);
+    return;
+  }
+  // Mark the matching item active in the changed list.
+  state.files.viewing = {
+    path: body.path, isDiff: true, diff: body.diff || '',
+    head: body.head || null, exists: body.exists !== false,
+    gitless: !!body.gitless,
+    content: '', binary: false, cards: [], selection: null,
+    pending: null, commentDraft: null, wrap: false, size: 0,
+  };
+  showFileViewerPane(body.path);
+  renderViewerHeader(body.path);
+  _renderFilesChanged(); // refresh active highlight
+  _renderDiffViewerBody(body);
+}
+
+function _renderDiffViewerBody(body) {
+  const viewBody = document.getElementById('files-view-body');
+  if (!viewBody) return;
+  // Header summary: "diff vs <head>" or "untracked file" (no HEAD ref
+  // because the file didn't exist at HEAD). Renders inline above the
+  // diff text so the user always knows what they're looking at.
+  const headerBits = [];
+  if (body.gitless) {
+    headerBits.push('<div class="fc-diff-notice">Not a git repository — no diff available.</div>');
+  } else {
+    const headBit = body.head ? `diff vs <code>${escHtml(body.head)}</code>` : 'diff vs working tree';
+    const existBit = body.exists ? '' : ' · <span class="fc-deleted">file deleted</span>';
+    headerBits.push(`<div class="fc-diff-header">${headBit}${existBit}</div>`);
+  }
+  // Empty-diff guard: untracked files don't show in `git diff HEAD`,
+  // they only show in `git status`. The diff endpoint returns ''.
+  // Surface a useful message instead of a blank pane.
+  let diffHtml;
+  if (!body.diff || !body.diff.trim()) {
+    diffHtml = '<div class="fc-diff-empty">(no diff — file may be untracked or unchanged vs HEAD; the file content viewer shows the current source)</div>';
+  } else {
+    const escaped = escHtml(body.diff);
+    diffHtml = `<pre class="fc-diff"><code class="language-diff">${escaped}</code></pre>`;
+  }
+  viewBody.innerHTML = headerBits.join('') + diffHtml;
+  // Apply highlight.js if available, scoped to the new code block.
+  try {
+    if (window.hljs) {
+      const codeEl = viewBody.querySelector('code.language-diff');
+      if (codeEl) window.hljs.highlightElement(codeEl);
+    }
+  } catch (err) { /* hljs missing on this build — leave the plain pre */ }
+  // Show the viewer pane + hide editor-only chrome (no Edit on diff
+  // views; user has to switch back via the changed-list or tree).
+  const msg = document.getElementById('files-view-msg');
+  if (msg) { msg.hidden = true; msg.textContent = ''; }
+  const actionBar = document.getElementById('files-action-bar');
+  if (actionBar) actionBar.hidden = true;
+  const editBtn = document.getElementById('files-edit');
+  if (editBtn) editBtn.hidden = true;
 }
 
 function renderFilesList(entries, truncated, relPath) {
@@ -8129,6 +8303,12 @@ async function _saveFileEdit({ force = false } = {}) {
     v.mtimeMs = body.mtimeMs;
     v.size = body.size;
     _exitFileEditMode();
+    // fr-77: a successful save likely changes the git-status of this
+    // file (clean → modified, or modified → clean depending on what
+    // the edit did). Refresh the changed-files section so the chip
+    // count + list reflect the new state. force=true bypasses the
+    // 2s cache so the user sees the update immediately.
+    if (typeof loadFilesChanged === 'function') loadFilesChanged({ force: true });
   } catch (err) {
     alert(`Save failed: ${err.message || err}`);
   } finally {

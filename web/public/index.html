@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=255" />
+  <link rel="stylesheet" href="styles.css?v=256" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -260,6 +260,26 @@
           </header>
           <ul id="files-tree"></ul>
           <div id="files-tree-msg" hidden></div>
+          <!-- fr-77: bottom "Changed files" section. Stacked below the
+               tree (split via CSS: tree flex:1 scrollable, this fixed-
+               height + scrollable). Header is collapsible. Clicking a
+               file opens the diff view in the right pane (vs the
+               normal file viewer). Refresh button re-fetches git
+               status on demand. -->
+          <div id="files-changed-section">
+            <header id="files-changed-header">
+              <span id="files-changed-title">Changed files</span>
+              <span id="files-changed-count" aria-live="polite"></span>
+              <button id="files-changed-refresh" title="Refresh changed files" aria-label="Refresh changed files">
+                <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+              </button>
+              <button id="files-changed-collapse" title="Collapse changed files" aria-label="Collapse changed files">
+                <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+            </header>
+            <ul id="files-changed-list"></ul>
+            <div id="files-changed-msg" hidden></div>
+          </div>
         </div>
         <div id="files-view-pane" hidden>
           <!-- bug-33: header is two stacked rows so the breadcrumb path
