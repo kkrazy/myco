@@ -643,13 +643,34 @@ t('styles.css: r18 action-row buttons share a fixed height (no per-button drift)
     'r18 must declare a shared height for all action-row buttons');
 });
 
-t('styles.css: r18 comment-toggle (+ siblings) icons bumped to 16px', () => {
-  // The .vote-icon svg / .artifact-comment-toggle > svg / .btn-icon svg
-  // rule must size to 16px (was 14px before r18).
+t('styles.css: r19 comment-toggle (+ siblings) icons match chrome 18px family', () => {
+  // r18 went 14 → 16; r19 went 16 → 18 (chrome cluster's exact size).
+  // The shared rule must size to 18px.
   const m = CSS.match(/\.vote-icon\s+svg[\s\S]*?\n\}/);
   assert.ok(m, '.vote-icon svg rule must exist');
-  assert.ok(/width:\s*16px/.test(m[0]),
-    'action-row SVG icons must be 16px (was 14px pre-r18)');
+  assert.ok(/width:\s*18px/.test(m[0]),
+    'action-row SVG icons must be 18px (chrome cluster family, post-r19)');
+});
+
+t('styles.css: r19 per-item delete adopts pill chrome matching comment-toggle', () => {
+  // The standalone .artifact-item-delete rule must use the same
+  // tinted-blue background + border + 6px radius + 2px 8px padding
+  // as .artifact-comment-toggle so the two buttons look like siblings.
+  // Anchor on the line-starting rule (the action-row override above
+  // is a different selector with .artifact-item-actions prefix).
+  const m = CSS.match(/\n\.artifact-item-delete\s*\{[\s\S]*?\n\}/);
+  assert.ok(m, '.artifact-item-delete base rule must exist');
+  const block = m[0];
+  assert.ok(/background:\s*rgba\(80,\s*120,\s*200/.test(block),
+    'delete must adopt the comment-toggle blue tint background');
+  assert.ok(/border:\s*1px solid rgba\(120,\s*160,\s*230/.test(block),
+    'delete must use the comment-toggle blue border color');
+  assert.ok(/border-radius:\s*6px/.test(block),
+    'delete must use 6px border-radius (pill, not 4px square)');
+  // SVG inside the per-item delete sized 18px to match.
+  const svgRule = CSS.match(/\.artifact-item-delete\s+svg\s*\{[\s\S]*?\n\}/);
+  assert.ok(svgRule && /width:\s*18px/.test(svgRule[0]),
+    'per-item delete SVG must be 18px to match comment-toggle');
 });
 
 // ──────────────────────────────────────────────────────────────────────

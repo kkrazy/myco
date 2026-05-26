@@ -2558,15 +2558,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .artifact-item-edited .btn-icon svg,
 .vote-icon svg,
 .artifact-comment-toggle > svg {
-  /* fr-77 r18: bumped from 14px → 16px so the action-row icons read
-     comfortably alongside their text labels and the comment-toggle
-     icon stops feeling "too small". 16px is the same family-coherent
-     step between the per-row Changed-files icons (14px, in a denser
-     row) and the chrome cluster icons (18px, alone in 32px buttons). */
-  width: 16px;
-  height: 16px;
+  /* fr-77 r19: bumped from 16px → 18px so the comment + vote + run +
+     edit + close icons match the chrome cluster's 18px icon family
+     1:1 (was: 16px as a "compact" compromise). Action-row buttons sit
+     at 28px height which leaves comfortable padding around an 18px
+     icon. User: "make the comment button image bigger again". */
+  width: 18px;
+  height: 18px;
   display: inline-block;
-  vertical-align: -3px;
+  vertical-align: -4px;
 }
 
 /* fr-77 r18: uniform sizing for every plan-item action button so
@@ -2590,23 +2590,31 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   box-sizing: border-box;
   line-height: 1;
 }
-/* Icon-only buttons (vote count + delete) want square-ish dimensions
-   so the icon is centered and the button doesn't stretch wider than
-   its content. */
-.artifact-item-actions .artifact-item-delete {
-  width: 28px;
-  padding: 0;
-}
-/* Mobile tap-target overrides (existing rule at @media max-width: 900px
+/* fr-77 r19: per-item delete used to override to a square 28px
+   (icon-only); now it's a pill matching .artifact-comment-toggle, so
+   the width override is dropped — padding from the shared 0 10px rule
+   above + the inner 18px SVG size give it the same visual footprint
+   as comment-toggle.
+   Mobile tap-target overrides (existing rule at @media max-width: 900px
    forces min-height: 44px) — leave those alone; this rule is the
    desktop default. */
+/* fr-77 r19: the per-comment edit/delete buttons stay icon-only in
+   a denser row → 14px. The per-ITEM delete button is split out below
+   so it can adopt the comment-toggle pill chrome at 18px. */
 .artifact-comment-edit svg,
-.artifact-comment-delete svg,
-.artifact-item-delete svg {
-  width: 13px;
-  height: 13px;
+.artifact-comment-delete svg {
+  width: 14px;
+  height: 14px;
   display: inline-block;
   vertical-align: -1px;
+}
+.artifact-item-delete svg {
+  /* Per-item delete (sits in the action row) shares the chrome cluster
+     18px family with comment-toggle / vote / run / edit / close. */
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  vertical-align: -4px;
 }
 /* The .btn-icon span sometimes is the wrapper around an SVG (r14) or
    was the old emoji char (pre-r14). For the SVG case, drop the line-
@@ -2778,21 +2786,26 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .runqueue-resume:hover { color: var(--accent, #4caf50); border-color: var(--accent, #4caf50); }
 .runqueue-clear:hover  { color: #d32f2f; border-color: #d32f2f; }
 
+/* fr-77 r19: per-item delete adopts the same pill chrome as
+   .artifact-comment-toggle / .artifact-vote so the action-row reads
+   as one consistent visual family. Distinguishes intent with a red
+   hover (matching the pre-r19 delete affordance). User: "make the
+   delete the same style" as the comment button. */
 .artifact-item-delete {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  font-size: 1rem;
+  background: rgba(80, 120, 200, .15);
+  color: var(--text);
+  border: 1px solid rgba(120, 160, 230, .25);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: .76rem;
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: background .12s, color .12s, border-color .12s;
   opacity: .55;
   transition: background .12s, opacity .12s, color .12s;
 }
