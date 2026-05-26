@@ -227,6 +227,7 @@ module.exports = {
   KNOWN_PROVIDERS,
   // Token-store passthrough so callers can do everything through one require.
   getToken: gitTokens.getToken,
+  listAliases: gitTokens.listAliases,
   setRepoToken: gitTokens.setRepoToken,
   setUserToken: gitTokens.setUserToken,
   listRepos: gitTokens.listRepos,

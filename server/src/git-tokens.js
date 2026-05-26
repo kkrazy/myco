@@ -99,7 +99,7 @@ function _normalizeProvider(provider) {
 // the user has set one, otherwise falls back to their OAuth-issued
 // user-level token (github only; gitee has no OAuth, so no fallback).
 
-function getToken(user, provider, owner, repo) {
+function getToken(user, provider, owner, repo, alias) {
   if (!user) return null;
   const p = _normalizeProvider(provider);
   if (!p) return null;
@@ -107,6 +107,17 @@ function getToken(user, provider, owner, repo) {
   const entry = store[user];
   if (!entry || typeof entry !== 'object') return null;
   if (owner && repo) {
+    // fr-82: when the caller explicitly asks for an alias, look up
+    // ONLY that alias's slot. No silent fallback to the default or
+    // user-level token — if the user said "use the labxnow alias"
+    // and that alias has no PAT stored, surfacing that as null lets
+    // the caller report "no such alias" rather than quietly use a
+    // different identity (the foot-gun an account switcher must
+    // avoid).
+    if (alias) {
+      const aliasKey = `${p}/${owner}/${repo}#${alias}`;
+      return entry[aliasKey] || null;
+    }
     const repoKey = `${p}/${owner}/${repo}`;
     if (entry[repoKey]) return entry[repoKey];
   }
@@ -121,14 +132,42 @@ function getToken(user, provider, owner, repo) {
 // Per-repo is what /setpat hits. User-level is what the OAuth callback
 // + the legacy github.setToken shim hit.
 
-function setRepoToken(user, provider, owner, repo, token) {
+function setRepoToken(user, provider, owner, repo, token, alias) {
   if (!user || !owner || !repo || !token) throw new Error('user, owner, repo, token all required');
   const p = _normalizeProvider(provider);
   if (!p) throw new Error(`unknown provider: ${provider}`);
+  if (alias && !/^[a-z0-9_-]{1,32}$/i.test(alias)) {
+    throw new Error('alias must match ^[a-z0-9_-]{1,32}$');
+  }
   const store = _load();
   if (!store[user] || typeof store[user] !== 'object') store[user] = {};
-  store[user][`${p}/${owner}/${repo}`] = String(token).trim();
+  // fr-82: aliased PATs live at `<provider>/<owner>/<repo>#<alias>`.
+  // Un-aliased default lives at `<provider>/<owner>/<repo>` (unchanged).
+  // Both can coexist for the same target — caller picks via getToken's
+  // optional alias param.
+  const key = alias
+    ? `${p}/${owner}/${repo}#${alias}`
+    : `${p}/${owner}/${repo}`;
+  store[user][key] = String(token).trim();
   _persist();
+}
+
+// fr-82: list aliases stored for (user, provider, owner, repo). Used
+// by /listpat + by handleRemoteIssue's "no such alias" error so the
+// user can see which aliases ARE available.
+function listAliases(user, provider, owner, repo) {
+  if (!user) return [];
+  const p = _normalizeProvider(provider);
+  if (!p) return [];
+  const store = _load();
+  const entry = store[user];
+  if (!entry || typeof entry !== 'object') return [];
+  const prefix = `${p}/${owner}/${repo}#`;
+  const result = [];
+  for (const key of Object.keys(entry)) {
+    if (key.startsWith(prefix)) result.push(key.slice(prefix.length));
+  }
+  return result.sort();
 }
 
 function setUserToken(user, provider, token) {
@@ -170,6 +209,7 @@ module.exports = {
   setRepoToken,
   setUserToken,
   listRepos,
+  listAliases,                 // fr-82
   KNOWN_PROVIDERS,
   _resetCacheForTest,
   _tokensFile: () => TOKENS_FILE,

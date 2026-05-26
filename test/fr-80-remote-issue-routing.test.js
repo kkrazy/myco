@@ -124,9 +124,9 @@ t('slashcmds.js: r2 — handleRemoteIssue 403 hint suggests re-sign-in FIRST (ch
   // `repo` scope addition won\'t carry issues:write). /setpat is the
   // last-resort override.
   const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
-  // r3 grew the function with the scope-probing 403 branch; bump
-  // window so the slice still includes the `return;` boundary.
-  const win = SRC.slice(idx, idx + 6000);
+  // r3+r4+fr-82 grew the function; bump window so the slice still
+  // includes the `return;` boundary.
+  const win = SRC.slice(idx, idx + 10000);
   assert.ok(/result\.status\s*===\s*403/.test(win),
     'must branch on the 403 status specifically');
   assert.ok(/Re-sign-in/i.test(win),
@@ -174,7 +174,8 @@ t('slashcmds.js: r3 — 403 hint surfaces the actual X-OAuth-Scopes from the res
   // the 403 hint so the user sees literally what's missing instead
   // of guessing.
   const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
-  const win = SRC.slice(idx, idx + 5000);
+  // fr-82 grew the function further; bump window from 5000 to 10000.
+  const win = SRC.slice(idx, idx + 10000);
   // 403 branch reads result.scopes + result.acceptedScopes.
   assert.ok(/result\.scopes/.test(win),
     '403 branch must read result.scopes from the response');
@@ -221,9 +222,10 @@ t('slashcmds.js: r2 — /setpat @<target> <token> path stores PAT without needin
   // When target is set, host is built from REMOTE_TARGETS (no git remote detection).
   assert.ok(/host\s*=\s*\{\s*provider:\s*target\.provider/.test(win),
     'remote-target form must derive host from REMOTE_TARGETS (no git remote needed)');
-  // Usage line mentions both forms.
-  assert.ok(/Usage:\s*\/setpat\s*<token>\s*OR\s*\/setpat\s*@<target>\s*<token>/.test(win),
-    'usage hint must advertise both `<token>` and `@<target> <token>` forms');
+  // Usage line mentions both forms (fr-82 added [--as <alias>] in the
+  // remote-form variant — accept either with or without that segment).
+  assert.ok(/Usage:\s*\/setpat\s*<token>[\s\S]{0,80}\/setpat\s*@<target>[\s\S]{0,80}<token>/.test(win),
+    'usage hint must advertise both `<token>` and `@<target> [--as <alias>] <token>` forms');
 });
 
 t('slashcmds.js: command usage strings advertise @<target>', () => {

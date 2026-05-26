@@ -30,7 +30,14 @@ Items live in `_myco_/plan.json` (git-tracked) → `git clone` = full onboarding
 /bug load-older loops past page 5
 /bug! <text>                   ← agent rewrites into Problem/Expected/Actual
 /fr @myco add dark-mode toggle ← files an issue on github.com/kkrazy/myco (uses your PAT)
+/fr @myco --as labxnow ...     ← picks the `labxnow` PAT alias (multi-account via /setpat --as)
 ```
+
+**Multi-account / switch PATs (fr-82):** stash multiple PATs per target under named aliases and pick which one to use per command.
+- `/setpat @<target> [--as <alias>] <token>` — store (with optional alias)
+- `/fr @<target> [--as <alias>] <text>` — use (omit `--as` to use the default un-aliased PAT, or fall back to your GitHub OAuth login)
+- `/listpat [@<target>]` — show which aliases are stored
+
 
 Per-item: vote · comment · edit · ▶ Run (Fix/Implement/Do) · Close/Reopen · delete. Items with optional `analysis` / `implPlan` fields render collapsible Analysis / Implementation-plan accordions.
 

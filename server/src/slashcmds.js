@@ -137,6 +137,12 @@ const COMMANDS = [
     handler: handleAdd2Plan,
   },
   {
+    names: ['listpat'],
+    summary: 'List stored PAT aliases for this session\'s repo or a remote @<target>',
+    usage: '/listpat   OR   /listpat @<target>',
+    handler: handleListPat,
+  },
+  {
     names: ['setpat'],
     summary: 'Save a personal access token for this session\'s repo (github or gitee, auto-detected)',
     usage: '/setpat <token>',
@@ -320,19 +326,30 @@ function addPlanItem(ctx, layer) {
   const targetMatch = text.match(/^@([a-z0-9_-]+)(\s+|$)/i);
   if (targetMatch) {
     const targetName = targetMatch[1].toLowerCase();
-    const remainder = text.slice(targetMatch[0].length).trim();
+    let remainder = text.slice(targetMatch[0].length).trim();
     if (!REMOTE_TARGETS[targetName]) {
       const known = Object.keys(REMOTE_TARGETS).map((n) => '`@' + n + '`').join(', ') || '(none registered)';
       ctx.reply(`(unknown @target \`@${targetName}\`. Known targets: ${known}.)`);
       return;
     }
+    // fr-82: `--as <alias>` after the @<target> picks a named PAT slot
+    // (stored via `/setpat @<target> --as <alias> <token>`). Without
+    // it, the default un-aliased slot is used (with user-level OAuth
+    // fallback as before).
+    let alias = null;
+    const aliasMatch = remainder.match(/^--as\s+([a-z0-9_-]+)(\s+|$)/i);
+    if (aliasMatch) {
+      alias = aliasMatch[1].toLowerCase();
+      remainder = remainder.slice(aliasMatch[0].length).trim();
+    }
+    const cmdName = layer === 'Feature' ? 'fr' : layer === 'Bug' ? 'bug' : 'td';
     if (!remainder) {
-      ctx.reply(`Usage: /${layer === 'Feature' ? 'fr' : layer === 'Bug' ? 'bug' : 'td'} @${targetName} <description>`);
+      ctx.reply(`Usage: /${cmdName} @${targetName}${alias ? ' --as ' + alias : ''} <description>`);
       return;
     }
     // Route to remote issue + return — does NOT append a local plan
     // item (the user wanted this to land on the OTHER repo).
-    return handleRemoteIssue(ctx, layer, targetName, remainder);
+    return handleRemoteIssue(ctx, layer, targetName, remainder, alias);
   }
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const shouldRewrite = forceRewrite || wordCount > PLAN_ITEM_REWRITE_WORD_THRESHOLD;
@@ -870,7 +887,7 @@ function handleTaskSkip(ctx) {
 // Distinct from handleIssue (which uses the session's git remote) —
 // here the target is a fixed repo unrelated to the session's cwd, so
 // no `git remote get-url` is run.
-async function handleRemoteIssue(ctx, layer, targetName, description) {
+async function handleRemoteIssue(ctx, layer, targetName, description, alias) {
   const target = REMOTE_TARGETS[targetName];
   if (!target) {                 // defensive — caller already validated
     ctx.reply(`(unknown @target \`@${targetName}\`)`);
@@ -878,6 +895,7 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
   }
   const labels = REMOTE_LABEL_BY_LAYER[layer] || [];
   const cmdName = layer === 'Feature' ? 'fr' : layer === 'Bug' ? 'bug' : 'td';
+  const aliasSuffix = alias ? ' --as ' + alias : '';
   // Title = first sentence (or up to 80 chars) so the GitHub issue
   // list is scannable. Full text always lives in the body.
   const firstLine = String(description).split(/[\r\n]/, 1)[0].trim();
@@ -891,14 +909,26 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
     '---',
     `Filed by **@${ctx.user}** via [myco](https://myco.labxnow.ai/) (\`/${cmdName} @${targetName}\`) on ${ts} UTC.`,
   ].join('\n');
-  const token = gitHosts.getToken(ctx.user, target.provider, target.owner, target.repo);
+  const token = gitHosts.getToken(ctx.user, target.provider, target.owner, target.repo, alias);
   if (!token) {
+    // fr-82: when the user explicitly asked for an alias and it isn't
+    // stored, list the aliases that ARE so they can correct the
+    // typo (e.g. asked for --as labxnow but stored under --as labxnow1).
+    if (alias) {
+      const known = gitHosts.listAliases(ctx.user, target.provider, target.owner, target.repo);
+      const knownStr = known.length ? known.map((a) => '`' + a + '`').join(', ') : '(none)';
+      ctx.reply(
+        `(no PAT stored under alias \`${alias}\` for @${targetName} (${target.owner}/${target.repo}). ` +
+        `Aliases on file: ${knownStr}. Save one with \`/setpat @${targetName} --as ${alias} <token>\`.)`
+      );
+      return;
+    }
     ctx.reply(
       `(no ${target.provider === 'github' ? 'GitHub' : 'Gitee'} token on file for @${ctx.user} for ${target.owner}/${target.repo}. ` +
       `${target.provider === 'github'
           ? 'Sign in via GitHub OAuth to get a user-level token, or'
           : 'Generate a PAT at https://gitee.com/profile/personal_access_tokens and'} ` +
-      `run \`/setpat <token>\` from a session whose origin points at that repo.)`
+      `run \`/setpat @${targetName} <token>\` from any session.)`
     );
     return;
   }
@@ -974,7 +1004,7 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
     ctx.reply(`(${label} error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
     return;
   }
-  ctx.reply(`✓ Filed ${layer.toLowerCase()} **#${result.number}** on ${target.owner}/${target.repo}: ${result.url}`);
+  ctx.reply(`✓ Filed ${layer.toLowerCase()} **#${result.number}** on ${target.owner}/${target.repo}${alias ? ' (alias `' + alias + '`)' : ''}: ${result.url}`);
 }
 
 async function handleIssue(ctx, { kind, labels }) {
@@ -1045,12 +1075,74 @@ async function handleIssue(ctx, { kind, labels }) {
 // We validate the token by hitting the provider's /user endpoint before
 // persisting — so a typo or wrong-provider paste surfaces immediately,
 // not on the next /feature.
+// fr-82: /listpat [@<target>] — show what PAT slots exist for the
+// caller for a given repo. Helps the user remember which aliases
+// they've stashed + which one is the un-aliased default. Doesn't
+// reveal the tokens themselves (just the slot names).
+async function handleListPat(ctx) {
+  const args = String(ctx.args || '').trim();
+  // Parse optional @<target>; otherwise auto-detect from session repo.
+  let host = null;
+  let scopeLabel;
+  const targetMatch = args.match(/^@([a-z0-9_-]+)\s*$/i);
+  if (targetMatch) {
+    const targetName = targetMatch[1].toLowerCase();
+    if (!REMOTE_TARGETS[targetName]) {
+      const known = Object.keys(REMOTE_TARGETS).map((n) => '`@' + n + '`').join(', ') || '(none registered)';
+      ctx.reply(`(unknown @target \`@${targetName}\`. Known targets: ${known}.)`);
+      return;
+    }
+    const t = REMOTE_TARGETS[targetName];
+    host = { provider: t.provider, owner: t.owner, repo: t.repo };
+    scopeLabel = `@${targetName} (${t.owner}/${t.repo})`;
+  } else if (!args) {
+    host = await gitHosts.detectHost(ctx.absCwd);
+    if (!host) {
+      ctx.reply(
+        `(no github.com or gitee.com remote in this session's cwd. ` +
+        `Use \`/listpat @<target>\` to inspect aliases for a registered remote target.)`
+      );
+      return;
+    }
+    scopeLabel = `${host.owner}/${host.repo}`;
+  } else {
+    ctx.reply(`Usage: /listpat   OR   /listpat @<target>`);
+    return;
+  }
+  const aliases = gitHosts.listAliases(ctx.user, host.provider, host.owner, host.repo);
+  // Default-slot existence check (un-aliased PAT, set via plain /setpat).
+  // We don't expose getToken's return value (the token itself); just
+  // check whether the default slot has anything stored. Easiest way:
+  // call getToken with no alias, and see if it returned non-null AND
+  // we know we have a per-repo PAT (vs falling back to user-level).
+  // For UX simplicity we just report "default slot: set/unset" by
+  // looking at the in-memory store directly via listAliases's sibling
+  // pattern — but to keep the API surface small, we just report the
+  // aliased slots. User-level OAuth fallback is documented separately.
+  const lines = [`**Stored PATs for ${scopeLabel}** (user: @${ctx.user}):`];
+  if (aliases.length === 0) {
+    lines.push(`  (no aliased PATs)`);
+  } else {
+    for (const a of aliases) lines.push(`  • \`${a}\`  → use with \`--as ${a}\``);
+  }
+  // Hint: user-level OAuth fallback (github only).
+  if (host.provider === 'github') {
+    const userLevelToken = gitHosts.getToken(ctx.user, 'github');
+    if (userLevelToken) {
+      lines.push(`  • _user-level GitHub OAuth token also present (default fallback when no per-target or aliased PAT)._`);
+    }
+  }
+  ctx.reply(lines.join('\n'));
+}
+
 async function handleSetPat(ctx) {
   let args = String(ctx.args || '').trim();
   if (!args) {
     ctx.reply(
-      `Usage: /setpat <token>  OR  /setpat @<target> <token>\n` +
+      `Usage: /setpat <token>  OR  /setpat @<target> [--as <alias>] <token>\n` +
       `Saves a PAT for this session's repo (no @target) or for a registered remote target (\`@myco\`).\n` +
+      `\`--as <alias>\` stores under a named alias so multiple PATs (e.g. work / personal accounts) can ` +
+      `coexist for the same target. Pick which one to use per command via \`/fr @<target> --as <alias>\`.\n` +
       `Provider for session form is auto-detected from \`git remote get-url origin\` (github.com or gitee.com).\n` +
       `For Gitee, generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`).`
     );
@@ -1073,6 +1165,16 @@ async function handleSetPat(ctx) {
     }
     target = { name: targetName, ...REMOTE_TARGETS[targetName] };
     args = args.slice(targetMatch[0].length).trim();
+  }
+  // fr-82: `--as <alias>` after the @<target> (or session form) names
+  // the storage slot so multiple PATs can coexist for the same repo.
+  // Alias must match [a-z0-9_-]{1,32} (defensive — the slot key is
+  // built from it).
+  let alias = null;
+  const aliasMatch = args.match(/^--as\s+([a-z0-9_-]+)(\s+|$)/i);
+  if (aliasMatch) {
+    alias = aliasMatch[1].toLowerCase();
+    args = args.slice(aliasMatch[0].length).trim();
   }
   const token = args;
   if (!token) {
@@ -1106,15 +1208,21 @@ async function handleSetPat(ctx) {
     ctx.reply(`(${host.provider} rejected the token: ${err.message})`);
     return;
   }
-  try { gitHosts.setRepoToken(ctx.user, host.provider, host.owner, host.repo, token); }
+  try { gitHosts.setRepoToken(ctx.user, host.provider, host.owner, host.repo, token, alias); }
   catch (err) {
     ctx.reply(`(could not save token: ${err.message})`);
     return;
   }
   const scopeLabel = target ? `@${target.name} (${host.owner}/${host.repo})` : `${host.owner}/${host.repo}`;
+  // fr-82: when an alias is set, the user picks it explicitly per
+  // command via `--as <alias>`. Spell that out so the user knows
+  // the next-step syntax.
+  const aliasReplyTail = alias
+    ? ` under alias **\`${alias}\`**. Use it with \`/fr ${target ? '@' + target.name : ''} --as ${alias} <text>\`.`
+    : `. \`/fr\`, \`/bug\`, \`/td\`, \`/feature\` will use it.`;
   ctx.reply(
     `✓ Saved ${host.provider} PAT for ${scopeLabel} ` +
-    `(validated as ${host.provider}:${profile.login}). \`/fr\`, \`/bug\`, \`/td\`, \`/feature\` will use it.`,
+    `(validated as ${host.provider}:${profile.login})` + aliasReplyTail,
   );
 }
 
