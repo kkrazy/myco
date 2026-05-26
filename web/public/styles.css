@@ -3731,17 +3731,29 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding: 8px 4px;
   justify-content: center;
 }
-/* fr-83: when the LEFT sidebar is collapsed AND the file-tree is in
-   its 36px-strip mode, the strip sits at x=0 — meaning its only
-   visible button (#files-tree-collapse, the `<` chevron) lands in the
-   same top-left ~46px square as #btn-expand (the ☰ "back to home /
-   sessions" toggle, fixed at top:10/left:10, size=--chrome-btn-size).
-   They overlap visually + collide on tap. Shift the strip's header
-   down by chrome-cluster-clearance (10 + chrome-btn-size + 8 = 54px)
-   so the `<` lives BELOW the ☰. Only kicks in when both conditions
-   hold — wide-sidebar layout is unaffected, and the collision can't
-   happen if the tree is expanded (the chevron is then under crumb
-   text, well clear of x=0). */
+/* fr-83 + r2: chrome clearance for the THREE file-pane `<` buttons
+   that share the top-left corner with #btn-expand (the ☰ "back to
+   home / sessions" toggle, fixed at top:10/left:10) whenever the
+   sidebar is collapsed AND the pane starts at x=0:
+     1. #files-tree-back     — "Up one level"        (#files-header,
+                                visible when in a subfolder; r2 fix)
+     2. #files-tree-collapse — "Hide tree pane"      (#files-header,
+                                always visible; r1 + r2 cover it)
+     3. #files-view-back     — "Back to tree"        (.files-view-
+                                header-nav, file viewer; r2 fix)
+   Mobile already does this via the @media block below (header
+   `padding-left: 54px`). On desktop we extend the same pattern, but
+   ONLY when the sidebar is collapsed — wide-sidebar desktop is fine
+   because the panes start at x=280px (well clear of ☰). Math: 54px
+   = chrome-top(10) + chrome-btn-size + 8px gap. */
+html.sidebar-collapsed #files-wrap:not(.files-tree-collapsed) #files-header,
+html.sidebar-collapsed .files-view-header-nav {
+  padding-left: 54px;
+}
+/* Special case: in the 36px tree-strip (.files-tree-collapsed), the
+   strip is too narrow for padding-left to reposition content — the
+   button stays centered in 36px no matter what. There we drop the
+   chevron BELOW ☰ via padding-top instead. */
 html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-header {
   padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 8px);
 }
