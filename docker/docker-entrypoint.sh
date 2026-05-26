@@ -41,35 +41,54 @@ export XDG_DATA_HOME="$DATA"
 # Public-cloud hosts (mycobeta, prod, opti) need direct internet access
 # to api.anthropic.com, github.com, etc. Hard-coding a private-RFC1918
 # proxy as the default fallback (the prior behaviour) broke every
-# cloud deploy with ConnectionRefused since the proxy host
-# (172.18.100.92) is unreachable from public IPs.
+# cloud deploy with ConnectionRefused since the proxy host was
+# unreachable from public IPs.
 #
-# Set MYCO_ENTERPRISE_PROXY=1 in $STATE_DIR/.env (or pass via
-# `docker run -e`) to enable the proxy stack. You can also override
-# the URL via MYCO_ENTERPRISE_PROXY_URL=<full-url> in the same .env;
-# otherwise we fall back to the historical Huawei p_atlas default
-# (kept here so single-flag toggle is enough on the original network).
+# To enable, set BOTH in $STATE_DIR/.env (or via `docker run -e`):
+#
+#   MYCO_ENTERPRISE_PROXY=1
+#   MYCO_ENTERPRISE_PROXY_URL=http://user:pass@proxy-host:port
+#
+# Optional fine-tuning (defaults shown):
+#   MYCO_ENTERPRISE_NO_PROXY="127.0.0.1,localhost,local,.local"
+#   MYCO_ENTERPRISE_TLS_INSECURE=1   # disables Node + git TLS verification
+#                                    # (only needed when the proxy injects
+#                                    # its own self-signed cert chain)
+#
+# No proxy URL is hard-coded — credentials should live in the state-dir
+# .env file (mode 0600, not committed), not in source.
 if [ "${MYCO_ENTERPRISE_PROXY:-0}" = "1" ]; then
-    DEFAULT_PROXY="${MYCO_ENTERPRISE_PROXY_URL:-http://p_atlas:proxy%40123@172.18.100.92:8080}"
-    export http_proxy="${http_proxy:-$DEFAULT_PROXY}"
-    export https_proxy="${https_proxy:-$DEFAULT_PROXY}"
-    export no_proxy="${no_proxy:-127.0.0.1,.huawei.com,localhost,local,.local}"
-    export GIT_SSL_NO_VERIFY="${GIT_SSL_NO_VERIFY:-1}"
-    # Node.js: trust self-signed proxy certificates (required for corporate proxies)
-    export NODE_TLS_REJECT_UNAUTHORIZED="${NODE_TLS_REJECT_UNAUTHORIZED:-0}"
-    # global-agent: explicit proxy URL (needed for bootstrap to pick it up)
-    export GLOBAL_AGENT_HTTP_PROXY="${GLOBAL_AGENT_HTTP_PROXY:-${http_proxy}}"
+    if [ -z "${MYCO_ENTERPRISE_PROXY_URL}" ] && [ -z "${http_proxy}" ]; then
+        echo "[entrypoint] MYCO_ENTERPRISE_PROXY=1 but no MYCO_ENTERPRISE_PROXY_URL or http_proxy set — proxy stack NOT applied" >&2
+    else
+        PROXY_URL="${MYCO_ENTERPRISE_PROXY_URL:-$http_proxy}"
+        export http_proxy="${http_proxy:-$PROXY_URL}"
+        export https_proxy="${https_proxy:-$PROXY_URL}"
+        export no_proxy="${no_proxy:-${MYCO_ENTERPRISE_NO_PROXY:-127.0.0.1,localhost,local,.local}}"
+        # global-agent: explicit proxy URL (needed for bootstrap to pick it up)
+        export GLOBAL_AGENT_HTTP_PROXY="${GLOBAL_AGENT_HTTP_PROXY:-${http_proxy}}"
 
-    # Configure git to use proxy
-    git config --global http.proxy "${http_proxy}" 2>/dev/null || true
-    git config --global https.proxy "${https_proxy}" 2>/dev/null || true
-    git config --global http.sslverify false 2>/dev/null || true
+        # TLS-insecure mode: only when the proxy injects its own cert chain.
+        # Disables Node TLS verification globally + git SSL verification.
+        # Off by default — opt in via MYCO_ENTERPRISE_TLS_INSECURE=1.
+        if [ "${MYCO_ENTERPRISE_TLS_INSECURE:-0}" = "1" ]; then
+            export NODE_TLS_REJECT_UNAUTHORIZED="0"
+            export GIT_SSL_NO_VERIFY="1"
+            git config --global http.sslverify false 2>/dev/null || true
+        fi
 
-    # Rewrite SSH URLs to HTTPS so they go through the HTTP proxy
-    # git@github.com:owner/repo.git → https://github.com/owner/repo.git
-    git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
-    git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:" 2>/dev/null || true
-    git config --global url."https://gitee.com/".insteadOf "git@gitee.com:" 2>/dev/null || true
+        # Configure git to use proxy
+        git config --global http.proxy "${http_proxy}" 2>/dev/null || true
+        git config --global https.proxy "${https_proxy}" 2>/dev/null || true
+
+        # Rewrite SSH URLs to HTTPS so they go through the HTTP proxy
+        # git@github.com:owner/repo.git → https://github.com/owner/repo.git
+        git config --global url."https://github.com/".insteadOf "git@github.com:" 2>/dev/null || true
+        git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:" 2>/dev/null || true
+        git config --global url."https://gitee.com/".insteadOf "git@gitee.com:" 2>/dev/null || true
+
+        echo "[entrypoint] enterprise proxy enabled via $http_proxy (TLS-insecure: ${MYCO_ENTERPRISE_TLS_INSECURE:-0})" >&2
+    fi
 else
     # Cloud-host default: explicitly clear any inherited empty proxy vars
     # (the Dockerfile sets `ENV http_proxy=` from a passed-through build
