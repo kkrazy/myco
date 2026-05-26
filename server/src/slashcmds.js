@@ -914,23 +914,34 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
     // or org-level restrictions on third-party OAuth apps). Make the
     // fix path obvious in the error reply.
     if (target.provider === 'github' && result.status === 403) {
-      // Tell the user we tried their LOGIN token (or per-repo PAT if
-      // they set one) and surface the fix paths in cheapest → most
-      // disruptive order. Re-signing-in is the most common fix because
-      // OAuth grants from before the `repo` scope was added (pre-fr-54
-      // era) don't carry issues:write.
+      // fr-80 r3: include the actual OAuth scopes GitHub reports in
+      // X-OAuth-Scopes + the required scopes from X-Accepted-OAuth-
+      // Scopes. Lets the user see literally what's missing rather
+      // than guess between "old grant", "org restriction", and "wrong
+      // PAT type" by trial.
+      const have = result.scopes || '(none reported)';
+      const need = result.acceptedScopes || '(POST /issues needs `repo` for private repos, `public_repo` for public)';
+      const hasRepo = /\brepo\b/.test(result.scopes || '');
+      const hasPub  = /\bpublic_repo\b/.test(result.scopes || '');
+      const scopeLine = hasRepo || hasPub
+        ? `Your token DOES carry \`repo\`-family scopes (have: ${have}), so this 403 likely means an ` +
+          `org-level OAuth restriction or repo Issues being disabled.`
+        : `Your token is missing the \`repo\` scope (have: ${have}; endpoint needs: ${need}). ` +
+          `Re-sign-in to refresh the OAuth grant.`;
       ctx.reply(
-        `(GitHub 403 — your stored token can't write issues on ${target.owner}/${target.repo}. ` +
-        `myco tried your per-repo PAT first (if any) then your GitHub OAuth login token. ` +
-        `Fixes, easiest first:\n` +
-        `  1. Re-sign-in via GitHub at the top-right user chip — refreshes the OAuth grant ` +
-        `with the current \`repo\` scope (older sign-ins may pre-date the scope addition).\n` +
-        `  2. Check the OAuth grant at https://github.com/settings/applications and confirm ` +
-        `myco can access ${target.owner}/${target.repo} (org-level restrictions can block ` +
-        `third-party OAuth apps per-repo).\n` +
-        `  3. Generate a classic PAT at https://github.com/settings/tokens/new?scopes=repo ` +
-        `and run \`/setpat @${targetName} <token>\` from any session — overrides the OAuth ` +
-        `token for this target only.)`
+        `(GitHub 403 — your stored token can't write issues on ${target.owner}/${target.repo}.\n\n` +
+        `${scopeLine}\n\n` +
+        `Fix paths:\n` +
+        `  1. **Re-sign-in via GitHub** at the top-right user chip — refreshes the OAuth ` +
+        `grant with the current \`repo\` scope. Most common fix.\n` +
+        `  2. **Check the OAuth grant** at https://github.com/settings/applications — ` +
+        `confirm myco has access to ${target.owner}/${target.repo} (org-level restrictions ` +
+        `can block third-party OAuth apps per-repo).\n` +
+        `  3. **Classic PAT override** — generate one at ` +
+        `https://github.com/settings/tokens/new?scopes=repo and run ` +
+        `\`/setpat @${targetName} <token>\` from any session.\n` +
+        `  4. **Verify Issues are enabled** on ${target.owner}/${target.repo} (Settings → ` +
+        `General → Features). 403 also fires when Issues are turned off.)`
       );
       return;
     }

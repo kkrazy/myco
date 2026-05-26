@@ -65,11 +65,17 @@ function _httpsJson({ hostname, path, method, headers, body }) {
       res.on('end', () => {
         let parsed = {};
         try { parsed = chunks ? JSON.parse(chunks) : {}; } catch {}
-        resolve({ status: res.statusCode, body: parsed });
+        // fr-80 r3: capture response headers so callers can read the
+        // X-OAuth-Scopes header GitHub returns on every API call (the
+        // single most useful signal when debugging "Resource not
+        // accessible by personal access token" 403s — it tells you
+        // exactly what scopes the token actually carries vs. what the
+        // endpoint requires).
+        resolve({ status: res.statusCode, body: parsed, headers: res.headers || {} });
       });
     });
-    req.on('error', (err) => resolve({ status: 0, body: { error: err.message } }));
-    req.on('timeout', () => { try { req.destroy(); } catch {}; resolve({ status: 0, body: { error: 'timeout' } }); });
+    req.on('error', (err) => resolve({ status: 0, body: { error: err.message }, headers: {} }));
+    req.on('timeout', () => { try { req.destroy(); } catch {}; resolve({ status: 0, body: { error: 'timeout' }, headers: {} }); });
     if (payload) req.write(payload);
     req.end();
   });
@@ -106,9 +112,17 @@ async function _createIssueGithub({ token, owner, repo, title, body, labels }, h
   if (result.status >= 200 && result.status < 300 && result.body.number) {
     return { number: result.body.number, url: result.body.html_url };
   }
+  // fr-80 r3: surface the token's actual OAuth scopes + the endpoint's
+  // required scopes so the user can see EXACTLY what's missing. Both
+  // headers are returned by GitHub on every authenticated request,
+  // including 403s.
+  const scopes = (result.headers && result.headers['x-oauth-scopes']) || '';
+  const acceptedScopes = (result.headers && result.headers['x-accepted-oauth-scopes']) || '';
   return {
     error: result.body.message || result.body.error || `GitHub API ${result.status}`,
     status: result.status,
+    scopes: String(scopes).trim(),
+    acceptedScopes: String(acceptedScopes).trim(),
   };
 }
 

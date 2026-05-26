@@ -124,13 +124,17 @@ t('slashcmds.js: r2 — handleRemoteIssue 403 hint suggests re-sign-in FIRST (ch
   // `repo` scope addition won\'t carry issues:write). /setpat is the
   // last-resort override.
   const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
-  const win = SRC.slice(idx, idx + 3500);
+  // r3 grew the function with the scope-probing 403 branch; bump
+  // window so the slice still includes the `return;` boundary.
+  const win = SRC.slice(idx, idx + 6000);
   assert.ok(/result\.status\s*===\s*403/.test(win),
     'must branch on the 403 status specifically');
   assert.ok(/Re-sign-in/i.test(win),
     '403 hint must mention "Re-sign-in" as the first fix');
   // Re-sign-in must be earlier in the message than /setpat (UX order).
-  const m = win.match(/result\.status\s*===\s*403[\s\S]{0,3000}\)\;/);
+  // Anchor on the branch boundary `return;` — earlier-text `);`
+  // patterns inside strings make a `\);`-terminated slice unreliable.
+  const m = win.match(/result\.status\s*===\s*403[\s\S]{0,5000}?return;/);
   assert.ok(m, '403 branch must be findable');
   const branchText = m[0];
   const signInIdx = branchText.search(/Re-sign-in/i);
@@ -139,6 +143,45 @@ t('slashcmds.js: r2 — handleRemoteIssue 403 hint suggests re-sign-in FIRST (ch
     '"Re-sign-in" must appear BEFORE the /setpat suggestion (cheapest-fix-first)');
   assert.ok(/OAuth/.test(branchText),
     '403 hint must explain that the OAuth login token was attempted (transparency about what we tried)');
+});
+
+t('slashcmds.js: r3 — 403 hint surfaces the actual X-OAuth-Scopes from the response', () => {
+  // GitHub returns X-OAuth-Scopes (what the token CAN do) and
+  // X-Accepted-OAuth-Scopes (what the endpoint NEEDS) on every API
+  // response. r3 captures both via git-hosts.js and surfaces them in
+  // the 403 hint so the user sees literally what's missing instead
+  // of guessing.
+  const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
+  const win = SRC.slice(idx, idx + 5000);
+  // 403 branch reads result.scopes + result.acceptedScopes.
+  assert.ok(/result\.scopes/.test(win),
+    '403 branch must read result.scopes from the response');
+  assert.ok(/result\.acceptedScopes/.test(win),
+    '403 branch must read result.acceptedScopes from the response');
+  // Branches on whether the token has `repo` (or `public_repo`) so the
+  // hint is right whether the user needs to re-sign-in (no scope) or
+  // dig into repo/org settings (has scope but still blocked).
+  assert.ok(/hasRepo\s*=\s*\/[^/]*repo[^/]*\/[\s\S]{0,80}result\.scopes/.test(win),
+    'must detect whether the token has a `repo`-family scope');
+  // Issues-disabled is also mentioned (4th fix path) since that\'s
+  // another common 403 cause that isn\'t about token scope at all.
+  assert.ok(/Issues are enabled/i.test(win) || /Issues being disabled/i.test(win),
+    'hint must mention "Issues enabled/disabled" as a 4th fix path (non-token cause)');
+});
+
+t('git-hosts.js: r3 — _httpsJson resolves with response headers', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'src', 'git-hosts.js'), 'utf8');
+  // The resolve() call inside the success path includes a headers property.
+  assert.ok(/resolve\(\s*\{\s*status:\s*res\.statusCode[\s\S]{0,200}headers:\s*res\.headers/.test(src),
+    '_httpsJson success resolve must include headers: res.headers');
+  // _createIssueGithub propagates scopes + acceptedScopes from the headers.
+  assert.ok(/x-oauth-scopes/i.test(src),
+    '_createIssueGithub must read x-oauth-scopes from result.headers');
+  assert.ok(/x-accepted-oauth-scopes/i.test(src),
+    '_createIssueGithub must read x-accepted-oauth-scopes from result.headers');
 });
 
 t('slashcmds.js: r2 — /setpat @<target> <token> path stores PAT without needing a session pointed at the target', () => {
