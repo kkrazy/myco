@@ -93,7 +93,7 @@ t('CSS: #files-view-header is flex-column (stacks the two rows)', () => {
     '#files-view-header must declare flex-direction: column so the two rows stack vertically');
 });
 
-t('CSS: #files-view-pane padding-top pushes the WHOLE pane below the chrome cluster', () => {
+t('CSS: #files-view-pane padding-top pushes the WHOLE pane below the chrome cluster ON MOBILE', () => {
   // bug-33 fourth pass: third-pass put the padding-top on
   // .files-view-header-nav (the inner row), but the user reported
   // the breadcrumb still appeared beside the chrome on mobile —
@@ -101,24 +101,38 @@ t('CSS: #files-view-pane padding-top pushes the WHOLE pane below the chrome clus
   // inside the mobile @media block. Moved the chrome-clearance to
   // #files-view-pane (the outer pane container) so the WHOLE pane
   // — header, body, action bar, action row — shifts below the
-  // chrome cluster, independent of inner-padding cascades. Required
-  // shape on #files-view-pane:
+  // chrome cluster, independent of inner-padding cascades.
   //
-  //   padding-top: calc(env(safe-area-inset-top, 0px) + 10px
-  //                     + var(--chrome-btn-size) + ≥10px buffer)
+  // fr-83 refinement: the original "fragile cascade" risk is
+  // mobile-specific (where chrome buttons are bigger and overlap
+  // the full-width header at narrow viewports). On DESKTOP the
+  // pane-level clearance was burning ~60px of vertical real-estate
+  // for no benefit (chrome is top-RIGHT only, doesn't overlap the
+  // left-aligned crumb). fr-83 trims desktop to just safe-area-
+  // inset and adds row-level padding-right on .files-view-header-*
+  // for the right-edge chrome clearance — but KEEPS the bug-33
+  // fourth-pass guard on mobile by re-declaring the pane-level
+  // padding-top inside the files @media (max-width: 900px) block.
   //
-  // The var() makes it auto-adapt to mobile vs desktop chrome sizes
-  // and iPhone-notch safe-area insets.
-  const paneBlock = CSS.match(/#files-view-pane\s*\{[\s\S]*?\}/);
-  assert.ok(paneBlock, '#files-view-pane rule must exist');
+  // Required shape — found inside the FILES mobile media block:
+  //   #files-view-pane {
+  //     padding-top: calc(env(safe-area-inset-top, 0px) + 10px
+  //                       + var(--chrome-btn-size) + ≥10px buffer)
+  //   }
+  const mIdx = CSS.search(/@media\s*\(\s*max-width:\s*900px\s*\)\s*\{\s*\n\s*#files-wrap/);
+  assert.ok(mIdx > -1, 'files-specific mobile @media block must be findable');
+  const mobileBlock = CSS.slice(mIdx, mIdx + 4000);
+  const paneInMobile = mobileBlock.match(/#files-view-pane\s*\{[\s\S]*?\n\s*\}/);
+  assert.ok(paneInMobile, 'mobile @media must redeclare #files-view-pane');
   const topCalcRe = /padding-top:\s*calc\([^)]*env\(safe-area-inset-top[^)]*\)[^)]*var\(--chrome-btn-size\)[^)]*\)/;
-  assert.ok(topCalcRe.test(paneBlock[0]),
-    '#files-view-pane must have a padding-top calc() that references BOTH env(safe-area-inset-top, 0px) AND var(--chrome-btn-size) so the WHOLE pane sits below the floating chrome cluster — third-pass nav-row-level padding was fragile under mobile cascade overrides.');
-  // box-sizing must be border-box so the padding is included in
-  // the pane's flex sizing — otherwise the padding stacks on top
-  // of the flex height and the pane overflows.
-  assert.ok(/box-sizing:\s*border-box/.test(paneBlock[0]),
-    '#files-view-pane must declare box-sizing: border-box so the chrome-clearance padding is included in its flex height (otherwise pane overflows the viewport)');
+  assert.ok(topCalcRe.test(paneInMobile[0]),
+    'mobile #files-view-pane must have a padding-top calc() that references BOTH env(safe-area-inset-top, 0px) AND var(--chrome-btn-size) so the WHOLE pane sits below the floating chrome cluster on mobile — third-pass nav-row-level padding was fragile under mobile cascade overrides.');
+  // box-sizing on the BASE #files-view-pane rule (still required
+  // regardless of whether the calc lives at desktop or mobile scope).
+  const paneBase = CSS.match(/\n#files-view-pane\s*\{[\s\S]*?\n\}/);
+  assert.ok(paneBase, '#files-view-pane base rule must exist');
+  assert.ok(/box-sizing:\s*border-box/.test(paneBase[0]),
+    '#files-view-pane base rule must declare box-sizing: border-box so any chrome-clearance padding (mobile) is included in its flex height (otherwise pane overflows the viewport)');
 });
 
 t('CSS: .files-view-header-nav uses normal padding (chrome clearance moved to pane)', () => {

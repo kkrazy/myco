@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=271" />
+  <link rel="stylesheet" href="styles.css?v=272" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -335,11 +335,26 @@
                    (state.viewerMode === true). Edit swaps the rendered
                    body for a textarea; Save POSTs to /file/edit; Cancel
                    reverts to the rendered view without writing. -->
-              <button id="files-edit" title="Edit this file (owner only)" hidden>✎ Edit</button>
-              <button id="files-edit-save" title="Save changes" hidden>💾 Save</button>
-              <button id="files-edit-cancel" title="Cancel edit" hidden>✕ Cancel</button>
-              <button id="files-wrap-toggle" title="Toggle wrap" hidden>⏎</button>
-              <button id="files-copy" title="Copy" hidden>📋</button>
+              <!-- fr-83: Lucide SVG icons (stroke 1.75, 24×24 viewBox,
+                   currentColor) so this action cluster matches the
+                   top-right chrome cluster (#btn-plan / #btn-files /
+                   #btn-chat). Icon-only with title tooltip — same
+                   accessibility pattern as the chrome cluster. -->
+              <button id="files-edit" title="Edit this file (owner only)" aria-label="Edit" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+              </button>
+              <button id="files-edit-save" title="Save changes" aria-label="Save" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>
+              </button>
+              <button id="files-edit-cancel" title="Cancel edit" aria-label="Cancel" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+              <button id="files-wrap-toggle" title="Toggle wrap" aria-label="Toggle line wrap" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 16-2 2 2 2"/><path d="M3 18h7"/></svg>
+              </button>
+              <button id="files-copy" title="Copy" aria-label="Copy" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              </button>
             </div>
           </header>
           <div id="files-action-bar" hidden>
@@ -509,6 +524,6 @@
        Exposes window.MycoCM with { createEditor, EditorView, ... }. -->
   <script src="/vendor/codemirror.bundle.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=238"></script>
+  <script src="app.js?v=239"></script>
 </body>
 </html>

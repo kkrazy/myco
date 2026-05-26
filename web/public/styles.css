@@ -3731,6 +3731,20 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding: 8px 4px;
   justify-content: center;
 }
+/* fr-83: when the LEFT sidebar is collapsed AND the file-tree is in
+   its 36px-strip mode, the strip sits at x=0 — meaning its only
+   visible button (#files-tree-collapse, the `<` chevron) lands in the
+   same top-left ~46px square as #btn-expand (the ☰ "back to home /
+   sessions" toggle, fixed at top:10/left:10, size=--chrome-btn-size).
+   They overlap visually + collide on tap. Shift the strip's header
+   down by chrome-cluster-clearance (10 + chrome-btn-size + 8 = 54px)
+   so the `<` lives BELOW the ☰. Only kicks in when both conditions
+   hold — wide-sidebar layout is unaffected, and the collision can't
+   happen if the tree is expanded (the chevron is then under crumb
+   text, well clear of x=0). */
+html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-header {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 8px);
+}
 #files-tree-collapse {
   background: transparent;
   border: 0;
@@ -4511,30 +4525,70 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-color: rgba(120, 200, 255, 0.5) !important;
   color: #78c8ff !important;
 }
+/* fr-83: action cluster (Edit/Save/Cancel/Wrap/Copy) styled to match
+   the top-right chrome cluster (#btn-plan / #btn-files / #btn-chat).
+   Same square shape, same border-radius, same dark-glass background,
+   same SVG size. Icon-only with tooltip — same pattern as chrome.
+   Save keeps its distinctive green tint so the "commit" affordance
+   reads at a glance (chrome cluster has no colored variant). */
 #files-edit,
 #files-edit-save,
-#files-edit-cancel {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, .12);
+#files-edit-cancel,
+#files-wrap-toggle,
+#files-copy {
+  width: var(--chrome-btn-size);
+  height: var(--chrome-btn-size);
+  padding: 0;
+  border-radius: 8px;
+  background: rgba(40, 40, 40, .85);
   color: var(--text);
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 0.78rem;
+  border: 1px solid rgba(255, 255, 255, .08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   margin-left: 6px;
+  transition: background-color .08s, transform .08s;
 }
-#files-edit:hover, #files-edit-save:hover, #files-edit-cancel:hover {
-  background: rgba(255, 255, 255, .06);
+#files-edit:hover,
+#files-edit-cancel:hover,
+#files-wrap-toggle:hover,
+#files-copy:hover {
+  background: rgba(60, 60, 60, .9);
+}
+#files-edit:active,
+#files-edit-save:active,
+#files-edit-cancel:active,
+#files-wrap-toggle:active,
+#files-copy:active { transform: scale(.92); }
+#files-edit .chrome-icon-svg,
+#files-edit-save .chrome-icon-svg,
+#files-edit-cancel .chrome-icon-svg,
+#files-wrap-toggle .chrome-icon-svg,
+#files-copy .chrome-icon-svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
 }
 #files-edit-save {
-  background: rgba(76, 175, 130, .14);
-  border-color: rgba(76, 175, 130, .35);
+  background: rgba(76, 175, 130, .25);
+  border-color: rgba(76, 175, 130, .45);
   color: #6fdc97;
 }
 #files-edit-save:hover {
-  background: rgba(76, 175, 130, .24);
+  background: rgba(76, 175, 130, .38);
 }
 #files-edit-save:disabled { opacity: .5; cursor: wait; }
+/* fr-83: while the save POST is in flight, gently pulse the icon's
+   opacity to signal "working" — the icon stays visible (was wiped
+   when the prior code did `textContent = '… saving'`). */
+#files-edit-save.is-saving .chrome-icon-svg {
+  animation: files-save-pulse 0.9s ease-in-out infinite;
+}
+@keyframes files-save-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
 #files-tree-pane::-webkit-scrollbar-track { background: transparent; }
 #files-tree-pane::-webkit-scrollbar-thumb {
   background: rgba(120, 130, 145, .35);
@@ -4753,18 +4807,17 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
   background: #0d1117;
   position: relative;       /* anchor for the floating action bar */
-  /* bug-33 (fourth pass): chrome-cluster clearance applied at the
-     PANE level rather than the nav-row level. The third-pass nav-row
-     padding-top was fragile under nested-cascade overrides on mobile.
-     Moving the calc here means the WHOLE pane shifts down so the
-     chrome cluster (5× `position:fixed; top:10px` buttons) sits in
-     the cleared band above the pane content. Inner row padding stays
-     small + layout-only. Math:
-       safe-area-top + chrome-top(10px) + var(--chrome-btn-size) + 18px buffer
-     Desktop --chrome-btn-size=32 → 60px above safe-area
-     Mobile  --chrome-btn-size=36 → 64px above safe-area
-     iPhone notch shifts both the chrome and this padding together. */
-  padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 18px);
+  /* fr-83: on DESKTOP the prior 60px top-clearance band was wasted
+     vertical space — the chrome cluster (top:10/right:10) only
+     overlaps the pane's top-RIGHT corner, not the full width, so
+     left-aligned content (back-arrow + crumb) doesn't need full-pane
+     top clearance. We give the headers per-row right-padding to clear
+     chrome instead (see .files-view-header-nav / -actions below) +
+     keep just the safe-area-inset here so iPhone-notch users still
+     get pushed below the notch. The legacy big-calc clearance lives
+     on as a mobile-only override (see the @media block at ~line 5279
+     where chrome buttons get bigger and overlap differently). */
+  padding-top: env(safe-area-inset-top, 0px);
   box-sizing: border-box;
 }
 /* bug-33: two-row layout. Row 1 holds back-button + breadcrumb (the
@@ -4790,20 +4843,27 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
 }
 .files-view-header-nav {
-  /* bug-33 (fourth pass): chrome clearance moved to the parent
-     `#files-view-pane padding-top` so the WHOLE pane sits below
-     the chrome cluster — the third-pass per-row padding-top was
-     fragile under mobile-CSS cascade overrides. With the pane-level
-     clearance in place, this row just needs normal layout padding. */
+  /* fr-83: top padding was previously absorbed by #files-view-pane's
+     60px clearance; we trimmed that to safe-area-inset only, so this
+     row now lives at the natural top of the pane. The chrome cluster
+     (top:10 right:10) only overlaps the RIGHT edge of this row — the
+     left-aligned back-arrow + crumb sit clear of it. The right-padding
+     reserves a chrome-shaped gap so a long crumb can't run under the
+     buttons. Math: 10 + 5×chrome-btn + 4×8gap + 10 = 222px is the full
+     5-button worst case; ~110px clears the typical 3 visible buttons
+     (Files + Plan + Chat after auto-hide). Mobile @media bumps this. */
   padding: 8px 12px;
+  padding-right: 120px;
   min-height: var(--pane-header-h);
 }
 .files-view-header-actions {
   /* Action buttons right-aligned (matches the pre-bug-33 visual where
      the .header-spacer flex:1 pushed them to the right). Bottom padding
-     gives a clean line under the action row before the file body. */
+     gives a clean line under the action row before the file body.
+     fr-83: right-padding clears the fixed chrome cluster so the Save
+     button (typically right-most) doesn't tuck under #btn-chat. */
   justify-content: flex-end;
-  padding: 4px 12px 6px 12px;
+  padding: 4px 132px 6px 12px;
   /* Default hidden — only show when at least one action button is
      visible (i.e. has no `hidden` attribute). Uses :has, supported in
      all modern browsers since 2023. When every button is hidden (the
@@ -5288,6 +5348,14 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   #files-view-header {
     padding-left: 54px;     /* clear #btn-expand (10 + 36 + ~8 gap) */
     padding-right: 100px;   /* clear #btn-files + #btn-chat (10 + 36 + 8 + 36 + 10) */
+  }
+  /* fr-83: desktop trimmed #files-view-pane padding-top to just
+     safe-area-inset. Mobile still needs the larger band — chrome
+     cluster buttons are bigger (36px vs 32px) and sit lower in the
+     visual order, so the whole pane drops below them to avoid the
+     header peeking out from under chrome at narrow widths. */
+  #files-view-pane {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 10px + var(--chrome-btn-size) + 18px);
   }
   .code-chunk { font-size: 12.5px; }
   #files-action-bar { padding: 5px 6px; gap: 3px; max-width: calc(100vw - 16px); }

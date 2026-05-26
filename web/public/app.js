@@ -9140,7 +9140,11 @@ async function _saveFileEdit({ force = false } = {}) {
   const saveBtn = document.getElementById('files-edit-save');
   if (saveBtn) {
     saveBtn.disabled = true;
-    saveBtn.textContent = '… saving';
+    // fr-83: was `textContent = '… saving'` — that wiped the inline
+    // SVG icon. Now we keep the icon and toggle a CSS class that
+    // pulses opacity to signal "saving". Restored in the `finally`.
+    saveBtn.classList.add('is-saving');
+    saveBtn.setAttribute('title', '… saving');
   }
   try {
     // fr-50: when force=true (user picked "Force overwrite" in the
@@ -9190,7 +9194,9 @@ async function _saveFileEdit({ force = false } = {}) {
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false;
-      saveBtn.textContent = '💾 Save';
+      // fr-83: restore non-busy state — class swap preserves the SVG.
+      saveBtn.classList.remove('is-saving');
+      saveBtn.setAttribute('title', 'Save changes');
     }
   }
 }
