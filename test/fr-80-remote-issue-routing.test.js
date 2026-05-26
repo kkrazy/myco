@@ -83,7 +83,8 @@ t('slashcmds.js: handleRemoteIssue is defined + uses gitHosts.{getToken,createIs
   assert.ok(/async\s+function\s+handleRemoteIssue\s*\(/.test(SRC),
     'handleRemoteIssue must be defined');
   const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
-  const win = SRC.slice(idx, idx + 3000);
+  // r2 grew the 403 branch substantially → bump window from 3000 to 5000.
+  const win = SRC.slice(idx, idx + 5000);
   assert.ok(/gitHosts\.getToken\(\s*ctx\.user/.test(win),
     'must call gitHosts.getToken(ctx.user, provider, owner, repo)');
   assert.ok(/gitHosts\.createIssue\(/.test(win),
@@ -114,6 +115,50 @@ t('slashcmds.js: handleRemoteIssue body includes user attribution + cmd marker',
     'body must include "Filed by **@<user>**" attribution');
   assert.ok(/\/\$\{cmdName\} @\$\{targetName\}/.test(win),
     'body must cite the exact slash-command shape (e.g., `/fr @myco`)');
+});
+
+t('slashcmds.js: r2 — handleRemoteIssue 403 hint suggests re-sign-in FIRST (cheapest fix)', () => {
+  // The login OAuth token is the default (gitHosts.getToken falls
+  // back to it when no per-repo PAT is set). When that returns 403,
+  // the cheapest fix is to re-sign-in (OAuth grants pre-dating the
+  // `repo` scope addition won\'t carry issues:write). /setpat is the
+  // last-resort override.
+  const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
+  const win = SRC.slice(idx, idx + 3500);
+  assert.ok(/result\.status\s*===\s*403/.test(win),
+    'must branch on the 403 status specifically');
+  assert.ok(/Re-sign-in/i.test(win),
+    '403 hint must mention "Re-sign-in" as the first fix');
+  // Re-sign-in must be earlier in the message than /setpat (UX order).
+  const m = win.match(/result\.status\s*===\s*403[\s\S]{0,3000}\)\;/);
+  assert.ok(m, '403 branch must be findable');
+  const branchText = m[0];
+  const signInIdx = branchText.search(/Re-sign-in/i);
+  const setpatIdx  = branchText.search(/\/setpat/);
+  assert.ok(signInIdx > -1 && setpatIdx > -1 && signInIdx < setpatIdx,
+    '"Re-sign-in" must appear BEFORE the /setpat suggestion (cheapest-fix-first)');
+  assert.ok(/OAuth/.test(branchText),
+    '403 hint must explain that the OAuth login token was attempted (transparency about what we tried)');
+});
+
+t('slashcmds.js: r2 — /setpat @<target> <token> path stores PAT without needing a session pointed at the target', () => {
+  // Bootstrap fix: previously /setpat required `git remote get-url
+  // origin` to point at the target repo. r2 lets the user paste a
+  // PAT for a registered REMOTE_TARGETS entry from any session.
+  const idx = SRC.search(/async\s+function\s+handleSetPat\s*\(/);
+  const win = SRC.slice(idx, idx + 3500);
+  // /setpat parses @<target> at the start of args.
+  assert.ok(/args\.match\(\s*\/\^@\(\[a-z0-9_-\]\+\)/i.test(win),
+    '/setpat must parse a leading @<target> token');
+  // Validates against REMOTE_TARGETS (rejects unknown targets).
+  assert.ok(/REMOTE_TARGETS\[targetName\]/.test(win),
+    '/setpat must reject unknown @<target> values');
+  // When target is set, host is built from REMOTE_TARGETS (no git remote detection).
+  assert.ok(/host\s*=\s*\{\s*provider:\s*target\.provider/.test(win),
+    'remote-target form must derive host from REMOTE_TARGETS (no git remote needed)');
+  // Usage line mentions both forms.
+  assert.ok(/Usage:\s*\/setpat\s*<token>\s*OR\s*\/setpat\s*@<target>\s*<token>/.test(win),
+    'usage hint must advertise both `<token>` and `@<target> <token>` forms');
 });
 
 t('slashcmds.js: command usage strings advertise @<target>', () => {

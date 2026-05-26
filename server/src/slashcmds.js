@@ -907,6 +907,33 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
   });
   if (result.error) {
     const label = target.provider === 'gitee' ? 'Gitee' : 'GitHub';
+    // fr-80 r2: GitHub 403 "Resource not accessible by personal access
+    // token" almost always means the token's scope is insufficient for
+    // issues:write on this repo (common with OAuth tokens missing the
+    // `repo` scope, fine-grained PATs without per-repo Issues access,
+    // or org-level restrictions on third-party OAuth apps). Make the
+    // fix path obvious in the error reply.
+    if (target.provider === 'github' && result.status === 403) {
+      // Tell the user we tried their LOGIN token (or per-repo PAT if
+      // they set one) and surface the fix paths in cheapest → most
+      // disruptive order. Re-signing-in is the most common fix because
+      // OAuth grants from before the `repo` scope was added (pre-fr-54
+      // era) don't carry issues:write.
+      ctx.reply(
+        `(GitHub 403 — your stored token can't write issues on ${target.owner}/${target.repo}. ` +
+        `myco tried your per-repo PAT first (if any) then your GitHub OAuth login token. ` +
+        `Fixes, easiest first:\n` +
+        `  1. Re-sign-in via GitHub at the top-right user chip — refreshes the OAuth grant ` +
+        `with the current \`repo\` scope (older sign-ins may pre-date the scope addition).\n` +
+        `  2. Check the OAuth grant at https://github.com/settings/applications and confirm ` +
+        `myco can access ${target.owner}/${target.repo} (org-level restrictions can block ` +
+        `third-party OAuth apps per-repo).\n` +
+        `  3. Generate a classic PAT at https://github.com/settings/tokens/new?scopes=repo ` +
+        `and run \`/setpat @${targetName} <token>\` from any session — overrides the OAuth ` +
+        `token for this target only.)`
+      );
+      return;
+    }
     ctx.reply(`(${label} error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
     return;
   }
@@ -982,30 +1009,59 @@ async function handleIssue(ctx, { kind, labels }) {
 // persisting — so a typo or wrong-provider paste surfaces immediately,
 // not on the next /feature.
 async function handleSetPat(ctx) {
-  const token = String(ctx.args || '').trim();
-  if (!token) {
+  let args = String(ctx.args || '').trim();
+  if (!args) {
     ctx.reply(
-      `Usage: /setpat <token>\n` +
-      `Saves a PAT for this session's repo. Provider is auto-detected from \`git remote get-url origin\` ` +
-      `(github.com or gitee.com).\n` +
+      `Usage: /setpat <token>  OR  /setpat @<target> <token>\n` +
+      `Saves a PAT for this session's repo (no @target) or for a registered remote target (\`@myco\`).\n` +
+      `Provider for session form is auto-detected from \`git remote get-url origin\` (github.com or gitee.com).\n` +
       `For Gitee, generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`).`
     );
+    return;
+  }
+  // fr-80 r2: `/setpat @<target> <token>` saves a PAT scoped to a
+  // REMOTE_TARGETS entry without needing a session pointed at that
+  // repo. Solves the bootstrap problem: a user who wants to file
+  // /fr @myco issues but works mostly in OTHER repos couldn't
+  // previously set a per-repo PAT for kkrazy/myco because /setpat
+  // demanded a session pointing at the target.
+  let target = null;
+  const targetMatch = args.match(/^@([a-z0-9_-]+)(\s+|$)/i);
+  if (targetMatch) {
+    const targetName = targetMatch[1].toLowerCase();
+    if (!REMOTE_TARGETS[targetName]) {
+      const known = Object.keys(REMOTE_TARGETS).map((n) => '`@' + n + '`').join(', ') || '(none registered)';
+      ctx.reply(`(unknown @target \`@${targetName}\`. Known targets: ${known}.)`);
+      return;
+    }
+    target = { name: targetName, ...REMOTE_TARGETS[targetName] };
+    args = args.slice(targetMatch[0].length).trim();
+  }
+  const token = args;
+  if (!token) {
+    ctx.reply(`(missing token after @${target ? target.name : '<target>'} — paste the PAT after the @target.)`);
     return;
   }
   if (token.length < 8) {
     ctx.reply(`(token looks too short — did you paste a placeholder?)`);
     return;
   }
-  // Detect provider+owner+repo from the session's cwd. "One PAT per repo"
-  // means we need to know WHICH repo before we can store anything.
-  const host = await gitHosts.detectHost(ctx.absCwd);
-  if (!host) {
-    ctx.reply(
-      `(no github.com or gitee.com remote in this session's cwd: ${ctx.absCwd}. ` +
-      `\`/setpat\` saves a PAT scoped to the current repo; make sure ` +
-      `\`git remote get-url origin\` points at one of those hosts.)`
-    );
-    return;
+  // Resolve provider+owner+repo: either from REMOTE_TARGETS (remote
+  // form) or from the session's git remote (session form).
+  let host;
+  if (target) {
+    host = { provider: target.provider, owner: target.owner, repo: target.repo };
+  } else {
+    host = await gitHosts.detectHost(ctx.absCwd);
+    if (!host) {
+      ctx.reply(
+        `(no github.com or gitee.com remote in this session's cwd: ${ctx.absCwd}. ` +
+        `\`/setpat\` saves a PAT scoped to the current repo; make sure ` +
+        `\`git remote get-url origin\` points at one of those hosts, ` +
+        `OR use \`/setpat @<target> <token>\` to scope by remote target.)`
+      );
+      return;
+    }
   }
   let profile;
   try { profile = await gitHosts.fetchUser({ provider: host.provider, token }); }
@@ -1018,9 +1074,10 @@ async function handleSetPat(ctx) {
     ctx.reply(`(could not save token: ${err.message})`);
     return;
   }
+  const scopeLabel = target ? `@${target.name} (${host.owner}/${host.repo})` : `${host.owner}/${host.repo}`;
   ctx.reply(
-    `✓ Saved ${host.provider} PAT for ${host.owner}/${host.repo} ` +
-    `(validated as ${host.provider}:${profile.login}). \`/feature\` and \`/bug\` will use it.`,
+    `✓ Saved ${host.provider} PAT for ${scopeLabel} ` +
+    `(validated as ${host.provider}:${profile.login}). \`/fr\`, \`/bug\`, \`/td\`, \`/feature\` will use it.`,
   );
 }
 
