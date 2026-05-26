@@ -923,6 +923,30 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
       const need = result.acceptedScopes || '(POST /issues needs `repo` for private repos, `public_repo` for public)';
       const hasRepo = /\brepo\b/.test(result.scopes || '');
       const hasPub  = /\bpublic_repo\b/.test(result.scopes || '');
+      // fr-80 r4: when scopes come back empty, probe the token by
+      // hitting GET /user. Three possible signals:
+      //   (a) probe succeeds + login present → token is ALIVE but
+      //       has no OAuth scopes attached (the grant at the user-
+      //       app level was revoked, or the token was issued for a
+      //       different OAuth app). Fix = re-authorize the OAuth
+      //       grant (NOT a fresh sign-in flow).
+      //   (b) probe fails → token is DEAD (revoked/expired). Fix =
+      //       full sign-out + re-sign-in.
+      // We only run the probe in the empty-scopes case to avoid an
+      // extra round-trip on the common "missing repo scope" path.
+      let probeLine = '';
+      if (!have || have === '(none reported)') {
+        try {
+          const u = await gitHosts.fetchUser({ provider: 'github', token });
+          probeLine = `Token IS alive (resolves to github user **${u.login}**) but reports zero OAuth ` +
+            `scopes. That usually means the OAuth grant for myco was REVOKED at the user-app level ` +
+            `(github.com/settings/applications → myco) — the access token survives revoke but loses ` +
+            `its scope grants. Re-authorizing via re-sign-in restores them.`;
+        } catch (probeErr) {
+          probeLine = `Token is DEAD (GET /user also failed: ${probeErr.message}). The OAuth token was ` +
+            `revoked or expired. Sign out (status-bar user chip) and sign back in.`;
+        }
+      }
       const scopeLine = hasRepo || hasPub
         ? `Your token DOES carry \`repo\`-family scopes (have: ${have}), so this 403 likely means an ` +
           `org-level OAuth restriction or repo Issues being disabled.`
@@ -930,13 +954,15 @@ async function handleRemoteIssue(ctx, layer, targetName, description) {
           `Re-sign-in to refresh the OAuth grant.`;
       ctx.reply(
         `(GitHub 403 — your stored token can't write issues on ${target.owner}/${target.repo}.\n\n` +
-        `${scopeLine}\n\n` +
+        `${scopeLine}\n` +
+        (probeLine ? probeLine + '\n\n' : '\n') +
         `Fix paths:\n` +
         `  1. **Re-sign-in via GitHub** at the top-right user chip — refreshes the OAuth ` +
         `grant with the current \`repo\` scope. Most common fix.\n` +
         `  2. **Check the OAuth grant** at https://github.com/settings/applications — ` +
         `confirm myco has access to ${target.owner}/${target.repo} (org-level restrictions ` +
-        `can block third-party OAuth apps per-repo).\n` +
+        `can block third-party OAuth apps per-repo). If you see myco listed there but it ` +
+        `says "0 organizations · 0 repositories", click it and grant access.\n` +
         `  3. **Classic PAT override** — generate one at ` +
         `https://github.com/settings/tokens/new?scopes=repo and run ` +
         `\`/setpat @${targetName} <token>\` from any session.\n` +

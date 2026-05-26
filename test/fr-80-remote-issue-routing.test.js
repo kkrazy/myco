@@ -83,8 +83,8 @@ t('slashcmds.js: handleRemoteIssue is defined + uses gitHosts.{getToken,createIs
   assert.ok(/async\s+function\s+handleRemoteIssue\s*\(/.test(SRC),
     'handleRemoteIssue must be defined');
   const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
-  // r2 grew the 403 branch substantially → bump window from 3000 to 5000.
-  const win = SRC.slice(idx, idx + 5000);
+  // r4 added the probe branch → bump again.
+  const win = SRC.slice(idx, idx + 7500);
   assert.ok(/gitHosts\.getToken\(\s*ctx\.user/.test(win),
     'must call gitHosts.getToken(ctx.user, provider, owner, repo)');
   assert.ok(/gitHosts\.createIssue\(/.test(win),
@@ -143,6 +143,28 @@ t('slashcmds.js: r2 — handleRemoteIssue 403 hint suggests re-sign-in FIRST (ch
     '"Re-sign-in" must appear BEFORE the /setpat suggestion (cheapest-fix-first)');
   assert.ok(/OAuth/.test(branchText),
     '403 hint must explain that the OAuth login token was attempted (transparency about what we tried)');
+});
+
+t('slashcmds.js: r4 — empty-scopes path probes GET /user to distinguish revoked-grant vs dead-token', () => {
+  // When X-OAuth-Scopes is empty, the cause is ambiguous between
+  // "token still authenticates but the OAuth grant was revoked at
+  // the user-app level" (probe succeeds) and "token is fully dead"
+  // (probe fails). The 403 branch runs a follow-up GET /user probe
+  // to disambiguate, and reports DIFFERENT fix paths per outcome.
+  const idx = SRC.search(/async\s+function\s+handleRemoteIssue\s*\(/);
+  const win = SRC.slice(idx, idx + 7500);
+  // Probe is gated on "have === '(none reported)'" or empty.
+  assert.ok(/none reported/.test(win) && /have/.test(win),
+    'must check for empty scopes before probing');
+  // Probe itself uses gitHosts.fetchUser.
+  assert.ok(/gitHosts\.fetchUser\(\{\s*provider:\s*['"]github['"]/.test(win),
+    'must probe via gitHosts.fetchUser(provider: github, token)');
+  // Two-branch reporting: probe success → "alive but no scopes" hint;
+  // probe failure → "token is dead, sign out + sign in".
+  assert.ok(/alive/.test(win) && /revoked/i.test(win),
+    'probe-success branch must mention token is alive + grant was revoked');
+  assert.ok(/DEAD/.test(win) || /dead/.test(win),
+    'probe-failure branch must mention the token is dead');
 });
 
 t('slashcmds.js: r3 — 403 hint surfaces the actual X-OAuth-Scopes from the response', () => {
