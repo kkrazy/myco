@@ -32,9 +32,13 @@ t('app.js: _startPlanChangedFilesAutoRefresh + _stopPlanChangedFilesAutoRefresh 
     'stop helper must be defined');
 });
 
-t('app.js: poll cadence is 5s (PLAN_CHANGED_FILES_POLL_MS)', () => {
-  assert.ok(/PLAN_CHANGED_FILES_POLL_MS\s*=\s*5000/.test(APP),
-    'PLAN_CHANGED_FILES_POLL_MS must be 5000 ms');
+t('app.js: poll cadence is 30s (PLAN_CHANGED_FILES_POLL_MS) — safety net behind fr-94 hooks', () => {
+  // fr-94 added per-event hooks (tool_result + /git submit) for ~100ms
+  // refresh latency, so polling is now the safety net for OUT-OF-BAND
+  // changes (external editor, git pull at the shell, etc.). 30s gives
+  // a reasonable backstop without flooding the server.
+  assert.ok(/PLAN_CHANGED_FILES_POLL_MS\s*=\s*30000/.test(APP),
+    'PLAN_CHANGED_FILES_POLL_MS must be 30000 ms (was 5000 pre-fr-94; bumped after instant hooks landed)');
 });
 
 t('app.js: poll loop skips when document.hidden + when Plan view inactive', () => {

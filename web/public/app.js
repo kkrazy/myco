@@ -4361,6 +4361,12 @@ function _appendAgentEvent(ev) {
     try { console.warn('[unknown_event]', ev.raw_type || '(no raw_type)', ev.raw); } catch {}
     return;
   }
+  // fr-94: instant Changed-files refresh hook. When the agent finishes
+  // a file-mutating tool call (Edit / Write / MultiEdit) or any Bash
+  // call (which often runs git/touch/mv/etc.), kick a force-reload
+  // of the Plan-view Changed-files section. ~100ms latency vs the 30s
+  // safety-net polling. No-op when Plan view isn't open.
+  _maybeAutoRefreshOnAgentEvent(ev);
   const pane = _ensureAgentLogPane();
   const ts = _localTs(ev.ts);
 
@@ -5918,6 +5924,10 @@ function bindChatUi() {
   function submitChat() {
     const submitted = input.value;
     if (sendChatMessage(submitted)) {
+      // fr-94: kick a Plan-view Changed-files refresh when the user
+      // runs a /git command (server processes it inline — no agent
+      // tool_result event fires, so we hook on the submit instead).
+      _maybeAutoRefreshOnGitCommand(submitted);
       // fr-78: in-memory chat-input history. Push the just-sent text
       // onto state.chatInputHistory (capped 200 entries; skip empty +
       // skip duplicates of the immediate previous entry — common
@@ -7900,15 +7910,14 @@ async function loadPlanChangedFiles({ force } = {}) {
 // list is re-rendered — fresh data invalidates the per-file diffs.
 let _planChangedDiffCache = new Map();
 
-// fr-93: auto-refresh interval handle for the Plan-view Changed-files
-// section. Started on Plan-view show, stopped on hide / artifact-tab
-// switch. Polling-based (NOT fs.watch) by design — fs.watch is
-// unreliable on macOS-Docker bind-mounts (events get dropped) and
-// recursive: true isn't supported on every Linux kernel inotify
-// backend. 5s cadence matches the typical "agent finishes a tool
-// call" rhythm without flooding the server.
+// fr-93/fr-94: auto-refresh interval handle for the Plan-view Changed-
+// files section. Polling is the SAFETY NET behind the per-event hooks
+// (fr-94 _maybeAutoRefreshOnAgentEvent + the /git submitChat hook), so
+// we run it slowly (30s) — fast enough to catch out-of-band changes
+// (external editor, git pull at the shell, etc.) without flooding
+// the server. Hooks cover the common case at ~100ms latency.
 let _planChangedFilesPollHandle = null;
-const PLAN_CHANGED_FILES_POLL_MS = 5000;
+const PLAN_CHANGED_FILES_POLL_MS = 30000;
 function _startPlanChangedFilesAutoRefresh() {
   if (_planChangedFilesPollHandle) return;        // already running
   if (typeof window === 'undefined') return;
@@ -7928,6 +7937,41 @@ function _stopPlanChangedFilesAutoRefresh() {
   if (!_planChangedFilesPollHandle) return;
   clearInterval(_planChangedFilesPollHandle);
   _planChangedFilesPollHandle = null;
+}
+
+// fr-94: file-mutating agent events drive an instant refresh of the
+// Plan-view Changed-files section. Edit/Write/MultiEdit are obvious
+// file writes; Bash is included because the agent commonly shells out
+// to git/touch/mv/sed which mutate the worktree. Debounce-clamped so
+// a burst of MultiEdit ticks doesn't fire N requests in a row.
+const _AUTO_REFRESH_TOOL_NAMES = new Set(['Edit', 'Write', 'MultiEdit', 'Bash']);
+let _autoRefreshDebounce = null;
+function _maybeAutoRefreshOnAgentEvent(ev) {
+  if (!ev || ev.type !== 'tool_result') return;
+  // tool_result events carry the tool name via a sibling field; depending
+  // on the SDK shape it lives on either `ev.name` (preferred) or inside
+  // ev.input. Be defensive.
+  const name = ev.name || (ev.tool && ev.tool.name) || '';
+  if (!_AUTO_REFRESH_TOOL_NAMES.has(name)) return;
+  if (!state.artifactView || state.artifactView.active !== 'plan') return;
+  if (_autoRefreshDebounce) clearTimeout(_autoRefreshDebounce);
+  _autoRefreshDebounce = setTimeout(() => {
+    _autoRefreshDebounce = null;
+    loadPlanChangedFiles({ force: true });
+  }, 250);  // 250ms debounce: one refresh per burst of edits
+}
+
+// fr-94: user-driven /git commands also refresh the section. The
+// server runs git inline (not as an agent tool) so there's no
+// tool_result event to catch — we hook directly on the submit path.
+// 1500ms delay matches the typical `/git` runtime (clone / fetch can
+// be longer but those refresh on the next 30s tick).
+function _maybeAutoRefreshOnGitCommand(submittedText) {
+  if (!submittedText) return;
+  const t = String(submittedText).trim();
+  if (!/^\/git(\s|$)/i.test(t)) return;
+  if (!state.artifactView || state.artifactView.active !== 'plan') return;
+  setTimeout(() => loadPlanChangedFiles({ force: true }), 1500);
 }
 // Resume polling immediately when the user comes back to a backgrounded
 // tab, instead of waiting up to 5s for the next tick.
