@@ -6391,6 +6391,12 @@ function showArtifactView(type) {
   if (type === 'plan') {
     bindPlanChangedFilesUi();
     loadPlanChangedFiles({ force: false });
+    // fr-93: start polling git-status so a user reviewing changes sees
+    // the agent's writes appear without a manual Refresh click.
+    _startPlanChangedFilesAutoRefresh();
+  } else {
+    // Switched to another artifact tab → stop the Plan-view polling.
+    _stopPlanChangedFilesAutoRefresh();
   }
   updateChatButton();
   _updateMainPaneLayout();
@@ -6403,6 +6409,8 @@ function hideArtifactView() {
   document.getElementById(wrapId).hidden = true;
   document.getElementById('btn-' + type)?.classList.remove('active');
   state.artifactView.active = null;
+  // fr-93: Plan view going away → stop polling git-status.
+  if (type === 'plan') _stopPlanChangedFilesAutoRefresh();
   // Phase 9 step 3 retired the terminal + transcript wraps. The chatpane
   // is always present underneath any artifact view, so closing one just
   // means hiding it — the chatpane reappears automatically. Files view
@@ -7891,6 +7899,46 @@ async function loadPlanChangedFiles({ force } = {}) {
 // is instant (no extra round-trip). Cleared whenever the changed-files
 // list is re-rendered — fresh data invalidates the per-file diffs.
 let _planChangedDiffCache = new Map();
+
+// fr-93: auto-refresh interval handle for the Plan-view Changed-files
+// section. Started on Plan-view show, stopped on hide / artifact-tab
+// switch. Polling-based (NOT fs.watch) by design — fs.watch is
+// unreliable on macOS-Docker bind-mounts (events get dropped) and
+// recursive: true isn't supported on every Linux kernel inotify
+// backend. 5s cadence matches the typical "agent finishes a tool
+// call" rhythm without flooding the server.
+let _planChangedFilesPollHandle = null;
+const PLAN_CHANGED_FILES_POLL_MS = 5000;
+function _startPlanChangedFilesAutoRefresh() {
+  if (_planChangedFilesPollHandle) return;        // already running
+  if (typeof window === 'undefined') return;
+  _planChangedFilesPollHandle = setInterval(() => {
+    // Skip the fetch when the tab/window is hidden — saves a request
+    // every 5s on a backgrounded laptop while still kicking off
+    // immediately when the user returns (visibilitychange handler
+    // below).
+    if (document.hidden) return;
+    // Skip if the user has navigated away from Plan view since the
+    // start (race with hideArtifactView clearing the handle).
+    if (!state.artifactView || state.artifactView.active !== 'plan') return;
+    loadPlanChangedFiles({ force: true });
+  }, PLAN_CHANGED_FILES_POLL_MS);
+}
+function _stopPlanChangedFilesAutoRefresh() {
+  if (!_planChangedFilesPollHandle) return;
+  clearInterval(_planChangedFilesPollHandle);
+  _planChangedFilesPollHandle = null;
+}
+// Resume polling immediately when the user comes back to a backgrounded
+// tab, instead of waiting up to 5s for the next tick.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (state.artifactView && state.artifactView.active === 'plan') {
+      loadPlanChangedFiles({ force: true });
+    }
+  });
+}
 
 // fr-77 r16: per-section memory of files the user just accepted (via
 // the ✓ button or Accept-all). Survives the loadPlanChangedFiles
