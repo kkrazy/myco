@@ -360,6 +360,41 @@ function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// fr-77 r14: Lucide-style SVG icon registry. The chrome cluster
+// (#btn-files / btn-plan / btn-arch / btn-test / btn-chat) is built
+// from inline SVGs with viewBox="0 0 24 24" + stroke="currentColor" +
+// stroke-width="1.75" + round caps. Several plan-view affordances
+// (Bug/Feature/Todo filter chips, upvote, comment, run, edit, close)
+// were previously emoji (🐞 ✨ ✅ 👍 💬 ▶ ✎ ✓), which:
+//   • render with the platform's emoji font (varying weight, size,
+//     and color across macOS/Windows/Linux)
+//   • can't take the chrome family's currentColor tint or
+//     hover/active state styling
+// _lucideIcon(name) returns a complete SVG string in the chrome
+// family. Set `cls` to override the wrapping class (default '.ft-svg'
+// — matches the other in-pane icons and is sized 18px/14px depending
+// on the surrounding context's CSS).
+const LUCIDE_PATHS = {
+  // Plan-item filter chips
+  'bug':           '<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>',
+  'sparkles':      '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>',
+  'check-square':  '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  // Per-item actions
+  'thumbs-up':     '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
+  'message-square':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  'play':          '<polygon points="6 3 20 12 6 21 6 3"/>',
+  'pencil':        '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  'check':         '<polyline points="20 6 9 17 4 12"/>',
+  'rotate-ccw':    '<path d="M3 12a9 9 0 1 0 9-9 9.74 9.74 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  'trash':         '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+};
+function _lucideIcon(name, cls) {
+  const path = LUCIDE_PATHS[name];
+  if (!path) return '';
+  const c = cls || 'ft-svg';
+  return `<svg class="${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+}
+
 // Full markdown rendering for conversation view via marked library.
 //
 // Wrapped in try/catch so a single bad message (unclosed fence, exotic
@@ -6718,10 +6753,10 @@ function renderArtifact(type, artifact) {
     const voteBlock = supportsVoting ? `
       <button class="artifact-vote ${userHasVoted ? 'is-voted' : ''}" data-id="${escHtml(it.id)}"
               title="${userHasVoted ? 'Click to remove your vote' : 'Click to vote — items at 2 votes auto-execute'}">
-        <span class="vote-icon">👍</span><span class="vote-count">${points}</span>
+        <span class="vote-icon">${_lucideIcon('thumbs-up')}</span><span class="vote-count">${points}</span>
       </button>
       <button class="artifact-comment-toggle" data-id="${escHtml(it.id)}" title="Show comments">
-        💬<span class="comment-count">${comments.length || ''}</span>
+        ${_lucideIcon('message-square')}<span class="comment-count">${comments.length || ''}</span>
       </button>` : '';
     // fr-46: pencil/trash on each comment, gated on !state.readOnly
     // (owner+admin only). meta.editedBy/editedAt → small "edited" badge
@@ -6736,8 +6771,8 @@ function renderArtifact(type, artifact) {
               : '';
             const commentActions = canEditComments
               ? `<span class="artifact-comment-actions">
-                  <button class="artifact-comment-edit" data-id="${escHtml(it.id)}" data-cid="${escHtml(c.id)}" title="Edit comment" aria-label="Edit comment">✎</button>
-                  <button class="artifact-comment-delete" data-id="${escHtml(it.id)}" data-cid="${escHtml(c.id)}" title="Delete comment" aria-label="Delete comment">×</button>
+                  <button class="artifact-comment-edit" data-id="${escHtml(it.id)}" data-cid="${escHtml(c.id)}" title="Edit comment" aria-label="Edit comment">${_lucideIcon('pencil')}</button>
+                  <button class="artifact-comment-delete" data-id="${escHtml(it.id)}" data-cid="${escHtml(c.id)}" title="Delete comment" aria-label="Delete comment">${_lucideIcon('trash')}</button>
                 </span>`
               : '';
             return `
@@ -6837,20 +6872,21 @@ function renderArtifact(type, artifact) {
       : it.done
         ? 'This item is marked done — Run is disabled. Reopen the item to re-run.'
         : !enoughVotes
-          ? `Needs ${RUN_VOTE_THRESHOLD} upvote${RUN_VOTE_THRESHOLD === 1 ? '' : 's'} to run (currently ${points}). Click 👍 above to vote.`
+          ? `Needs ${RUN_VOTE_THRESHOLD} upvote${RUN_VOTE_THRESHOLD === 1 ? '' : 's'} to run (currently ${points}). Click the vote button above to vote.`
           : `Blocked by unmet prereq${unmetDeps.length === 1 ? '' : 's'}: ${unmetDeps.join(', ')}. Mark them done first.`;
     // Mobile hides .btn-text via CSS (icon-only); desktop keeps both.
-    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="${escHtml(runLabel)}"><span class="btn-icon">▶</span><span class="btn-text">${escHtml(runLabel)}</span></button>`;
+    // fr-77 r14: Lucide-style SVGs replace the ▶ ✎ ✓ ↻ × emojis below
+    // so the whole plan-item action row picks up currentColor + hover
+    // tints from the same family as the chrome cluster.
+    const runBtn = `<button class="artifact-item-run" data-id="${escHtml(it.id)}" data-text="${escHtml(String(it.text || '').slice(0, 200))}" ${runEnabled ? '' : 'disabled'} title="${escHtml(runTitle)}" aria-label="${escHtml(runLabel)}"><span class="btn-icon">${_lucideIcon('play')}</span><span class="btn-text">${escHtml(runLabel)}</span></button>`;
     // fr-46: edit pencil for item body text. Gated on !state.readOnly
     // (owner+admin only — viewers don't see it). meta.editedBy chip
     // surfaces the audit trail for everyone.
-    // "· edited" → ✎ icon + "edited" text. Mobile shows just the
-    // ✎ icon; desktop keeps both. Tooltip retains the audit details.
     const itemEditedBadge = (it.meta && it.meta.editedBy)
-      ? `<span class="artifact-item-edited" title="edited by ${escHtml(it.meta.editedBy)} at ${escHtml(it.meta.editedAt || '')}${it.meta.originalText ? ' · original preserved' : ''}"><span class="btn-icon">✎</span><span class="btn-text">edited</span></span>`
+      ? `<span class="artifact-item-edited" title="edited by ${escHtml(it.meta.editedBy)} at ${escHtml(it.meta.editedAt || '')}${it.meta.originalText ? ' · original preserved' : ''}"><span class="btn-icon">${_lucideIcon('pencil')}</span><span class="btn-text">edited</span></span>`
       : '';
     const editBtn = (!state.readOnly && supportsVoting)
-      ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit"><span class="btn-icon">✎</span><span class="btn-text">Edit</span></button>`
+      ? `<button class="artifact-item-edit" data-id="${escHtml(it.id)}" title="Edit item body" aria-label="Edit"><span class="btn-icon">${_lucideIcon('pencil')}</span><span class="btn-text">Edit</span></button>`
       : '';
     // fr-48: per-item ⊤ Queue button was pruned after the unified
     // dispatch refactor (commit 606f14c) made the ▶ Run button itself
@@ -6873,9 +6909,10 @@ function renderArtifact(type, artifact) {
     const closeTitle = it.done
       ? 'Reopen this item (clears done state)'
       : 'Close this item (marks done — no claude dispatch)';
-    // Close icon = ✓ (mark done); Reopen icon = ↻ (restart). Mobile
+    // Close icon = ✓ (mark done); Reopen icon = ↻ (restart). r14 swap
+    // to Lucide 'check' + 'rotate-ccw' SVGs (chrome family). Mobile
     // shows just the icon; desktop adds the text label after.
-    const closeIcon = it.done ? '↻' : '✓';
+    const closeIcon = it.done ? _lucideIcon('rotate-ccw') : _lucideIcon('check');
     const closeBtn = supportsVoting
       ? `<button class="artifact-item-close" data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" data-done="${it.done ? '1' : '0'}" title="${escHtml(closeTitle)}" aria-label="${escHtml(closeLabel)}"><span class="btn-icon">${closeIcon}</span><span class="btn-text">${escHtml(closeLabel)}</span></button>`
       : '';
@@ -6888,7 +6925,7 @@ function renderArtifact(type, artifact) {
         ${runBtn}
         ${closeBtn}
         ${editBtn}
-        <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">×</button>
+        <button class="artifact-item-delete" data-id="${escHtml(it.id)}" title="Delete this item" aria-label="Delete">${_lucideIcon('trash')}</button>
       </div>`;
     // Plan/test items render their body as markdown so multi-line
     // text, code fences, lists, and mermaid diagrams all show up
@@ -7833,6 +7870,16 @@ async function loadPlanChangedFiles({ force } = {}) {
 // list is re-rendered — fresh data invalidates the per-file diffs.
 let _planChangedDiffCache = new Map();
 
+// fr-77 r16: per-section memory of files the user just accepted (via
+// the ✓ button or Accept-all). Survives the loadPlanChangedFiles
+// refresh that follows the action so the row keeps showing the
+// "accepted" indicator + greyed-out buttons until the user explicitly
+// hits the section's Refresh chevron OR the file actually leaves the
+// changed-files list (e.g. they commit, then it disappears). Reset on
+// the Refresh button (handler in bindPlanChangedFilesUi) + whenever
+// the section is first loaded for a session switch.
+let _planAcceptedPaths = new Set();
+
 function _renderPlanChangedFiles() {
   const ul     = document.getElementById('plan-changed-files-list');
   const msgEl  = document.getElementById('plan-changed-files-msg');
@@ -7885,20 +7932,34 @@ function _renderPlanChangedFiles() {
     // family (24x24 viewBox, stroke 1.75, round caps, currentColor).
     // Replaces Unicode ✓/✕/▶ from r12 which rendered with varying
     // fonts + couldn't take the chrome icon styling.
+    // fr-77 r16: per-row accepted state. After a successful Accept
+    // (single or bulk), the path is added to _planAcceptedPaths and
+    // the row picks up .is-accepted on the next re-render. The badge
+    // ✓ chip + disabled accept/reject buttons stay until the user
+    // hits the section's Refresh chevron (which clears the set).
+    const isAccepted = _planAcceptedPaths.has(e.path);
+    const acceptedBadge = isAccepted
+      ? `<span class="pcf-accepted-badge" title="Accepted (staged via git add) — click Refresh to clear">${_lucideIcon('check', 'pcf-accepted-svg')}<span>accepted</span></span>`
+      : '';
     const actions = canMutate
-      ? `<button class="pcf-row-btn pcf-accept" data-pcf-action="accept" data-pcf-path="${escHtml(e.path)}" title="Accept (stage)" aria-label="Accept ${escHtml(e.path)}"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
-         <button class="pcf-row-btn pcf-reject" data-pcf-action="reject" data-pcf-path="${escHtml(e.path)}" title="Reject (revert/delete)" aria-label="Reject ${escHtml(e.path)}"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`
+      ? (isAccepted
+        ? `<button class="pcf-row-btn pcf-accept is-accepted-state" disabled aria-label="Already accepted" title="Already staged"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+           <button class="pcf-row-btn pcf-reject is-accepted-state" disabled aria-label="Reject disabled after accept" title="Refresh to re-enable"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`
+        : `<button class="pcf-row-btn pcf-accept" data-pcf-action="accept" data-pcf-path="${escHtml(e.path)}" title="Accept (stage)" aria-label="Accept ${escHtml(e.path)}"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+           <button class="pcf-row-btn pcf-reject" data-pcf-action="reject" data-pcf-path="${escHtml(e.path)}" title="Reject (revert/delete)" aria-label="Reject ${escHtml(e.path)}"><svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`)
       : '';
     // fr-77 r3: leading caret rotates 90° when the row is expanded
     // (see #plan-changed-files-list li.is-expanded .pcf-caret rule).
     // r13: Lucide chevron-right SVG instead of the ▶ Unicode triangle
     // (which rendered as emoji on some platforms, breaking line height).
     const caret = `<svg class="pcf-caret-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>`;
-    return `<li data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path + titleStats)}">
+    const rowCls = isAccepted ? ' is-accepted' : '';
+    return `<li class="${escHtml(rowCls.trim())}" data-fc-path="${escHtml(e.path)}" title="${escHtml(label + ' · ' + e.path + titleStats + (isAccepted ? ' · accepted (staged)' : ''))}">
       <span class="pcf-caret">${caret}</span>
       <span class="fc-status ${escHtml(cls)}">${escHtml(display)}</span>
       <span class="fc-path">${escHtml(e.path)}</span>
       ${stats}
+      ${acceptedBadge}
       ${actions}
     </li>`;
   }).join('');
@@ -8056,12 +8117,18 @@ function _renderInlineDiffBody(diffRow, body) {
   // read-only viewers (they have no chat input either). Form lives
   // below the diff body so the reader sees what they're commenting
   // on before typing.
+  // r15: file-level reconsider form mirrors the per-line form — Esc on
+  // the textarea clears it (so a "never mind" feels symmetrical), and
+  // a small hint advertises the shortcut next to the Send button.
   const reconsiderHtml = state.readOnly ? '' :
     `<form class="pcf-reconsider" data-pcf-path="${escHtml(body.path)}">
        <textarea class="pcf-reconsider-input" rows="2"
          placeholder="Ask the AI to reconsider this change… (e.g. 'use a Map instead of an Object here')"
          aria-label="Comment for AI about ${escHtml(body.path)}"></textarea>
-       <button type="submit" class="pcf-reconsider-send" title="Send to AI">Send to AI</button>
+       <div class="pcf-reconsider-actions">
+         <span class="pcf-reconsider-hint">Esc to clear</span>
+         <button type="submit" class="pcf-reconsider-send" title="Send to AI">Send to AI</button>
+       </div>
      </form>`;
   container.innerHTML = headerBits.join('') + diffHtml + reconsiderHtml;
   _bindDiffInteractions(container, body.path);
@@ -8089,11 +8156,20 @@ function _bindDiffInteractions(container, filePath) {
   // File-level reconsider form (sits below the diff). Submit fires
   // the same /files/reconsider POST without a lineNo, so the server
   // emits [chat:reconsider#<path>] without the :L<n> suffix.
+  // r15: Esc on the textarea clears it + blurs (so the user can keep
+  // browsing the diff without the form holding focus).
   const form = container.querySelector('form.pcf-reconsider');
   if (form) {
+    const ta = form.querySelector('textarea');
+    ta?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        ev.stopPropagation(); ev.preventDefault();
+        ta.value = '';
+        ta.blur();
+      }
+    });
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      const ta = form.querySelector('textarea');
       const comment = (ta && ta.value || '').trim();
       if (!comment) return;
       await _sendReconsider(filePath, comment, null);
@@ -8206,6 +8282,10 @@ function bindPlanChangedFilesUi() {
   sec.dataset.bound = '1';
   document.getElementById('plan-changed-files-refresh')?.addEventListener('click', (e) => {
     e.preventDefault();
+    // r16: Refresh = "give me a fresh git-status read" → also drop the
+    // local accepted-paths memory so previously-accepted rows lose
+    // their checkmark badge until the user explicitly accepts again.
+    _planAcceptedPaths = new Set();
     loadPlanChangedFiles({ force: true });
   });
   document.getElementById('plan-changed-files-collapse')?.addEventListener('click', (e) => {
@@ -8306,6 +8386,15 @@ async function _planChangedFilesAction(action, paths) {
     alert(`${action} failed: ${(body && body.error) || res.status}`);
     return;
   }
+  // fr-77 r16: remember per-path success so the post-refresh re-render
+  // can mark the rows as "accepted" (✓ badge + greyed-out action
+  // buttons). Reject takes the file out of the list entirely (status
+  // gone), so there's nothing to remember.
+  if (action === 'accept' && body && Array.isArray(body.results)) {
+    for (const r of body.results) {
+      if (r && r.ok && r.path) _planAcceptedPaths.add(r.path);
+    }
+  }
   // Refresh the list so the count + rows reflect the new git state.
   loadPlanChangedFiles({ force: true });
 }
@@ -8331,7 +8420,10 @@ function _togglePcfLineComment(lineEl) {
     lineEl.classList.remove('pcf-line-commenting');
     return;
   }
-  // Open: insert a comment form right after the clicked line.
+  // Open: insert a comment form right after the clicked line. r15
+  // shows a small "(Esc to cancel)" hint next to the Cancel button so
+  // the keyboard escape is discoverable, and binds Esc on the textarea
+  // to trigger Cancel (matches the chat composer's Esc-to-clear UX).
   const form = document.createElement('div');
   form.className = 'pcf-line-comment';
   form.innerHTML =
@@ -8340,6 +8432,7 @@ function _togglePcfLineComment(lineEl) {
          placeholder="Ask the AI about line ${lineNo}…"
          aria-label="Comment for AI about line ${lineNo}"></textarea>
        <div class="pcf-line-actions">
+         <span class="pcf-line-hint">Esc to cancel</span>
          <button type="button" class="pcf-line-cancel">Cancel</button>
          <button type="submit" class="pcf-line-send">Send to AI</button>
        </div>
@@ -8348,17 +8441,22 @@ function _togglePcfLineComment(lineEl) {
   lineEl.insertAdjacentElement('afterend', form);
   const input = form.querySelector('textarea');
   if (input) input.focus();
-  form.querySelector('.pcf-line-cancel')?.addEventListener('click', () => {
+  const dismiss = () => {
     form.remove();
     lineEl.classList.remove('pcf-line-commenting');
+  };
+  form.querySelector('.pcf-line-cancel')?.addEventListener('click', dismiss);
+  // r15: Esc keypress while the textarea is focused → dismiss the form.
+  // Stop propagation so the Esc doesn't also trigger any global handler.
+  input?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { ev.stopPropagation(); ev.preventDefault(); dismiss(); }
   });
   form.querySelector('form')?.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const comment = (input && input.value || '').trim();
     if (!comment) return;
     await _sendReconsider(filePath, comment, lineNo);
-    form.remove();
-    lineEl.classList.remove('pcf-line-commenting');
+    dismiss();
   });
 }
 

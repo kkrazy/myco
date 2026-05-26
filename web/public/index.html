@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=267" />
+  <link rel="stylesheet" href="styles.css?v=268" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -194,17 +194,21 @@
              sit together) by _filterPlanItems. -->
         <div class="artifact-subheader" id="plan-filter-row">
           <div class="plan-type-filters" role="group" aria-label="Filter plan items by type">
+            <!-- fr-77 r14: filter chips use Lucide-style SVGs (chrome cluster
+                 family) instead of platform-specific emoji so they pick up
+                 currentColor + active-state tints + render identically. -->
+
             <label class="plan-type-chip" data-type="Bug" title="Show / hide Bug items">
               <input type="checkbox" id="plan-filter-bug" checked />
-              <span>🐞 Bug</span>
+              <span><svg class="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg> Bug</span>
             </label>
             <label class="plan-type-chip" data-type="Feature" title="Show / hide Feature items">
               <input type="checkbox" id="plan-filter-feature" checked />
-              <span>✨ Feature</span>
+              <span><svg class="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg> Feature</span>
             </label>
             <label class="plan-type-chip" data-type="Todo" title="Show / hide Todo items">
               <input type="checkbox" id="plan-filter-todo" checked />
-              <span>✅ Todo</span>
+              <span><svg class="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Todo</span>
             </label>
           </div>
           <!-- Open only checkbox — same place as the other filter chips
@@ -505,6 +509,6 @@
        Exposes window.MycoCM with { createEditor, EditorView, ... }. -->
   <script src="/vendor/codemirror.bundle.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=231"></script>
+  <script src="app.js?v=232"></script>
 </body>
 </html>

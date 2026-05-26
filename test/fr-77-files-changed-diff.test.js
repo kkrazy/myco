@@ -571,10 +571,10 @@ t('app.js: inline-expand uses /files/diff endpoint (reuses readDiff route)', () 
 
 t('app.js: _renderPlanChangedFiles list items carry data-fc-path + .pcf-caret', () => {
   const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
-  // r13 inlines Lucide SVG markup into each row → function body grew
-  // substantially. Bump the slice to 5500 chars to still capture the
-  // row HTML.
-  const win = APP.slice(idx, idx + 5500);
+  // r13 inlined SVG markup → grew the body; r16 added accepted-state
+  // branches with duplicated button HTML → grew again. Slice 8kB to
+  // cover.
+  const win = APP.slice(idx, idx + 8000);
   assert.ok(/data-fc-path=/.test(win),
     'list items must carry data-fc-path so the click handler picks the path');
   assert.ok(/pcf-caret/.test(win),
@@ -585,6 +585,140 @@ t('app.js: _saveFileEdit success path refreshes the Plan changed-files section',
   const idx = APP.search(/loadPlanChangedFiles\s*\(\s*\{\s*force:\s*true\s*\}/);
   assert.ok(idx > -1,
     '_saveFileEdit must call loadPlanChangedFiles({force:true}) on save so the chip count refreshes');
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// fr-77 r14 / r15 / r16 — Lucide icons + Esc-to-cancel + accepted state
+// ──────────────────────────────────────────────────────────────────────
+
+t('app.js: r14 Lucide icon registry + _lucideIcon helper defined', () => {
+  assert.ok(/const\s+LUCIDE_PATHS\s*=\s*\{/.test(APP),
+    'LUCIDE_PATHS path registry must be defined');
+  assert.ok(/function\s+_lucideIcon\s*\(/.test(APP),
+    '_lucideIcon(name, cls) helper must be defined');
+  // Registry must include every icon name the plan view uses.
+  for (const name of ['bug', 'sparkles', 'check-square', 'thumbs-up',
+                       'message-square', 'play', 'pencil', 'check',
+                       'rotate-ccw', 'trash']) {
+    assert.ok(new RegExp("'" + name + "'\\s*:").test(APP),
+      `LUCIDE_PATHS must include '${name}'`);
+  }
+});
+
+t('app.js: r14 plan-item action row uses _lucideIcon (not emoji)', () => {
+  // Per-item action row builders should reference _lucideIcon for run,
+  // edit, edited badge, close (✓ + ↻), comment-toggle, vote.
+  const idx = APP.search(/const\s+voteBlock\s*=/);
+  // The inlined SVG strings + close+edit+delete templates ballooned the
+  // section past 8kB — slice 14kB to cover them all (voteBlock at line
+  // ~6750, the trash delete button is ~280 lines / ~13kB later).
+  const win = APP.slice(idx, idx + 14000);
+  for (const name of ['thumbs-up', 'message-square', 'play', 'pencil',
+                       'check', 'rotate-ccw', 'trash']) {
+    assert.ok(new RegExp("_lucideIcon\\(['\"]" + name + "['\"]").test(win),
+      `plan-item action row must use _lucideIcon('${name}')`);
+  }
+  // Defensive: no emoji left in the action row markup. Strip line
+  // comments AND block comments first — historical context comments
+  // may legitimately reference the old emoji to explain the swap.
+  const noComments = win.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/👍|💬|✎|↻/.test(noComments),
+    'no emoji should remain in the plan-item action row code (r14 swap to SVG)');
+});
+
+t('index.html: r14 Bug/Feature/Todo filter chips use Lucide SVGs (no emoji)', () => {
+  // Filter chip labels must contain inline SVGs with the chrome family
+  // attributes (viewBox 24x24, stroke 1.75). The chip SVGs are big
+  // (~700 bytes each) so slice generously.
+  const startIdx = HTML.indexOf('id="plan-filter-row"');
+  const sec = HTML.slice(startIdx, startIdx + 5000);
+  assert.ok(/plan-filter-bug[\s\S]{0,800}<svg class="chip-svg"[^>]*stroke-width="1\.75"/.test(sec),
+    'Bug chip must use a Lucide SVG');
+  assert.ok(/plan-filter-feature[\s\S]{0,800}<svg class="chip-svg"[^>]*stroke-width="1\.75"/.test(sec),
+    'Feature chip must use a Lucide SVG');
+  assert.ok(/plan-filter-todo[\s\S]{0,800}<svg class="chip-svg"[^>]*stroke-width="1\.75"/.test(sec),
+    'Todo chip must use a Lucide SVG');
+  // No emoji remaining in the filter chip area itself (constrained to
+  // just the three chip labels — the OAuth flow comment elsewhere in
+  // the file is unrelated).
+  const chipsOnly = sec.slice(0, sec.indexOf('plan-open-only-toggle'));
+  assert.ok(!/🐞|✨|✅/.test(chipsOnly),
+    'filter chips must not contain 🐞/✨/✅ emoji (r14 swap)');
+});
+
+t('styles.css: r14 SVG sizing rules for chip + btn-icon + comment icons', () => {
+  assert.ok(/\.plan-type-chip\s+\.chip-svg/.test(CSS),
+    'must size chip-svg in filter chips');
+  assert.ok(/\.btn-icon\s+svg/.test(CSS),
+    'must size svg inside .btn-icon (run/edit/close/edited badge)');
+  assert.ok(/\.vote-icon\s+svg/.test(CSS),
+    'must size svg inside .vote-icon');
+  assert.ok(/\.artifact-comment-(edit|delete)\s+svg/.test(CSS),
+    'must size svg inside comment-edit/delete buttons');
+});
+
+t('app.js: r15 _togglePcfLineComment binds Esc to dismiss + shows "Esc to cancel" hint', () => {
+  const idx = APP.search(/function\s+_togglePcfLineComment\s*\(/);
+  const win = APP.slice(idx, idx + 3000);
+  assert.ok(/pcf-line-hint/.test(win),
+    'per-line form must render a .pcf-line-hint');
+  assert.ok(/Esc to cancel/.test(win),
+    'hint text must include "Esc to cancel"');
+  // Esc keydown handler on the textarea.
+  assert.ok(/key\s*===\s*['"]Escape['"]/.test(win),
+    'must bind keydown for Escape on the textarea');
+});
+
+t('app.js: r15 file-level reconsider form has Esc hint + handler', () => {
+  // The form lives inside _renderInlineDiffBody's HTML, and the Esc
+  // handler lives inside _bindDiffInteractions.
+  const renderIdx = APP.search(/function\s+_renderInlineDiffBody\s*\(/);
+  const renderWin = APP.slice(renderIdx, renderIdx + 3500);
+  assert.ok(/pcf-reconsider-hint/.test(renderWin),
+    'file-level form must render a .pcf-reconsider-hint');
+  assert.ok(/Esc to clear/.test(renderWin),
+    'hint text must include "Esc to clear"');
+  const bindIdx = APP.search(/function\s+_bindDiffInteractions\s*\(/);
+  const bindWin = APP.slice(bindIdx, bindIdx + 2000);
+  assert.ok(/key\s*===\s*['"]Escape['"]/.test(bindWin),
+    '_bindDiffInteractions must bind Escape on the file-level textarea');
+});
+
+t('app.js: r16 _planAcceptedPaths Set tracks accepted-this-session paths', () => {
+  assert.ok(/_planAcceptedPaths\s*=\s*new\s+Set\(\)/.test(APP),
+    '_planAcceptedPaths must be a Set');
+  // _planChangedFilesAction populates it on accept success.
+  const idx = APP.search(/async\s+function\s+_planChangedFilesAction\s*\(/);
+  const win = APP.slice(idx, idx + 2500);
+  assert.ok(/_planAcceptedPaths\.add/.test(win),
+    'accept success must add the path to _planAcceptedPaths');
+  // Refresh button clears it.
+  const refreshIdx = APP.search(/plan-changed-files-refresh/);
+  const refreshWin = APP.slice(refreshIdx, refreshIdx + 600);
+  assert.ok(/_planAcceptedPaths\s*=\s*new\s+Set\(\)/.test(refreshWin),
+    'Refresh button click must reset _planAcceptedPaths');
+});
+
+t('app.js: r16 _renderPlanChangedFiles emits .is-accepted + .pcf-accepted-badge + disabled buttons', () => {
+  const idx = APP.search(/function\s+_renderPlanChangedFiles\s*\(/);
+  const win = APP.slice(idx, idx + 5500);
+  assert.ok(/_planAcceptedPaths\.has\(e\.path\)/.test(win),
+    'render must check _planAcceptedPaths.has(e.path) per row');
+  assert.ok(/pcf-accepted-badge/.test(win),
+    'accepted rows must render a .pcf-accepted-badge');
+  assert.ok(/is-accepted-state/.test(win),
+    'accepted rows must render disabled .is-accepted-state buttons');
+  assert.ok(/disabled/.test(win),
+    'buttons must carry the HTML disabled attribute');
+});
+
+t('styles.css: r16 .is-accepted row styling + .pcf-accepted-badge + .is-accepted-state', () => {
+  assert.ok(/#plan-changed-files-list\s+li\.is-accepted\b/.test(CSS),
+    '.is-accepted row must have its own styling');
+  assert.ok(/\.pcf-accepted-badge\b/.test(CSS),
+    '.pcf-accepted-badge must be defined');
+  assert.ok(/\.pcf-row-btn\.is-accepted-state\b/.test(CSS),
+    '.pcf-row-btn.is-accepted-state must be defined (greyed-out look)');
 });
 
 // ──────────────────────────────────────────────────────────────────────

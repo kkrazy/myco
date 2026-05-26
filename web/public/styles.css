@@ -2539,6 +2539,57 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin-left: 6px;
   vertical-align: middle;
 }
+
+/* fr-77 r14: Lucide-style SVG sizing for the plan-view affordances
+   that swapped from emoji (🐞 ✨ ✅ 👍 💬 ▶ ✎ ✓ ↻ ×). Single block
+   keeps the family consistent — all 14px to match the per-row icons
+   in the Changed-files list (r13). The 18px chrome cluster icons sit
+   alone in 32px buttons; here they pair with text labels or sit in
+   denser rows, so a smaller 14px keeps proportions readable.
+   Inline-flex on the parent button keeps icon + text vertically
+   centered. */
+.plan-type-chip .chip-svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  flex-shrink: 0;
+}
+.artifact-item-actions .btn-icon svg,
+.artifact-item-edited .btn-icon svg,
+.vote-icon svg,
+.artifact-comment-toggle > svg {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: -2px;
+}
+.artifact-comment-edit svg,
+.artifact-comment-delete svg,
+.artifact-item-delete svg {
+  width: 13px;
+  height: 13px;
+  display: inline-block;
+  vertical-align: -1px;
+}
+/* The .btn-icon span sometimes is the wrapper around an SVG (r14) or
+   was the old emoji char (pre-r14). For the SVG case, drop the line-
+   height tweaks that were tuned for emoji — let the SVG dictate height. */
+.artifact-item-actions .btn-icon:has(svg),
+.artifact-item-edited .btn-icon:has(svg) {
+  display: inline-flex;
+  align-items: center;
+  font-size: inherit;
+  line-height: 1;
+}
+/* Coloured tints for state — checkmark green when an item is closed,
+   restart blue when reopened. Mirrors the chrome cluster's
+   .active state tint. */
+.is-done .artifact-item-close .btn-icon svg {
+  color: #6fdc97;
+}
+.artifact-vote.is-voted .vote-icon svg {
+  color: #58a6ff;
+}
 .artifact-item-edited,
 .comment-edited {
   font-size: 11px;
@@ -4160,6 +4211,72 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .pcf-line-send:hover { background: rgba(56, 139, 253, .25); }
 .pcf-line-cancel:hover { background: rgba(255, 255, 255, .08); }
+/* fr-77 r15: small "Esc to cancel/clear" hint text in both the per-line
+   + file-level reconsider forms. Muted italic so it reads as a
+   contextual key-hint, not as content. */
+.pcf-line-hint,
+.pcf-reconsider-hint {
+  flex: 1 1 auto;
+  color: var(--muted, #8b949e);
+  font-size: 0.7rem;
+  font-style: italic;
+  align-self: center;
+}
+.pcf-reconsider-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* fr-77 r16: accepted-file indicator. The row picks up .is-accepted on
+   the next re-render after the ✓ button (or Accept-all) succeeds for
+   that path; survives until the user hits the section's Refresh
+   chevron. A small green ✓ "accepted" chip + green-tinted row bg signal
+   the state; the accept/reject buttons go disabled-grey so the user
+   can't double-accept. */
+#plan-changed-files-list li.is-accepted {
+  background: rgba(46, 160, 67, .08);
+}
+#plan-changed-files-list li.is-accepted:hover {
+  background: rgba(46, 160, 67, .14);
+  color: var(--text);
+}
+.pcf-accepted-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  margin-left: 4px;
+  background: rgba(46, 160, 67, .15);
+  border: 1px solid rgba(46, 160, 67, .45);
+  border-radius: 9px;
+  color: #6fdc97;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.pcf-accepted-badge .pcf-accepted-svg {
+  width: 11px;
+  height: 11px;
+}
+/* Greyed-out state for the accept/reject buttons after accept. Disabled
+   via the HTML disabled attr + visually softened so they read as
+   "not actionable right now". */
+.pcf-row-btn.is-accepted-state {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: rgba(40, 40, 40, .25);
+  border-color: rgba(255, 255, 255, .05);
+}
+.pcf-row-btn.is-accepted-state:hover {
+  /* No hover state — keep the greyed look. */
+  background: rgba(40, 40, 40, .25);
+  color: var(--muted, #8b949e);
+  border-color: rgba(255, 255, 255, .05);
+}
 
 /* Inline file editor — fills the files-view-body with a monospace
    textarea. The Save / Cancel buttons live in the files-view-header
