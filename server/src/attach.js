@@ -1493,6 +1493,13 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
         : message.ts,
       selected: message.meta.selected,
     };
+    // r7 (fr-85): the popover is a tight floating panel — multi-
+    // paragraph essays don't fit. Wrap the user's question with a
+    // brevity nudge so claude replies in 1-3 short sentences. The
+    // wrap is invisible to the user (clarify rows are filtered from
+    // chat render; the popover preview shows the SELECTED text, not
+    // the question), so it's a purely LLM-facing instruction.
+    message.text = `[clarify — please answer concisely in 1-3 short sentences] ${text}`;
   }
   // [run:<type>#<id>] marker: the chat-pane's ▶ Run button on a
   // plan item produces this prefix. Stash {type, id} on the

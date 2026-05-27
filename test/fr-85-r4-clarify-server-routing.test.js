@@ -161,5 +161,27 @@ t('app.js: r2 — client passes questionTs in clarify meta', () => {
 // sites stay; they're no-ops for clients during a clarify because
 // _emit early-returns.
 
+t('attach.js: r7 — clarify branch wraps message.text with a brevity preamble before persistence', () => {
+  // User: "The response should be as concise as possible". The
+  // clarify branch must wrap message.text with an instruction that
+  // tells claude to reply in 1-3 short sentences so the popover
+  // doesn't fill with a multi-paragraph essay. The wrap is invisible
+  // in chat (clarify rows are filtered from render) and the popover
+  // preview shows the user's selected text, not the question — so
+  // the wrap is purely an LLM-facing nudge.
+  const idx = ATTACH.search(/function\s+handleChatMessage\s*\(/);
+  assert.ok(idx > -1, 'handleChatMessage must be defined');
+  const win = ATTACH.slice(idx, idx + 6000);
+  // The brevity instruction must be applied to message.text inside
+  // the clarify branch. We anchor on "concise" / "short sentences"
+  // so the test doesn't pin a specific wording.
+  assert.ok(/message\.text\s*=[\s\S]{0,400}(concise|short sentences|brief)/i.test(win),
+    'r7: clarify branch must rewrite message.text with a brevity instruction (concise / short sentences / brief)');
+  // The user's original text must be embedded in the wrapped string —
+  // we don't want to lose what they actually asked.
+  assert.ok(/message\.text\s*=[\s\S]{0,400}(\$\{text\}|`\s*\$\{|\+\s*text\b)/.test(win),
+    'r7: the wrap must include the original `text` so claude sees the actual question');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

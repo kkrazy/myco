@@ -3518,6 +3518,18 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-27T07:43:26.086Z"
           }
+        },
+        {
+          "id": "492ea84b7696",
+          "user": "kkrazy",
+          "text": "The response should be as concise as possible",
+          "ts": "2026-05-27T23:27:09.079Z"
+        },
+        {
+          "id": "fr85r7-479ebb8afa4a",
+          "user": "claude",
+          "text": "✓ r7: clarify branch now wraps question with brevity nudge (1-3 sentences). server/src/attach.js handleChatMessage. Test: test/fr-85-r4-clarify-server-routing.test.js r7 guard. 9/9 server-routing + 27/27 popover + 101/101 sweep green.",
+          "ts": "2026-05-27T23:33:21.388Z"
         }
       ],
       "meta": {
@@ -3563,5 +3575,5 @@
       "description": "**Problem:** Clicking 'Build' submits an incomplete payload, losing the description and comments.\n**Expected:** 'Build' sends the full content — title, description, and comments.\n**Actual:** Only the title is sent; description and comments are dropped."
     }
   ],
-  "updatedAt": "2026-05-27T08:36:02.689Z"
+  "updatedAt": "2026-05-27T23:33:21.389Z"
 }
