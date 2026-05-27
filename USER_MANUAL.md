@@ -1,95 +1,123 @@
-# myco — Cheat Sheet
+# myco — Getting Started
 
-Shared work surface for humans + autonomous agents on the same project.
+A shared workspace where you and an AI coding agent work on the same
+project, together. You talk to it like a teammate; it edits files,
+runs commands, files issues, and ships PRs.
 
-**+ New session** in the sidebar → chat opens → type to steer the agent.
+## 1. Sign in
 
-## Git — `/git <args>`  *(owner/admin)*
+Click **Sign in with GitHub**. First-time users need to be on the
+project's invite list — ask whoever sent you the link to add your
+GitHub login if you see "Not invited yet".
 
-**Clone a repo to get started.** Every session is a fresh workspace —
-bring code in first. Full pass-through to the `git` CLI.
+## 2. Open your first session
+
+Click **+ New session** in the left sidebar. A session is one
+isolated workspace — its own folder, its own chat history, its own
+plan. Type a friendly label (optional) and confirm.
+
+## 3. Bring code in — `/git clone`
+
+Every session starts empty. The most common first command:
 
 ```
 /git clone https://github.com/owner/repo
+```
+
+That's it — the agent now sees the code and can read, edit, and
+commit. Other `/git` commands work the same way:
+
+```
 /git status
 /git log --oneline -10
 /git diff HEAD~3
-/git fetch origin
 /git commit -m "fix: bug X"
 ```
 
-Caps 60 s · 1 MB stdout · 16 KB stderr · `GIT_TERMINAL_PROMPT=0` (fails fast). Private repos: embed PAT in URL `https://x-access-token:<PAT>@github.com/...` or `/setpat <token>` first. `--global` mutates container `$HOME` (affects ALL sessions) — prefer project-scoped `git config`.
+Private repos: use `/setpat <token>` once to store a personal access
+token, then `/git clone` works without inline credentials.
 
-## Plan — `/td` `/fr` `/bug`
+## 4. Talk to the agent
 
-Items live in `_myco_/plan.json` (git-tracked) → `git clone` = full onboarding.
+Just type. The agent reads your message, plans, then acts — editing
+files, running tests, asking permission before anything destructive.
 
-```
-/td bump node in dockerfile
-/fr add dark-mode toggle
-/bug load-older loops past page 5
-/bug! <text>                   ← agent rewrites into Problem/Expected/Actual
-/fr @myco add dark-mode toggle ← files an issue on github.com/kkrazy/myco (uses your PAT)
-/fr @myco --as labxnow ...     ← picks the `labxnow` PAT alias (multi-account via /setpat --as)
-```
-
-**Multi-account / switch PATs (fr-82):** stash multiple PATs per target under named aliases and pick which one to use per command.
-- `/setpat @<target> [--as <alias>] <token>` — store (with optional alias)
-- `/fr @<target> [--as <alias>] <text>` — use (omit `--as` to use the default un-aliased PAT, or fall back to your GitHub OAuth login)
-- `/listpat [@<target>]` — show which aliases are stored
-
-
-Per-item: vote · comment · edit · ▶ Run (Fix/Implement/Do) · Close/Reopen · delete. Items with optional `analysis` / `implPlan` fields render collapsible Analysis / Implementation-plan accordions.
-
-## Changed files (Plan footer)
-
-Scroll past the plan items. Drag the top strip to resize.
-
-- **Mentions / Recent** rows — bug/fr/td tokens from diff + last 5 commit subjects
-- **+N −M chip** per file (lines added / removed)
-- **Click a row** — inline-expand the diff with per-language syntax highlight
-- **Click any `+` / context line** — per-line comment to the AI (Esc cancels)
-- **✓ Accept** = `git add <file>` · **✕ Reject** = revert tracked / DELETE untracked (confirms)
-- **Accept all / Reject all** — header bulk buttons
-
-## Chat + roles
-
-| | |
+| You type | What happens |
 |---|---|
-| Plain text | → the agent |
-| `@user` / `@all` | discussion (not the agent) |
-| `/cmd` | slash command |
-| **Stop** (red ■) | interrupts in-flight turn |
-| **Permission modal** | Allow once / always / Deny |
-| **↑ / ↓** at input edge | recall previous messages (this session) |
+| **Plain text** | The agent picks it up and works on it |
+| `@user` / `@all` | Message a teammate (the agent ignores it) |
+| `/cmd` | Run a slash command |
+| **Stop** (red ■) | Interrupt the agent mid-turn |
+| **Permission modal** | Allow once / Allow always / Deny |
+| **↑ / ↓** at line start | Recall your previous messages |
 
-Roles — **Owner** (spawner) · **Admin** (`/admin <login>`) · **Guest** (share link / non-allowlisted; `@mention` + file plan items only).
+## 5. File work as you go — `/td`, `/fr`, `/bug`
 
-## Run queue
+Keep work-in-progress in the **Plan** tab. Items live in
+`_myco_/plan.json` (git-tracked), so they travel with the repo.
 
-`/queue fr-43 bug-21` adds + auto-dispatches if idle. `/qstatus` · `/qcancel <id>` · `/qclear` · `/qresume` after auto-pause-on-failure. `/next` ranks top-10 open items (LLM rerank, cached 2h).
+```
+/td   bump node version in dockerfile
+/fr   add a dark-mode toggle
+/bug  load-older button loops past page 5
+/bug! <text>                    ← agent rewrites into Problem/Expected/Actual format
+/fr @myco add dark-mode toggle  ← files the issue on github.com/kkrazy/myco
+```
 
-## Files + editor
+Per item: vote · comment · edit · **▶ Run** (the agent picks it up
+and works on it) · Close/Reopen · delete.
 
-Tree → click any text file. **✎ Edit** in the header (owner/admin) opens CodeMirror 6 with highlight / line nums / search / fold. Cmd/Ctrl+S to save · Esc to cancel. Mtime check prevents silent overwrites.
+## 6. Plan view — what's around the items
 
-## Sharing · cross-device · mobile
+Scroll past the plan items for **Changed files** (the diff for any
+work the agent did this session):
 
-Mint a share link from the session menu → read-only viewer (sees live chat + tools + plan + files; can `@mention` + file plan items). Phone ↔ laptop in seconds; lossless reconnect after network blips. Mobile (≤900px): sidebar + chat are mutually exclusive overlays — back icon ☰ toggles.
+- **+N −M** per file (lines added / removed)
+- **Click a row** to inline-expand the diff with syntax highlight
+- **Click any `+` line** to drop a per-line comment for the agent
+- **✓ Accept** stages the file · **✕ Reject** reverts it
+- **Accept all / Reject all** in the header for bulk ops
 
-## Slash commands (reference)
+## 7. Files tab — browse + edit
 
-**Guest**: `/help` · `/me` · `/whoami` · `/td` `/fr` `/bug` · `/task` `/skip` `/cancel` · `/allowlist` · `/qstatus` · `/whatsnext` `/next`
+Click any text file to view it. **✎ Edit** opens an in-browser
+editor with syntax highlight, line numbers, search, and fold.
+Cmd/Ctrl-S to save, Esc to cancel.
 
-**Owner/admin**: `/admin` · `/git` · `/queue` `/qcancel` `/qclear` `/qresume` · `/btw` · `/feature` `/bug` (GitHub issue) · `/setpat <token>`
+## 8. Run queue
+
+When the agent is working on a Plan item and you want to queue more:
+
+```
+/queue fr-43 bug-21       ← add to queue, auto-dispatches if idle
+/qstatus                  ← see what's running
+/qcancel <id>             ← drop a queued item
+/next                     ← agent ranks the top 10 open items for you
+```
+
+## 9. Share + mobile
+
+From the session menu, mint a **share link** — anyone with the link
+gets a read-only view (live chat, tools, plan, files; they can
+`@mention` and file plan items but can't drive the agent).
+
+Same link works on phone and laptop — switch devices any time, the
+chat history is the same.
+
+## Slash commands — quick reference
+
+**Anyone**: `/help` · `/me` · `/whoami` · `/td` `/fr` `/bug` ·
+`/task` · `/qstatus` · `/next`
+
+**Owner / admin**: `/admin <login>` · `/git <args>` · `/queue`
+`/qcancel` `/qclear` `/qresume` · `/setpat <token>`
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `connecting…/reconnecting…` loop | Try incognito (clears HTTP/3 `alt-svc`) — WSS being stripped by firewall/VPN |
-| "Not invited yet" | Ask host to add your GitHub login to `allowed-github-users.txt` |
-| `/feature` "no token" | Sign out + in OR `/setpat <token>` |
-| ✎ Edit hidden | Hard-refresh; confirm not in viewer mode |
-| Queue stalls | `/qcancel <id>` |
-| Chat input red ring | Guest-restricted text — use `@mention` |
+| Chat keeps showing `connecting…` | Try an incognito window — usually a stale browser cache or a firewall stripping WebSockets |
+| "Not invited yet" on sign-in | Ask the host to add your GitHub login to the invite list |
+| `/fr @<repo>` says "no token" | Sign out and back in, OR run `/setpat <token>` |
+| ✎ Edit button missing | Hard-refresh the page; only owners and admins can edit |
+| Queue isn't moving | `/qcancel <id>` to drop the stuck item, or `/qresume` after a failure |
