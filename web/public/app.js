@@ -2071,7 +2071,14 @@ async function _diagramSave() {
     const body = await res.json();
     const input = document.getElementById('chat-input');
     if (input) {
-      const md = `![diagram](${body.url})`;
+      // r4: include the relative filesystem path on a second line as
+      // plain text. The markdown image (line 1) renders for humans;
+      // the `(saved at: ...)` line (line 2) lets the in-session agent
+      // pull the path out of chat history and Read the SVG bytes with
+      // its standard Read tool. body.path is the server-returned
+      // `_myco_/diagrams/<filename>.svg` — resolves correctly from
+      // any agent cwd because cwd is always the session workspace.
+      const md = `![diagram](${body.url})\n(saved at: ${body.path})`;
       // Append on a new line if there's already content, otherwise
       // just drop the markdown in.
       const cur = input.value || '';
