@@ -55,6 +55,21 @@ function _artifactCommentsBlock(item) {
   }
   return lines;
 }
+// bug-36: claude only saw the one-line title and the comments —
+// item.description (the Problem/Expected/Actual body fr-80 r6 added
+// when it rewrites a long input) was silently dropped. Without the
+// body, claude often re-derived (or invented) the issue's context
+// instead of using what the user actually wrote. Both builders
+// (Run/Fix/Implement/Do AND the quorum auto-fire) need the same fix.
+function _artifactDescriptionBlock(item) {
+  const desc = item && typeof item.description === 'string'
+    ? item.description.trim()
+    : '';
+  if (!desc) return [];
+  // Blank line separator before the body so it reads as a distinct
+  // section from the title row above.
+  return ['', desc];
+}
 function buildArtifactRunText(type, item, user) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
   // fr-48 bugfix: prepend the [run:<type>#<id>] marker. attach.js
@@ -67,7 +82,15 @@ function buildArtifactRunText(type, item, user) {
   // call sites that build dispatch text without a backing plan item.
   const runMarkerPrefix = item && item.id ? `[run:${type}#${item.id}] ` : '';
   const header = `${runMarkerPrefix}[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
-  return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
+  // bug-36: ORDER is header → title (item.text) → description (body)
+  //         → comments. Description must come BEFORE comments so the
+  //         issue body is what claude reads first.
+  return [
+    header,
+    item.text || '',
+    ..._artifactDescriptionBlock(item),
+    ..._artifactCommentsBlock(item),
+  ].join('\n');
 }
 function buildArtifactQuorumText(type, item) {
   const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
@@ -77,7 +100,13 @@ function buildArtifactQuorumText(type, item) {
   // handleChatMessage path and needs _activeRunItem set.
   const runMarkerPrefix = item && item.id ? `[run:${type}#${item.id}] ` : '';
   const header = `${runMarkerPrefix}[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
-  return [header, item.text || '', ..._artifactCommentsBlock(item)].join('\n');
+  // bug-36: same description ordering as buildArtifactRunText.
+  return [
+    header,
+    item.text || '',
+    ..._artifactDescriptionBlock(item),
+    ..._artifactCommentsBlock(item),
+  ].join('\n');
 }
 
 // All three artifacts (plan / test / arch) are mirrored into
