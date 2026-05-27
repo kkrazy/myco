@@ -64,6 +64,8 @@
 
 ## Deployment
 
+0. **NEVER deploy unless the user explicitly asks for it — opti is in production.** As of 2026-05-27 `opti.labxnow.ai` is the live production surface. Push-and-deploy is no longer an implicit part of any task; landing code on `main` is finishing the task. Do not run `./scripts/deploy.sh`, do not scp the source archive to a host, do not SSH into opti to swap the container, do not propose deploying as the next step. Wait for the user to say "deploy" (or "ship", "release", "push to opti", etc.) before running any deploy command. The same rule applies to `myco.labxnow.ai` and `mycobeta.labxnow.ai`. The recipes in §1 + §2 below describe HOW to deploy — they do not authorize WHEN.
+
 1. **Always deploy via `./scripts/deploy.sh`.** It builds the Docker image locally, streams it over SSH to `myco.labxnow.ai`, and swaps the container against a single bind-mounted state directory. Do not push raw source or `systemctl restart` on the remote.
 
 2. **Deploying to `mycobeta.labxnow.ai`: do it on the host itself.** Local Docker is often unavailable, so the working recipe (verified 2026-05-11) is: `git archive HEAD -o /tmp/myco-src.tgz`, `scp` it to `kkrazy@mycobeta.labxnow.ai:/tmp/`, extract into `~/myco-src` (overwriting), then `ssh kkrazy@mycobeta.labxnow.ai 'cd ~/myco-src && MYCO_DEPLOY_HOST=kkrazy@localhost ./scripts/deploy.sh'`. The script SSHes back to localhost on mycobeta and runs the normal build/swap there. ssh-to-self on mycobeta is already set up.
