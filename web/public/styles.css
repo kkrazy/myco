@@ -3107,11 +3107,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
-  padding: 8px 10px;
-  background: rgba(28, 30, 34, .98);
-  border: 1px solid rgba(80, 120, 200, .45);
+  padding: 10px 12px;
+  /* r6: lift the bg from near-black to a clearly lighter neutral so
+     the popover reads as a floating panel against the chat surface
+     (user: "make the popover background stand out a bit more").
+     Pairs with a brighter accent border + deeper drop shadow. */
+  background: rgba(46, 52, 64, 1);
+  border: 1px solid rgba(120, 160, 230, .7);
   border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .6),
+              0 0 0 1px rgba(120, 160, 230, .18);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }

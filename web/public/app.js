@@ -3359,8 +3359,12 @@ function _clarifyReposition() {
   const chatRect = chatList && chatList.getBoundingClientRect
     ? chatList.getBoundingClientRect()
     : { left: 0, top: 0, width: window.innerWidth, bottom: window.innerHeight };
-  const left  = chatRect.left + window.scrollX;
-  const width = Math.max(120, chatRect.width);
+  // r6: inset horizontally so the popover floats inside the chat
+  // window rather than butting against its edges (user: "the width
+  // should leave some spacing"). Margin applied symmetrically.
+  const CLARIFY_H_MARGIN = 16;
+  const left  = chatRect.left + window.scrollX + CLARIFY_H_MARGIN;
+  const width = Math.max(120, chatRect.width - CLARIFY_H_MARGIN * 2);
   const top   = rect.bottom + window.scrollY + 8;
   pop.style.left  = left  + 'px';
   pop.style.top   = top   + 'px';

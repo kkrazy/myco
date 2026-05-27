@@ -378,6 +378,56 @@ t('app.js: r5 — no auto-close on outside click (popover only closes on × / Es
   );
 });
 
+t('app.js: r6 — popover width is inset from the chat-messages bbox (visible side spacing)', () => {
+  // User: "the width should leave some spacing". r5 set
+  // width = chatRect.width flush, which put the popover edges right
+  // up against the chat-window edges. r6 insets by a horizontal margin
+  // (≥ 8 px each side) so the popover floats inside the chat-window
+  // padding instead of butting against it.
+  const idx = APP.search(/function\s+_clarifyReposition\s*\(\s*\)/);
+  assert.ok(idx > -1, '_clarifyReposition must be defined');
+  const win = APP.slice(idx, idx + 1800);
+  // Width must subtract a positive horizontal-margin literal (not
+  // chatRect.width on its own). Accept any explicit subtraction.
+  assert.ok(
+    /chatRect\.width\s*-\s*(?:\d+|[A-Za-z_$][\w$]*\s*\*\s*2|2\s*\*\s*[A-Za-z_$][\w$]*)/.test(win),
+    'r6: width must be chatRect.width minus a horizontal margin (was flush chatRect.width)'
+  );
+  // Left must add the same margin so the popover is centered inside
+  // the chat-messages box (not just narrower on the right side).
+  assert.ok(
+    /chatRect\.left\s*\+\s*window\.scrollX\s*\+\s*(?:\d+|[A-Za-z_$][\w$]*)/.test(win),
+    'r6: left must be chatRect.left + scrollX + margin (offset matching the width inset)'
+  );
+});
+
+t('css: r6 — popover background stands out from the chat surface', () => {
+  // User: "make the popover background stand out a bit more". Visual
+  // distinguishability is hard to assert pixel-perfectly, so the
+  // surrogate is: the bg-color must NOT be the prior near-black
+  // rgba(28, 30, 34, …) — it must be lifted to a lighter neutral, AND
+  // there must be a stronger border / shadow signal so the popover
+  // reads as a floating panel rather than a flat extension of the
+  // chat background.
+  const idx = CSS.search(/#chat-clarify-popover\s*\{/);
+  assert.ok(idx > -1, '#chat-clarify-popover rule must exist');
+  // Comments + multi-line shadow push the rule body past ~800; slice big.
+  const win = CSS.slice(idx, idx + 1500);
+  // Negative guard: the prior near-black bg should be gone.
+  assert.ok(
+    !/background:\s*rgba\(\s*28\s*,\s*30\s*,\s*34\s*,/.test(win),
+    'r6: bg must NOT remain rgba(28, 30, 34, …) — lift to a lighter neutral so it stands out'
+  );
+  // Positive guard: a background declaration is still present.
+  assert.ok(/background:\s*rgba?\(/.test(win),
+    'r6: popover must still set an explicit background-color');
+  // Positive guard: shadow / border still applied so the panel reads as elevated.
+  assert.ok(/box-shadow:/.test(win),
+    'r6: popover must keep box-shadow (elevation cue)');
+  assert.ok(/border:\s*1px\s+solid\s+rgba\(/.test(win),
+    'r6: popover must keep a colored border (panel edge)');
+});
+
 t('app.js: popover closes on Escape', () => {
   const idx = APP.search(/function\s+_closeClarifyPopover\s*\(\s*\)/);
   assert.ok(idx > -1, '_closeClarifyPopover must be defined');
