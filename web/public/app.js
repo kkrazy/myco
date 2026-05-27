@@ -3390,17 +3390,22 @@ function _openClarifyPopover() {
     preview.textContent = `Clarify: "${trimmed}"`;
   }
   pop.style.display = 'flex';
-  // Position UNDER the selection, clamped to viewport. Anchor coords
-  // are page-relative via window.scrollX/Y so it survives a scroll
-  // (popover lives at body so position:absolute is page-relative).
-  const POP_W = 360;
-  const left = Math.max(8, Math.min(
-    window.innerWidth - POP_W - 8,
-    rect.left + window.scrollX + (rect.width / 2) - (POP_W / 2)
-  ));
-  const top = rect.bottom + window.scrollY + 8;
-  pop.style.left = left + 'px';
-  pop.style.top  = top  + 'px';
+  // r3: position UNDER the selection vertically (rect.bottom +
+  // scrollY), but anchor the popover HORIZONTALLY to the chat
+  // window (#chat-messages) — not the selection. Width tracks the
+  // chat window too. Matches the user's "always left-align with
+  // the chat window, width = chat window width" ask. Falls back to
+  // viewport bounds if the chat-messages element isn't in the DOM.
+  const chatList = document.getElementById('chat-messages');
+  const chatRect = chatList && chatList.getBoundingClientRect
+    ? chatList.getBoundingClientRect()
+    : { left: 0, width: window.innerWidth };
+  const left  = chatRect.left  + window.scrollX;
+  const width = Math.max(120, chatRect.width);   // sanity floor for narrow viewports
+  const top   = rect.bottom + window.scrollY + 8;
+  pop.style.left  = left  + 'px';
+  pop.style.top   = top   + 'px';
+  pop.style.width = width + 'px';
   // Focus the input so the user can type immediately.
   const input = pop.querySelector('#chat-clarify-input');
   if (input) { input.value = ''; input.focus(); }

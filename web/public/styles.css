@@ -3096,7 +3096,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #chat-clarify-popover {
   position: absolute;
   z-index: 9500;
-  width: 360px;
+  /* r3: width is set inline from JS to match #chat-messages width;
+     min-width is just a safety floor for tiny viewports. */
+  min-width: 120px;
+  box-sizing: border-box;
   display: none;
   flex-direction: row;
   align-items: center;

@@ -156,6 +156,60 @@ t('app.js: selected range is wrapped in .chat-clarify-anchor on submit (visual c
 
 // ── Cleanup behavior ────────────────────────────────────────────────
 
+t('app.js: r3 — popover left + width come from #chat-messages bbox (not the selection)', () => {
+  // User: "the pop up should always left align with the chat window
+  // and below the content highlighted, with width the same as the
+  // chat window".
+  // Position formula must read #chat-messages.getBoundingClientRect()
+  // for left + width; only the vertical anchor (top) still comes
+  // from the selection's bbox.
+  const idx = APP.search(/function\s+_openClarifyPopover\s*\(\s*\)/);
+  assert.ok(idx > -1, '_openClarifyPopover must exist');
+  // r3 made the function longer (chat-rect lookup + width set);
+  // widen the slice past the position-set lines.
+  const win = APP.slice(idx, idx + 4500);
+  // Must look up #chat-messages for horizontal alignment.
+  assert.ok(/getElementById\(['"]chat-messages['"]\)/.test(win) ||
+            /querySelector\(['"]#chat-messages['"]\)/.test(win),
+    '_openClarifyPopover must read #chat-messages for horizontal alignment');
+  // Must call .getBoundingClientRect() on the chat-messages element.
+  assert.ok(/\.getBoundingClientRect\(\)/.test(win),
+    '_openClarifyPopover must compute the chat window\'s bbox');
+  // Must explicitly set width on the popover (chat-window width, not
+  // the old fixed 360 px).
+  assert.ok(/(pop|popover)\.style\.width\s*=/i.test(win),
+    'popover must set style.width from JS (chat-window width, not a fixed CSS value)');
+  // The OLD 360-fixed POP_W constant should be gone — it pinned the
+  // wrong width model. A guard against a future "let me just hardcode
+  // it back" regression.
+  assert.ok(!/POP_W\s*=\s*360/.test(win),
+    'the fixed POP_W=360 constant must be gone — width now comes from chat-messages bbox');
+});
+
+t('app.js: r3 — vertical anchor still uses the selection\'s bottom (below the highlight)', () => {
+  const idx = APP.search(/function\s+_openClarifyPopover\s*\(\s*\)/);
+  const win = APP.slice(idx, idx + 4500);
+  // Selection range provides `rect.bottom + scrollY` for the top.
+  assert.ok(/rect\.bottom\s*\+\s*window\.scrollY/.test(win) ||
+            /selRect\.bottom\s*\+\s*window\.scrollY/.test(win),
+    'top position must still use the selection bbox\'s bottom (popover sits BELOW the highlight)');
+});
+
+t('css: #chat-clarify-popover no longer pins a fixed width', () => {
+  // Width is now JS-driven per chat-window. CSS should NOT lock a
+  // pixel width on the element — leave it loose so the JS value wins.
+  // A `min-width` or `max-width` is fine; a fixed `width: <px>;` is
+  // what we're guarding against.
+  const idx = CSS.search(/#chat-clarify-popover\s*\{/);
+  assert.ok(idx > -1, '#chat-clarify-popover rule must exist');
+  const win = CSS.slice(idx, idx + 800);
+  // No literal `width: 360px` (or similar pinned px) inside the base
+  // rule. Match `width:` followed by a digit + px (a hard pixel pin)
+  // but NOT prefixed by min-/max-.
+  assert.ok(!/(?<!(min-|max-))width:\s*\d+px/.test(win),
+    '#chat-clarify-popover base rule must not pin a fixed pixel width — JS sets it from chat-window bbox now');
+});
+
 t('app.js: popover closes on Escape', () => {
   const idx = APP.search(/function\s+_closeClarifyPopover\s*\(\s*\)/);
   assert.ok(idx > -1, '_closeClarifyPopover must be defined');
