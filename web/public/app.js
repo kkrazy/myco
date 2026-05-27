@@ -2088,6 +2088,16 @@ async function _diagramSave() {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
       try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+      // r5: per user request — Insert = insert AND send directly,
+      // no second click on Send required. Trigger the chat-form
+      // submit so the existing submit listener (which calls the
+      // closure-scoped submitChat()) handles the ship through its
+      // normal path — guest gates, history push, claude wakeup all
+      // apply. Lives in the success branch only: failed saves stay
+      // in the modal with their error and DON'T auto-send anything.
+      const form = document.getElementById('chat-form');
+      if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
+      else if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     }
     closeDiagramModal();
   } catch (err) {
