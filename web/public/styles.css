@@ -7593,6 +7593,26 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   user-select: none;
   -webkit-user-select: none;
 }
+/* fr-84 r2: select-tool cursor swap. Active when the SVG canvas
+   carries data-tool="select" (set by the tool-pick handler).
+   Default cursor is the standard pointer; switches to "move" when
+   hovering a drawn shape with the select tool active (so the user
+   knows clicking will drag it). */
+#diagram-canvas[data-tool="select"] { cursor: default; }
+#diagram-canvas[data-tool="select"] #diagram-layer > * { cursor: move; }
+/* fr-84 r2: selected-shape indicator. We can't add a stroke to an
+   arbitrary <g> from rough.js (it would double-draw), so we drop a
+   dashed bbox marker via an outline filter. The `.diagram-selected`
+   class is added/removed by the select tool. */
+#diagram-layer > .diagram-selected {
+  outline: 2px dashed rgba(80, 120, 200, .9);
+  outline-offset: 4px;
+  /* outline-on-svg-elements isn't universally supported — fall back
+     to a CSS filter that approximates a glow so the user still has
+     a visual cue on Safari / older WebKit. */
+  filter: drop-shadow(0 0 0 rgba(80, 120, 200, .85))
+          drop-shadow(0 0 4px rgba(80, 120, 200, .75));
+}
 #diagram-status {
   padding: 6px 16px;
   min-height: 22px;

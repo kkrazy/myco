@@ -1667,12 +1667,20 @@ function closeManualModal() {
 //     the saved file is literally `<svg>...</svg>` — no rasterization,
 //     no canvas-to-PNG, no third-party serializer.
 //
-// Tools (5): pen (freehand polyline), rect, ellipse, line, text.
-// Colors (4) + stroke widths (3). Undo pops last shape; clear empties
-// the layer.
+// Tools (8 — r2: +select, +arrow, +diamond): select, pen, rect,
+// ellipse, diamond, line, arrow, text. Colors (4) + stroke widths (3).
+// Undo pops last shape; clear empties the layer. Delete key removes
+// selected shapes. r2 wraps the shape primitives in rough.js so
+// rect/ellipse/line/arrow/diamond gain a hand-drawn aesthetic; pen
+// and text stay vanilla.
 
-const DIAGRAM_TOOLS = ['pen', 'rect', 'ellipse', 'line', 'text'];
+const DIAGRAM_TOOLS = ['select', 'pen', 'rect', 'ellipse', 'diamond', 'line', 'arrow', 'text'];
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// r2: rough.js generator slot — created lazily on modal open (after
+// the iframe of the canvas exists). Reused across draws; recreated
+// per shape with a fixed seed so live-preview strokes don't dance.
+let _diagramRough = null;
+let _diagramShapeSeed = 0;
 
 const _diagramState = {
   tool: 'pen',
@@ -1682,6 +1690,10 @@ const _diagramState = {
   currentShape: null,    // SVG element being constructed during a drag
   penPoints: [],         // accumulated [x,y] for pen mode
   dragStart: null,       // {x, y} for shape tools
+  // r2: select-tool state.
+  selection: new Set(),  // Set<SVGElement> currently selected
+  selectMode: 'idle',    // 'idle' | 'rubber-band' | 'move-selected'
+  moveBases: new Map(),  // Map<el, {tx, ty}> base translate at drag-start
 };
 
 function _diagramSvgPoint(evt) {
@@ -1708,15 +1720,160 @@ function _diagramAttachStroke(el) {
   el.setAttribute('fill', 'none');
 }
 
+// ── r2: rough.js wrappers + select-tool helpers ────────────────────
+
+// Returns rough.js options keyed off the active color + width. Each
+// shape gets a fresh seed at mousedown so the sketchy stroke pattern
+// stays stable through the drag's mousemove preview redraws.
+function _diagramRoughOpts(seed) {
+  return {
+    stroke: _diagramState.color,
+    strokeWidth: _diagramState.width,
+    roughness: 1.6,        // amount of sketchy wobble; ~1.0 is mild, 2.0 is wild
+    bowing: 1.4,           // how curved straight lines get
+    fill: 'none',
+    seed,                  // pinned per-shape so live preview doesn't flicker
+  };
+}
+
+// Wraps rough.js for a single primitive. `factory(roughGen, opts)`
+// must return a fresh <g> element (rough.js's standard return type).
+// Replaces `state.currentShape` so live preview during drag works:
+// each mousemove tick removes the previous <g> and appends a new one.
+function _diagramReplaceCurrent(factory) {
+  const layer = document.getElementById('diagram-layer');
+  if (!layer || !_diagramRough) return;
+  if (_diagramState.currentShape && _diagramState.currentShape.parentNode === layer) {
+    layer.removeChild(_diagramState.currentShape);
+  }
+  const opts = _diagramRoughOpts(_diagramShapeSeed);
+  const el = factory(_diagramRough, opts);
+  if (el) layer.appendChild(el);
+  _diagramState.currentShape = el;
+}
+
+// Element bbox in canvas viewBox coords. getBBox() returns the
+// element's local bbox; we shift it by the element's translate
+// (transform="translate(tx ty)") to land in canvas space.
+function _diagramElementBBox(el) {
+  let bb;
+  try { bb = el.getBBox(); } catch { return null; }
+  const tr = el.getAttribute('transform') || '';
+  const m = tr.match(/translate\(\s*([-\d.]+)[ ,]+([-\d.]+)\s*\)/);
+  const tx = m ? parseFloat(m[1]) : 0;
+  const ty = m ? parseFloat(m[2]) : 0;
+  return { x: bb.x + tx, y: bb.y + ty, width: bb.width, height: bb.height };
+}
+
+// True if point (px, py) is inside element's bbox.
+function _diagramHitTest(el, px, py) {
+  const bb = _diagramElementBBox(el);
+  if (!bb) return false;
+  return px >= bb.x && px <= bb.x + bb.width && py >= bb.y && py <= bb.y + bb.height;
+}
+
+// True if `inner` bbox is fully contained inside `outer` bbox.
+function _diagramBBoxContains(outer, inner) {
+  return inner.x >= outer.x &&
+         inner.y >= outer.y &&
+         inner.x + inner.width  <= outer.x + outer.width &&
+         inner.y + inner.height <= outer.y + outer.height;
+}
+
+// Find topmost (last-in-DOM-order) shape under cursor — children
+// later in DOM render on top, so iterate in reverse for click priority.
+function _diagramTopmostAt(px, py) {
+  const layer = document.getElementById('diagram-layer');
+  if (!layer) return null;
+  const kids = Array.from(layer.children);
+  for (let i = kids.length - 1; i >= 0; i--) {
+    if (_diagramHitTest(kids[i], px, py)) return kids[i];
+  }
+  return null;
+}
+
+function _diagramSetSelected(el, on) {
+  if (!el) return;
+  if (on) {
+    el.classList.add('diagram-selected');
+    _diagramState.selection.add(el);
+  } else {
+    el.classList.remove('diagram-selected');
+    _diagramState.selection.delete(el);
+  }
+}
+
+function _diagramClearSelection() {
+  for (const el of _diagramState.selection) el.classList.remove('diagram-selected');
+  _diagramState.selection.clear();
+}
+
+function _diagramDeleteSelection() {
+  if (!_diagramState.selection.size) return;
+  for (const el of _diagramState.selection) {
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }
+  _diagramState.selection.clear();
+}
+
+// Read the current translate offset from an element's transform attr.
+function _diagramGetTranslate(el) {
+  const tr = el.getAttribute('transform') || '';
+  const m = tr.match(/translate\(\s*([-\d.]+)[ ,]+([-\d.]+)\s*\)/);
+  return { tx: m ? parseFloat(m[1]) : 0, ty: m ? parseFloat(m[2]) : 0 };
+}
+function _diagramSetTranslate(el, tx, ty) {
+  el.setAttribute('transform', `translate(${tx.toFixed(2)} ${ty.toFixed(2)})`);
+}
+
+// ── r2 pointer dispatch ─────────────────────────────────────────────
+// Per tool, pointer-down opens a fresh draw OR a select interaction.
+// rect/ellipse/diamond/line/arrow are rough.js-rendered; pen + text
+// stay vanilla (rough.js doesn't help freehand or text rendering).
+
 function _diagramOnPointerDown(evt) {
   const layer = document.getElementById('diagram-layer');
   if (!layer) return;
   evt.preventDefault();
   const p = _diagramSvgPoint(evt);
   const s = _diagramState;
+  // ── select tool: click hit-test or rubber-band ──
+  if (s.tool === 'select') {
+    const hit = _diagramTopmostAt(p.x, p.y);
+    if (hit) {
+      if (evt.shiftKey) {
+        // Toggle hit in selection.
+        if (s.selection.has(hit)) _diagramSetSelected(hit, false);
+        else                      _diagramSetSelected(hit, true);
+      } else {
+        // If hit already in selection, keep current selection (about to
+        // drag the whole group). Otherwise replace selection with just hit.
+        if (!s.selection.has(hit)) { _diagramClearSelection(); _diagramSetSelected(hit, true); }
+      }
+      // Start a move-selected drag — even if only one shape.
+      s.selectMode = 'move-selected';
+      s.dragStart = p;
+      s.moveBases.clear();
+      for (const el of s.selection) s.moveBases.set(el, _diagramGetTranslate(el));
+    } else {
+      if (!evt.shiftKey) _diagramClearSelection();
+      s.selectMode = 'rubber-band';
+      s.dragStart = p;
+      const rb = document.getElementById('diagram-rubber');
+      if (rb) {
+        rb.setAttribute('x', String(p.x)); rb.setAttribute('y', String(p.y));
+        rb.setAttribute('width', '0'); rb.setAttribute('height', '0');
+        rb.setAttribute('visibility', 'visible');
+      }
+    }
+    return;
+  }
+  // ── draw tools ──
   s.isDrawing = true;
   s.dragStart = p;
+  _diagramShapeSeed = Math.floor(Math.random() * 2 ** 31);  // per-shape seed
   if (s.tool === 'pen') {
+    // Pen stays vanilla: incremental polyline grows on every mousemove.
     s.penPoints = [`${p.x.toFixed(1)},${p.y.toFixed(1)}`];
     const el = document.createElementNS(SVG_NS, 'polyline');
     _diagramAttachStroke(el);
@@ -1724,28 +1881,25 @@ function _diagramOnPointerDown(evt) {
     layer.appendChild(el);
     s.currentShape = el;
   } else if (s.tool === 'rect') {
-    const el = document.createElementNS(SVG_NS, 'rect');
-    _diagramAttachStroke(el);
-    el.setAttribute('x', String(p.x)); el.setAttribute('y', String(p.y));
-    el.setAttribute('width', '0'); el.setAttribute('height', '0');
-    layer.appendChild(el);
-    s.currentShape = el;
+    _diagramReplaceCurrent((rc, opts) => rc.rectangle(p.x, p.y, 0.01, 0.01, opts));
   } else if (s.tool === 'ellipse') {
-    const el = document.createElementNS(SVG_NS, 'ellipse');
-    _diagramAttachStroke(el);
-    el.setAttribute('cx', String(p.x)); el.setAttribute('cy', String(p.y));
-    el.setAttribute('rx', '0'); el.setAttribute('ry', '0');
-    layer.appendChild(el);
-    s.currentShape = el;
+    _diagramReplaceCurrent((rc, opts) => rc.ellipse(p.x, p.y, 0.01, 0.01, opts));
+  } else if (s.tool === 'diamond') {
+    _diagramReplaceCurrent((rc, opts) => rc.polygon([[p.x, p.y], [p.x, p.y], [p.x, p.y], [p.x, p.y]], opts));
   } else if (s.tool === 'line') {
+    _diagramReplaceCurrent((rc, opts) => rc.line(p.x, p.y, p.x, p.y, opts));
+  } else if (s.tool === 'arrow') {
+    // Arrow stays vanilla SVG (rough.js's roughness conflicts with
+    // marker positioning). Plain line + marker-end gives a clean,
+    // legible arrow that reads as a diagram connector.
     const el = document.createElementNS(SVG_NS, 'line');
     _diagramAttachStroke(el);
     el.setAttribute('x1', String(p.x)); el.setAttribute('y1', String(p.y));
     el.setAttribute('x2', String(p.x)); el.setAttribute('y2', String(p.y));
+    el.setAttribute('marker-end', 'url(#diagram-arrowhead)');
     layer.appendChild(el);
     s.currentShape = el;
   } else if (s.tool === 'text') {
-    // Text is click-not-drag: prompt for label, drop at click point.
     s.isDrawing = false;
     const label = (window.prompt('Text:') || '').trim();
     if (!label) return;
@@ -1762,7 +1916,29 @@ function _diagramOnPointerDown(evt) {
 
 function _diagramOnPointerMove(evt) {
   const s = _diagramState;
-  if (!s.isDrawing || !s.currentShape) return;
+  // ── select tool: rubber-band resize OR drag-move selected ──
+  if (s.tool === 'select') {
+    if (s.selectMode === 'idle' || !s.dragStart) return;
+    evt.preventDefault();
+    const p = _diagramSvgPoint(evt);
+    if (s.selectMode === 'rubber-band') {
+      const rb = document.getElementById('diagram-rubber');
+      if (!rb) return;
+      const x = Math.min(s.dragStart.x, p.x), y = Math.min(s.dragStart.y, p.y);
+      const w = Math.abs(p.x - s.dragStart.x), h = Math.abs(p.y - s.dragStart.y);
+      rb.setAttribute('x', String(x)); rb.setAttribute('y', String(y));
+      rb.setAttribute('width', String(w)); rb.setAttribute('height', String(h));
+    } else if (s.selectMode === 'move-selected') {
+      const dx = p.x - s.dragStart.x, dy = p.y - s.dragStart.y;
+      for (const el of s.selection) {
+        const base = s.moveBases.get(el) || { tx: 0, ty: 0 };
+        _diagramSetTranslate(el, base.tx + dx, base.ty + dy);
+      }
+    }
+    return;
+  }
+  // ── draw tools ──
+  if (!s.isDrawing) return;
   evt.preventDefault();
   const p = _diagramSvgPoint(evt);
   if (s.tool === 'pen') {
@@ -1771,18 +1947,21 @@ function _diagramOnPointerMove(evt) {
   } else if (s.tool === 'rect') {
     const x = Math.min(s.dragStart.x, p.x), y = Math.min(s.dragStart.y, p.y);
     const w = Math.abs(p.x - s.dragStart.x), h = Math.abs(p.y - s.dragStart.y);
-    s.currentShape.setAttribute('x', String(x));
-    s.currentShape.setAttribute('y', String(y));
-    s.currentShape.setAttribute('width', String(w));
-    s.currentShape.setAttribute('height', String(h));
+    if (w > 0.5 && h > 0.5) _diagramReplaceCurrent((rc, opts) => rc.rectangle(x, y, w, h, opts));
   } else if (s.tool === 'ellipse') {
     const cx = (s.dragStart.x + p.x) / 2, cy = (s.dragStart.y + p.y) / 2;
+    const w = Math.abs(p.x - s.dragStart.x), h = Math.abs(p.y - s.dragStart.y);
+    if (w > 1 && h > 1) _diagramReplaceCurrent((rc, opts) => rc.ellipse(cx, cy, w, h, opts));
+  } else if (s.tool === 'diamond') {
+    const cx = (s.dragStart.x + p.x) / 2, cy = (s.dragStart.y + p.y) / 2;
     const rx = Math.abs(p.x - s.dragStart.x) / 2, ry = Math.abs(p.y - s.dragStart.y) / 2;
-    s.currentShape.setAttribute('cx', String(cx));
-    s.currentShape.setAttribute('cy', String(cy));
-    s.currentShape.setAttribute('rx', String(rx));
-    s.currentShape.setAttribute('ry', String(ry));
+    if (rx > 1 && ry > 1) {
+      const pts = [[cx, cy - ry], [cx + rx, cy], [cx, cy + ry], [cx - rx, cy]];
+      _diagramReplaceCurrent((rc, opts) => rc.polygon(pts, opts));
+    }
   } else if (s.tool === 'line') {
+    _diagramReplaceCurrent((rc, opts) => rc.line(s.dragStart.x, s.dragStart.y, p.x, p.y, opts));
+  } else if (s.tool === 'arrow') {
     s.currentShape.setAttribute('x2', String(p.x));
     s.currentShape.setAttribute('y2', String(p.y));
   }
@@ -1790,19 +1969,40 @@ function _diagramOnPointerMove(evt) {
 
 function _diagramOnPointerUp() {
   const s = _diagramState;
-  if (!s.isDrawing) return;
-  // Drop degenerate shapes (zero-size click without drag) so they
-  // don't litter the undo stack.
-  const sh = s.currentShape;
-  if (sh) {
-    const tag = sh.tagName.toLowerCase();
-    if (tag === 'rect' && (+sh.getAttribute('width') < 2 || +sh.getAttribute('height') < 2)) sh.remove();
-    else if (tag === 'ellipse' && (+sh.getAttribute('rx') < 2 || +sh.getAttribute('ry') < 2)) sh.remove();
-    else if (tag === 'line') {
-      const dx = +sh.getAttribute('x2') - +sh.getAttribute('x1');
-      const dy = +sh.getAttribute('y2') - +sh.getAttribute('y1');
-      if (Math.hypot(dx, dy) < 2) sh.remove();
+  // ── select tool: finalize rubber-band or drag-move ──
+  if (s.tool === 'select') {
+    if (s.selectMode === 'rubber-band') {
+      const rb = document.getElementById('diagram-rubber');
+      const x = rb ? parseFloat(rb.getAttribute('x')) : 0;
+      const y = rb ? parseFloat(rb.getAttribute('y')) : 0;
+      const w = rb ? parseFloat(rb.getAttribute('width')) : 0;
+      const h = rb ? parseFloat(rb.getAttribute('height')) : 0;
+      if (rb) rb.setAttribute('visibility', 'hidden');
+      if (w > 2 && h > 2) {
+        // Select every layer child whose bbox is fully inside.
+        const outer = { x, y, width: w, height: h };
+        const layer = document.getElementById('diagram-layer');
+        if (layer) {
+          for (const kid of layer.children) {
+            const bb = _diagramElementBBox(kid);
+            if (bb && _diagramBBoxContains(outer, bb)) _diagramSetSelected(kid, true);
+          }
+        }
+      }
     }
+    s.selectMode = 'idle';
+    s.dragStart = null;
+    s.moveBases.clear();
+    return;
+  }
+  // ── draw tools ──
+  if (!s.isDrawing) return;
+  const sh = s.currentShape;
+  // Drop degenerate shapes (zero-size click without drag).
+  if (sh) {
+    let bb;
+    try { bb = sh.getBBox(); } catch {}
+    if (bb && (bb.width < 2 && bb.height < 2)) sh.remove();
   }
   s.isDrawing = false; s.currentShape = null; s.penPoints = []; s.dragStart = null;
 }
@@ -1898,6 +2098,12 @@ function _diagramOnKeyDown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault(); _diagramSave(); return;
   }
+  // r2: Delete / Backspace removes the current selection.
+  if ((e.key === 'Delete' || e.key === 'Backspace') && _diagramState.selection.size > 0) {
+    e.preventDefault();
+    _diagramDeleteSelection();
+    return;
+  }
 }
 
 // Bind once per page load — open/close toggles `hidden` on the modal.
@@ -1915,6 +2121,13 @@ function _bindDiagramModal() {
       if (!DIAGRAM_TOOLS.includes(tool)) return;
       _diagramState.tool = tool;
       document.querySelectorAll('.diagram-tool').forEach((b) => b.classList.toggle('active', b === btn));
+      // r2: mirror onto the canvas so CSS can swap the cursor when
+      // the select tool is active.
+      const cv = document.getElementById('diagram-canvas');
+      if (cv) cv.setAttribute('data-tool', tool);
+      // Leaving select clears the selection so a subsequent draw
+      // doesn't accidentally drag the previously-selected shapes.
+      if (tool !== 'select') _diagramClearSelection();
     });
   });
   document.querySelectorAll('.diagram-color').forEach((btn) => {
@@ -1955,6 +2168,18 @@ function openDiagramModal() {
   if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
   _diagramState.isDrawing = false;
   _diagramState.currentShape = null;
+  _diagramState.selectMode = 'idle';
+  _diagramState.moveBases.clear();
+  _diagramClearSelection();
+  // r2: bind rough.js to the canvas. The canvas exists at all times
+  // (it's static markup) but rough.svg() needs the live element so we
+  // create the generator here rather than at module init.
+  const cv = document.getElementById('diagram-canvas');
+  if (cv && typeof window.rough !== 'undefined') {
+    _diagramRough = window.rough.svg(cv);
+  }
+  // Reflect the current tool onto the canvas for the CSS cursor swap.
+  if (cv) cv.setAttribute('data-tool', _diagramState.tool);
   _diagramSetStatus('');
   document.addEventListener('keydown', _diagramOnKeyDown);
 }

@@ -58,17 +58,24 @@ t('html: #chat-diagram composer button lives between #chat-mic and #chat-send', 
     '#chat-diagram must contain an inline SVG icon (matches composer family)');
 });
 
-t('html: #diagram-modal is a dialog with canvas + 5 tools + 4 colors + 3 widths', () => {
+t('html: #diagram-modal is a dialog with canvas + 8 tools + 4 colors + 3 widths', () => {
   assert.ok(/<div\s+id="diagram-modal"[^>]*role="dialog"/.test(HTML),
     '#diagram-modal must exist with role="dialog"');
   // Canvas is an inline SVG with a fixed viewBox so coordinates persist.
   assert.ok(/<svg\s+id="diagram-canvas"[^>]*viewBox="0 0 1000 600"/.test(HTML),
     '#diagram-canvas must be an inline SVG with viewBox 0 0 1000 600');
-  // 5 tool buttons — each carries data-tool with one of the registry values.
-  for (const tool of ['pen', 'rect', 'ellipse', 'line', 'text']) {
+  // r2: 8 tool buttons — original 5 + select / arrow / diamond.
+  for (const tool of ['select', 'pen', 'rect', 'ellipse', 'diamond', 'line', 'arrow', 'text']) {
     const re = new RegExp(`class="diagram-tool[^"]*"[^>]*data-tool="${tool}"`);
     assert.ok(re.test(HTML), `tool '${tool}' must be present in #diagram-toolbar`);
   }
+  // r2: arrowhead marker def is inside the canvas so the Arrow tool's
+  // `marker-end="url(#diagram-arrowhead)"` resolves.
+  assert.ok(/<marker\s+id="diagram-arrowhead"/.test(HTML),
+    '#diagram-arrowhead <marker> def must live inside #diagram-canvas');
+  // r2: rubber-band <rect> for select-tool drag-to-select.
+  assert.ok(/<rect\s+id="diagram-rubber"/.test(HTML),
+    '#diagram-rubber rubber-band rect must exist for select-tool drag');
   // 4 colors.
   const colorCount = (HTML.match(/class="diagram-color[^"]*"/g) || []).length;
   assert.ok(colorCount >= 4, `at least 4 .diagram-color buttons expected (got ${colorCount})`);
@@ -84,12 +91,13 @@ t('html: #diagram-modal is a dialog with canvas + 5 tools + 4 colors + 3 widths'
 
 // ── Client JS: drawing engine + save flow ───────────────────────────
 
-t('app.js: DIAGRAM_TOOLS registry lists exactly the 5 supported tools', () => {
+t('app.js: DIAGRAM_TOOLS registry lists exactly the 8 supported tools (r2)', () => {
   const m = APP.match(/const\s+DIAGRAM_TOOLS\s*=\s*\[([^\]]+)\]/);
   assert.ok(m, 'DIAGRAM_TOOLS constant must be declared');
   const list = m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, ''));
-  assert.deepStrictEqual(list.sort(), ['ellipse', 'line', 'pen', 'rect', 'text'],
-    'DIAGRAM_TOOLS must contain exactly: pen / rect / ellipse / line / text');
+  assert.deepStrictEqual(list.sort(),
+    ['arrow', 'diamond', 'ellipse', 'line', 'pen', 'rect', 'select', 'text'],
+    'DIAGRAM_TOOLS must contain exactly: select / pen / rect / ellipse / diamond / line / arrow / text');
 });
 
 t('app.js: openDiagramModal + closeDiagramModal are defined', () => {
@@ -122,14 +130,105 @@ t('app.js: save flow POSTs to /sessions/:id/diagrams and inserts markdown into c
     'must insert `![diagram](<url>)` markdown into the chat input');
 });
 
-t('app.js: zero-new-vendor weight — no excalidraw / tldraw / fabric / paper / konva imports', () => {
-  for (const bannedLib of ['excalidraw', 'tldraw', 'fabric.js', 'paper.js', 'konva']) {
+t('app.js: lightweight-only — no excalidraw / tldraw / fabric / paper / konva / drawio', () => {
+  // r2: rough.js (~27 KB) is intentional + whitelisted. Heavier
+  // drawing libs stay banned to preserve the "lighter than drawio,
+  // richer than vanilla SVG" middle-ground the user picked.
+  for (const bannedLib of ['excalidraw', 'tldraw', 'fabric.js', 'paper.js', 'konva', 'drawio', 'diagrams.net']) {
     const re = new RegExp(bannedLib.replace(/\./g, '\\.'), 'i');
     assert.ok(!re.test(APP),
       `app.js must not import "${bannedLib}" — user constraint: as light as possible`);
     assert.ok(!re.test(HTML),
       `index.html must not load "${bannedLib}"`);
   }
+});
+
+// ── r2: rough.js + select tool + new shape primitives ──────────────
+
+t('html: rough.js script is loaded from /vendor/ (self-hosted)', () => {
+  assert.ok(/<script[^>]*src="\/vendor\/rough\.umd\.js"/.test(HTML),
+    'index.html must load /vendor/rough.umd.js');
+  // Self-hosted only — no CDN fallback that would break behind firewalls.
+  assert.ok(!/(unpkg|cdn|jsdelivr)[^"]*rough/.test(HTML),
+    'rough.js must be self-hosted (no CDN reference)');
+});
+
+t('vendor: rough.umd.js exists + is reasonably small (≤ 50 KB)', () => {
+  const p = path.join(__dirname, '..', 'web', 'public', 'vendor', 'rough.umd.js');
+  assert.ok(fs.existsSync(p), '/web/public/vendor/rough.umd.js must exist');
+  const stat = fs.statSync(p);
+  assert.ok(stat.size > 5000,  'rough.umd.js suspiciously tiny — check it actually downloaded');
+  assert.ok(stat.size <= 50 * 1024, `rough.umd.js must be ≤ 50 KB (got ${stat.size} bytes)`);
+});
+
+t('app.js: rough.js bound to canvas on modal open + cleared on close-tool-switch', () => {
+  const idx = APP.search(/function\s+openDiagramModal\s*\(\s*\)/);
+  const win = APP.slice(idx, idx + 1500);
+  assert.ok(/window\.rough\.svg\(/.test(win),
+    'openDiagramModal must call window.rough.svg(canvas) to init the generator');
+  assert.ok(/_diagramRough\s*=/.test(win),
+    'openDiagramModal must store the rough generator in _diagramRough');
+});
+
+t('app.js: select-tool state shape — selection Set + selectMode + moveBases', () => {
+  // Pin the state-machine shape so a future refactor can't quietly
+  // drop multi-select or drag-move.
+  const idx = APP.search(/const\s+_diagramState\s*=\s*\{/);
+  const win = APP.slice(idx, idx + 800);
+  assert.ok(/selection:\s*new\s+Set\(\)/.test(win),
+    '_diagramState.selection must be a Set (multi-select)');
+  assert.ok(/selectMode:\s*['"]idle['"]/.test(win),
+    '_diagramState.selectMode must start at "idle"');
+  assert.ok(/moveBases:\s*new\s+Map\(\)/.test(win),
+    '_diagramState.moveBases must be a Map for tracking per-shape translate offsets at drag-start');
+});
+
+t('app.js: drawing engine has hit-test + rubber-band + drag-to-move helpers', () => {
+  // Each piece of the select-tool contract is its own named helper.
+  for (const fnName of [
+    '_diagramTopmostAt',
+    '_diagramHitTest',
+    '_diagramBBoxContains',
+    '_diagramElementBBox',
+    '_diagramSetSelected',
+    '_diagramClearSelection',
+    '_diagramDeleteSelection',
+    '_diagramGetTranslate',
+    '_diagramSetTranslate',
+  ]) {
+    assert.ok(new RegExp(`function\\s+${fnName}\\s*\\(`).test(APP),
+      `${fnName} helper must be defined`);
+  }
+});
+
+t('app.js: Delete / Backspace key removes selected shapes', () => {
+  const idx = APP.search(/function\s+_diagramOnKeyDown\s*\(/);
+  const win = APP.slice(idx, idx + 800);
+  assert.ok(/(['"]Delete['"]|['"]Backspace['"])/.test(win),
+    'keydown handler must branch on Delete or Backspace');
+  assert.ok(/_diagramDeleteSelection\(/.test(win),
+    'keydown handler must call _diagramDeleteSelection() when selection is non-empty');
+});
+
+t('app.js: rough.js wrappers used for rect / ellipse / diamond / line in pointer-down', () => {
+  const idx = APP.search(/function\s+_diagramOnPointerDown\s*\(/);
+  const win = APP.slice(idx, idx + 4000);
+  // _diagramReplaceCurrent is the single funnel — verify each shape
+  // tool flows through it.
+  for (const shape of ['rectangle', 'ellipse', 'polygon', 'line']) {
+    const re = new RegExp(`_diagramReplaceCurrent\\([\\s\\S]{0,300}rc\\.${shape}\\(`);
+    assert.ok(re.test(win),
+      `pointer-down must call rc.${shape}() via _diagramReplaceCurrent for the relevant tool`);
+  }
+});
+
+t('app.js: arrow tool uses plain SVG line + marker-end (rough.js + markers is brittle)', () => {
+  // Arrow stays vanilla so the arrowhead lands at the actual tip,
+  // not at every sketchy sub-stroke that rough.js would generate.
+  const idx = APP.search(/function\s+_diagramOnPointerDown\s*\(/);
+  const win = APP.slice(idx, idx + 4000);
+  assert.ok(/s\.tool === ['"]arrow['"][\s\S]{0,500}marker-end[\s\S]{0,100}#diagram-arrowhead/.test(win),
+    'arrow branch must set marker-end="url(#diagram-arrowhead)" on a plain <line>');
 });
 
 // ── Server: POST + GET routes for diagram storage ───────────────────
@@ -206,13 +305,13 @@ t('css: #diagram-modal full-screen overlay + #diagram-canvas fills its host', ()
 
 // ── Cache busters bumped so the new CSS + JS are served ──────────────
 
-t('index.html: cache busters bumped (styles.css ≥ v274, app.js ≥ v240)', () => {
+t('index.html: cache busters bumped for r2 (styles.css ≥ v275, app.js ≥ v241)', () => {
   const cssM = HTML.match(/styles\.css\?v=(\d+)/);
   const jsM  = HTML.match(/app\.js\?v=(\d+)/);
-  assert.ok(cssM && parseInt(cssM[1], 10) >= 274,
-    `styles.css cache-buster must be >= 274 (got ${cssM && cssM[1]})`);
-  assert.ok(jsM && parseInt(jsM[1], 10) >= 240,
-    `app.js cache-buster must be >= 240 (got ${jsM && jsM[1]})`);
+  assert.ok(cssM && parseInt(cssM[1], 10) >= 275,
+    `styles.css cache-buster must be >= 275 (got ${cssM && cssM[1]})`);
+  assert.ok(jsM && parseInt(jsM[1], 10) >= 241,
+    `app.js cache-buster must be >= 241 (got ${jsM && jsM[1]})`);
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

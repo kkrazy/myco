@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=274" />
+  <link rel="stylesheet" href="styles.css?v=275" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -474,8 +474,11 @@
       <header id="diagram-header">
         <h2 id="diagram-title">Draw diagram</h2>
         <div id="diagram-toolbar" role="toolbar" aria-label="Drawing tools">
-          <!-- Tools -->
+          <!-- Tools (fr-84 r2: +select, +arrow, +diamond → 8 total) -->
           <div class="diagram-tools" role="group" aria-label="Tool">
+            <button type="button" class="diagram-tool" data-tool="select" title="Select (click + drag, Shift-click to add, drag to rubber-band, Del removes)" aria-label="Select">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.5 9 21l3-8 8-3z"/></svg>
+            </button>
             <button type="button" class="diagram-tool active" data-tool="pen" title="Pen (freehand)" aria-label="Pen">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
             </button>
@@ -485,8 +488,14 @@
             <button type="button" class="diagram-tool" data-tool="ellipse" title="Ellipse" aria-label="Ellipse">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="6"/></svg>
             </button>
+            <button type="button" class="diagram-tool" data-tool="diamond" title="Diamond" aria-label="Diamond">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 22 12 12 22 2 12"/></svg>
+            </button>
             <button type="button" class="diagram-tool" data-tool="line" title="Line" aria-label="Line">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="arrow" title="Arrow" aria-label="Arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="18" y2="6"/><polyline points="11 6 18 6 18 13"/></svg>
             </button>
             <button type="button" class="diagram-tool" data-tool="text" title="Text" aria-label="Text">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/></svg>
@@ -527,8 +536,20 @@
         <!-- viewBox stays in 1000x600 design units; CSS scales to fit.
              SVG-native draw layer that mouse/touch events target. -->
         <svg id="diagram-canvas" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+          <!-- fr-84 r2: arrowhead def for the Arrow tool. context-stroke
+               lets the marker inherit the line's stroke color so a red
+               arrow has a red arrowhead automatically. -->
+          <defs>
+            <marker id="diagram-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
+            </marker>
+          </defs>
           <rect id="diagram-bg" x="0" y="0" width="1000" height="600" fill="#0d1117"/>
           <g id="diagram-layer"></g>
+          <!-- Rubber-band rect used by the Select tool. Hidden until a
+               drag starts. Outside #diagram-layer so it doesn't get
+               serialized into saved SVGs or hit by undo. -->
+          <rect id="diagram-rubber" x="0" y="0" width="0" height="0" fill="rgba(80,120,200,.12)" stroke="rgba(80,120,200,.6)" stroke-width="1" stroke-dasharray="4 3" pointer-events="none" visibility="hidden"/>
         </svg>
       </div>
       <div id="diagram-status" role="status" aria-live="polite"></div>
@@ -604,7 +625,11 @@
        Built from tools/codemirror-entry.mjs via `npm run build:editor`.
        Exposes window.MycoCM with { createEditor, EditorView, ... }. -->
   <script src="/vendor/codemirror.bundle.js"></script>
+  <!-- fr-84 r2: rough.js for the hand-drawn aesthetic in the diagram
+       modal. UMD bundle (~27 KB) — exposes window.rough with svg() /
+       canvas() / generator() factories. Drawing engine wraps it. -->
+  <script src="/vendor/rough.umd.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=240"></script>
+  <script src="app.js?v=241"></script>
 </body>
 </html>
