@@ -3081,6 +3081,82 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin: 8px 0;
 }
 .chat-msg .chat-text img { max-width: 100%; height: auto; border-radius: 4px; }
+/* fr-85: inline clarification popover + anchor span. User selects
+   text inside a claude bubble → popover anchored to the selection
+   appears via _openClarifyPopover; on submit, the selected range
+   gets wrapped in span.chat-clarify-anchor so the user can scroll
+   back and see what got clarified. Subtle marker so it doesn't
+   compete with the message body for attention. */
+.chat-msg .chat-text .chat-clarify-anchor {
+  border-bottom: 1px dashed rgba(80, 120, 200, .65);
+  background: rgba(80, 120, 200, .08);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+#chat-clarify-popover {
+  position: absolute;
+  z-index: 9500;
+  width: 360px;
+  display: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(28, 30, 34, .98);
+  border: 1px solid rgba(80, 120, 200, .45);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+#chat-clarify-popover .chat-clarify-preview {
+  flex: 0 0 auto;
+  max-width: 100px;
+  font-size: 11px;
+  color: var(--muted, #8b949e);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#chat-clarify-popover #chat-clarify-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 4px;
+  color: var(--text, #e6edf3);
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  outline: none;
+}
+#chat-clarify-popover #chat-clarify-input:focus {
+  border-color: rgba(80, 120, 200, .7);
+}
+#chat-clarify-popover button {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 4px;
+  color: var(--text, #e6edf3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: background-color .08s;
+}
+#chat-clarify-popover button:hover { background: rgba(255, 255, 255, .08); }
+#chat-clarify-popover #chat-clarify-send {
+  background: rgba(80, 120, 200, .25);
+  border-color: rgba(80, 120, 200, .45);
+  color: #aac8ff;
+}
+#chat-clarify-popover #chat-clarify-send:hover { background: rgba(80, 120, 200, .4); }
 /* fr-84 r3: tighter cap for diagrams inserted via the composer's
    Draw modal. The save flow emits `![diagram](/sessions/.../...svg)`
    markdown which renders as `<img alt="diagram">`. Without this rule

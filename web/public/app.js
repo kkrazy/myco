@@ -3301,6 +3301,194 @@ function _resortChatPaneByTs() {
   for (const { el } of items) list.appendChild(el);
 }
 
+// ── fr-85: inline clarification popovers on claude responses ─────────
+//
+// User selects text inside a claude bubble's body — a small popover
+// appears anchored to the selection with a one-line input + Send
+// button. On submit, the message
+//     [clarify: "<selected>"] <user question>
+// is dispatched through the normal chat send path (same gates as a
+// composer Send: guest checks, history push, claude wakeup). The
+// claude reply lands as a regular chat message. The original span
+// gets a subtle `.chat-clarify-anchor` wrap so the user can scroll
+// back and see what got clarified — ephemeral (rebuilds on reload
+// since the wrap isn't server-persisted; matches the simplest path
+// the user picked when scoping fr-85).
+
+let _clarifyAnchorRange = null;   // saved Range captured at popover-open
+
+function _clarifySelectionInClaudeBubble() {
+  // Returns the .chat-text element that fully contains the current
+  // selection iff it lives inside a `.chat-msg.from-claude` bubble
+  // AND the selection's anchor + focus are both inside the same
+  // .chat-text. Returns null otherwise (the popover doesn't open
+  // for user messages, agent cards, menus, or cross-bubble drags).
+  const sel = window.getSelection ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const txt = String(sel.toString() || '').trim();
+  if (!txt) return null;
+  // Selection must start AND end inside the same chat-text element,
+  // AND that element must live inside a `.chat-msg.from-claude`.
+  const anchorTxt = sel.anchorNode && (sel.anchorNode.nodeType === 3
+    ? sel.anchorNode.parentNode.closest('.chat-text')
+    : sel.anchorNode.closest && sel.anchorNode.closest('.chat-text'));
+  const focusTxt  = sel.focusNode  && (sel.focusNode.nodeType === 3
+    ? sel.focusNode.parentNode.closest('.chat-text')
+    : sel.focusNode.closest && sel.focusNode.closest('.chat-text'));
+  if (!anchorTxt || anchorTxt !== focusTxt) return null;
+  const bubble = anchorTxt.closest('.chat-msg.from-claude');
+  if (!bubble) return null;
+  return anchorTxt;
+}
+
+function _openClarifyPopover() {
+  const sel = window.getSelection();
+  const chatText = _clarifySelectionInClaudeBubble();
+  if (!chatText) return;
+  // Save the live range so the user's typing in the popover input
+  // doesn't disturb it. The popover's input takes focus, which
+  // collapses window.getSelection — we need the range captured
+  // BEFORE that happens so we can wrap it on submit + use its
+  // bounding rect for popover positioning.
+  _clarifyAnchorRange = sel.getRangeAt(0).cloneRange();
+  const selectedText = String(_clarifyAnchorRange.toString() || '').trim();
+  if (!selectedText) { _closeClarifyPopover(); return; }
+  // Anchor rect from the SELECTION (not the bubble) so the popover
+  // attaches right under the highlight regardless of bubble size.
+  const rect = _clarifyAnchorRange.getBoundingClientRect();
+  // Build the popover lazily — one per page lifetime; mounted on body.
+  let pop = document.getElementById('chat-clarify-popover');
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = 'chat-clarify-popover';
+    // role="dialog" so screen readers announce it; aria-label spells out intent.
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Ask claude to clarify the selected text');
+    pop.innerHTML = `
+      <div class="chat-clarify-preview" title="Selected text"></div>
+      <input id="chat-clarify-input" type="text" placeholder="Ask about this…" autocomplete="off" />
+      <button id="chat-clarify-send" type="button" title="Send (Enter)" aria-label="Send">→</button>
+      <button id="chat-clarify-close" type="button" title="Cancel (Esc)" aria-label="Cancel">×</button>
+    `;
+    document.body.appendChild(pop);
+    pop.querySelector('#chat-clarify-send').addEventListener('click', () => _sendClarify());
+    pop.querySelector('#chat-clarify-close').addEventListener('click', () => _closeClarifyPopover());
+    pop.querySelector('#chat-clarify-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); _sendClarify(); }
+      else if (e.key === 'Escape') { e.preventDefault(); _closeClarifyPopover(); }
+    });
+  }
+  // Preview text — show ≤ 60 chars of the selection so the user
+  // knows which span they're clarifying.
+  const preview = pop.querySelector('.chat-clarify-preview');
+  if (preview) {
+    const trimmed = selectedText.length > 60 ? selectedText.slice(0, 57) + '…' : selectedText;
+    preview.textContent = `Clarify: "${trimmed}"`;
+  }
+  pop.style.display = 'flex';
+  // Position UNDER the selection, clamped to viewport. Anchor coords
+  // are page-relative via window.scrollX/Y so it survives a scroll
+  // (popover lives at body so position:absolute is page-relative).
+  const POP_W = 360;
+  const left = Math.max(8, Math.min(
+    window.innerWidth - POP_W - 8,
+    rect.left + window.scrollX + (rect.width / 2) - (POP_W / 2)
+  ));
+  const top = rect.bottom + window.scrollY + 8;
+  pop.style.left = left + 'px';
+  pop.style.top  = top  + 'px';
+  // Focus the input so the user can type immediately.
+  const input = pop.querySelector('#chat-clarify-input');
+  if (input) { input.value = ''; input.focus(); }
+}
+
+function _closeClarifyPopover() {
+  const pop = document.getElementById('chat-clarify-popover');
+  if (pop) pop.style.display = 'none';
+  _clarifyAnchorRange = null;
+}
+
+function _sendClarify() {
+  if (!_clarifyAnchorRange) { _closeClarifyPopover(); return; }
+  const pop = document.getElementById('chat-clarify-popover');
+  const input = pop && pop.querySelector('#chat-clarify-input');
+  const question = input ? String(input.value || '').trim() : '';
+  const selected = String(_clarifyAnchorRange.toString() || '').trim();
+  if (!selected) { _closeClarifyPopover(); return; }
+  // Wrap the selected range in <span class="chat-clarify-anchor"> so
+  // the user can scroll back and see what got clarified. Only works
+  // when the range starts + ends in the same text node; for cross-
+  // node selections (rare in chat prose) just skip the wrap — the
+  // message still gets sent fine.
+  try {
+    const span = document.createElement('span');
+    span.className = 'chat-clarify-anchor';
+    _clarifyAnchorRange.surroundContents(span);
+  } catch {
+    /* range spans node boundaries — skip the visual marker, the
+       message itself still ships */
+  }
+  // Build the [clarify: "..."] prefix + ship via the normal chat
+  // send path. Inject directly into #chat-input + trigger form
+  // submit, same shape as fr-84 r5 — preserves all gates (guest
+  // restrictions, history push, claude wakeup).
+  const composer = document.getElementById('chat-input');
+  if (composer) {
+    composer.value = `[clarify: "${selected}"] ${question}`.trim();
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    const form = document.getElementById('chat-form');
+    if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
+    else if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  }
+  _closeClarifyPopover();
+}
+
+let _clarifyBound = false;
+function _setupChatClarify() {
+  if (_clarifyBound) return;
+  _clarifyBound = true;
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  // mouseup catches text-selection drags AND double-click word-selects.
+  // selectionchange would also work but fires on every cursor blink
+  // outside chat too; mouseup-on-chat-messages stays scoped.
+  list.addEventListener('mouseup', () => {
+    // Defer one tick so the selection settles after the click resolves.
+    setTimeout(() => {
+      if (_clarifySelectionInClaudeBubble()) _openClarifyPopover();
+      else _closeClarifyPopover();
+    }, 0);
+  });
+  // Touch: long-press / native-text-select on mobile triggers selectionchange.
+  document.addEventListener('selectionchange', () => {
+    // Only react if popover is closed AND there's a fresh selection
+    // in a claude bubble. Avoids re-opening while user is typing.
+    const pop = document.getElementById('chat-clarify-popover');
+    if (pop && pop.style.display === 'flex') return;
+    if (_clarifySelectionInClaudeBubble()) _openClarifyPopover();
+  });
+  // Click outside popover (and outside chat-messages) closes it.
+  document.addEventListener('mousedown', (e) => {
+    const pop = document.getElementById('chat-clarify-popover');
+    if (!pop || pop.style.display !== 'flex') return;
+    if (pop.contains(e.target)) return;
+    // Allow clicks inside chat-messages — user might be selecting more.
+    if (list.contains(e.target)) return;
+    _closeClarifyPopover();
+  });
+  // Escape closes anywhere (input handler also has Esc — this is the
+  // doc-level catch for when focus isn't in the input yet).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const pop = document.getElementById('chat-clarify-popover');
+      if (pop && pop.style.display === 'flex') {
+        e.preventDefault();
+        _closeClarifyPopover();
+      }
+    }
+  });
+}
+
 // 2026-05-17: globally-ordered insertion by server-allocated seq #.
 // Both chat-msg rows and agent-events get seq from the same monotonic
 // per-session counter (sessions.allocSeq), so a user's input + claude's
@@ -6685,6 +6873,7 @@ function bindChatUi() {
   _bindPermModalKeys();
   _bindStopAgent();
   _bindVoiceInput();
+  _setupChatClarify();   // fr-85: select-text-in-claude-bubble → popover
 }
 
 // Voice input: browser-local speech-to-text via the Web Speech API.
