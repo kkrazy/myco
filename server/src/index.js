@@ -858,6 +858,94 @@ app.post('/sessions/:id/file/edit', async (req, res) => {
   } catch (e) { fileApiError(res, e); }
 });
 
+// ─── fr-84: embedded diagram drawing tool ─────────────────────────────────
+//
+// User drew an SVG in the in-browser whiteboard (composer "Diagram"
+// button → modal). The client POSTs the rendered SVG markup here; we
+// persist it under `_myco_/diagrams/<ts>-<hex>.svg` and return the
+// public URL. The client then drops `![diagram](<url>)` into the chat
+// composer so the rendered image lands in chat history + other
+// attached viewers can see it.
+//
+// Storage under `_myco_/` means the diagram travels with the repo on
+// `git commit`, matching the "_myco_/ is the project's shared memory"
+// rule. The filename pattern is timestamp-prefixed so multiple
+// diagrams in one session are auto-ordered + collision-free.
+//
+// Owner-only POST (drawers create), viewer-readable GET (so shared
+// session viewers see the diagrams the owner inserted into chat).
+
+const DIAGRAM_MAX_BYTES = 512 * 1024;   // 512 KB — generous for hand-drawn SVG
+const DIAGRAM_FILENAME_RE = /^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}\.svg$/;
+
+function _validateDiagramSvg(raw) {
+  if (typeof raw !== 'string') return { error: 'svg must be a string' };
+  const trimmed = raw.trim();
+  if (!trimmed) return { error: 'svg empty' };
+  if (Buffer.byteLength(trimmed, 'utf8') > DIAGRAM_MAX_BYTES) {
+    return { error: `svg too large (max ${DIAGRAM_MAX_BYTES} bytes)` };
+  }
+  // Loose-shape sanity check — don't try to parse XML, just confirm
+  // it opens with `<svg` and ends with `</svg>`. Defends against
+  // pasting random text into the route as a poor man's attack.
+  if (!/^<svg[\s>]/i.test(trimmed) || !/<\/svg>\s*$/i.test(trimmed)) {
+    return { error: 'svg must start with <svg> and end with </svg>' };
+  }
+  // Defensive: reject embedded <script> — the SVG will eventually be
+  // served back with image/svg+xml, and browsers DO execute scripts
+  // inside top-navigated SVGs.
+  if (/<script\b/i.test(trimmed)) return { error: 'embedded <script> not allowed' };
+  return { svg: trimmed };
+}
+
+function _newDiagramFilename() {
+  // YYYYMMDDTHHMMSSZ-<8 hex> — sortable, unique-enough for the
+  // throughput of a human drawing in a chat session.
+  const iso = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const hex = crypto.randomBytes(4).toString('hex');
+  return `${iso}-${hex}.svg`;
+}
+
+app.post('/sessions/:id/diagrams', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const v = _validateDiagramSvg((req.body || {}).svg);
+  if (v.error) return res.status(400).json({ error: v.error });
+  const fs = require('fs/promises');
+  const path = require('path');
+  const dir = path.join(ctx.root, '_myco_', 'diagrams');
+  try { await fs.mkdir(dir, { recursive: true }); }
+  catch (e) { return res.status(500).json({ error: `mkdir failed: ${e.message}` }); }
+  const filename = _newDiagramFilename();
+  const abs = path.join(dir, filename);
+  try {
+    await fs.writeFile(abs, v.svg, { encoding: 'utf8', mode: 0o644 });
+  } catch (e) { return res.status(500).json({ error: `write failed: ${e.message}` }); }
+  const url = `/sessions/${encodeURIComponent(ctx.id)}/diagrams/${encodeURIComponent(filename)}`;
+  res.json({ filename, path: `_myco_/diagrams/${filename}`, url, bytes: Buffer.byteLength(v.svg, 'utf8') });
+});
+
+app.get('/sessions/:id/diagrams/:filename', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const filename = String(req.params.filename || '');
+  // Strict whitelist — only YYYYMMDDTHHMMSSZ-<hex>.svg shape is
+  // servable. Blocks path traversal + arbitrary file disclosure.
+  if (!DIAGRAM_FILENAME_RE.test(filename)) {
+    return res.status(400).json({ error: 'bad filename shape' });
+  }
+  const path = require('path');
+  const abs = path.join(ctx.root, '_myco_', 'diagrams', filename);
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.sendFile(abs, (err) => {
+    if (err && !res.headersSent) {
+      if (err.code === 'ENOENT') res.status(404).json({ error: 'not found' });
+      else res.status(500).json({ error: err.message });
+    }
+  });
+});
+
 // ─── per-file Claude thread (file-viewer) ───────────────────────────────────
 //
 // Owner-only, same containment + auth model as the file API. Threads are

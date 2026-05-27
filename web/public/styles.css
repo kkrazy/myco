@@ -7448,3 +7448,161 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   max-height: 250px;
   overflow: auto;
 }
+
+/* ── fr-84: in-browser diagram drawing modal ─────────────────────────────
+   Full-screen overlay with a dark scrim, centered dialog, a 5-tool
+   palette in the header, an SVG canvas (fluid-resizing inside its host)
+   and an action row. Pure CSS — no animation lib, no vendor weight.
+   The canvas viewBox is fixed at 1000×600 so coordinates persist
+   regardless of CSS pixel size. */
+#diagram-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, .68);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+#diagram-dialog {
+  width: min(1100px, 100%);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
+  overflow: hidden;
+}
+#diagram-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+#diagram-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #e6edf3);
+  margin: 0;
+}
+#diagram-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.diagram-tools,
+.diagram-colors,
+.diagram-widths,
+.diagram-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .02);
+}
+.diagram-actions { margin-left: auto; }
+.diagram-tool,
+.diagram-actions > button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text, #e6edf3);
+  cursor: pointer;
+  transition: background-color .08s, border-color .08s;
+}
+.diagram-tool:hover,
+.diagram-actions > button:hover { background: rgba(255, 255, 255, .08); }
+.diagram-tool.active { background: rgba(80, 120, 200, .25); border-color: rgba(80, 120, 200, .45); }
+.diagram-tool svg,
+.diagram-actions > button svg { width: 16px; height: 16px; }
+.diagram-color {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform .08s, border-color .08s;
+}
+.diagram-color.active { border-color: #fff; transform: scale(1.1); }
+.diagram-width {
+  width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.diagram-width:hover { background: rgba(255, 255, 255, .08); }
+.diagram-width.active { background: rgba(80, 120, 200, .25); border-color: rgba(80, 120, 200, .45); }
+.diagram-width > span {
+  display: block;
+  width: 18px;
+  background: var(--text, #e6edf3);
+  border-radius: 2px;
+}
+#diagram-save {
+  /* Wider than the icon-only buttons to fit the "Insert" label. */
+  width: auto !important;
+  padding: 0 10px 0 8px !important;
+  gap: 4px;
+  background: rgba(76, 175, 130, .25);
+  border-color: rgba(76, 175, 130, .45) !important;
+  color: #6fdc97;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+#diagram-save:hover { background: rgba(76, 175, 130, .38); }
+#diagram-save:disabled { opacity: .5; cursor: wait; }
+#diagram-save .diagram-save-label { padding-left: 2px; }
+
+#diagram-canvas-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #0d1117;
+  overflow: hidden;
+}
+#diagram-canvas {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;       /* keep touch drags from scrolling the page */
+  user-select: none;
+  -webkit-user-select: none;
+}
+#diagram-status {
+  padding: 6px 16px;
+  min-height: 22px;
+  font-size: 12px;
+  color: var(--muted, #8b949e);
+  border-top: 1px solid rgba(255, 255, 255, .04);
+}
+
+/* Composer "Draw" button styled like the other composer-btn members.
+   Most of the visual chrome inherits from .composer-btn — this rule
+   just keeps the hover affordance consistent (the diagram-specific
+   tone is subtle: same as Speak when present). */
+.composer-btn-diagram { /* relies on .composer-btn cascade — no extra rules needed */ }

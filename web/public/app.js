@@ -1651,6 +1651,320 @@ function closeManualModal() {
   if (modal) modal.hidden = true;
 }
 
+// ── fr-84: in-browser freehand diagram drawing modal ──────────────────────
+//
+// User clicks the composer "Draw" button → modal opens → user picks a
+// tool, draws on the canvas, hits Insert → the resulting SVG is POSTed
+// to /sessions/:id/diagrams (persisted under _myco_/diagrams/) and a
+// markdown image link `![diagram](<url>)` is appended to the chat input.
+// The composer's existing submit flow then ships it to chat where it
+// renders inline for every attached viewer.
+//
+// Design constraints (user: "as light as possible and runs together
+// with myco"):
+//   - Zero new vendor weight. Pure browser-native SVG + mouse/touch.
+//   - All shapes are real SVG elements appended to #diagram-layer so
+//     the saved file is literally `<svg>...</svg>` — no rasterization,
+//     no canvas-to-PNG, no third-party serializer.
+//
+// Tools (5): pen (freehand polyline), rect, ellipse, line, text.
+// Colors (4) + stroke widths (3). Undo pops last shape; clear empties
+// the layer.
+
+const DIAGRAM_TOOLS = ['pen', 'rect', 'ellipse', 'line', 'text'];
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const _diagramState = {
+  tool: 'pen',
+  color: '#e6edf3',
+  width: 3,
+  isDrawing: false,
+  currentShape: null,    // SVG element being constructed during a drag
+  penPoints: [],         // accumulated [x,y] for pen mode
+  dragStart: null,       // {x, y} for shape tools
+};
+
+function _diagramSvgPoint(evt) {
+  // Convert client (page) coords → SVG viewBox coords. Keeps the
+  // drawing crisp regardless of the modal's actual CSS-pixel size.
+  const svg = document.getElementById('diagram-canvas');
+  if (!svg) return { x: 0, y: 0 };
+  const pt = svg.createSVGPoint();
+  pt.x = (evt.touches ? evt.touches[0].clientX : evt.clientX);
+  pt.y = (evt.touches ? evt.touches[0].clientY : evt.clientY);
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return { x: pt.x, y: pt.y };
+  const inv = ctm.inverse();
+  const out = pt.matrixTransform(inv);
+  return { x: out.x, y: out.y };
+}
+
+function _diagramAttachStroke(el) {
+  // Stroke-only shapes (no fill) so drawings read as line art.
+  el.setAttribute('stroke', _diagramState.color);
+  el.setAttribute('stroke-width', String(_diagramState.width));
+  el.setAttribute('stroke-linecap', 'round');
+  el.setAttribute('stroke-linejoin', 'round');
+  el.setAttribute('fill', 'none');
+}
+
+function _diagramOnPointerDown(evt) {
+  const layer = document.getElementById('diagram-layer');
+  if (!layer) return;
+  evt.preventDefault();
+  const p = _diagramSvgPoint(evt);
+  const s = _diagramState;
+  s.isDrawing = true;
+  s.dragStart = p;
+  if (s.tool === 'pen') {
+    s.penPoints = [`${p.x.toFixed(1)},${p.y.toFixed(1)}`];
+    const el = document.createElementNS(SVG_NS, 'polyline');
+    _diagramAttachStroke(el);
+    el.setAttribute('points', s.penPoints[0]);
+    layer.appendChild(el);
+    s.currentShape = el;
+  } else if (s.tool === 'rect') {
+    const el = document.createElementNS(SVG_NS, 'rect');
+    _diagramAttachStroke(el);
+    el.setAttribute('x', String(p.x)); el.setAttribute('y', String(p.y));
+    el.setAttribute('width', '0'); el.setAttribute('height', '0');
+    layer.appendChild(el);
+    s.currentShape = el;
+  } else if (s.tool === 'ellipse') {
+    const el = document.createElementNS(SVG_NS, 'ellipse');
+    _diagramAttachStroke(el);
+    el.setAttribute('cx', String(p.x)); el.setAttribute('cy', String(p.y));
+    el.setAttribute('rx', '0'); el.setAttribute('ry', '0');
+    layer.appendChild(el);
+    s.currentShape = el;
+  } else if (s.tool === 'line') {
+    const el = document.createElementNS(SVG_NS, 'line');
+    _diagramAttachStroke(el);
+    el.setAttribute('x1', String(p.x)); el.setAttribute('y1', String(p.y));
+    el.setAttribute('x2', String(p.x)); el.setAttribute('y2', String(p.y));
+    layer.appendChild(el);
+    s.currentShape = el;
+  } else if (s.tool === 'text') {
+    // Text is click-not-drag: prompt for label, drop at click point.
+    s.isDrawing = false;
+    const label = (window.prompt('Text:') || '').trim();
+    if (!label) return;
+    const el = document.createElementNS(SVG_NS, 'text');
+    el.setAttribute('x', String(p.x));
+    el.setAttribute('y', String(p.y));
+    el.setAttribute('fill', s.color);
+    el.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
+    el.setAttribute('font-size', String(14 + s.width * 2));
+    el.textContent = label;
+    layer.appendChild(el);
+  }
+}
+
+function _diagramOnPointerMove(evt) {
+  const s = _diagramState;
+  if (!s.isDrawing || !s.currentShape) return;
+  evt.preventDefault();
+  const p = _diagramSvgPoint(evt);
+  if (s.tool === 'pen') {
+    s.penPoints.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+    s.currentShape.setAttribute('points', s.penPoints.join(' '));
+  } else if (s.tool === 'rect') {
+    const x = Math.min(s.dragStart.x, p.x), y = Math.min(s.dragStart.y, p.y);
+    const w = Math.abs(p.x - s.dragStart.x), h = Math.abs(p.y - s.dragStart.y);
+    s.currentShape.setAttribute('x', String(x));
+    s.currentShape.setAttribute('y', String(y));
+    s.currentShape.setAttribute('width', String(w));
+    s.currentShape.setAttribute('height', String(h));
+  } else if (s.tool === 'ellipse') {
+    const cx = (s.dragStart.x + p.x) / 2, cy = (s.dragStart.y + p.y) / 2;
+    const rx = Math.abs(p.x - s.dragStart.x) / 2, ry = Math.abs(p.y - s.dragStart.y) / 2;
+    s.currentShape.setAttribute('cx', String(cx));
+    s.currentShape.setAttribute('cy', String(cy));
+    s.currentShape.setAttribute('rx', String(rx));
+    s.currentShape.setAttribute('ry', String(ry));
+  } else if (s.tool === 'line') {
+    s.currentShape.setAttribute('x2', String(p.x));
+    s.currentShape.setAttribute('y2', String(p.y));
+  }
+}
+
+function _diagramOnPointerUp() {
+  const s = _diagramState;
+  if (!s.isDrawing) return;
+  // Drop degenerate shapes (zero-size click without drag) so they
+  // don't litter the undo stack.
+  const sh = s.currentShape;
+  if (sh) {
+    const tag = sh.tagName.toLowerCase();
+    if (tag === 'rect' && (+sh.getAttribute('width') < 2 || +sh.getAttribute('height') < 2)) sh.remove();
+    else if (tag === 'ellipse' && (+sh.getAttribute('rx') < 2 || +sh.getAttribute('ry') < 2)) sh.remove();
+    else if (tag === 'line') {
+      const dx = +sh.getAttribute('x2') - +sh.getAttribute('x1');
+      const dy = +sh.getAttribute('y2') - +sh.getAttribute('y1');
+      if (Math.hypot(dx, dy) < 2) sh.remove();
+    }
+  }
+  s.isDrawing = false; s.currentShape = null; s.penPoints = []; s.dragStart = null;
+}
+
+function _diagramUndo() {
+  const layer = document.getElementById('diagram-layer');
+  if (!layer || !layer.lastElementChild) return;
+  layer.removeChild(layer.lastElementChild);
+}
+
+function _diagramClear() {
+  const layer = document.getElementById('diagram-layer');
+  if (!layer || !layer.firstChild) return;
+  if (!window.confirm('Clear the whole canvas?')) return;
+  while (layer.firstChild) layer.removeChild(layer.firstChild);
+}
+
+function _diagramSetStatus(msg, isError) {
+  const el = document.getElementById('diagram-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = isError ? '#f6b48a' : 'var(--muted, #8b949e)';
+}
+
+// Serialize the current canvas to a standalone SVG string (with xmlns
+// + viewBox preserved) so it renders correctly when served back as a
+// standalone image/svg+xml resource.
+function _diagramSerialize() {
+  const canvas = document.getElementById('diagram-canvas');
+  if (!canvas) return null;
+  // Clone so we can strip the id (id="diagram-canvas" would collide
+  // if the chat ever rendered two diagrams on the same page).
+  const clone = canvas.cloneNode(true);
+  clone.removeAttribute('id');
+  const bg = clone.querySelector('#diagram-bg'); if (bg) bg.removeAttribute('id');
+  const layer = clone.querySelector('#diagram-layer'); if (layer) layer.removeAttribute('id');
+  // Make sure xmlns is present on the root for standalone rendering.
+  if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', SVG_NS);
+  return new XMLSerializer().serializeToString(clone);
+}
+
+async function _diagramSave() {
+  const layer = document.getElementById('diagram-layer');
+  if (!layer || !layer.firstChild) {
+    _diagramSetStatus('Nothing to insert — draw something first.', true);
+    return;
+  }
+  const sid = state.activeId;
+  if (!sid) { _diagramSetStatus('No active session.', true); return; }
+  const svg = _diagramSerialize();
+  if (!svg) { _diagramSetStatus('Could not serialize canvas.', true); return; }
+  _diagramSetStatus('Saving…', false);
+  const saveBtn = document.getElementById('diagram-save');
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/diagrams`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ svg }),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error || ''; } catch {}
+      throw new Error(`HTTP ${res.status}${detail ? ' — ' + detail : ''}`);
+    }
+    const body = await res.json();
+    const input = document.getElementById('chat-input');
+    if (input) {
+      const md = `![diagram](${body.url})`;
+      // Append on a new line if there's already content, otherwise
+      // just drop the markdown in.
+      const cur = input.value || '';
+      input.value = cur ? `${cur}${cur.endsWith('\n') ? '' : '\n'}${md}` : md;
+      // input event so the chip-render listener (and any others)
+      // re-evaluate the new value.
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+    }
+    closeDiagramModal();
+  } catch (err) {
+    _diagramSetStatus(`Save failed: ${err.message || err}`, true);
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+function _diagramOnKeyDown(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closeDiagramModal(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault(); _diagramUndo(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault(); _diagramSave(); return;
+  }
+}
+
+// Bind once per page load — open/close toggles `hidden` on the modal.
+let _diagramBound = false;
+function _bindDiagramModal() {
+  if (_diagramBound) return;
+  _diagramBound = true;
+  const modal = document.getElementById('diagram-modal');
+  const canvas = document.getElementById('diagram-canvas');
+  if (!modal || !canvas) return;
+  // Tool palette — class .diagram-tool, attribute data-tool.
+  document.querySelectorAll('.diagram-tool').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tool = btn.dataset.tool;
+      if (!DIAGRAM_TOOLS.includes(tool)) return;
+      _diagramState.tool = tool;
+      document.querySelectorAll('.diagram-tool').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.querySelectorAll('.diagram-color').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _diagramState.color = btn.dataset.color || '#e6edf3';
+      document.querySelectorAll('.diagram-color').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  });
+  document.querySelectorAll('.diagram-width').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _diagramState.width = parseInt(btn.dataset.width, 10) || 3;
+      document.querySelectorAll('.diagram-width').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  });
+  // Pointer/touch on canvas.
+  canvas.addEventListener('mousedown', _diagramOnPointerDown);
+  canvas.addEventListener('mousemove', _diagramOnPointerMove);
+  window.addEventListener('mouseup',   _diagramOnPointerUp);
+  canvas.addEventListener('touchstart', _diagramOnPointerDown, { passive: false });
+  canvas.addEventListener('touchmove',  _diagramOnPointerMove, { passive: false });
+  canvas.addEventListener('touchend',   _diagramOnPointerUp);
+  // Actions.
+  document.getElementById('diagram-undo')?.addEventListener('click', _diagramUndo);
+  document.getElementById('diagram-clear')?.addEventListener('click', _diagramClear);
+  document.getElementById('diagram-cancel')?.addEventListener('click', closeDiagramModal);
+  document.getElementById('diagram-save')?.addEventListener('click', _diagramSave);
+  // Click on the backdrop closes (but not on the dialog itself).
+  modal.addEventListener('click', (e) => { if (e.target.id === 'diagram-modal') closeDiagramModal(); });
+}
+
+function openDiagramModal() {
+  _bindDiagramModal();
+  const modal = document.getElementById('diagram-modal');
+  if (!modal) return;
+  modal.hidden = false;
+  // Reset layer + state so each open starts fresh.
+  const layer = document.getElementById('diagram-layer');
+  if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
+  _diagramState.isDrawing = false;
+  _diagramState.currentShape = null;
+  _diagramSetStatus('');
+  document.addEventListener('keydown', _diagramOnKeyDown);
+}
+
+function closeDiagramModal() {
+  const modal = document.getElementById('diagram-modal');
+  if (modal) modal.hidden = true;
+  document.removeEventListener('keydown', _diagramOnKeyDown);
+}
+
 async function doSpawn() {
   const rawCwd = document.getElementById('spawn-cwd').value.trim();
   const errEl = document.getElementById('spawn-error');
@@ -6081,6 +6395,15 @@ function bindChatUi() {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     submitChat();
+  });
+
+  // fr-84: composer "Draw" button opens the in-browser diagram modal.
+  // Modal handles its own keyboard + close wiring; we just toggle it
+  // open here. The save flow appends `![diagram](<url>)` to this same
+  // textarea, so the user can edit the message + send normally.
+  document.getElementById('chat-diagram')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openDiagramModal();
   });
 
   // Chrome icon click contract:

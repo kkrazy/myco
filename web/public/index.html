@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=273" />
+  <link rel="stylesheet" href="styles.css?v=274" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -169,6 +169,14 @@
             <button type="button" id="chat-mic" class="composer-btn composer-btn-mic" title="Voice input — in progress · coming soon" aria-label="Voice input (in progress)" aria-pressed="false" aria-disabled="true" disabled hidden>
               <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 19v3"/></svg>
               <span class="composer-btn-label">Speak</span>
+            </button>
+            <!-- fr-84: open the in-browser freehand drawing modal.
+                 Saved diagrams are inserted into the chat input as
+                 markdown image links and rendered inline for every
+                 attached viewer. Lucide pen-tool icon. -->
+            <button type="button" id="chat-diagram" class="composer-btn composer-btn-diagram" title="Draw a diagram and insert it into chat" aria-label="Draw a diagram">
+              <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15.707 21.293-2-2a1 1 0 0 1 0-1.414l8.586-8.586a1 1 0 0 1 1.414 0l2 2a1 1 0 0 1 0 1.414l-8.586 8.586a1 1 0 0 1-1.414 0"/><path d="M18 13 13 8"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+              <span class="composer-btn-label">Draw</span>
             </button>
             <button type="submit" id="chat-send" class="composer-btn composer-btn-send" title="Send (Enter)" aria-label="Send">
               <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
@@ -454,6 +462,79 @@
     </div>
   </div>
 
+  <!-- fr-84: in-browser freehand diagram modal. Opens from the
+       composer "Draw" button. Pure-SVG canvas, 5 tools (pen / rect /
+       ellipse / line / text), 4 colors, 3 stroke widths, undo +
+       clear + save + cancel. Saved diagrams POST to
+       /sessions/:id/diagrams and the URL is inserted as a markdown
+       image into the chat composer. Zero new vendor weight — uses
+       browser-native SVG + mouse/touch events. -->
+  <div id="diagram-modal" hidden role="dialog" aria-label="Draw diagram" aria-modal="true">
+    <div id="diagram-dialog">
+      <header id="diagram-header">
+        <h2 id="diagram-title">Draw diagram</h2>
+        <div id="diagram-toolbar" role="toolbar" aria-label="Drawing tools">
+          <!-- Tools -->
+          <div class="diagram-tools" role="group" aria-label="Tool">
+            <button type="button" class="diagram-tool active" data-tool="pen" title="Pen (freehand)" aria-label="Pen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="rect" title="Rectangle" aria-label="Rectangle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="ellipse" title="Ellipse" aria-label="Ellipse">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="6"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="line" title="Line" aria-label="Line">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="text" title="Text" aria-label="Text">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/></svg>
+            </button>
+          </div>
+          <!-- Colors -->
+          <div class="diagram-colors" role="group" aria-label="Color">
+            <button type="button" class="diagram-color active" data-color="#e6edf3" style="background:#e6edf3" title="White" aria-label="White"></button>
+            <button type="button" class="diagram-color" data-color="#79c0ff" style="background:#79c0ff" title="Blue" aria-label="Blue"></button>
+            <button type="button" class="diagram-color" data-color="#7ee787" style="background:#7ee787" title="Green" aria-label="Green"></button>
+            <button type="button" class="diagram-color" data-color="#ff7b72" style="background:#ff7b72" title="Red" aria-label="Red"></button>
+          </div>
+          <!-- Stroke widths -->
+          <div class="diagram-widths" role="group" aria-label="Stroke width">
+            <button type="button" class="diagram-width" data-width="2" title="Thin" aria-label="Thin"><span style="height:2px"></span></button>
+            <button type="button" class="diagram-width active" data-width="3" title="Medium" aria-label="Medium"><span style="height:3px"></span></button>
+            <button type="button" class="diagram-width" data-width="5" title="Thick" aria-label="Thick"><span style="height:5px"></span></button>
+          </div>
+          <!-- Actions -->
+          <div class="diagram-actions" role="group" aria-label="Actions">
+            <button type="button" id="diagram-undo" title="Undo last shape (Ctrl+Z)" aria-label="Undo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.7 2.9L3 13"/></svg>
+            </button>
+            <button type="button" id="diagram-clear" title="Clear canvas (confirms)" aria-label="Clear">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            </button>
+            <button type="button" id="diagram-cancel" title="Discard + close (Esc)" aria-label="Cancel">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+            <button type="button" id="diagram-save" title="Insert into chat (Ctrl+Enter)" aria-label="Save">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>
+              <span class="diagram-save-label">Insert</span>
+            </button>
+          </div>
+        </div>
+      </header>
+      <div id="diagram-canvas-host">
+        <!-- viewBox stays in 1000x600 design units; CSS scales to fit.
+             SVG-native draw layer that mouse/touch events target. -->
+        <svg id="diagram-canvas" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+          <rect id="diagram-bg" x="0" y="0" width="1000" height="600" fill="#0d1117"/>
+          <g id="diagram-layer"></g>
+        </svg>
+      </div>
+      <div id="diagram-status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
   <!-- User-manual modal. Sidebar's book-open icon fetches
        /USER_MANUAL.md and renders it via marked into the body. -->
   <div id="manual-modal" hidden>
@@ -524,6 +605,6 @@
        Exposes window.MycoCM with { createEditor, EditorView, ... }. -->
   <script src="/vendor/codemirror.bundle.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=239"></script>
+  <script src="app.js?v=240"></script>
 </body>
 </html>
