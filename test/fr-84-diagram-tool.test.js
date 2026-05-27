@@ -249,14 +249,17 @@ t('server: GET /sessions/:id/diagrams/:filename serves image/svg+xml with strict
   assert.ok(/app\.get\(['"]\/sessions\/:id\/diagrams\/:filename['"]/.test(SERVER),
     'GET /sessions/:id/diagrams/:filename route must be registered');
   const idx = SERVER.search(/app\.get\(['"]\/sessions\/:id\/diagrams\/:filename['"]/);
-  const win = SERVER.slice(idx, idx + 1200);
+  // r3 expanded the route comment + body, so widen the slice past it.
+  const win = SERVER.slice(idx, idx + 3000);
   assert.ok(/image\/svg\+xml/.test(win),
     'GET route must set Content-Type: image/svg+xml');
-  // Viewer access — share-token recipients should see diagrams the
-  // owner posted.
-  assert.ok(/fileApiPreamble\(\s*req\s*,\s*res\s*,\s*['"]viewer['"]/.test(win),
-    'GET /diagrams/:filename must use viewer access');
-  // Filename whitelist guards path traversal.
+  // r3 (2026-05-27): auth contract was relaxed — see
+  // test/fr-84-r3-chat-render.test.js for the new contract (no
+  // Bearer gate because <img src> can't carry it; security boundary
+  // is {unguessable session-id, unguessable filename}). The original
+  // "viewer access" assertion is intentionally removed here, NOT
+  // forgotten.
+  // Filename whitelist guards path traversal (still required).
   assert.ok(/DIAGRAM_FILENAME_RE/.test(win) || /\\.svg\$/.test(win),
     'GET route must validate filename against a strict whitelist (no path traversal)');
 });

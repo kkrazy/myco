@@ -926,8 +926,25 @@ app.post('/sessions/:id/diagrams', async (req, res) => {
 });
 
 app.get('/sessions/:id/diagrams/:filename', async (req, res) => {
-  const ctx = fileApiPreamble(req, res, 'viewer');
-  if (!ctx) return;
+  // r3: NO Bearer-auth gate on GET. Diagram URLs land inline in
+  // chat as `<img src="...">`, and the browser fetches images
+  // WITHOUT custom headers — our Bearer token never reaches the
+  // route, so a fileApiPreamble gate caused 401 → blank renders.
+  //
+  // Security boundary is now {unguessable session-id, unguessable
+  // filename}:
+  //   - session-id  = the random session record id (UUID-shaped)
+  //   - filename    = YYYYMMDDTHHMMSSZ-<8hex>.svg (32 bits of
+  //                   randomness on top of the session-id)
+  // Same protection model as share-link tokens — possession of
+  // the URL implies access. Anyone who can see a session's chat
+  // can already see the diagram URLs in it; anyone who can't
+  // shouldn't be able to guess the {id, filename} pair.
+  const rec = getSessionRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'unknown session' });
+  let root;
+  try { root = resolveCwd(rec.cwd, rec.user); }
+  catch { return res.status(500).json({ error: 'stale session record' }); }
   const filename = String(req.params.filename || '');
   // Strict whitelist — only YYYYMMDDTHHMMSSZ-<hex>.svg shape is
   // servable. Blocks path traversal + arbitrary file disclosure.
@@ -935,7 +952,7 @@ app.get('/sessions/:id/diagrams/:filename', async (req, res) => {
     return res.status(400).json({ error: 'bad filename shape' });
   }
   const path = require('path');
-  const abs = path.join(ctx.root, '_myco_', 'diagrams', filename);
+  const abs = path.join(root, '_myco_', 'diagrams', filename);
   res.setHeader('Content-Type', 'image/svg+xml');
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.sendFile(abs, (err) => {

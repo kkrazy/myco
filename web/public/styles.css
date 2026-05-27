@@ -3081,6 +3081,23 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin: 8px 0;
 }
 .chat-msg .chat-text img { max-width: 100%; height: auto; border-radius: 4px; }
+/* fr-84 r3: tighter cap for diagrams inserted via the composer's
+   Draw modal. The save flow emits `![diagram](/sessions/.../...svg)`
+   markdown which renders as `<img alt="diagram">`. Without this rule
+   the diagram inherits the generic `max-width: 100%` above and fills
+   the bubble — way too big for an inline preview. Cap at 420×320 px
+   with aspect-preserve; user-pasted screenshots / agent images
+   (no alt="diagram") still respect the bubble width. */
+.chat-msg .chat-text img[alt="diagram"] {
+  max-width: 420px;
+  max-height: 320px;
+  height: auto;
+  border: 1px solid rgba(255, 255, 255, .06);
+  background: rgba(255, 255, 255, .02);
+  border-radius: 6px;
+  display: block;
+  margin: 6px 0;
+}
 .chat-msg .chat-text table {
   border-collapse: collapse;
   margin: 6px 0;
