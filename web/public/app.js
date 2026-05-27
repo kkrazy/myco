@@ -1412,6 +1412,13 @@ function openSession(id, opts = {}) {
         // event-log pane defined below — phase 3 will swap this for
         // a rich structured renderer.
         _handleAgentFrame(msg);
+      } else if (msg.t === 'clarify-reply') {
+        // fr-85 r4: claude's response to a clarify-tagged user input
+        // is routed back via this dedicated WS frame — NOT through
+        // the normal chat-msg / agent-event channels — so the popover
+        // can render it in place without the question or the reply
+        // polluting chat history.
+        _handleClarifyReplyFrame(msg);
       } else if (msg.t === 'exit') {
         state.term?.writeln('\r\n[session ended]');
       } else if (msg.t === 'error') {
@@ -2372,6 +2379,13 @@ function applyChatHistory(messages, total) {
 
 function appendChatMessage(message) {
   if (!message || typeof message !== 'object') return;
+  // fr-85 r4: clarify-tagged messages go to the popover only, NOT
+  // to chat state. Server still persists them in rec.chat for the
+  // audit trail, but the client-side state.chatMessages array stays
+  // clean — they\'re not part of the user-visible chat thread.
+  if (message.meta && (message.meta.kind === 'clarify' || message.meta.kind === 'clarify-reply')) {
+    return;
+  }
   // Dedup by transcript uuid — Claude's assistant text reaches the
   // client through the server's persistAssistantTextToChat watcher as
   // a 'chat' frame stamped with meta.transcriptUuid. Replays (chat-
@@ -3389,6 +3403,19 @@ function _openClarifyPopover() {
     const trimmed = selectedText.length > 60 ? selectedText.slice(0, 57) + '…' : selectedText;
     preview.textContent = `Clarify: "${trimmed}"`;
   }
+  // r4: fresh open = clear any reply from a prior popover use +
+  // re-enable input. Without this, opening the popover on a new
+  // selection while a previous reply was still showing would leave
+  // the old reply visible until the new send.
+  const oldReply = pop.querySelector('.chat-clarify-reply');
+  if (oldReply) oldReply.remove();
+  const inEl = pop.querySelector('#chat-clarify-input');
+  if (inEl) { inEl.disabled = false; inEl.placeholder = 'Ask about this…'; }
+  const sndEl = pop.querySelector('#chat-clarify-send');
+  if (sndEl) sndEl.disabled = false;
+  _clarifyState.questionTs = null;
+  _clarifyState.selected = '';
+  _clarifyState.question = '';
   pop.style.display = 'flex';
   // r3: position UNDER the selection vertically (rect.bottom +
   // scrollY), but anchor the popover HORIZONTALLY to the chat
@@ -3413,8 +3440,19 @@ function _openClarifyPopover() {
 
 function _closeClarifyPopover() {
   const pop = document.getElementById('chat-clarify-popover');
-  if (pop) pop.style.display = 'none';
+  if (pop) {
+    pop.style.display = 'none';
+    // r4: drop any in-flight reply pane so the next open starts
+    // clean. Selection is also cleared from the saved range so a
+    // stale clarify-reply WS frame (e.g. the user closes the
+    // popover before the reply arrives) doesn't try to render.
+    const reply = pop.querySelector('.chat-clarify-reply');
+    if (reply) reply.remove();
+  }
   _clarifyAnchorRange = null;
+  _clarifyState.questionTs = null;
+  _clarifyState.selected = '';
+  _clarifyState.question = '';
 }
 
 function _sendClarify() {
@@ -3424,6 +3462,7 @@ function _sendClarify() {
   const question = input ? String(input.value || '').trim() : '';
   const selected = String(_clarifyAnchorRange.toString() || '').trim();
   if (!selected) { _closeClarifyPopover(); return; }
+  if (!question) { return; }   // require a question; don't auto-close
   // Wrap the selected range in <span class="chat-clarify-anchor"> so
   // the user can scroll back and see what got clarified. Only works
   // when the range starts + ends in the same text node; for cross-
@@ -3437,19 +3476,94 @@ function _sendClarify() {
     /* range spans node boundaries — skip the visual marker, the
        message itself still ships */
   }
-  // Build the [clarify: "..."] prefix + ship via the normal chat
-  // send path. Inject directly into #chat-input + trigger form
-  // submit, same shape as fr-84 r5 — preserves all gates (guest
-  // restrictions, history push, claude wakeup).
-  const composer = document.getElementById('chat-input');
-  if (composer) {
-    composer.value = `[clarify: "${selected}"] ${question}`.trim();
-    composer.dispatchEvent(new Event('input', { bubbles: true }));
-    const form = document.getElementById('chat-form');
-    if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
-    else if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  // r4: ship via sendChatMessage with meta.kind='clarify' instead of
+  // injecting into #chat-input + firing the chat-form submit. Reasons:
+  //   - DOESN\'T pollute the main chat window (server filters from
+  //     the chat-history WS frame; client filters from render).
+  //   - Selected text travels in meta.selected so claude gets the
+  //     anchor context without it being part of the user-visible
+  //     prompt.
+  //   - The composer textarea is untouched — user\'s in-flight chat
+  //     draft (if any) survives a clarify ask.
+  // Track the questionTs so the incoming clarify-reply WS frame can
+  // be matched + routed into THIS popover instance.
+  const questionTs = new Date().toISOString();
+  _clarifyState.questionTs = questionTs;
+  _clarifyState.selected = selected;
+  _clarifyState.question = question;
+  // Build the user-visible message text. The selected anchor is
+  // ALSO inlined here as a quote so the agent sees both meta.selected
+  // (machine-readable) and an inline excerpt in the prompt text.
+  const text = `Re: "${selected}"\n\n${question}`;
+  sendChatMessage(text, { meta: { kind: 'clarify', selected } });
+  _clarifyRenderBusy();
+}
+
+// r4: visual state machine for the popover during a clarify round-
+// trip. _clarifyRenderBusy collapses the input + shows a "claude is
+// thinking…" line; _clarifyRenderReply replaces busy with the
+// rendered markdown reply; _clarifyRenderInput restores the input
+// so the user can ask a follow-up.
+const _clarifyState = { questionTs: null, selected: '', question: '' };
+
+function _clarifyReplyEl() {
+  const pop = document.getElementById('chat-clarify-popover');
+  if (!pop) return null;
+  let el = pop.querySelector('.chat-clarify-reply');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'chat-clarify-reply';
+    pop.appendChild(el);
   }
-  _closeClarifyPopover();
+  return el;
+}
+
+function _clarifyRenderBusy() {
+  const replyEl = _clarifyReplyEl();
+  if (!replyEl) return;
+  replyEl.className = 'chat-clarify-reply is-busy';
+  replyEl.textContent = 'claude is thinking…';
+  // Disable the input + send button while the reply is in flight to
+  // prevent accidental double-submits.
+  const pop = document.getElementById('chat-clarify-popover');
+  if (pop) {
+    const input = pop.querySelector('#chat-clarify-input');
+    const send  = pop.querySelector('#chat-clarify-send');
+    if (input) input.disabled = true;
+    if (send)  send.disabled  = true;
+  }
+}
+
+function _clarifyRenderReply(text) {
+  const replyEl = _clarifyReplyEl();
+  if (!replyEl) return;
+  replyEl.className = 'chat-clarify-reply artifact-md';
+  replyEl.innerHTML = renderMd(String(text || ''));
+  // Re-enable input + clear it so the user can ask a follow-up
+  // about the same anchor span.
+  const pop = document.getElementById('chat-clarify-popover');
+  if (pop) {
+    const input = pop.querySelector('#chat-clarify-input');
+    const send  = pop.querySelector('#chat-clarify-send');
+    if (input) {
+      input.disabled = false;
+      input.value = '';
+      input.placeholder = 'Follow-up question…';
+      input.focus();
+    }
+    if (send) send.disabled = false;
+  }
+}
+
+// WS frame `{t:'clarify-reply', questionTs, text, ts}` — routed
+// into the live popover if its questionTs matches the last one we
+// sent. If they don\'t match (e.g. user closed + reopened the
+// popover between send + reply), drop the reply silently — better
+// than randomly mutating an unrelated popover.
+function _handleClarifyReplyFrame(payload) {
+  if (!payload || !payload.questionTs) return;
+  if (_clarifyState.questionTs !== payload.questionTs) return;
+  _clarifyRenderReply(payload.text || '');
 }
 
 let _clarifyBound = false;
@@ -4278,6 +4392,15 @@ function _findLastMenuMessageIdx(messages) {
 }
 
 function renderChatMessage(m, isActiveMenu) {
+  // fr-85 r4: clarify-tagged messages (both the user's clarify
+  // question AND claude's clarify-reply) live in rec.chat for the
+  // audit trail, but DON'T render in the chat pane — they belong
+  // in the popover only. Returning '' from this function makes
+  // _appendChatMessageDom skip the DOM insert (it builds nothing
+  // from an empty html string via _htmlToNode).
+  if (m && m.meta && (m.meta.kind === 'clarify' || m.meta.kind === 'clarify-reply')) {
+    return '';
+  }
   const fromClaude = m.user === 'claude';
   const fromSelf = state.chatUser && m.user === state.chatUser;
   const ts = m.ts ? formatChatTs(m.ts) : '';
@@ -6472,12 +6595,16 @@ function _flushOutboundChat() {
   const queue = state.outboundChat;
   state.outboundChat = [];
   for (const item of queue) {
-    try { ws.send(JSON.stringify({ t: 'chat', text: item.text })); }
+    // fr-85 r4: preserve item.meta on the flushed frame so a queued
+    // clarify message survives a WS reconnect.
+    const frame = { t: 'chat', text: item.text };
+    if (item.meta) frame.meta = item.meta;
+    try { ws.send(JSON.stringify(frame)); }
     catch { state.outboundChat.push(item); break; }
   }
 }
 
-function sendChatMessage(text) {
+function sendChatMessage(text, opts) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
   // bug-19 follow-up: refuse to send if read-only viewer + text
@@ -6490,18 +6617,25 @@ function sendChatMessage(text) {
     console.log('[bug-19] refused to send (read-only viewer, text would be denied):', trimmed.slice(0, 60));
     return false;
   }
+  // fr-85 r4: optional meta field — used by the clarify popover to
+  // tag a chat-message as meta.kind='clarify'. The server filters
+  // these out of normal chat render + routes the resulting claude
+  // reply back via a dedicated clarify-reply WS frame. Only meta
+  // is passed through; other opts keys are ignored.
+  const frame = { t: 'chat', text: trimmed };
+  if (opts && opts.meta && typeof opts.meta === 'object') frame.meta = opts.meta;
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     // Queue + return true so the input clears and the user moves on. The
     // message goes out as soon as the WS reconnects (drainOutboundChat is
     // wired to every `open` event in connect()/connectShare()).
     if (!state.outboundChat) state.outboundChat = [];
-    state.outboundChat.push({ text: trimmed, ts: Date.now() });
+    state.outboundChat.push({ text: trimmed, ts: Date.now(), meta: frame.meta });
   } else {
-    try { ws.send(JSON.stringify({ t: 'chat', text: trimmed })); }
+    try { ws.send(JSON.stringify(frame)); }
     catch {
       if (!state.outboundChat) state.outboundChat = [];
-      state.outboundChat.push({ text: trimmed, ts: Date.now() });
+      state.outboundChat.push({ text: trimmed, ts: Date.now(), meta: frame.meta });
     }
   }
   // Since the chat-routing rewrite (2026-05-14), plain text goes to the

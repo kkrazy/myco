@@ -102,31 +102,83 @@ t('app.js: popover has a text input + Send button', () => {
     'popover must contain a send button with #chat-clarify-send id');
 });
 
-// ── Message format ──────────────────────────────────────────────────
+// ── Message format / send path ──────────────────────────────────────
 
-t('app.js: submit builds `[clarify: "..."] <question>` and ships via chat', () => {
-  // Pin the exact prefix shape so claude (and any agent on the other
-  // end) can recognize the clarify intent.
-  assert.ok(/\[clarify:\s*"\$\{[^}]+\}"\]/.test(APP) ||
-            /\[clarify:\s*"\$\{[^}]+\}"\]\s+\$\{[^}]+\}/.test(APP),
-    'submit must build a `[clarify: "<selected>"] <question>` message');
-  // Routes through the same chat send path the composer uses — so
-  // guest gates / history push / persistence all apply uniformly.
-  // Either submitChat-via-form-submit OR direct sendChatMessage are
-  // acceptable; pin one of them present in the clarify handler.
+t('app.js: r4 — _sendClarify ships via sendChatMessage with meta.kind=clarify (NOT form.requestSubmit)', () => {
+  // r4 design pivot: clarify question must NOT pollute the main
+  // chat window. Old r3 path injected into #chat-input + fired
+  // form.requestSubmit() — that put the question into the visible
+  // chat thread. New r4 path goes direct via sendChatMessage(text,
+  // {meta:{kind:'clarify',...}}) which the server side filters out
+  // of normal chat render via meta.kind matching.
   const idx = APP.search(/function\s+_sendClarify\s*\(/);
   assert.ok(idx > -1, '_sendClarify handler must be defined');
-  // Slice big enough to cover the whole function body. The actual
-  // implementation can be up to ~3000 chars (the try/catch around
-  // surroundContents, the composer-input assignment, the form
-  // lookup, the submit-or-dispatch fallback).
-  const win = APP.slice(idx, idx + 3000);
-  assert.ok(
-    /sendChatMessage\(/.test(win) ||
-    /requestSubmit\(\)/.test(win) ||
-    /dispatchEvent\(\s*new\s+Event\(\s*['"]submit['"]/.test(win),
-    '_sendClarify must dispatch through the normal chat send path (sendChatMessage / form.requestSubmit / submit Event)'
-  );
+  const win = APP.slice(idx, idx + 4500);
+  // Must call sendChatMessage with the meta arg.
+  assert.ok(/sendChatMessage\([^,]+,\s*\{\s*meta:\s*\{\s*kind:\s*['"]clarify['"]/.test(win),
+    '_sendClarify must call sendChatMessage(text, { meta: { kind: "clarify", ... } })');
+  // Must include the selected text in meta so the server can pair
+  // the eventual reply back to this anchor.
+  assert.ok(/selected\b/.test(win),
+    'meta must carry the selected text (selected: <range text>)');
+  // Must NOT go via the chat-form submit anymore (that\'s what put
+  // the question into the visible chat thread in r3).
+  assert.ok(!/requestSubmit\(\)/.test(win),
+    '_sendClarify must NOT call form.requestSubmit() — that polluted the main chat window in r3');
+  assert.ok(!/dispatchEvent\(\s*new\s+Event\(\s*['"]submit['"]/.test(win),
+    '_sendClarify must NOT synthesize a chat-form submit Event');
+});
+
+t('app.js: r4 — chat render skips clarify-tagged messages so they don\'t pollute chat', () => {
+  // Both directions filtered: user's clarify question (meta.kind='clarify')
+  // and claude's reply (meta.kind='clarify-reply').
+  const idx = APP.search(/function\s+renderChatMessage\s*\(/);
+  assert.ok(idx > -1, 'renderChatMessage must be defined');
+  const win = APP.slice(idx, idx + 800);
+  assert.ok(/clarify-reply/.test(win) && /clarify/.test(win),
+    'renderChatMessage must early-return for messages with meta.kind="clarify" or "clarify-reply"');
+});
+
+t('app.js: r4 — appendChatMessage skips clarify-tagged messages (no state.chatMessages bloat)', () => {
+  const idx = APP.search(/function\s+appendChatMessage\s*\(/);
+  assert.ok(idx > -1, 'appendChatMessage must be defined');
+  const win = APP.slice(idx, idx + 800);
+  assert.ok(/clarify-reply/.test(win) && /clarify/.test(win),
+    'appendChatMessage must early-return for clarify-tagged messages — they belong in the popover only, not state.chatMessages');
+});
+
+t('app.js: r4 — WS handler routes t=clarify-reply frames to _handleClarifyReplyFrame', () => {
+  assert.ok(/msg\.t === ['"]clarify-reply['"]/.test(APP),
+    'WS dispatcher must branch on msg.t === "clarify-reply"');
+  assert.ok(/_handleClarifyReplyFrame\(msg\)/.test(APP) ||
+            /_handleClarifyReplyFrame\(\s*msg\s*\)/.test(APP),
+    'clarify-reply branch must call _handleClarifyReplyFrame');
+  assert.ok(/function\s+_handleClarifyReplyFrame\s*\(/.test(APP),
+    '_handleClarifyReplyFrame handler must be defined');
+});
+
+t('app.js: r4 — _clarifyState tracks questionTs so the right popover gets the reply', () => {
+  // The popover-as-response-surface model means a clarify-reply WS
+  // frame has to be matched back to the in-flight clarify by ts —
+  // otherwise a stale frame from a closed popover could mutate a
+  // new one.
+  assert.ok(/_clarifyState\s*=\s*\{/.test(APP),
+    '_clarifyState object must exist');
+  const idx = APP.search(/function\s+_handleClarifyReplyFrame\s*\(/);
+  const win = APP.slice(idx, idx + 500);
+  assert.ok(/_clarifyState\.questionTs/.test(win) &&
+            /payload\.questionTs/.test(win),
+    'reply handler must compare payload.questionTs against _clarifyState.questionTs before rendering');
+});
+
+t('app.js: r4 — sendChatMessage accepts optional opts.meta + forwards it on the WS frame', () => {
+  const idx = APP.search(/function\s+sendChatMessage\s*\(text(?:,\s*opts)?\)/);
+  assert.ok(idx > -1, 'sendChatMessage(text, opts) signature must exist');
+  const win = APP.slice(idx, idx + 1500);
+  assert.ok(/opts\.meta/.test(win) || /opts && opts\.meta/.test(win),
+    'sendChatMessage must read opts.meta');
+  assert.ok(/frame\.meta\s*=/.test(win),
+    'sendChatMessage must attach opts.meta onto the outbound WS frame');
 });
 
 // ── Anchor marker (visual cue on the original selection) ────────────

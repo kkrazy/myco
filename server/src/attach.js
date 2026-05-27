@@ -1073,11 +1073,21 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(JSON.stringify({ t: 'exit', code }));
   };
+  // fr-85 r4: clarify-reply WS frame. agent-session emits this when
+  // a claude assistant_text finishes responding to a clarify-tagged
+  // user input. Goes to ALL attached clients (multi-viewer
+  // consistency); the client matches by questionTs to decide whether
+  // to render in its popover.
+  const onClarifyReply = (payload) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'clarify-reply', ...payload }));
+  };
 
   session.on('agent-event', onAgentEvent);
   session.on('chat', onChat);
   session.on('state-update', onStateUpdate);
   session.on('exit', onExit);
+  session.on('clarify-reply', onClarifyReply);
 
   // Track this attach in the presence roster + broadcast the updated
   // list to everyone watching the session (incl. the new connection,
@@ -1104,7 +1114,19 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     }
     if (msg.t === 'chat' && typeof msg.text === 'string' && user) {
       const text = msg.text.trim();
-      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT));
+      // r4 (fr-85): clarify-tagged chat messages are filtered out of
+      // chat render on both sides. Only meta.kind='clarify' is
+      // passed through — other meta keys are ignored as a security
+      // measure (prevents a client from spoofing a meta.kind='menu'
+      // or similar that could trick downstream renderers).
+      const opts = {};
+      if (msg.meta && msg.meta.kind === 'clarify') {
+        opts.meta = {
+          kind: 'clarify',
+          selected: String(msg.meta.selected || '').slice(0, 1000),
+        };
+      }
+      if (text) handleChatMessage(sessionId, session, user, text.slice(0, CHAT_TEXT_LIMIT), opts);
       return;
     }
     // bug-14: dedicated interrupt frame. The Stop button used to send
@@ -1442,6 +1464,20 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   if (mentionTarget && user !== ASSISTANT_USER) {
     message.meta = { kind: 'mention', mentionUser: mentionTarget };
     if (mentionTarget === 'all') message.meta.broadcast = true;
+  }
+  // r4 (fr-85): clarify tag — the message gets meta.kind='clarify'
+  // so the client filters it out of chat render, AND `session._pending
+  // Clarify` is set so the NEXT claude assistant_text reply gets
+  // paired back to this question (see _persistAssistantTextToRecChat
+  // in agent-session.js). The text still ships to claude via the
+  // usual session.write path — claude doesn't know it's a "clarify";
+  // only the routing of the resulting reply changes.
+  if (opts && opts.meta && opts.meta.kind === 'clarify' && user !== ASSISTANT_USER) {
+    message.meta = { kind: 'clarify', selected: String(opts.meta.selected || '') };
+    session._pendingClarify = {
+      questionTs: message.ts,
+      selected: message.meta.selected,
+    };
   }
   // [run:<type>#<id>] marker: the chat-pane's ▶ Run button on a
   // plan item produces this prefix. Stash {type, id} on the

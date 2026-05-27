@@ -3160,6 +3160,69 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   color: #aac8ff;
 }
 #chat-clarify-popover #chat-clarify-send:hover { background: rgba(80, 120, 200, .4); }
+#chat-clarify-popover #chat-clarify-input:disabled,
+#chat-clarify-popover #chat-clarify-send:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+/* fr-85 r4: in-place reply area inside the popover. Shown after the
+   user sends a clarify question — first as "claude is thinking…",
+   then replaced with the rendered markdown reply. The popover must
+   become column-layout when this child exists so the reply sits
+   BELOW the input row instead of next to it. */
+#chat-clarify-popover:has(.chat-clarify-reply) {
+  flex-direction: column;
+  align-items: stretch;
+  padding-bottom: 10px;
+}
+.chat-clarify-reply {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text, #e6edf3);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.chat-clarify-reply.is-busy {
+  color: var(--muted, #8b949e);
+  font-style: italic;
+}
+.chat-clarify-reply.is-busy::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: rgba(180, 130, 255, .6);
+  animation: cc-pulse 1.2s infinite;
+  vertical-align: middle;
+}
+/* Tighten markdown rendering inside the reply so it doesn\'t add
+   huge default <p> margins. */
+.chat-clarify-reply.artifact-md > :first-child { margin-top: 0; }
+.chat-clarify-reply.artifact-md > :last-child  { margin-bottom: 0; }
+.chat-clarify-reply.artifact-md p { margin: 4px 0; }
+.chat-clarify-reply.artifact-md pre {
+  margin: 6px 0;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, .35);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.chat-clarify-reply.artifact-md code {
+  background: rgba(255, 255, 255, .06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
 /* fr-84 r3: tighter cap for diagrams inserted via the composer's
    Draw modal. The save flow emits `![diagram](/sessions/.../...svg)`
    markdown which renders as `<img alt="diagram">`. Without this rule

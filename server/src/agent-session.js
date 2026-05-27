@@ -1232,6 +1232,30 @@ class AgentSession extends EventEmitter {
       ts: new Date().toISOString(),
       meta: { fromAgent: true },
     };
+    // fr-85 r4: if a clarify-tagged user input is in-flight (set by
+    // attach.js handleChatMessage when meta.kind='clarify' came in),
+    // pair this reply back to that question. Tag on the persisted
+    // record (so future chat-history fetches can be filtered) AND
+    // fire a dedicated WS event (`clarify-reply`) so all attached
+    // clients can route it to their popover instead of letting it
+    // render as a chat bubble. One-shot — clear pending after stamping
+    // so subsequent assistant_text (e.g. follow-up tool calls in the
+    // same turn) goes through the normal chat path.
+    if (this._pendingClarify) {
+      const pending = this._pendingClarify;
+      this._pendingClarify = null;
+      msg.meta.kind = 'clarify-reply';
+      msg.meta.clarifyQuestionTs = pending.questionTs;
+      try {
+        this.emit('clarify-reply', {
+          questionTs: pending.questionTs,
+          text: trimmed,
+          ts: msg.ts,
+        });
+      } catch (err) {
+        console.error(`[persist-chat] ${this.sessionId} clarify-reply emit failed: ${err && err.message ? err.message : err}`);
+      }
+    }
     try {
       const sessionsMod = require('./sessions');
       if (sessionsMod.appendChatMessage) {
@@ -1244,7 +1268,7 @@ class AgentSession extends EventEmitter {
     // Deliberately NO this.emit('chat', msg) here — the agent-event
     // stream (assistant_text card) is the live render channel; emitting
     // 'chat' would produce a duplicate bubble next to the card.
-    console.log(`[persist-chat] ${this.sessionId} mirrored assistant_text (${trimmed.length} chars) to rec.chat fromAgent:true`);
+    console.log(`[persist-chat] ${this.sessionId} mirrored assistant_text (${trimmed.length} chars) to rec.chat fromAgent:true${msg.meta.kind === 'clarify-reply' ? ' (clarify-reply)' : ''}`);
   }
 
   // Read up to the last MAX_EVENTS events from <cwd>/_myco_/

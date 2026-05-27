@@ -312,9 +312,9 @@ t('index.html: cache busters bumped for r2 (styles.css ≥ v275, app.js ≥ v241
   const cssM = HTML.match(/styles\.css\?v=(\d+)/);
   const jsM  = HTML.match(/app\.js\?v=(\d+)/);
   assert.ok(cssM && parseInt(cssM[1], 10) >= 275,
-    `styles.css cache-buster must be >= 275 (got ${cssM && cssM[1]})`);
+    `styles.css cache-buster must be >= 275 (got ${cssM && cssM[1]}) — rising baseline as more features ship`);
   assert.ok(jsM && parseInt(jsM[1], 10) >= 241,
-    `app.js cache-buster must be >= 241 (got ${jsM && jsM[1]})`);
+    `app.js cache-buster must be >= 241 (got ${jsM && jsM[1]}) — rising baseline as more features ship`);
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
