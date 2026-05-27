@@ -97,6 +97,24 @@ else
     unset HTTP_PROXY HTTPS_PROXY NO_PROXY
     unset GLOBAL_AGENT_HTTP_PROXY GLOBAL_AGENT_HTTPS_PROXY
     unset NODE_TLS_REJECT_UNAUTHORIZED GIT_SSL_NO_VERIFY
+
+    # ALSO clean any stale BARE-KEY git proxy/sslverify/insteadOf entries
+    # from /root/.gitconfig (bind-mounted from $STATE_DIR/home — survives
+    # container swaps). Older entrypoints wrote these unconditionally;
+    # without this cleanup, a host that USED to opt in keeps a poisoned
+    # gitconfig forever.
+    #
+    # IMPORTANT: only unset BARE keys (http.proxy, https.proxy). Per-URL
+    # entries like `http.<gitee.com>.proxy` are deliberate routes (e.g.
+    # the prod-side Gitee SSH tunnel at 172.17.0.1:8888) and MUST be
+    # preserved. `git config --unset` with a bare key does NOT touch
+    # subsection-scoped keys, so this is safe.
+    git config --global --unset http.proxy 2>/dev/null || true
+    git config --global --unset https.proxy 2>/dev/null || true
+    git config --global --unset http.sslverify 2>/dev/null || true
+    git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
+    git config --global --unset url."https://gitlab.com/".insteadOf 2>/dev/null || true
+    git config --global --unset url."https://gitee.com/".insteadOf 2>/dev/null || true
 fi
 
 # Start Caddy in background
