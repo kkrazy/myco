@@ -48,19 +48,44 @@ t('app.js: _setupChatClarify is invoked at page init', () => {
 
 // ── Trigger: selection inside a claude bubble ───────────────────────
 
-t('app.js: popover trigger scopes to .chat-msg.from-claude .chat-text only', () => {
-  // User messages + agent cards + menus must NOT show the popover.
-  // The bubble-check helper is a sibling of _setupChatClarify; slice
-  // the whole fr-85 region (between the marker comment and the end
-  // of the file) and assert both the .from-claude and .chat-text
-  // selectors live somewhere in there.
+t('app.js: popover trigger covers BOTH claude bubble (.chat-msg.from-claude .chat-text) AND agent-replay card (.agent-card-assistant_text .agent-card-md)', () => {
+  // r2 fix: original v1 only matched chat-history bubbles. Claude's
+  // text on first attach typically lands in an agent-replay card
+  // (.agent-card-assistant_text .agent-card-md) instead — selecting
+  // text there did nothing. Both surfaces are valid trigger targets.
   const startIdx = APP.search(/fr-85:\s*inline clarification popovers/i);
   assert.ok(startIdx > -1, 'fr-85 region marker comment must exist');
   const region = APP.slice(startIdx);
+  // Bubble path
   assert.ok(/from-claude/.test(region),
-    'trigger logic must check for the .from-claude class so user messages + agent cards don\'t accidentally trigger');
+    'trigger logic must check the .from-claude bubble path');
   assert.ok(/chat-text/.test(region),
-    'trigger logic must scope to .chat-text (the rendered body, not the byline/timestamps)');
+    'bubble path must scope to .chat-text');
+  // Agent-card path
+  assert.ok(/agent-card-assistant_text/.test(region),
+    'trigger logic must ALSO accept the agent-card .agent-card-assistant_text surface (where claude text lives in agent-replay)');
+  assert.ok(/agent-card-md/.test(region),
+    'agent-card path must scope to .agent-card-md (the markdown body)');
+});
+
+t('app.js: no document-level `selectionchange` listener inside the fr-85 region', () => {
+  // selectionchange fires during a drag, before the user is done.
+  // Opening the popover at the first selectionchange steals focus
+  // from the user's drag — they think nothing happened. mouseup /
+  // pointerup is the right "user finished selecting" signal.
+  // The fr-85 region spans from its marker comment to the next
+  // top-level `// ── ` section divider — slice that exact range so
+  // we don't false-positive on unrelated selectionchange listeners
+  // elsewhere in app.js (there's one for native-mobile selection
+  // callout that's unrelated to clarify).
+  const startIdx = APP.search(/fr-85:\s*inline clarification popovers/i);
+  assert.ok(startIdx > -1, 'fr-85 region marker comment must exist');
+  // Find the next top-level section divider (// ── ) after the marker.
+  const after = APP.slice(startIdx);
+  const endRel = after.search(/\n\/\/\s*── /);
+  const region = endRel > -1 ? after.slice(0, endRel) : after.slice(0, 12000);
+  assert.ok(!/document\.addEventListener\(\s*['"]selectionchange['"]/.test(region),
+    'fr-85 region must NOT wire selectionchange — race condition during drag-select');
 });
 
 // ── Popover markup ──────────────────────────────────────────────────

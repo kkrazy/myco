@@ -3318,27 +3318,31 @@ function _resortChatPaneByTs() {
 let _clarifyAnchorRange = null;   // saved Range captured at popover-open
 
 function _clarifySelectionInClaudeBubble() {
-  // Returns the .chat-text element that fully contains the current
-  // selection iff it lives inside a `.chat-msg.from-claude` bubble
-  // AND the selection's anchor + focus are both inside the same
-  // .chat-text. Returns null otherwise (the popover doesn't open
-  // for user messages, agent cards, menus, or cross-bubble drags).
+  // r2: returns the container element that fully holds the current
+  // selection iff selection is in one of TWO valid surfaces:
+  //   1. `.chat-msg.from-claude .chat-text`           — chat-history bubble
+  //   2. `.agent-card-assistant_text .agent-card-md`  — agent-replay card
+  // Both surfaces render claude's text; both should support clarify.
+  // v1 only checked path 1 — selections inside agent-replay cards
+  // (the typical first-attach surface) silently did nothing.
+  // Returns null for user messages, agent cards of other types,
+  // menus, or cross-container drags.
   const sel = window.getSelection ? window.getSelection() : null;
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
   const txt = String(sel.toString() || '').trim();
   if (!txt) return null;
-  // Selection must start AND end inside the same chat-text element,
-  // AND that element must live inside a `.chat-msg.from-claude`.
-  const anchorTxt = sel.anchorNode && (sel.anchorNode.nodeType === 3
-    ? sel.anchorNode.parentNode.closest('.chat-text')
-    : sel.anchorNode.closest && sel.anchorNode.closest('.chat-text'));
-  const focusTxt  = sel.focusNode  && (sel.focusNode.nodeType === 3
-    ? sel.focusNode.parentNode.closest('.chat-text')
-    : sel.focusNode.closest && sel.focusNode.closest('.chat-text'));
-  if (!anchorTxt || anchorTxt !== focusTxt) return null;
-  const bubble = anchorTxt.closest('.chat-msg.from-claude');
-  if (!bubble) return null;
-  return anchorTxt;
+  const SELECTOR = '.chat-msg.from-claude .chat-text, ' +
+                   '.agent-card-assistant_text .agent-card-md';
+  const findContainer = (node) => {
+    if (!node) return null;
+    const el = node.nodeType === 3 ? node.parentNode : node;
+    if (!el || typeof el.closest !== 'function') return null;
+    return el.closest(SELECTOR);
+  };
+  const anchorEl = findContainer(sel.anchorNode);
+  const focusEl  = findContainer(sel.focusNode);
+  if (!anchorEl || anchorEl !== focusEl) return null;
+  return anchorEl;
 }
 
 function _openClarifyPopover() {
@@ -3449,23 +3453,22 @@ function _setupChatClarify() {
   _clarifyBound = true;
   const list = document.getElementById('chat-messages');
   if (!list) return;
-  // mouseup catches text-selection drags AND double-click word-selects.
-  // selectionchange would also work but fires on every cursor blink
-  // outside chat too; mouseup-on-chat-messages stays scoped.
-  list.addEventListener('mouseup', () => {
-    // Defer one tick so the selection settles after the click resolves.
+  // r2: pointerup is the unified "user finished selecting" signal —
+  // fires for mouse (desktop drag), touch (mobile long-press release),
+  // and stylus. The selectionchange listener used in v1 raced with
+  // mid-drag focus shifts: opening the popover at the FIRST
+  // selectionchange (1 char selected) stole focus to the popover
+  // input, which collapsed the visual selection while the user was
+  // still dragging — they thought nothing happened. pointerup waits
+  // for the gesture to complete.
+  list.addEventListener('pointerup', () => {
+    // Defer one tick so the selection settles after the pointer-up
+    // resolves (some browsers haven't committed the final range yet
+    // at the pointerup tick).
     setTimeout(() => {
       if (_clarifySelectionInClaudeBubble()) _openClarifyPopover();
       else _closeClarifyPopover();
     }, 0);
-  });
-  // Touch: long-press / native-text-select on mobile triggers selectionchange.
-  document.addEventListener('selectionchange', () => {
-    // Only react if popover is closed AND there's a fresh selection
-    // in a claude bubble. Avoids re-opening while user is typing.
-    const pop = document.getElementById('chat-clarify-popover');
-    if (pop && pop.style.display === 'flex') return;
-    if (_clarifySelectionInClaudeBubble()) _openClarifyPopover();
   });
   // Click outside popover (and outside chat-messages) closes it.
   document.addEventListener('mousedown', (e) => {
