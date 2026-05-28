@@ -8799,6 +8799,31 @@ function bindFilesUi() {
     hideActionBar();
   });
 
+  // Free-text "ask about this code" input. The selection's line-range
+  // anchor is already captured in state.files.viewing.selection at
+  // selection time, so it survives focusing the input (the code-body
+  // selection collapses, but the anchor persists). Submit ships the
+  // typed question through the same askClaudeAboutSelection('ask', …)
+  // path the preset buttons use — the answer renders as a file-viewer
+  // card.
+  const _askInput = document.getElementById('files-ask-input');
+  const _askSend = document.getElementById('files-ask-send');
+  function _submitFilesAsk() {
+    const q = (_askInput && _askInput.value || '').trim();
+    if (!q) return;
+    askClaudeAboutSelection('ask', q).catch(() => {});
+    if (_askInput) _askInput.value = '';
+    hideActionBar();
+  }
+  _askSend?.addEventListener('click', _submitFilesAsk);
+  _askInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _submitFilesAsk(); }
+    else if (e.key === 'Escape') {
+      if (_askInput) _askInput.value = '';
+      hideActionBar();
+    }
+  });
+
   // Selection listener — detect line-range selections inside the code body.
   document.addEventListener('selectionchange', debouncedOnSelectionChange);
   // Reposition the floating popover when the code scrolls under it, on
@@ -10850,6 +10875,12 @@ async function deleteClaudeCard(messageId) {
 
 function onSelectionChange() {
   const bar = document.getElementById('files-action-bar');
+  // If the user is interacting with the action bar itself — e.g. typing
+  // a question into #files-ask-input — focusing the input collapses the
+  // code-body selection and fires selectionchange. We must NOT tear the
+  // bar down or null the captured anchor in that case; the line-range
+  // anchor in state.files.viewing.selection is what the ask uses.
+  if (bar && !bar.hidden && bar.contains(document.activeElement)) return;
   const v = state.files.viewing;
   // If an inline comment editor is open, the user is typing in the body —
   // selection changes there shouldn't kick the popover around (and the

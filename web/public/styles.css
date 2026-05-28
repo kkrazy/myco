@@ -5122,26 +5122,64 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 
 /* ── selection action bar (floating, anchored near selection) ───────────── */
 #files-action-bar {
+  /* Two stacked rows: preset buttons on top, the free-text "ask about
+     this code" input below. Column layout keeps the input full-width. */
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 6px 5px 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 8px;
   background: rgba(20, 24, 34, .96);
   border: 1px solid rgba(120, 160, 230, .45);
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, .55), 0 0 0 1px rgba(0, 0, 0, .3);
   font: 12px 'JetBrains Mono', monospace;
-  flex-wrap: nowrap;
   position: absolute;
   z-index: 50;
   /* JS sets top/left; default off-screen until positioned. */
   top: -9999px;
   left: -9999px;
+  min-width: 260px;
   max-width: calc(100% - 16px);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   pointer-events: auto;
 }
+/* Top row — selection label + preset action buttons + clear. */
+.files-action-row { display: flex; align-items: center; gap: 4px; }
+/* Bottom row — the free-text question input + send arrow. */
+.files-ask-row { display: flex; align-items: center; gap: 6px; }
+#files-ask-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 5px;
+  color: var(--text, #e6edf3);
+  font: 12px 'JetBrains Mono', monospace;
+  outline: none;
+}
+#files-ask-input:focus { border-color: rgba(120, 160, 230, .7); }
+#files-ask-send {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(80, 120, 200, .35);
+  border: 1px solid rgba(120, 160, 230, .45);
+  border-radius: 5px;
+  color: #aac8ff;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: background-color .08s, transform .04s;
+}
+#files-ask-send:hover { background: rgba(80, 120, 200, .55); }
+#files-ask-send:active { transform: scale(.95); }
 #files-action-label { color: #aac8ff; flex-shrink: 0; font-size: 10.5px; padding-right: 4px; border-right: 1px solid rgba(120, 160, 230, .20); margin-right: 2px; white-space: nowrap; }
 .files-action-btn {
   background: rgba(80, 120, 200, .22);

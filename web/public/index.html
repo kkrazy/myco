@@ -21,7 +21,7 @@
   <link rel="icon" type="image/png" href="/hetu.png?v=2" />
   <link rel="apple-touch-icon" href="/hetu.png?v=2" />
   <title>myco</title>
-  <link rel="stylesheet" href="styles.css?v=281" />
+  <link rel="stylesheet" href="styles.css?v=282" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
 </head>
 <body>
@@ -366,11 +366,17 @@
             </div>
           </header>
           <div id="files-action-bar" hidden>
-            <span id="files-action-label">L—</span>
-            <button class="files-action-btn" data-action="explain">Explain</button>
-            <button class="files-action-btn" data-action="bugs">Find bugs</button>
-            <button class="files-action-btn" data-action="comment">Add comment</button>
-            <button id="files-action-clear" title="Clear selection">×</button>
+            <div class="files-action-row">
+              <span id="files-action-label">L—</span>
+              <button class="files-action-btn" data-action="explain">Explain</button>
+              <button class="files-action-btn" data-action="bugs">Find bugs</button>
+              <button class="files-action-btn" data-action="comment">Add comment</button>
+              <button id="files-action-clear" title="Clear selection">×</button>
+            </div>
+            <div class="files-ask-row">
+              <input id="files-ask-input" type="text" placeholder="Ask about this code…" autocomplete="off" />
+              <button id="files-ask-send" type="button" title="Ask (Enter)" aria-label="Ask">→</button>
+            </div>
           </div>
           <div id="files-view-body"></div>
           <div id="files-view-msg" hidden></div>
@@ -630,6 +636,6 @@
        canvas() / generator() factories. Drawing engine wraps it. -->
   <script src="/vendor/rough.umd.js"></script>
   <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <script src="app.js?v=257"></script>
+  <script src="app.js?v=258"></script>
 </body>
 </html>
