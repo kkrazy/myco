@@ -2531,6 +2531,18 @@ test_chat_window() {
   # poisoned resume (clear sdkSessionId, redeliver the in-flight turn,
   # retry fresh), mirroring fr-44's resume-failure fallback.
   node_test_result test/bug-40-thinking-block-resume.test.js "test/bug-40-thinking-block-resume.test.js (16 cases)"
+  # bug-40 r2: the `claude` CLI subprocess sometimes CATCHES the API 400 and
+  # surfaces it as a normal stream `result` event (subtype:'success',
+  # result:<error text>) instead of throwing. bug-40's recovery only fires
+  # on thrown errors → the prose-form path was a blind spot, leaving every
+  # subsequent turn re-resuming the poisoned transcript (live-reproduced on
+  # mycobeta's myco-beta session 2026-05-29; required manual sdkSessionId
+  # clear + container restart to unwedge). Fix: shared
+  # _isThinkingBlockErrorMessage(text) helper used by both the thrown-error
+  # classifier and a new check inside the for-await loop that throws a
+  # synthetic Error on m.type==='result' + matching m.result text, routing
+  # the failure into the existing streamErr recovery branch.
+  node_test_result test/bug-40-r2-prose-form-error.test.js "test/bug-40-r2-prose-form-error.test.js (11 cases)"
   # fr-46: enable edit on plan items (body text + comments) — owner+admin
   # only. Adds PATCH /sessions/:id/artifact/item and PATCH
   # /sessions/:id/artifact/comment routes in artifacts.js, both gated on

@@ -466,6 +466,20 @@ class AgentSession extends EventEmitter {
           if (!this.alive) { killedMidStream = true; break; }
           this._handleEvent(m);
           if (m && m.type === 'result') emittedTerminal = true;
+          // bug-40 r2: the SDK CLI sometimes catches the Anthropic 400
+          // for a poisoned thinking-block resume and EMITS it as a normal
+          // `result` event (subtype:'success', result:<error text>)
+          // instead of throwing. Without intervention the stream closes
+          // cleanly, recovery never runs, and the session stays wedged
+          // — every following turn re-resumes the same poisoned
+          // transcript and 400s identically. Detect the prose form here
+          // and throw a synthetic so the existing
+          // _isThinkingBlockError(streamErr) recovery branch (line ~505)
+          // fires: drop sdkSessionId, redeliver, retry fresh.
+          if (m && m.type === 'result' && this._isThinkingBlockErrorMessage(m.result)) {
+            const detail = String(m.result || '').slice(0, 200);
+            throw new Error(`thinking_block_immutability (prose-form result): ${detail}`);
+          }
         }
       } catch (err) {
         streamErr = err;
@@ -595,7 +609,22 @@ class AgentSession extends EventEmitter {
   _isThinkingBlockError(err) {
     if (!err) return false;
     const msg = String((err && err.message) || '');
-    return /thinking or redacted_thinking blocks.*cannot be modified|must remain as they were in the original response/i.test(msg);
+    return this._isThinkingBlockErrorMessage(msg);
+  }
+
+  // bug-40 r2 — the `claude` CLI subprocess sometimes CATCHES the API 400
+  // and surfaces it as a normal `result` stream event (subtype:'success',
+  // result:<error-text>) instead of throwing. Our existing
+  // _isThinkingBlockError(err) only inspects thrown errors, so it never
+  // fires on that path and the session stays wedged: every subsequent
+  // turn re-resumes the same poisoned transcript and 400s identically,
+  // never advancing recovery. This helper takes a plain text string so
+  // the for-await loop can classify the prose-form error and route it
+  // into the same recovery branch (by throwing a synthetic Error whose
+  // message contains the matched text).
+  _isThinkingBlockErrorMessage(text) {
+    if (!text || typeof text !== 'string') return false;
+    return /thinking or redacted_thinking blocks.*cannot be modified|must remain as they were in the original response/i.test(text);
   }
 
   // fr-43: classify an SDK error as retry-eligible. Conservative —
