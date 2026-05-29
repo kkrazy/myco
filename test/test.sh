@@ -1296,17 +1296,17 @@ test_new_session_readonly() {
   grep -q "function _migrateLegacyMemory" server/src/sessions.js \
     && pass "sessions.js: _migrateLegacyMemory helper defined" \
     || fail "sessions.js: _migrateLegacyMemory helper missing"
-  # UX Phase 3: single centered column layout. The chatpane fills the
-  # main pane (no longer a right-anchored sidebar with --chatpane-w);
-  # its inner content is centered with max-width: 880px on desktop.
-  # Artifact panes follow the same centered-content rule so opening
-  # Plan/Arch/Test is visually continuous with the conversation.
+  # UX Phase 3: single-column layout. The chatpane fills the main pane
+  # (no longer a right-anchored sidebar with --chatpane-w).
+  # NOTE: the chat column's max-width:880px cap was intentionally
+  # relaxed to max-width:none in 7378ab9 ("let the chat pane use the
+  # full screen width"). The dedicated guard test/chat-pane-full-width
+  # .test.js now owns that assertion — do NOT re-pin 880px on the chat
+  # column here. The artifact-body 880px readable-line cap below is a
+  # DIFFERENT surface (fr-77) and is still in force.
   grep -Pzoq "#chatpane\.chat-main-view\s*\{[\s\S]{0,400}inset:\s*0" web/public/styles.css \
     && pass "styles.css: chatpane fills main pane (inset:0, Phase 3)" \
     || fail "styles.css: chatpane still right-anchored sidebar"
-  grep -Pzoq "#chatpane\.chat-main-view\s+#chat-messages[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
-    && pass "styles.css: chatpane content centered + max-width 880px" \
-    || fail "styles.css: chatpane content not centered"
   grep -Pzoq "\.artifact-main-view\s+\.artifact-body[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
     && pass "styles.css: artifact-body centered + max-width 880px (Phase 3)" \
     || fail "styles.css: artifact-body not centered"
