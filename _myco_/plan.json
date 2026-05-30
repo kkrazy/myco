@@ -3737,7 +3737,26 @@
         "rewritten": true
       },
       "description": "**Problem:** Users have no way to clear and resume a session to switch context.\n**Expected:** A slash command that clears the current session and resumes it, available only to owner and admin roles.\n**Actual:** No such command exists."
+    },
+    {
+      "id": "bug-40",
+      "text": "Special chars in prompt trigger 400 error on thinking/redacted_thinking blocks",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-29T01:25:49.287Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "special chars in the prompt \"$$\\frac{100}{10 - 1} = 11.\\overline{1} \\text{ 秒}$$ and $$v(t) = \\lim_{h \\to 0} \\frac{x(t+h) - x(t)}{h}$$\" might cause the following error: API Error: 400 messages.3.content.17: thinking or redacted_thinking blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response.",
+        "rewritten": true
+      },
+      "description": "**Problem:** Prompts containing special characters break the request with a 400 API error about immutable thinking blocks.\n**Expected:** Prompts with LaTeX/special chars (e.g. `$$\\frac{100}{10 - 1} = 11.\\overline{1} \\text{ 秒}$$` and `$$v(t) = \\lim_{h \\to 0} \\frac{x(t+h) - x(t)}{h}$$`) are sent without corrupting prior assistant message content.\n**Actual:** API Error: 400 messages.3.content.17: thinking or redacted_thinking blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."
     }
   ],
-  "updatedAt": "2026-05-28T16:26:30.638Z"
+  "updatedAt": "2026-05-29T01:25:55.224Z"
 }

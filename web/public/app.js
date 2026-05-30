@@ -404,6 +404,77 @@ function _lucideIcon(name, cls) {
 // regressions: if you suddenly see `[renderMd] marked unavailable` or
 // `[renderMd] marked.parse threw` in the console after an event, that
 // pinpoints the cause.
+// bug-39: protect LaTeX math from markdown mangling. marked treats
+// $$…$$ / \(…\) as ordinary text (collapses `_` → emphasis, drops the
+// backslashes, eats braces), so model output like
+//   $$\frac{100}{10 - 1} = 11.\overline{1} \text{ 秒}$$
+// renders as garbage. _extractMath pre-renders each math span to KaTeX
+// HTML BEFORE marked.parse and leaves a control-char placeholder;
+// _restoreMath swaps the HTML back in AFTER parse. STX/ETX (/)
+// placeholders are used because markdown never emits or transforms control
+// chars, so they survive marked.parse byte-for-byte. When KaTeX isn't
+// loaded (server-side / test contexts) it returns the text unchanged.
+function _extractMath(text) {
+  const src = String(text == null ? '' : text);
+  const math = [];
+  if (typeof katex === 'undefined' || !katex.renderToString) return { text: src, math };
+  const stash = (tex, displayMode) => {
+    let html;
+    try { html = katex.renderToString(tex.trim(), { displayMode, throwOnError: false }); }
+    catch { return null; }                          // keep the literal on a KaTeX parse error
+    const token = 'M' + math.length + '';
+    math.push(html);
+    return token;
+  };
+  let s = src;
+  s = s.replace(/\$\$([\s\S]+?)\$\$/g, (m, tex) => { const t = stash(tex, true);  return t == null ? m : t; });   // $$…$$ display
+  s = s.replace(/\\\[([\s\S]+?)\\\]/g, (m, tex) => { const t = stash(tex, true);  return t == null ? m : t; });   // \[…\] display
+  s = s.replace(/\\\(([\s\S]+?)\\\)/g, (m, tex) => { const t = stash(tex, false); return t == null ? m : t; });   // \(…\) inline
+  // $…$ inline: require no whitespace just inside the delimiters and no
+  // digit right after the closer, so prose like "$5 and $10" is left alone.
+  s = s.replace(/\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)/g, (m, tex) => { const t = stash(tex, false); return t == null ? m : t; });
+  return { text: s, math };
+}
+
+function _restoreMath(html, math) {
+  if (!math || !math.length) return html;
+  return String(html).replace(/M(\d+)/g, (m, i) => {
+    const n = Number(i);
+    return (n >= 0 && n < math.length) ? math[n] : m;
+  });
+}
+
+// Build the marked renderer once (code-block handler: mermaid passthrough +
+// hljs highlight). Hoisted out of renderMd so renderMd stays small — the
+// math protect → parse → restore steps read top-to-bottom.
+let _mdRenderer = null;
+function _buildMarkedRenderer() {
+  if (_mdRenderer) return _mdRenderer;
+  const renderer = new marked.Renderer();
+  renderer.code = function(arg) {
+    const code = (typeof arg === 'object' && arg.text !== undefined) ? arg.text : arg;
+    const lang = (typeof arg === 'object' && arg.lang) ? arg.lang : '';
+    if (lang === 'mermaid') {
+      return '<pre><code class="language-mermaid">' + escHtml(code) + '</code></pre>';
+    }
+    if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+      try {
+        const highlighted = hljs.highlight(code, { language: lang }).value;
+        return '<pre><code class="hljs language-' + escHtml(lang) + '">' + highlighted + '</code></pre>';
+      } catch {}
+    }
+    if (typeof hljs !== 'undefined') {
+      try {
+        const highlighted = hljs.highlightAuto(code).value;
+        return '<pre><code class="hljs">' + highlighted + '</code></pre>';
+      } catch {}
+    }
+    return '<pre><code>' + escHtml(code) + '</code></pre>';
+  };
+  _mdRenderer = renderer;
+  return _mdRenderer;
+}
+
 let _renderMdLoggedUnavailable = false;
 function renderMd(text) {
   if (typeof marked === 'undefined' || !marked.parse) {
@@ -414,28 +485,9 @@ function renderMd(text) {
     return escHtml(text);
   }
   try {
-    const renderer = new marked.Renderer();
-    renderer.code = function(arg) {
-      const code = (typeof arg === 'object' && arg.text !== undefined) ? arg.text : arg;
-      const lang = (typeof arg === 'object' && arg.lang) ? arg.lang : '';
-      if (lang === 'mermaid') {
-        return '<pre><code class="language-mermaid">' + escHtml(code) + '</code></pre>';
-      }
-      if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-        try {
-          const highlighted = hljs.highlight(code, { language: lang }).value;
-          return '<pre><code class="hljs language-' + escHtml(lang) + '">' + highlighted + '</code></pre>';
-        } catch {}
-      }
-      if (typeof hljs !== 'undefined') {
-        try {
-          const highlighted = hljs.highlightAuto(code).value;
-          return '<pre><code class="hljs">' + highlighted + '</code></pre>';
-        } catch {}
-      }
-      return '<pre><code>' + escHtml(code) + '</code></pre>';
-    };
-    return marked.parse(String(text == null ? '' : text), { breaks: true, gfm: true, renderer });
+    const { text: protectedText, math } = _extractMath(String(text == null ? '' : text));
+    const html = marked.parse(protectedText, { breaks: true, gfm: true, renderer: _buildMarkedRenderer() });
+    return _restoreMath(html, math);
   } catch (err) {
     console.error('[renderMd] marked.parse threw:', err && err.message, 'on input head:', String(text).slice(0, 200));
     return escHtml(text);

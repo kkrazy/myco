@@ -1296,17 +1296,17 @@ test_new_session_readonly() {
   grep -q "function _migrateLegacyMemory" server/src/sessions.js \
     && pass "sessions.js: _migrateLegacyMemory helper defined" \
     || fail "sessions.js: _migrateLegacyMemory helper missing"
-  # UX Phase 3: single centered column layout. The chatpane fills the
-  # main pane (no longer a right-anchored sidebar with --chatpane-w);
-  # its inner content is centered with max-width: 880px on desktop.
-  # Artifact panes follow the same centered-content rule so opening
-  # Plan/Arch/Test is visually continuous with the conversation.
+  # UX Phase 3: single-column layout. The chatpane fills the main pane
+  # (no longer a right-anchored sidebar with --chatpane-w).
+  # NOTE: the chat column's max-width:880px cap was intentionally
+  # relaxed to max-width:none in 7378ab9 ("let the chat pane use the
+  # full screen width"). The dedicated guard test/chat-pane-full-width
+  # .test.js now owns that assertion — do NOT re-pin 880px on the chat
+  # column here. The artifact-body 880px readable-line cap below is a
+  # DIFFERENT surface (fr-77) and is still in force.
   grep -Pzoq "#chatpane\.chat-main-view\s*\{[\s\S]{0,400}inset:\s*0" web/public/styles.css \
     && pass "styles.css: chatpane fills main pane (inset:0, Phase 3)" \
     || fail "styles.css: chatpane still right-anchored sidebar"
-  grep -Pzoq "#chatpane\.chat-main-view\s+#chat-messages[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
-    && pass "styles.css: chatpane content centered + max-width 880px" \
-    || fail "styles.css: chatpane content not centered"
   grep -Pzoq "\.artifact-main-view\s+\.artifact-body[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
     && pass "styles.css: artifact-body centered + max-width 880px (Phase 3)" \
     || fail "styles.css: artifact-body not centered"
@@ -2548,6 +2548,32 @@ test_chat_window() {
   # is NOT on the list (negative guard against a careless refactor
   # adding it back).
   node_test_result test/fr-45-sdkopts-lint.test.js "test/fr-45-sdkopts-lint.test.js (13 cases)"
+  # bug-40 (user-reported): special chars in a prompt (LaTeX / unicode)
+  # 400 the NEXT turn with "thinking or redacted_thinking blocks in the
+  # latest assistant message cannot be modified". Root cause: the fr-55
+  # lean-ctx sidecar's autonomous compaction-sync REWRITES the Anthropic
+  # transcript JSONL (observed 59 MB → 305 KB + .jsonl.bak.<ts> backups),
+  # breaking the immutability the API enforces on thinking blocks — every
+  # resume then reloads the poisoned transcript and 400s, wedging the
+  # session. Fix: (1) prevention — spawn lean-ctx with LEAN_CTX_AUTONOMY=
+  # false so it stops rewriting the transcript (ctx_* tools still work);
+  # (2) recovery — _isThinkingBlockError(err) classifies the 400 and the
+  # init- AND stream-error branches of _ensureIteration treat it as a
+  # poisoned resume (clear sdkSessionId, redeliver the in-flight turn,
+  # retry fresh), mirroring fr-44's resume-failure fallback.
+  node_test_result test/bug-40-thinking-block-resume.test.js "test/bug-40-thinking-block-resume.test.js (16 cases)"
+  # bug-40 r2: the `claude` CLI subprocess sometimes CATCHES the API 400 and
+  # surfaces it as a normal stream `result` event (subtype:'success',
+  # result:<error text>) instead of throwing. bug-40's recovery only fires
+  # on thrown errors → the prose-form path was a blind spot, leaving every
+  # subsequent turn re-resuming the poisoned transcript (live-reproduced on
+  # mycobeta's myco-beta session 2026-05-29; required manual sdkSessionId
+  # clear + container restart to unwedge). Fix: shared
+  # _isThinkingBlockErrorMessage(text) helper used by both the thrown-error
+  # classifier and a new check inside the for-await loop that throws a
+  # synthetic Error on m.type==='result' + matching m.result text, routing
+  # the failure into the existing streamErr recovery branch.
+  node_test_result test/bug-40-r2-prose-form-error.test.js "test/bug-40-r2-prose-form-error.test.js (11 cases)"
   # fr-46: enable edit on plan items (body text + comments) — owner+admin
   # only. Adds PATCH /sessions/:id/artifact/item and PATCH
   # /sessions/:id/artifact/comment routes in artifacts.js, both gated on
@@ -2711,13 +2737,15 @@ test_chat_window() {
   # Soon badge until OAuth is wired up. Click + keyboard activation
   # neutralized so it can't try to navigate to /auth/github/start.
   node_test_result test/login-github-soon-badge.test.js "test/login-github-soon-badge.test.js (6 cases)"
-  # bug-23: tool_result events now render as their own claude-style
-  # message bubble (border-left + tinted background, mirrors the
-  # assistant_text bubble shape with a cooler blue-grey tint).
-  # Pulled out of AGENT_CHROME_TYPES so it stops folding into the
-  # chrome batch with tool_use + hook_allow. Added to
-  # AGENT_DEFAULT_EXPANDED so the bubble shows expanded.
-  node_test_result test/bug-23-tool-result-bubble.test.js "test/bug-23-tool-result-bubble.test.js (8 cases)"
+  # bug-23 (tool_result rendered as its own claude-style bubble) was
+  # REVERSED by bug-38 r2 — tool_result now folds back INTO the chrome
+  # batch with tool_use + hook_allow. The original
+  # test/bug-23-tool-result-bubble.test.js was removed; assert its
+  # successor instead. (The dead node_test_result that used to sit here
+  # made the parallel runner block on a .exit file node_test_prelaunch
+  # never writes — the glob skips nonexistent files — until the 180s
+  # budget tripped and reported a phantom failure on every full run.)
+  node_test_result test/bug-38-r2-tool-result-fold.test.js "test/bug-38-r2-tool-result-fold.test.js"
   # bug-25: unknown_event events (server-side passthrough for SDK
   # message types myco doesn't recognize) used to leak into the
   # chat pane as literal "unknown_event" rows + JSON dumps. Now

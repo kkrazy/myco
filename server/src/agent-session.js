@@ -201,6 +201,11 @@ class AgentSession extends EventEmitter {
     this._iterating = false;
     this._abortController = null;
     this._iterationDone = null;   // promise resolved when the current iteration ends
+    // bug-40: the most-recent user turn delivered this iteration, kept so a
+    // poisoned-resume recovery (resume-failure or thinking-block 400) can
+    // redeliver it to the FRESH conversation — a fresh query() has no
+    // transcript to replay it from. Cleared once a turn completes (result).
+    this._lastUserEnvelope = null;
 
     // Phase 2: chat-pane menu integration. Each canUseTool fire stores
     // its resolve fn + the structured request here keyed by a hash; the
@@ -344,7 +349,22 @@ class AgentSession extends EventEmitter {
             type: 'stdio',
             command: 'lean-ctx',
             args: ['mcp'],
-            env: { ...process.env, CTX_PROJECT_ROOT: this.cwd },
+            // bug-40: lean-ctx's autonomous "compaction-sync" (see its
+            // src/server/compaction_sync.rs) rewrites the Anthropic
+            // transcript JSONL under ~/.claude/projects/<cwd>/ when it
+            // detects a compaction — shrinking the file (observed 59 MB →
+            // 305 KB) and leaving <id>.jsonl.bak.<ts> backups. That
+            // re-serialization changes the assistant messages byte-for-byte,
+            // which breaks the immutability the Anthropic API enforces on
+            // thinking / redacted_thinking blocks. The very next resume then
+            // 400s: "thinking or redacted_thinking blocks in the latest
+            // assistant message cannot be modified." (Prompts with special
+            // chars — LaTeX backslashes, unicode — make the affected messages
+            // re-serialize differently, which is why they correlate.)
+            // LEAN_CTX_AUTONOMY=false disables the autonomous background
+            // behaviors (incl. compaction-sync) while KEEPING the ctx_*
+            // compression tools the agent uses for reads/shell/search.
+            env: { ...process.env, CTX_PROJECT_ROOT: this.cwd, LEAN_CTX_AUTONOMY: 'false' },
           },
         },
       };
@@ -375,9 +395,19 @@ class AgentSession extends EventEmitter {
         // line skips (this.sdkSessionId is null), so this branch
         // self-disables and we won't infinite-loop on repeated
         // resume-failure-flavored errors.
-        if (this._isResumeFailure(initErr) && !!sdkOpts.resume) {
+        // bug-40: a thinking-block-immutability 400 is also a poisoned
+        // resume (the resumed transcript can't be re-sent), so it takes the
+        // same fallback as fr-44's resume-failure: drop the resume + retry
+        // fresh. _isThinkingBlockError is OR'd in here and on the stream
+        // path below.
+        if ((this._isResumeFailure(initErr) || this._isThinkingBlockError(initErr)) && !!sdkOpts.resume) {
           const prev = this.sdkSessionId;
-          this._emit({ type: 'resume_failed', prevSdkSessionId: prev, error: String((initErr && initErr.message) || initErr).slice(0, 200) });
+          this._emit({
+            type: 'resume_failed',
+            reason: this._isThinkingBlockError(initErr) ? 'thinking_block_immutability' : 'resume_unavailable',
+            prevSdkSessionId: prev,
+            error: String((initErr && initErr.message) || initErr).slice(0, 200),
+          });
           this.sdkSessionId = null;
           try {
             const sessionsMod = require('./sessions');
@@ -389,6 +419,10 @@ class AgentSession extends EventEmitter {
           } catch (err) {
             console.error(`[agent-session] resume-fallback failed to clear rec.sdkSessionId: ${err.message}`);
           }
+          // bug-40: a fresh query() has no transcript to replay the in-flight
+          // user turn from, so re-stash it — the loop top drains
+          // _pendingPrePush into the fresh queue at the next attempt.
+          if (this._lastUserEnvelope) this._pendingPrePush = [this._lastUserEnvelope];
           // Don't count this against MAX_ATTEMPTS — the resume-failure
           // fallback is a free retry. Decrement the loop counter so
           // the next iteration is logically still attempt 1.
@@ -432,6 +466,20 @@ class AgentSession extends EventEmitter {
           if (!this.alive) { killedMidStream = true; break; }
           this._handleEvent(m);
           if (m && m.type === 'result') emittedTerminal = true;
+          // bug-40 r2: the SDK CLI sometimes catches the Anthropic 400
+          // for a poisoned thinking-block resume and EMITS it as a normal
+          // `result` event (subtype:'success', result:<error text>)
+          // instead of throwing. Without intervention the stream closes
+          // cleanly, recovery never runs, and the session stays wedged
+          // — every following turn re-resumes the same poisoned
+          // transcript and 400s identically. Detect the prose form here
+          // and throw a synthetic so the existing
+          // _isThinkingBlockError(streamErr) recovery branch (line ~505)
+          // fires: drop sdkSessionId, redeliver, retry fresh.
+          if (m && m.type === 'result' && this._isThinkingBlockErrorMessage(m.result)) {
+            const detail = String(m.result || '').slice(0, 200);
+            throw new Error(`thinking_block_immutability (prose-form result): ${detail}`);
+          }
         }
       } catch (err) {
         streamErr = err;
@@ -456,6 +504,40 @@ class AgentSession extends EventEmitter {
       if (isAbort) {
         this._emit({ type: 'iteration_aborted' });
         break;
+      }
+
+      // bug-40: a poisoned resume usually surfaces HERE, not at init — the
+      // SDK returns a stream from query() immediately and only hits the
+      // Anthropic API (which validates thinking-block immutability) once we
+      // start consuming it, so the 400 throws out of the `for await` loop as
+      // streamErr. Same recovery as the init path: drop the corrupted resume,
+      // redeliver the in-flight user turn, and retry once with a fresh
+      // conversation. The `!!sdkOpts.resume` guard is one-shot — after we
+      // clear sdkSessionId the next attempt sets no resume=, so this branch
+      // can't re-fire and loop. (resume-failure is folded in too, in case the
+      // SDK ever surfaces it on the stream instead of at init.)
+      if ((this._isResumeFailure(streamErr) || this._isThinkingBlockError(streamErr)) && !!sdkOpts.resume) {
+        const prev = this.sdkSessionId;
+        this._emit({
+          type: 'resume_failed',
+          reason: this._isThinkingBlockError(streamErr) ? 'thinking_block_immutability' : 'resume_unavailable',
+          prevSdkSessionId: prev,
+          error: String((streamErr && streamErr.message) || streamErr).slice(0, 200),
+        });
+        this.sdkSessionId = null;
+        try {
+          const sessionsMod = require('./sessions');
+          const rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
+          if (rec) {
+            rec.sdkSessionId = null;
+            sessionsMod.saveStore();
+          }
+        } catch (err) {
+          console.error(`[agent-session] stream resume-fallback failed to clear rec.sdkSessionId: ${err.message}`);
+        }
+        if (this._lastUserEnvelope) this._pendingPrePush = [this._lastUserEnvelope];
+        attempt--;
+        continue;
       }
 
       if (this._isRecoverable(streamErr) && !lastAttempt) {
@@ -510,6 +592,39 @@ class AgentSession extends EventEmitter {
     if (!err) return false;
     const msg = String((err && err.message) || '');
     return /session not found|invalid session.?id|could not load conversation|conversation not found|no such session|session expired/i.test(msg);
+  }
+
+  // bug-40: classify the Anthropic API's thinking-block-immutability 400.
+  // It fires when a resumed conversation re-sends a thinking /
+  // redacted_thinking block that no longer matches the originally-signed
+  // bytes — in this codebase that happens because lean-ctx's compaction-sync
+  // rewrote the transcript JSONL out from under us (see the LEAN_CTX_AUTONOMY
+  // note in _ensureIteration's mcpServers block). Once it fires, EVERY resume
+  // reloads the same poisoned transcript and 400s identically, so the session
+  // is permanently wedged unless we drop the resume. Treated as a
+  // poisoned-resume alongside _isResumeFailure: clear sdkSessionId + retry
+  // fresh. The prevention (LEAN_CTX_AUTONOMY=false) is the primary fix; this
+  // is the defense-in-depth net for any transcript corruption that slips
+  // through (a different tool, a future lean-ctx regression, manual edits).
+  _isThinkingBlockError(err) {
+    if (!err) return false;
+    const msg = String((err && err.message) || '');
+    return this._isThinkingBlockErrorMessage(msg);
+  }
+
+  // bug-40 r2 — the `claude` CLI subprocess sometimes CATCHES the API 400
+  // and surfaces it as a normal `result` stream event (subtype:'success',
+  // result:<error-text>) instead of throwing. Our existing
+  // _isThinkingBlockError(err) only inspects thrown errors, so it never
+  // fires on that path and the session stays wedged: every subsequent
+  // turn re-resumes the same poisoned transcript and 400s identically,
+  // never advancing recovery. This helper takes a plain text string so
+  // the for-await loop can classify the prose-form error and route it
+  // into the same recovery branch (by throwing a synthetic Error whose
+  // message contains the matched text).
+  _isThinkingBlockErrorMessage(text) {
+    if (!text || typeof text !== 'string') return false;
+    return /thinking or redacted_thinking blocks.*cannot be modified|must remain as they were in the original response/i.test(text);
   }
 
   // fr-43: classify an SDK error as retry-eligible. Conservative —
@@ -690,6 +805,10 @@ class AgentSession extends EventEmitter {
       // Reset the per-turn accumulator now that the turn is done so
       // the next turn starts clean.
       this._currentTurnAssistantText = '';
+      // bug-40: the turn produced a result, so the in-flight user message
+      // was processed — drop it so a later recovery can't redeliver a turn
+      // that's already been answered.
+      this._lastUserEnvelope = null;
       // fr-85 r4 r3: flush the consolidated clarify-reply BEFORE
       // emitting turn_result. Two reasons for ordering: (a) we
       // want the popover to receive the answer atomically (one
@@ -1395,6 +1514,9 @@ class AgentSession extends EventEmitter {
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
     const envelope = { type: 'user', message: { role: 'user', content: trimmed } };
+    // bug-40: remember this turn so a poisoned-resume recovery can
+    // redeliver it to a fresh conversation (cleared on the next `result`).
+    this._lastUserEnvelope = envelope;
     // Reset the per-turn assistant-text accumulator (used by the
     // `result` branch in _handleEvent to dedup the SDK's final
     // result text against any text already streamed via assistant
