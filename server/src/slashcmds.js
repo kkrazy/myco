@@ -155,6 +155,12 @@ const COMMANDS = [
     handler: handleAdmin,
   },
   {
+    names: ['share'],
+    summary: 'Share this session read-only with one or more users (owner only). Viewers can see chat + transcripts but cannot drive claude.',
+    usage: '/share @alice @bob (grant) · /share -@alice (revoke) · /share (list)',
+    handler: handleShare,
+  },
+  {
     names: ['strict'],
     summary: 'Toggle strict-mode gate: claude-bound chat must include [run:plan#<id>] (owner + admin).',
     usage: '/strict on · /strict off · /strict (status)',
@@ -1539,6 +1545,110 @@ function handleAdmin(ctx) {
       ? `✓ @${target} is now an admin on this session. Inherits everything except delete-session + grant/revoke admin (those stay owner-only).`
       : `(@${target} is already an admin — no change.)`);
   }
+}
+
+// fr-87: /share @a @b @c (grant read-only viewer access),
+// /share -@user (revoke), /share (list). Owner-only — mirrors /admin's
+// trust-graph sovereignty model. Viewers can see the session in their
+// sidebar + read transcripts/chat, but cannot drive claude, cannot
+// /admin or /share, cannot delete. Promoting to /admin supersedes
+// viewer (handled by addViewerToSession in sessions.js).
+//
+// Multi-user: a single `/share @alice @bob @carol` invocation grants
+// all three at once, each with its own reply line, so the user can
+// share a session with a whole group in one chat message (matches the
+// fr-87 title).
+function handleShare(ctx) {
+  const sessionsMod = require('./sessions');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/share: session not found)');
+    return;
+  }
+  // Owner-only gate (same as /admin). Admins inherit non-trust-graph
+  // controls per fr-39, but grant/revoke of viewers is a trust-graph
+  // mutation — owner stays sovereign.
+  if (rec.user !== ctx.user) {
+    ctx.reply(`(/share is owner-only. Session owner is @${rec.user}.)`);
+    return;
+  }
+  const arg = String((ctx && ctx.args) || '').trim();
+  // No args → list current viewers + visibility status.
+  if (!arg) {
+    const viewers = sessionsMod.getSessionViewers(ctx.sessionId);
+    const admins = sessionsMod.getSessionAdmins(ctx.sessionId);
+    if (!viewers.length && !admins.length) {
+      ctx.reply('This session is **private** — only @' + rec.user + ' (owner) can see it. `/share @user` to grant read-only; `/admin @user` for read+write.');
+    } else {
+      const lines = ['Session visibility: **shared**. Owner: @' + rec.user + '.'];
+      if (admins.length) lines.push('Admins (read+write): ' + admins.map((u) => '@' + u).join(', '));
+      if (viewers.length) lines.push('Viewers (read-only): ' + viewers.map((u) => '@' + u).join(', '));
+      lines.push('`/share -@user` to revoke a viewer; `/admin -@user` to revoke an admin.');
+      ctx.reply(lines.join('\n'));
+    }
+    return;
+  }
+  // Parse: split on whitespace into tokens. Each token may be a grant
+  // (`@user` / `user`) or a revoke (`-@user` / `-user`). Mixed batches
+  // are fine — `/share @alice -@bob @carol` is interpreted left-to-
+  // right with per-token reply lines.
+  const tokens = arg.split(/\s+/).filter(Boolean);
+  if (!tokens.length) {
+    ctx.reply('Usage: `/share @user [@user ...]` (grant), `/share -@user` (revoke), or `/share` (list).');
+    return;
+  }
+  const auth = require('./auth');
+  const replies = [];
+  for (const tokRaw of tokens) {
+    let revoke = false;
+    let target = tokRaw;
+    if (target.startsWith('-')) {
+      revoke = true;
+      target = target.slice(1).trim();
+    }
+    if (target.startsWith('@')) target = target.slice(1).trim();
+    if (!target || !/^[A-Za-z0-9_-]+$/.test(target)) {
+      replies.push(`(skipped \`${tokRaw}\` — not a valid github login)`);
+      continue;
+    }
+    if (target === rec.user) {
+      replies.push(`(@${target} is the owner — already has all privileges.)`);
+      continue;
+    }
+    // Reject the assistant pseudo-user on BOTH paths (mirrors /admin's
+    // bug-17 fix — granting `claude` is meaningless and confusing).
+    if (target === ASSISTANT_USER) {
+      replies.push(`(cannot ${revoke ? 'revoke' : 'grant'} the assistant user (@${target}). Pick a real github login.)`);
+      continue;
+    }
+    // Allowlist gate on grants only (revoke must always work so the
+    // owner can clean up a previously-granted but now-removed-from-
+    // allowlist user).
+    if (!revoke && auth.isAuthRequired() && !auth.isAllowed(target)) {
+      replies.push(`(@${target} is not in the invitation allowlist (allowed-github-users.txt). Run \`./deploy.sh --allow-github-user ${target}\` first, then retry.)`);
+      continue;
+    }
+    if (revoke) {
+      const removed = sessionsMod.removeViewerFromSession(ctx.sessionId, target);
+      replies.push(removed
+        ? `✓ @${target} no longer has read-only access to this session.`
+        : `(@${target} wasn't a viewer — nothing to revoke.)`);
+    } else {
+      // Disambiguation: if target is already an admin, addViewer
+      // returns false (admin supersedes). Surface that clearly so the
+      // owner doesn't think the grant silently failed.
+      const admins = sessionsMod.getSessionAdmins(ctx.sessionId);
+      if (admins.includes(target)) {
+        replies.push(`(@${target} is already an admin on this session — admin supersedes viewer, no change.)`);
+        continue;
+      }
+      const added = sessionsMod.addViewerToSession(ctx.sessionId, target);
+      replies.push(added
+        ? `✓ @${target} now has read-only access to this session. They can see chat + transcripts but cannot drive claude.`
+        : `(@${target} is already a viewer — no change.)`);
+    }
+  }
+  ctx.reply(replies.join('\n'));
 }
 
 // fr-38: /strict on / /strict off / /strict (status). Owner + admin

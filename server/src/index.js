@@ -8,7 +8,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const sessionsMod = require('./sessions');
-const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
+const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, isOwnerAdminOrViewer, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
 const filesApi = require('./files');
 const { askAboutFile, ASSISTANT_USER } = require('./btw');
 const githubMod = require('./github');
@@ -565,6 +565,18 @@ server.on('upgrade', (req, socket, head) => {
       // pane affordances the owner has — EXCEPT delete-session and
       // grant/revoke admin, both enforced separately below + in
       // slashcmds.js.
+      //
+      // fr-87 (private-by-default): pre-fr-87 ANY authenticated user
+      // would land here with readOnly=true — every session was a
+      // walk-up viewer surface if you knew the id. Now we require the
+      // user to be in rec.viewers[] (via `/share @user`) to land on
+      // the read-only branch. Otherwise reject. Share-token viewers
+      // are handled above and aren't affected.
+      if (!isOwnerAdminOrViewer(sessionId, user)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       readOnly = true;
     }
   }
@@ -639,15 +651,38 @@ function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' */) {
   if (!isAuthRequired()) {
     access = 'owner';                                    // single-user mode
   } else if (req.user) {
-    access = (rec.user === req.user) ? 'owner' : 'viewer';
-  } else {
+    // fr-87 (private-by-default): tightened from the pre-fr-87 rule
+    // where any authenticated user got 'viewer' access to any session
+    // they could find the id for. Now only owner + admins + viewers
+    // (rec.admins[], rec.viewers[]) pass; everyone else falls through
+    // to the share-token check or rejects.
+    //
+    // Tier mapping:
+    //   owner / admin → 'owner' tier (admin inherits write surface per
+    //     fr-39, so files/accept, files/reject, etc. accept admins).
+    //   viewer        → 'viewer' tier (read-only).
+    //   other         → null (try share token next).
+    if (rec.user === req.user) {
+      access = 'owner';
+    } else if (Array.isArray(rec.admins) && rec.admins.includes(req.user)) {
+      access = 'owner';
+    } else if (Array.isArray(rec.viewers) && rec.viewers.includes(req.user)) {
+      access = 'viewer';
+    }
+  }
+  if (!access) {
     const shareTok = (req.query && req.query.s) || '';
     if (shareTok) {
       const info = shareTokenInfo(shareTok);
       if (info && info.sessionId === id) access = 'viewer';
     }
   }
-  if (!access) { res.status(401).json({ error: 'unauthorized' }); return null; }
+  if (!access) {
+    // Distinguish unauthenticated (401) from authenticated-but-denied
+    // (403) so the client can re-prompt for login only when relevant.
+    if (req.user) return (res.status(403).json({ error: 'forbidden' }), null);
+    res.status(401).json({ error: 'unauthorized' }); return null;
+  }
   if (requiredAccess === 'owner' && access !== 'owner') {
     res.status(403).json({ error: 'forbidden' });
     return null;

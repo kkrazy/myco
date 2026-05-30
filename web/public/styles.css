@@ -363,6 +363,33 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   border-left: 3px solid rgba(80, 140, 200, .5);
 }
 
+/* fr-87: per-session visibility badge on owned sessions.
+   - .visibility-private (gray) — only the owner can see the session
+   - .visibility-shared  (blue) — at least one admin or viewer
+   Inherits the .shared-badge geometry (chip size / type) so the two
+   badge families align when both render side-by-side. */
+.visibility-badge {
+  display: inline-block;
+  font-size: .6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+  line-height: 1.4;
+  white-space: pre-line;          /* tooltip line breaks render as \n */
+}
+.visibility-private {
+  background: rgba(140, 140, 140, .18);
+  color: #aaa;
+}
+.visibility-shared {
+  background: rgba(80, 140, 200, .25);
+  color: #8cc5ff;
+}
+
 .empty { padding: 16px; color: var(--muted); font-size: .85rem; }
 
 /* Delete (×) button on a card. Hidden by default. Revealed on hover for

@@ -2439,6 +2439,13 @@ test_chat_window() {
   # DELETE route staying owner-only, and the /admin slash command +
   # owner-only handler gate.
   node_test_result test/admin-delegation.test.js "test/admin-delegation.test.js (19 cases)"
+  # fr-87: per-session public/private + `/share @user @user` viewer
+  # delegation. Locks the viewer-tier helpers in sessions.js, the
+  # private-by-default tightening on fileApiPreamble + WS attach, the
+  # listSessions widening (forUser includes viewer-shared rows) and
+  # visibility metadata, and the /share owner-only slash command with
+  # multi-user grant parser.
+  node_test_result test/fr-87-share-slash-command.test.js "test/fr-87-share-slash-command.test.js (29 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

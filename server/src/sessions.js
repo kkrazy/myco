@@ -464,6 +464,77 @@ function removeAdminFromSession(sessionId, user) {
   return true;
 }
 
+// fr-87: per-session viewer delegation (the read-only counterpart of
+// fr-39's admin tier). Owners can share a session read-only with other
+// users via `/share @user @user` (slash command in slashcmds.js).
+// Viewers can READ — list the session in their sidebar, see chat +
+// transcripts, attach as a read-only WS — but cannot drive claude,
+// cannot edit, cannot grant/revoke admins or viewers, cannot delete.
+//
+// Tier ordering: owner > admin > viewer. Admin promotion supersedes
+// viewer; addViewerToSession is a no-op for owner + existing admins
+// (so rec.viewers[] never double-lists a user who's already higher).
+//
+// Data shape: rec.viewers = [string login, ...] persisted in
+// /data/sessions.json. Missing field → [] (empty list).
+function getSessionViewers(sessionId) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec) return [];
+  return Array.isArray(rec.viewers) ? rec.viewers.slice() : [];
+}
+
+function isOwnerAdminOrViewer(sessionId, user) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec || !user) return false;
+  if (rec.user === user) return true;
+  if (Array.isArray(rec.admins) && rec.admins.includes(user)) return true;
+  return Array.isArray(rec.viewers) && rec.viewers.includes(user);
+}
+
+function addViewerToSession(sessionId, user) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec || !user) return false;
+  if (rec.user === user) return false;           // owner is implicit viewer; don't add a redundant entry
+  if (Array.isArray(rec.admins) && rec.admins.includes(user)) return false; // admin supersedes viewer
+  if (!Array.isArray(rec.viewers)) rec.viewers = [];
+  if (rec.viewers.includes(user)) return false;  // idempotent
+  rec.viewers.push(user);
+  saveStore();
+  // Mirror the bug-17 kick used by addAdmin: if the granted user has
+  // a live WS to this session, kick it so the new attach evaluates
+  // isOwnerAdminOrViewer against the fresh rec.viewers and lands them
+  // on the read-only viewer branch instead of the rejected/no-such-
+  // session branch.
+  try {
+    const attachMod = require('./attach');
+    if (typeof attachMod._kickViewerByLogin === 'function') {
+      attachMod._kickViewerByLogin(sessionId, user);
+    }
+  } catch (err) {
+    console.error(`[fr-87-kick] addViewer: kick failed for ${sessionId}/${user}: ${err.message}`);
+  }
+  return true;
+}
+
+function removeViewerFromSession(sessionId, user) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec || !user) return false;
+  if (!Array.isArray(rec.viewers)) return false;
+  const idx = rec.viewers.indexOf(user);
+  if (idx < 0) return false;                     // idempotent
+  rec.viewers.splice(idx, 1);
+  saveStore();
+  try {
+    const attachMod = require('./attach');
+    if (typeof attachMod._kickViewerByLogin === 'function') {
+      attachMod._kickViewerByLogin(sessionId, user);
+    }
+  } catch (err) {
+    console.error(`[fr-87-kick] removeViewer: kick failed for ${sessionId}/${user}: ${err.message}`);
+  }
+  return true;
+}
+
 // fr-38: per-session "strict mode" gate. When on, claude-bound chat
 // messages MUST include a `[run:plan#<id>]` marker; messages without
 // it are blocked at the handleChatMessage boundary with an
@@ -500,7 +571,17 @@ function clamp(v, min, max, fallback) {
 
 async function listSessions(forUser) {
   const all = Object.values(loadStore().sessions);
-  const filtered = forUser ? all.filter((r) => r.user === forUser) : all;
+  // fr-87: include sessions where forUser is owner, admin, OR viewer.
+  // Before fr-87 this was owner-only (rec.user === forUser); widening
+  // it lets a shared session show up in the recipient's sidebar.
+  const filtered = forUser
+    ? all.filter((r) => {
+        if (r.user === forUser) return true;
+        if (Array.isArray(r.admins) && r.admins.includes(forUser)) return true;
+        if (Array.isArray(r.viewers) && r.viewers.includes(forUser)) return true;
+        return false;
+      })
+    : all;
   return Promise.all(filtered.map(async (r) => {
     const info = await readDescriptionForCwd(r.absCwd, r);
     // Display label preference: explicit rec.label (set on spawn) →
@@ -508,6 +589,18 @@ async function listSessions(forUser) {
     // id-shortid as a last resort. The client renders s.name as the
     // session-list title.
     const displayName = r.label || r.cwd || r.id;
+    // fr-87: visibility metadata for the session-list badge. A session
+    // is 'shared' if it has any admins OR viewers; otherwise 'private'.
+    // viewerCount is the literal length of rec.viewers (admins are
+    // tracked separately and not double-counted). isViewer is true
+    // when forUser is in rec.viewers AND not in higher tiers — the
+    // client uses this to disable the "drive claude" controls.
+    const admins = Array.isArray(r.admins) ? r.admins : [];
+    const viewers = Array.isArray(r.viewers) ? r.viewers : [];
+    const visibility = (admins.length || viewers.length) ? 'shared' : 'private';
+    const isOwner = forUser ? (r.user === forUser) : false;
+    const isAdmin = forUser ? admins.includes(forUser) : false;
+    const isViewer = !!forUser && !isOwner && !isAdmin && viewers.includes(forUser);
     return {
       id: r.id,
       name: displayName,
@@ -519,6 +612,12 @@ async function listSessions(forUser) {
       status: info?.status || 'idle',
       last_activity: info?.lastActivity || null,
       created_at: r.createdAt,
+      // fr-87 visibility surface
+      owner: r.user,
+      visibility,
+      viewerCount: viewers.length,
+      viewers,                            // included so owner can render tooltip without an extra fetch
+      isViewer,
     };
   }));
 }
@@ -1094,6 +1193,11 @@ Object.assign(module.exports, {
   isOwnerOrAdmin,
   addAdminToSession,
   removeAdminFromSession,
+  // fr-87: per-session viewer delegation (read-only counterpart of admin)
+  getSessionViewers,
+  isOwnerAdminOrViewer,
+  addViewerToSession,
+  removeViewerFromSession,
   // fr-38: per-session strict-mode gate (requires [run:plan#<id>] marker on claude-bound messages)
   isSessionStrict,
   setSessionStrict,

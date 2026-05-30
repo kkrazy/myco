@@ -938,9 +938,32 @@ function renderSessionList() {
     const sharedBadge = readOnly && ownerLabel
       ? `<span class="shared-badge" title="${s.shared ? 'Shared by' : 'Owned by'} ${escHtml(ownerLabel)} — read-only">${escHtml(ownerLabel)}</span>`
       : '';
+    // fr-87: visibility badge — only rendered on OWNED sessions, since
+    // for non-owned (URL-shared / viewer-shared) the existing shared-
+    // badge already labels them. For owned sessions:
+    //   • visibility === 'private' (no admins, no viewers) → small "private" chip
+    //   • visibility === 'shared'  (≥1 admin or viewer)   → "shared (N)" chip
+    //     where N = viewerCount; tooltip lists the viewers so the
+    //     owner can audit the trust graph at a glance without opening
+    //     a /share dialog.
+    let visibilityBadge = '';
+    if (s.owned && !s.shared && s.visibility) {
+      if (s.visibility === 'private') {
+        visibilityBadge = `<span class="visibility-badge visibility-private" title="Private — only you can see this session. \`/share @user\` to grant read-only access.">private</span>`;
+      } else {
+        const viewers = Array.isArray(s.viewers) ? s.viewers : [];
+        const tooltipLines = ['Shared session.'];
+        if (viewers.length) tooltipLines.push('Viewers: ' + viewers.map((u) => '@' + u).join(', '));
+        tooltipLines.push('`/share -@user` to revoke; `/share` to list.');
+        const tip = escHtml(tooltipLines.join('\n'));
+        const count = Number(s.viewerCount) || 0;
+        const label = count ? `shared (${count})` : 'shared';
+        visibilityBadge = `<span class="visibility-badge visibility-shared" title="${tip}">${label}</span>`;
+      }
+    }
     li.innerHTML = `
       ${statusDot}
-      <span class="session-title">${escHtml(dirName)}${sharedBadge}</span>
+      <span class="session-title">${escHtml(dirName)}${sharedBadge}${visibilityBadge}</span>
       ${summary}
       <span class="session-meta">${escHtml(idShort)} · ${timeAgo(s.last_activity || s.created_at)}</span>
       ${s.owned && !s.shared ? '<button class="session-share" aria-label="Share session">↗</button>' : ''}
