@@ -398,10 +398,21 @@ app.get('/sessions', async (req, res) => {
   // Allow unauthenticated access if share tokens are provided
   if (!user && !req.query.share) return res.status(401).json({ error: 'unauthorized' });
   try {
+    // fr-87r: ?all=1 used to short-circuit forUser to null, which made
+    // listSessions return EVERY session in the store — completely
+    // bypassing fr-87's owner/admin/viewer filter. The client polls
+    // `/sessions?all=1` every 3 s, so the sidebar leaked every owner's
+    // private sessions to every authenticated user. The user filter is
+    // now ALWAYS applied when there's an auth'd user; the all=1 flag
+    // is preserved for the URL shape (older bookmarked queries don't
+    // 400) but no longer has gate semantics. Anonymous requests (auth
+    // bypass mode + the share-token-only path) still get the unfiltered
+    // listing because that's the only way a shareless guest can see
+    // anything at all.
     const all = req.query.all === '1';
     let own = [];
     if (user) {
-      own = await listSessions(all ? null : (isAuthRequired() ? user : null));
+      own = await listSessions(isAuthRequired() ? user : null);
       // Tag owned/owner so the client can label non-owned sessions and
       // open them in viewer (read-only) mode without a share token.
       for (const s of own) {

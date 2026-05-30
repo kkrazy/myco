@@ -2463,6 +2463,13 @@ test_chat_window() {
   # closure; after 3 close-before-open events stop retrying and show a
   # non-blocking error overlay so the user can pick another session.
   node_test_result test/fr-88r-handshake-failure-stops-retry.test.js "test/fr-88r-handshake-failure-stops-retry.test.js (10 cases)"
+  # fr-87r (regression): GET /sessions?all=1 bypassed fr-87's user
+  # filter, leaking every owner's private sessions to every auth'd
+  # user. Fix: the route now ALWAYS passes the auth'd user to
+  # listSessions; ?all=1 keeps the URL shape but loses gate semantics.
+  # User-reported as "i logged in as kkrazy and i can see demo001"
+  # (Demo001 was owned by labxnow with no admins/viewers).
+  node_test_result test/fr-87r-sessions-all-flag-leak.test.js "test/fr-87r-sessions-all-flag-leak.test.js (7 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/
