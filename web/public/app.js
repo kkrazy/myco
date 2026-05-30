@@ -1465,7 +1465,11 @@ function openSession(id, opts = {}) {
 
     ws.addEventListener('close', () => {
       if (state.activeId !== id) return; // switched session OR error cleared activeId
-      showConnOverlay('Reconnecting', null, 'Restoring session…');
+      // fr-88: pass blocking=true so the user gets a full-viewport
+      // dimmed modal during the reconnect window (instead of the
+      // floating pill used on initial connect). Cleared on the next
+      // 'open' event via hideConnOverlay().
+      showConnOverlay('Reconnecting', null, 'Restoring session…', true);
       setTimeout(() => {
         if (state.activeId === id) connect();
       }, reconnectDelay);
@@ -9965,7 +9969,15 @@ async function openFileInViewer(relPath) {
 // Floating "Connecting" / "Reconnecting" card over the terminal area.
 // The spinner is the activity indicator; title text omits the trailing
 // ellipsis. Sub-line is updated to match the title's mode.
-function showConnOverlay(text, kind, sub) {
+//
+// fr-88: a 4th `blocking` arg (default false) upgrades the overlay from
+// a floating pill (scoped to #terminal-pane, pointer-events:none) to a
+// full-viewport dimmed modal that intercepts clicks. The CSS
+// `.blocking` modifier (styles.css) handles all the visual changes;
+// this function just toggles the class. Used by the close→reconnect
+// path in connect() — initial-connect call sites omit the flag so
+// first-page-load UX is unchanged.
+function showConnOverlay(text, kind, sub, blocking) {
   const overlay = document.getElementById('conn-overlay');
   if (!overlay) return;
   const pill = overlay.querySelector('.conn-pill');
@@ -9974,11 +9986,17 @@ function showConnOverlay(text, kind, sub) {
   if (txt) txt.textContent = text || 'Connecting';
   if (subEl && sub) subEl.textContent = sub;
   if (pill) pill.classList.toggle('error', kind === 'error');
+  overlay.classList.toggle('blocking', !!blocking);
   overlay.hidden = false;
 }
 function hideConnOverlay() {
   const overlay = document.getElementById('conn-overlay');
-  if (overlay) overlay.hidden = true;
+  if (!overlay) return;
+  // fr-88: clear the blocking modifier on hide so a subsequent non-
+  // blocking show (e.g. session-switch initial connect) isn't stuck
+  // with the blocking backdrop from a prior reconnect window.
+  overlay.classList.remove('blocking');
+  overlay.hidden = true;
 }
 
 function showFileViewerPane(relPath) {

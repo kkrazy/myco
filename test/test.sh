@@ -2446,6 +2446,15 @@ test_chat_window() {
   # visibility metadata, and the /share owner-only slash command with
   # multi-user grant parser.
   node_test_result test/fr-87-share-slash-command.test.js "test/fr-87-share-slash-command.test.js (29 cases)"
+  # fr-88: WS-disconnect blocking modal. Pre-fr-88 the #conn-overlay
+  # was a floating pill that didn't intercept clicks; per user request
+  # the reconnect window now upgrades to a full-viewport dimmed modal
+  # blocking all interaction. Locks: showConnOverlay's new `blocking`
+  # arg, the styles.css .blocking modifier (position:fixed +
+  # pointer-events:auto + dim backdrop), hideConnOverlay's cleanup of
+  # the .blocking class, and that ONLY the close→reconnect call site
+  # passes blocking=true (initial-connect sites keep the lighter pill).
+  node_test_result test/fr-88-ws-reconnect-blocking-modal.test.js "test/fr-88-ws-reconnect-blocking-modal.test.js (11 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

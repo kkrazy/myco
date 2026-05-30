@@ -811,6 +811,29 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   border-top-color: rgba(255, 180, 180, .95);
 }
 
+/* fr-88: blocking-modal modifier. The default #conn-overlay is a
+   floating pill scoped to #terminal-pane that doesn't intercept
+   clicks — fine for the initial-connect indicator on first page load.
+   When the WS DROPS post-connect, we want a louder signal: a full-
+   viewport dimmed backdrop that blocks all interaction until the
+   reconnect lands. The .blocking class is added by showConnOverlay()
+   only on the close→reconnect call site; initial-connect call sites
+   stay unmodified. Removed by hideConnOverlay() so a subsequent
+   non-blocking show doesn't get stuck blocking. */
+#conn-overlay.blocking {
+  position: fixed;
+  z-index: 10000;                                 /* above every other modal so a backdrop'd reconnect always wins */
+  background: rgba(8, 12, 22, .62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  pointer-events: auto;                           /* eat clicks on the backdrop too — block ALL interaction */
+}
+#conn-overlay.blocking .conn-pill {
+  /* Larger card so it reads as "this is a real blocker, not a hint". */
+  padding: 28px 38px 28px 32px;
+  min-width: 280px;
+}
+
 /* Spinner ring — reads as "loading" more clearly than a pulsing dot. */
 .conn-spinner {
   width: 28px;
