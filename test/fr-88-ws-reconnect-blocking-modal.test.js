@@ -163,9 +163,15 @@ t('static guard: close→reconnect site passes blocking=true', () => {
   // Find the close handler in the connect closure
   const closeAt = src.indexOf("ws.addEventListener('close'");
   assert.ok(closeAt > 0, 'app.js must wire ws.addEventListener("close", …)');
-  const window = src.slice(closeAt, closeAt + 800);
-  assert.ok(/showConnOverlay\([^)]*,\s*true\s*\)/.test(window),
-    'The close→reconnect call site must pass blocking=true to showConnOverlay');
+  // Window covers the whole close handler. Bumped from 800 → 2400 in
+  // fr-88r: that fix added a ~25-line bailout block (handshake-failure
+  // detection + non-blocking "Cannot connect" overlay) BEFORE the
+  // Reconnecting-overlay call, pushing the relevant `, true)` past the
+  // old 800-char window. The new size covers the full handler body
+  // (~1900 chars currently) with headroom for future inserts.
+  const window = src.slice(closeAt, closeAt + 2400);
+  assert.ok(/showConnOverlay\([^)]*Reconnecting[^)]*,\s*true\s*\)/.test(window),
+    'The close→reconnect call site must pass blocking=true to showConnOverlay (look for the "Reconnecting" call specifically — fr-88r added a separate non-blocking "Cannot connect" call EARLIER in the handler for the handshake-failure bailout, but that one MUST stay false to allow recovery)');
   assert.ok(/Reconnecting/.test(window),
     'The close→reconnect call site must still use the "Reconnecting" label');
 });

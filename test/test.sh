@@ -1318,7 +1318,12 @@ test_new_session_readonly() {
   ! grep -q 'spawn-mode-label\|"spawn-mode-pty" type="checkbox"' web/public/index.html \
     && pass "index.html: PTY-checkbox label retired from spawn modal" \
     || fail "index.html: PTY-checkbox label still in spawn modal"
-  grep -Pzoq "_migrateLegacyMemory\(rec\.absCwd\)[\s\S]{0,800}spawnAgent" server/src/sessions.js \
+  # Proximity guard between _migrateLegacyMemory and spawnAgent inside
+  # ensureLiveSession. Budget bumped from 800 → 3000 chars to absorb
+  # transcript-autoheal and other future ensureLiveSession inserts;
+  # the assertion intent ("both calls happen, in order, in the same
+  # function") is preserved without bouncing on every code add.
+  grep -Pzoq "_migrateLegacyMemory\(rec\.absCwd\)[\s\S]{0,3000}spawnAgent" server/src/sessions.js \
     && pass "sessions.js: ensureLiveSession invokes _migrateLegacyMemory before spawnAgent" \
     || fail "sessions.js: ensureLiveSession does not run the memory migration"
   # Smoke test the helper itself: copy a tmp fixture from a fake
