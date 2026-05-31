@@ -69,7 +69,15 @@ t('HTML: explicit dismiss (X button) still carries data-perm-defer', () => {
 t('app.js: Esc key still dismisses (the second explicit dismiss path)', () => {
   // Esc key handler at _bindPermModalKeys still sets dismissed=true.
   // We're explicit-only now; Esc must still work.
-  assert.ok(/Escape[\s\S]{0,300}permModalDismissed\s*=\s*true/.test(APP),
+  //
+  // Budget bumped 300 → 1500 chars: bug-41 added a synthetic-Cancel
+  // primary path (resolves the AskUserQuestion Promise instead of just
+  // hiding the modal), so permModalDismissed=true is now the FALLBACK
+  // branch that runs only when no synthetic-Cancel exists on the
+  // current menu (permission-flavour modals, older AskUserQuestion
+  // shapes). Distance is ~974 chars on current HEAD. The intent of
+  // this guard ("Esc still has SOME dismiss path") is preserved.
+  assert.ok(/Escape[\s\S]{0,1500}permModalDismissed\s*=\s*true/.test(APP),
     '_bindPermModalKeys must still set state.permModalDismissed=true on Escape (explicit dismiss path)');
 });
 
