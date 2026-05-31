@@ -2485,6 +2485,16 @@ test_chat_window() {
   # picks the Cancel synthetic so the agent unblocks instead of
   # silently hanging.
   node_test_result test/bug-41-askuserquestion-escape-hatch.test.js "test/bug-41-askuserquestion-escape-hatch.test.js (12 cases)"
+  # fr-86: /clear new — soft-reset slash command. Existing /clear
+  # (wipes rec.chat, anyone) is unchanged; /clear new is the new
+  # owner+admin path that PRESERVES rec.chat + nulls sdkSessionId so
+  # next message spawns a fresh Claude conversation. Graceful stop:
+  # if a turn is in flight, replies "🔄 restart pending — waiting
+  # for <task>" and defers the actual restart to the iteration's
+  # emit('idle') hook. Broadcasts state-update chat-pane-reset
+  # (distinct from chat-clear) so clients wipe visible pane while
+  # history remains scrollable via load-older.
+  node_test_result test/fr-86-clear-new-restart-session.test.js "test/fr-86-clear-new-restart-session.test.js (19 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

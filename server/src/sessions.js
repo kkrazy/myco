@@ -464,6 +464,21 @@ function removeAdminFromSession(sessionId, user) {
   return true;
 }
 
+// fr-86: soft-reset support. markSessionForRestart nulls the SDK
+// session id so the next ensureLiveSession spawn produces a FRESH
+// Claude conversation (no resume, no carried-over working memory).
+// rec.chat / events.jsonl / the existing SDK transcript JSONL are
+// deliberately untouched — the user explicitly asked that history
+// survive so they "can come back and collect the full logs later".
+// Called by /clear new (slashcmds.js) under an owner+admin gate.
+function markSessionForRestart(sessionId) {
+  const rec = getSessionRecord(sessionId);
+  if (!rec) return false;
+  rec.sdkSessionId = null;
+  saveStore();
+  return true;
+}
+
 // fr-87: per-session viewer delegation (the read-only counterpart of
 // fr-39's admin tier). Owners can share a session read-only with other
 // users via `/share @user @user` (slash command in slashcmds.js).
@@ -1198,6 +1213,8 @@ Object.assign(module.exports, {
   isOwnerAdminOrViewer,
   addViewerToSession,
   removeViewerFromSession,
+  // fr-86: soft-reset support for /clear new (keeps rec.chat, nulls sdkSessionId)
+  markSessionForRestart,
   // fr-38: per-session strict-mode gate (requires [run:plan#<id>] marker on claude-bound messages)
   isSessionStrict,
   setSessionStrict,

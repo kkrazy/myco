@@ -114,8 +114,8 @@ const COMMANDS = [
   },
   {
     names: ['clear'],
-    summary: 'Wipe this session\'s discussion-pane chat (server-side + every attached client)',
-    usage: '/clear',
+    summary: 'Wipe this session\'s chat history. `new` mode restarts the session instead (owner+admin only).',
+    usage: '/clear (wipe history) · /clear new (restart session, keep history, owner+admin)',
     handler: handleClear,
   },
   {
@@ -1441,6 +1441,52 @@ async function handleAllowList(ctx) {
 function handleClear(ctx) {
   const sessionId = ctx.sessionId;
   if (!sessionId) { ctx.reply('(no session context — slash command dropped)'); return; }
+  // fr-86: arg parser — `/clear` (legacy, wipes rec.chat, anyone) vs
+  // `/clear new` (preserves rec.chat, restarts SDK conversation, owner
+  // + admin only). Case-insensitive trim so `/clear NEW`, `/clear new `
+  // all hit the new path.
+  const arg = String((ctx && ctx.args) || '').trim().toLowerCase();
+  if (arg === 'new') {
+    // Owner+admin gate (mirror /strict's fr-39 model). The restart
+    // resets Claude's working memory across the whole session — viewers
+    // shouldn't be able to do that to the owner's work.
+    if (!sessionsMod.isOwnerOrAdmin(sessionId, ctx.user)) {
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      const ownerLabel = rec ? `@${rec.user}` : '(unknown)';
+      ctx.reply(`(/clear new is owner-or-admin only. Session owner is ${ownerLabel}.)`);
+      return;
+    }
+    // Resolve the live AgentSession (preferred via ctx.session, fall
+    // back to attach.getSession for unit-test contexts that only pass
+    // a minimal ctx). If there's no live session, the user's effectively
+    // already on a fresh slate — just mark the record + reply.
+    let session = ctx.session || null;
+    if (!session) {
+      try { session = require('./attach').getSession(sessionId); } catch {}
+    }
+    if (!session || typeof session.requestRestart !== 'function') {
+      try { sessionsMod.markSessionForRestart(sessionId); } catch {}
+      ctx.reply('✓ session marked for restart. The next message will spawn a fresh Claude conversation.');
+      return;
+    }
+    const result = session.requestRestart();
+    // Customize the success reply with the actual @user instead of
+    // the @USER placeholder the AgentSession uses (it doesn't know
+    // which slashcmd invocation triggered it).
+    const replyMsg = (result.kind === 'executed')
+      ? `✓ session restarted by @${ctx.user}. Earlier history preserved — scroll up to load it. Claude starts fresh.`
+      : result.message;
+    ctx.reply(replyMsg);
+    return;
+  }
+  if (arg) {
+    // Anything other than 'new' is unknown — emit a usage hint instead
+    // of silently falling through to the legacy clear (which would be
+    // surprising — the user typed something with intent).
+    ctx.reply(`(/clear: unknown mode \`${arg}\`. Usage: \`/clear\` (wipe chat history) · \`/clear new\` (restart session, keep history — owner+admin only))`);
+    return;
+  }
+  // Legacy path: wipe rec.chat. Anyone can use.
   let cleared = 0;
   try {
     cleared = sessionsMod.clearChatHistory(sessionId);

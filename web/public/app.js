@@ -5073,7 +5073,8 @@ function _applyModeSnapshot(mode) {
 //   { kind: 'menu',          messageUuid, hash, meta }
 //   { kind: 'artifact',      artifactType, artifact }
 //   { kind: 'tool-progress', open: [{ id, name, summary, sinceMs }] }
-//   { kind: 'chat-clear' }   // /clear slash command — wipe local chat
+//   { kind: 'chat-clear' }      // /clear — server-side wiped rec.chat too
+//   { kind: 'chat-pane-reset' } // fr-86 /clear new — pane wipe only; rec.chat preserved
 
 // ── agent-mode session rendering (phase 3) ──────────────────────────────
 //
@@ -6448,6 +6449,16 @@ function _applyStateUpdate(msg) {
     // /clear slash command — wipe local chat list. The server has
     // already emptied rec.chat; a confirmation reply will arrive on the
     // following 'chat' frame.
+    clearChat();
+    return;
+  }
+  if (msg.kind === 'chat-pane-reset') {
+    // fr-86: /clear new — soft-reset. The server has NOT emptied
+    // rec.chat (history preserved for later log collection); only the
+    // VISIBLE pane is wiped here. The user can scroll up to load
+    // older messages via the existing GET /chat/history?before=...
+    // load-older path. A confirmation chat reply arrives on the
+    // following 'chat' frame (handleClear's ctx.reply).
     clearChat();
     return;
   }

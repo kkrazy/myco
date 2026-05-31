@@ -558,6 +558,16 @@ class AgentSession extends EventEmitter {
     this._msgQueue = null;
     this._abortController = null;
     if (this.alive) this.emit('idle');
+    // fr-86: deferred-restart hook. If /clear new fired while a turn
+    // was in flight, requestRestart() set this._pendingRestart=true
+    // and returned a "restart pending" reply. Now that the iteration
+    // is fully drained (turn_result has landed, openToolCalls is
+    // empty), execute the actual restart: null sdkSessionId + broadcast
+    // chat-pane-reset. Checked AFTER emit('idle') so attach.js's idle
+    // listeners get a chance to settle first.
+    if (this.alive && this._pendingRestart) {
+      this._executeRestart();
+    }
   }
 
   // fr-45: validate sdkOpts keys against the SDK_OPTIONS_ALLOWLIST.
@@ -1074,6 +1084,81 @@ class AgentSession extends EventEmitter {
   // Multi-select toggle for AskUserQuestion. Flips the n-th option's
   // .checked state. Idempotent on the hash → no resolve, no SDK
   // unblock — the user keeps composing until they hit Submit.
+  // fr-86: soft-reset the SDK conversation (keep chat history, drop
+  // working memory). Called by /clear new (slashcmds.js handleClear)
+  // under an owner+admin gate.
+  //
+  // Branches on this._iterating:
+  //   - Idle  → execute immediately: null sdkSessionId via sessions
+  //             helper, broadcast state-update chat-pane-reset so every
+  //             attached client wipes its visible chat pane. Returns
+  //             { kind: 'executed', message } so the slashcmd handler
+  //             can reply with the success text.
+  //   - Busy  → defer: set this._pendingRestart=true; the iteration's
+  //             emit('idle') post-condition fires the actual restart
+  //             once the in-flight tool/turn finishes. Returns
+  //             { kind: 'pending', message } describing what we're
+  //             waiting on so the user knows their command was queued.
+  //
+  // The waiting message NAMES the current tool when available (e.g.
+  // "Bash(npm test)"), or falls back to "current turn" when openToolCalls
+  // is empty (e.g., the SDK is mid-thinking-block with no tool_use yet).
+  requestRestart() {
+    // Idempotency: a second /clear new while one is already pending
+    // shouldn't queue another or double-emit. Just reply that one is
+    // already in flight.
+    if (this._pendingRestart) {
+      return {
+        kind: 'pending',
+        message: '🔄 restart already pending — still waiting for the current turn to finish',
+      };
+    }
+    if (this._iterating) {
+      this._pendingRestart = true;
+      // Pick the first open tool call's name as the "current task"
+      // hint. Maps to "Bash(npm test)" / "Read(/path)" via the existing
+      // _summariseToolInput helper used by the tool-progress broadcast.
+      let currentTask = 'current turn';
+      for (const tc of this.openToolCalls.values()) {
+        currentTask = tc.summary ? `${tc.name}(${tc.summary})` : tc.name;
+        break;
+      }
+      this._emit({ type: 'restart_pending', currentTask });
+      return {
+        kind: 'pending',
+        message: `🔄 restart pending — waiting for ${currentTask} to finish`,
+      };
+    }
+    // Idle path: execute now.
+    this._executeRestart();
+    return {
+      kind: 'executed',
+      message: '✓ session restarted by @USER. Earlier history preserved — scroll up to load it. Claude starts fresh.',
+    };
+  }
+
+  // fr-86: actual state mutation + broadcast. Called either directly
+  // from requestRestart (idle path) or from the emit('idle') hook
+  // (busy path completion).
+  _executeRestart() {
+    this._pendingRestart = false;
+    try {
+      const sessionsMod = require('./sessions');
+      sessionsMod.markSessionForRestart(this.sessionId);
+    } catch (err) {
+      console.error(`[fr-86] markSessionForRestart failed for ${this.sessionId}: ${err.message}`);
+    }
+    // Local copy must also be nulled — _ensureIteration reads
+    // this.sdkSessionId, not the on-disk record, when deciding whether
+    // to pass `resume: sdkSessionId` to the SDK query().
+    this.sdkSessionId = null;
+    this._emit({ type: 'restart_executed' });
+    // Wipe the visible chat pane on every attached client. NOT
+    // chat-clear — that kind implies the server also wiped rec.chat,
+    // which we explicitly did NOT do.
+    try { this.emit('state-update', { kind: 'chat-pane-reset' }); } catch {}
+  }
+
   resolveMenuToggle(hash, n) {
     const pending = this._pendingPermissions.get(hash);
     if (!pending || !pending.multi || !Array.isArray(pending.options)) return false;
