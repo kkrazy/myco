@@ -178,9 +178,32 @@ function _registerExternalSession(sessionId, session) {
         }
       }
       if (ev.type === 'turn_result') {
+        // bug-fix (post-f71495f regression): stamp the run outcome
+        // SYNCHRONOUSLY on the event tick, BEFORE any async critique
+        // work. The pre-f71495f contract was "emit turn_result →
+        // runs[] + run-summary comment land in rec immediately, same
+        // tick as the event". f71495f's gated Gemini Critique wrapper
+        // moved the stamp inside an `(async () => {})()` IIFE for the
+        // success path, breaking that contract — same-tick consumers
+        // (test/plan-run-comment.test.js + any real client reading
+        // the store synchronously after the event) saw an empty runs[]
+        // and undefined comments[0]. The fix: stamp first, kick off
+        // critique afterwards. Critique never re-stamps (was already
+        // double-stamping in the original happy path AND the
+        // fallback — both calls hit the same artifact slot).
+        try {
+          _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
+        } catch (err) {
+          console.error('[plan-run] stamp outcome failed:', err.message);
+        }
         const rec = sessionsMod.getSessionRecord(sessionId);
         if (ev.subtype === 'success' && active && active.itemId && rec && rec.absCwd) {
-          // Gated Critique workflow execution
+          // Async gated Gemini Critique workflow. No more stamping
+          // here — that was done synchronously above. If the critique
+          // fires, it takes over queue advancement (matches
+          // f71495f's original intent — the return below skips the
+          // _advanceRunQueue fallback). Otherwise the fallback path
+          // advances normally.
           (async () => {
             try {
               const { listChangedFiles, readDiff } = require('./files');
@@ -193,31 +216,21 @@ function _registerExternalSession(sessionId, session) {
                     fullDiff += `\n--- File: ${entry.path} ---\n${d.diff}\n`;
                   }
                 }
-                
                 if (fullDiff.trim()) {
                   console.log(`[critique-gate] Plan item ${active.itemId} completed. Invoking Gemini Critique...`);
-                  // Stamp the outcome
-                  _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
-                  // Trigger Gemini critique
                   const planArtifact = rec.artifacts && rec.artifacts.plan;
                   const item = planArtifact && Array.isArray(planArtifact.items) && planArtifact.items.find(it => it.id === active.itemId);
                   if (item) {
                     const { triggerGeminiCritique } = require('./critique');
                     await triggerGeminiCritique(sessionId, session, item, fullDiff, ev.result || '');
-                    return;
+                    return;                       // critique took over queue advancement
                   }
                 }
               }
             } catch (err) {
               console.error('[critique-gate] Error during critique generation:', err.message);
             }
-            
-            // Fallback: if no files changed or critique couldn't run, stamp and advance
-            try {
-              _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
-            } catch (err) {
-              console.error('[plan-run] stamp outcome failed:', err.message);
-            }
+            // Fallback: no critique fired — advance the queue.
             try {
               _advanceRunQueue(sessionId, session, active.itemId, ev);
             } catch (err) {
@@ -226,12 +239,6 @@ function _registerExternalSession(sessionId, session) {
           })();
           session._activeRunItem = null;
           return;
-        }
-
-        try {
-          _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt);
-        } catch (err) {
-          console.error('[plan-run] stamp outcome failed:', err.message);
         }
       } else {
         // For abort/fatal, stamp a brief synthetic "aborted"/"error"
