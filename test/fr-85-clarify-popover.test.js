@@ -132,11 +132,34 @@ t('app.js: r4 — _sendClarify ships via sendChatMessage with meta.kind=clarify 
 t('app.js: r4 — chat render skips clarify-tagged messages so they don\'t pollute chat', () => {
   // Both directions filtered: user's clarify question (meta.kind='clarify')
   // and claude's reply (meta.kind='clarify-reply').
+  //
+  // f71495f refactored the skip-check out of renderChatMessage into a
+  // helper `_shouldSkipMessageRender(m)`. Behaviour is preserved — the
+  // function still skips clarify rows — but the literal 'clarify'
+  // string moved from renderChatMessage's body into the helper. This
+  // guard now accepts EITHER pattern:
+  //   (a) renderChatMessage's window contains the literal clarify
+  //       check (legacy in-function shape), OR
+  //   (b) renderChatMessage calls _shouldSkipMessageRender AND that
+  //       helper contains the clarify check (post-f71495f delegation).
+  // The semantic contract — "clarify-tagged messages are filtered" —
+  // is what's being locked, not a specific code shape.
   const idx = APP.search(/function\s+renderChatMessage\s*\(/);
   assert.ok(idx > -1, 'renderChatMessage must be defined');
   const win = APP.slice(idx, idx + 800);
-  assert.ok(/clarify-reply/.test(win) && /clarify/.test(win),
-    'renderChatMessage must early-return for messages with meta.kind="clarify" or "clarify-reply"');
+  const directHasClarify = /clarify-reply/.test(win) && /clarify/.test(win);
+  if (directHasClarify) return;                                     // legacy shape: in-function check passes
+
+  // Delegation shape: renderChatMessage calls a skip helper that
+  // contains the clarify check.
+  const callsHelper = /_shouldSkipMessageRender\s*\(/.test(win);
+  assert.ok(callsHelper,
+    'renderChatMessage must skip clarify-tagged messages — either by an in-function check OR by calling a helper like _shouldSkipMessageRender(m).');
+  const helperAt = APP.search(/function\s+_shouldSkipMessageRender\s*\(/);
+  assert.ok(helperAt > -1, '_shouldSkipMessageRender helper must be defined when renderChatMessage delegates to it');
+  const helperWin = APP.slice(helperAt, helperAt + 800);
+  assert.ok(/clarify-reply/.test(helperWin) && /clarify/.test(helperWin),
+    '_shouldSkipMessageRender must check meta.kind for "clarify" and "clarify-reply" — that\'s where renderChatMessage now delegates the skip decision after f71495f.');
 });
 
 t('app.js: r4 — appendChatMessage skips clarify-tagged messages (no state.chatMessages bloat)', () => {
