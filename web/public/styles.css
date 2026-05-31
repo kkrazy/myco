@@ -1110,6 +1110,65 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   border-radius: 6px;
 }
 
+/* fr-87 r2: admin merge — system-wide settings section inside the
+   Config modal. Mirrors the .config-pat-form layout for the env
+   inputs + the .config-pat-row pattern for the allowlist rows so
+   we don't invent new visual language. Hidden by default; revealed
+   when GET /api/admin/config returns 200. */
+.config-admin-allowlist-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.config-admin-allowlist-form input {
+  flex: 1;
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: .85rem;
+}
+.config-admin-allowlist-form button {
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.config-admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.config-admin-field label {
+  font-size: .72rem;
+  color: var(--muted);
+  letter-spacing: .04em;
+  font-family: var(--mono, monospace);
+}
+.config-admin-field input {
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: .85rem;
+}
+#config-admin-env-save {
+  background: var(--accent, #4caf82);
+  color: #08120d;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: .85rem;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
 #spawn-dialog label {
   display: flex;
   flex-direction: column;

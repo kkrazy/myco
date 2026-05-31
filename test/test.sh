@@ -2529,6 +2529,16 @@ test_chat_window() {
   # state.chatUser is set. Static guards lock the markup, click
   # binding, auth gate, and bug-44 marker comment.
   node_test_result test/bug-44-mobile-config-entry.test.js "test/bug-44-mobile-config-entry.test.js (5 cases)"
+  # fr-87 r2: merge system-wide admin config into the user Config
+  # modal for users with admin access. Adds #config-admin-section
+  # (allowlist + env config) inside #config-modal, positioned between
+  # PATs and Account. Show/hide driven by GET /api/admin/config 200
+  # vs 403 (server-side requireAdmin gate from f71495f is the SoT).
+  # IDs use config-admin- prefix to avoid collision with the
+  # standalone admin pane (#admin-wrap) which is retained as a
+  # parallel entry. Static guards lock structure + ordering + ID
+  # uniqueness + endpoint wiring.
+  node_test_result test/fr-87-r2-admin-merge.test.js "test/fr-87-r2-admin-merge.test.js (9 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

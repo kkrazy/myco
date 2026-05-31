@@ -339,8 +339,12 @@ t('static guard: sign-out moved INTO the config modal (handled by a button insid
   // affordance (button or link).
   const modalStart = html.indexOf('id="config-modal"');
   const modalEndMarker = html.indexOf('</div>', modalStart + 200);   // crude but workable for this guard
-  // Walk forward a few KB to capture the modal body.
-  const window = html.slice(modalStart, modalStart + 4000);
+  // Walk forward a few KB to capture the modal body. Window bumped
+  // from 4000 → 8000 chars: fr-87 r2's admin merge inserted a new
+  // section (~5KB of form HTML) between #config-pats-section and
+  // #config-account-section. The sign-out button now lives further
+  // past the modal-open tag.
+  const window = html.slice(modalStart, modalStart + 8000);
   assert.ok(/sign.?out|signout|log.?out|logout/i.test(window),
     '#config-modal must contain a sign-out button/link — moved out of the legacy confirm() prompt');
 });

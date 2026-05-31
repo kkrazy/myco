@@ -966,6 +966,168 @@ async function openConfigModal() {
   }
   modal.hidden = false;
   await _refreshConfigPats();
+  // fr-87 r2: admin-merge — probe /api/admin/config; show section on 200.
+  await _refreshConfigAdmin();
+}
+
+// fr-87 r2: probe + render the Admin (system-wide) section. Uses the
+// server-side requireAdmin gate (the hardcoded login list from
+// f71495f's index.js) as the source of truth — if /api/admin/config
+// returns 200 the user is admin; on 403 the section stays hidden.
+// The standalone admin pane (#admin-wrap) is NOT touched — both
+// entries are valid; this merge just removes the need for an admin
+// to bounce between the modal and the pane.
+async function _refreshConfigAdmin() {
+  const section = document.getElementById('config-admin-section');
+  if (!section) return;
+  let cfg = null;
+  try {
+    const res = await authedFetch('/api/admin/config');
+    if (!res.ok) { section.hidden = true; return; }
+    const body = await res.json();
+    cfg = body.config || {};
+  } catch (err) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  // Populate env-config form (server pre-masks _KEY-suffixed values;
+  // we display whatever the server returned as the field's "current"
+  // shown value, except for masked values where we leave the input
+  // blank so the user can paste a new value or leave it unchanged).
+  const ENV_FIELDS = {
+    ANTHROPIC_API_KEY: 'config-admin-anthropic-key',
+    GEMINI_API_KEY: 'config-admin-gemini-key',
+    OPENAI_API_KEY: 'config-admin-openai-key',
+    CUSTOM_CRITIC_ENDPOINT: 'config-admin-critic-endpoint',
+    CUSTOM_CRITIC_KEY: 'config-admin-critic-key',
+    CUSTOM_CRITIC_MODEL: 'config-admin-critic-model',
+    HTTP_PROXY: 'config-admin-http-proxy',
+    HTTPS_PROXY: 'config-admin-https-proxy',
+    NO_PROXY: 'config-admin-no-proxy',
+  };
+  for (const [envKey, inputId] of Object.entries(ENV_FIELDS)) {
+    const input = document.getElementById(inputId);
+    if (!input) continue;
+    const v = cfg[envKey];
+    // Masked values look like "••••XXXX" or include "..." — leave
+    // those inputs blank so a save with an empty field doesn't
+    // overwrite the real secret with the mask.
+    if (typeof v === 'string' && (v.includes('•') || v.includes('...'))) {
+      input.value = '';
+    } else {
+      input.value = (typeof v === 'string') ? v : '';
+    }
+  }
+  // Wire handlers once.
+  if (!section.dataset.bound) {
+    section.dataset.bound = '1';
+    const saveBtn = document.getElementById('config-admin-env-save');
+    if (saveBtn) saveBtn.addEventListener('click', _saveConfigAdminEnv);
+    const addBtn = document.getElementById('config-admin-allowlist-add');
+    if (addBtn) addBtn.addEventListener('click', _addConfigAdminAllowlist);
+  }
+  // Load the allowlist into its list container.
+  await _refreshConfigAdminAllowlist();
+}
+
+async function _refreshConfigAdminAllowlist() {
+  const listEl = document.getElementById('config-admin-allowlist-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  let users = [];
+  try {
+    const res = await authedFetch('/api/admin/allowlist');
+    if (!res.ok) return;
+    const body = await res.json();
+    users = Array.isArray(body.allowlist) ? body.allowlist : [];
+  } catch { return; }
+  if (!users.length) {
+    listEl.innerHTML = '<div class="config-empty">No users in the allowlist.</div>';
+    return;
+  }
+  for (const u of users) {
+    const row = document.createElement('div');
+    row.className = 'config-pat-row';
+    row.innerHTML = `
+      <span class="config-pat-label">${escHtml(u)}</span>
+      <span></span>
+      <span class="config-pat-actions">
+        <button class="config-pat-delete" data-username="${escHtml(u)}" title="Remove from allowlist">Remove</button>
+      </span>
+    `;
+    row.querySelector('.config-pat-delete').addEventListener('click', () => _removeConfigAdminAllowlist(u));
+    listEl.appendChild(row);
+  }
+}
+
+async function _addConfigAdminAllowlist() {
+  const input = document.getElementById('config-admin-allowlist-input');
+  const username = (input && input.value || '').trim();
+  if (!username) return;
+  const errEl = document.getElementById('config-error');
+  try {
+    await authedFetch('/api/admin/allowlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    });
+    if (input) input.value = '';
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    await _refreshConfigAdminAllowlist();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Allowlist add failed: ' + err.message; }
+  }
+}
+
+async function _removeConfigAdminAllowlist(username) {
+  if (!username) return;
+  if (!confirm(`Remove @${username} from the allowlist?`)) return;
+  const errEl = document.getElementById('config-error');
+  try {
+    await authedFetch(`/api/admin/allowlist/${encodeURIComponent(username)}`, { method: 'DELETE' });
+    await _refreshConfigAdminAllowlist();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Allowlist remove failed: ' + err.message; }
+  }
+}
+
+async function _saveConfigAdminEnv() {
+  // Collect only fields the user filled in. Blank values for masked
+  // keys mean "leave unchanged" — we skip them so we don't overwrite
+  // real secrets with empties.
+  const ENV_FIELDS = {
+    ANTHROPIC_API_KEY: 'config-admin-anthropic-key',
+    GEMINI_API_KEY: 'config-admin-gemini-key',
+    OPENAI_API_KEY: 'config-admin-openai-key',
+    CUSTOM_CRITIC_ENDPOINT: 'config-admin-critic-endpoint',
+    CUSTOM_CRITIC_KEY: 'config-admin-critic-key',
+    CUSTOM_CRITIC_MODEL: 'config-admin-critic-model',
+    HTTP_PROXY: 'config-admin-http-proxy',
+    HTTPS_PROXY: 'config-admin-https-proxy',
+    NO_PROXY: 'config-admin-no-proxy',
+  };
+  const payload = {};
+  for (const [envKey, inputId] of Object.entries(ENV_FIELDS)) {
+    const el = document.getElementById(inputId);
+    if (!el) continue;
+    const v = String(el.value || '').trim();
+    if (v) payload[envKey] = v;
+  }
+  const errEl = document.getElementById('config-error');
+  try {
+    await authedFetch('/api/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    // Re-fetch + re-mask after save so the inputs reflect the
+    // post-save state (and don\'t retain typed-in raw values).
+    await _refreshConfigAdmin();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Save env config failed: ' + err.message; }
+  }
 }
 
 function closeConfigModal() {

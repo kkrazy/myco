@@ -610,6 +610,81 @@
           </div>
         </div>
       </section>
+      <!-- fr-87 r2: Admin merge section. Hidden by default; revealed
+           in openConfigModal when GET /api/admin/config returns 200
+           (the server's requireAdmin gate from f71495f decides). The
+           IDs use a `config-admin-` prefix so they don't collide with
+           the standalone admin pane's same-named inputs (#input-
+           anthropic-key etc., which still exist in #admin-wrap for
+           the legacy entry via #btn-admin). The standalone pane is
+           NOT retired this round — both entries continue to work;
+           the merge is just so an admin doesn't have to bounce
+           between modal and pane. -->
+      <section class="config-section" id="config-admin-section" hidden>
+        <h3>Admin — system-wide</h3>
+        <p class="config-section-hint">You have admin access on this
+          instance. These settings affect all users + persist to
+          <code>$STATE_DIR/.env</code> and
+          <code>allowed-github-users.txt</code>.</p>
+
+        <h4>Allowlist (invited GitHub logins)</h4>
+        <div id="config-admin-allowlist-list"></div>
+        <div class="config-admin-allowlist-form">
+          <input id="config-admin-allowlist-input" type="text"
+                 placeholder="github login (e.g. alice)" autocomplete="off" />
+          <button id="config-admin-allowlist-add">Add</button>
+        </div>
+
+        <h4>Server env config</h4>
+        <form id="config-admin-env-form" autocomplete="off" onsubmit="return false;">
+          <div class="config-admin-field">
+            <label for="config-admin-anthropic-key">ANTHROPIC_API_KEY</label>
+            <input type="password" id="config-admin-anthropic-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-gemini-key">GEMINI_API_KEY</label>
+            <input type="password" id="config-admin-gemini-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-openai-key">OPENAI_API_KEY</label>
+            <input type="password" id="config-admin-openai-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-critic-endpoint">CUSTOM_CRITIC_ENDPOINT</label>
+            <input type="text" id="config-admin-critic-endpoint"
+                   placeholder="e.g. http://localhost:11434/v1" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-critic-key">CUSTOM_CRITIC_KEY</label>
+            <input type="password" id="config-admin-critic-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-critic-model">CUSTOM_CRITIC_MODEL</label>
+            <input type="text" id="config-admin-critic-model"
+                   placeholder="e.g. llama3" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-http-proxy">HTTP_PROXY</label>
+            <input type="text" id="config-admin-http-proxy"
+                   placeholder="e.g. http://10.0.0.1:8080" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-https-proxy">HTTPS_PROXY</label>
+            <input type="text" id="config-admin-https-proxy"
+                   placeholder="e.g. http://proxy.example.com:8080" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-no-proxy">NO_PROXY</label>
+            <input type="text" id="config-admin-no-proxy"
+                   placeholder="e.g. 127.0.0.1,localhost,.local" />
+          </div>
+          <button id="config-admin-env-save" type="button">Save env config</button>
+        </form>
+      </section>
       <section class="config-section" id="config-account-section">
         <h3>Account</h3>
         <button id="config-signout">Sign out</button>
