@@ -3837,6 +3837,12 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-31T09:22:42.569Z"
           }
+        },
+        {
+          "id": "f95908b34eee",
+          "user": "kkrazy",
+          "text": "System config and user config should merge when user has admin access",
+          "ts": "2026-05-31T11:55:40.101Z"
         }
       ],
       "meta": {
@@ -3892,7 +3898,14 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "4652d4dfe44e",
+          "user": "kkrazy",
+          "text": "Problem still exist",
+          "ts": "2026-05-31T12:00:54.153Z"
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "The config page doesnt show up on mobile, but show up when i click on a session",
