@@ -3756,7 +3756,50 @@
         "rewritten": true
       },
       "description": "**Problem:** Prompts containing special characters break the request with a 400 API error about immutable thinking blocks.\n**Expected:** Prompts with LaTeX/special chars (e.g. `$$\\frac{100}{10 - 1} = 11.\\overline{1} \\text{ 秒}$$` and `$$v(t) = \\lim_{h \\to 0} \\frac{x(t+h) - x(t)}{h}$$`) are sent without corrupting prior assistant message content.\n**Actual:** API Error: 400 messages.3.content.17: thinking or redacted_thinking blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response."
+    },
+    {
+      "id": "bug-41",
+      "text": "AskUserQuestion has no escape hatch when no option fits and Esc hangs flow",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-31T01:00:07.344Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "allow cancel or free input for user questions, right now if none of the options matches user intent, there is no way to adjust, the entire process will stuck if I just hit \"esc\"",
+        "rewritten": true
+      },
+      "description": "**Problem:** When `AskUserQuestion` is shown and none of the presented options match the user's intent, there is no way to cancel or provide free-form input to redirect the agent.\n**Expected:** User can cancel the question or supply free-text input to steer the flow when no option fits.\n**Actual:** Hitting `Esc` does not cancel; the entire process gets stuck with no way to proceed or adjust.",
+      "runs": [
+        {
+          "status": "running",
+          "ts": "2026-05-31T01:07:42.007Z",
+          "summary": null
+        }
+      ]
+    },
+    {
+      "id": "bug-42",
+      "text": "Allow submitting fr/td/bug to queue while paused; resume kicks off processing",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-05-31T01:08:30.767Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "should allow submitting fr/td/bug to queue even when the queue is paused requiring resume to kick off",
+        "rewritten": true
+      },
+      "description": "**Problem:** Users can't enqueue fr/td/bug items while the queue is paused, forcing them to resume before submitting.\n**Expected:** Submissions of fr/td/bug are always accepted into the queue regardless of pause state; resuming the queue kicks off processing of any queued items.\n**Actual:** Submission is blocked while the queue is paused."
     }
   ],
-  "updatedAt": "2026-05-29T01:25:55.224Z"
+  "updatedAt": "2026-05-31T01:08:36.695Z"
 }
