@@ -904,20 +904,216 @@ async function showBuildStamp() {
 
 // Populates the status-bar user chip from state.chatUser (set by tryToken on
 // auth success). Empty when auth is disabled — :empty CSS hides the chip.
+//
+// fr-87: clicking the chip now opens the Config modal (PAT management +
+// sign-out button). The legacy `confirm('Sign out?')` flow on click is
+// gone — sign-out lives as a button inside the modal.
 function showUserStamp() {
   const el = document.getElementById('user-stamp');
   if (!el) return;
   el.textContent = state.chatUser ? `@${state.chatUser}` : '';
-  el.title = state.chatUser ? `Logged in as ${state.chatUser} — click to sign out` : '';
-  if (state.chatUser && !el.dataset.logoutBound) {
-    el.dataset.logoutBound = '1';
+  el.title = state.chatUser ? `Logged in as ${state.chatUser} — click to open config` : '';
+  if (state.chatUser && !el.dataset.configBound) {
+    el.dataset.configBound = '1';
     el.style.cursor = 'pointer';
     el.addEventListener('click', (e) => {
       // Status-bar parent has its own click handler (toggleLogPanel); don't
       // open the log panel when the user clicks the username.
       e.stopPropagation();
+      openConfigModal();
+    });
+  }
+}
+
+// fr-87: Config modal — per-user PAT management + sign-out. Fetches
+// the inventory from GET /config/pats (never includes raw token
+// values), renders user-level + per-repo rows, wires Set/Delete
+// actions. Sign-out button at the bottom calls doLogout() (the same
+// helper the old chip-click confirm flow used).
+async function openConfigModal() {
+  const modal = document.getElementById('config-modal');
+  if (!modal) return;
+  // Title shows whose config this is.
+  const titleEl = document.getElementById('config-title');
+  if (titleEl) titleEl.textContent = state.chatUser ? `Config — @${state.chatUser}` : 'Config';
+  // Close + sign-out + add-PAT click handlers (bound once, idempotent).
+  if (!modal.dataset.bound) {
+    modal.dataset.bound = '1';
+    document.getElementById('config-close').addEventListener('click', closeConfigModal);
+    document.getElementById('config-signout').addEventListener('click', () => {
       if (confirm('Sign out of myco?')) doLogout();
     });
+    document.getElementById('config-pat-save').addEventListener('click', _saveConfigPerRepoPat);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !modal.hidden) closeConfigModal();
+    });
+  }
+  modal.hidden = false;
+  await _refreshConfigPats();
+}
+
+function closeConfigModal() {
+  const modal = document.getElementById('config-modal');
+  if (modal) modal.hidden = true;
+  // Clear any token-input residue so the password field doesn\'t cache
+  // the last typed value when the user reopens the modal.
+  const tokInput = document.getElementById('config-pat-token');
+  if (tokInput) tokInput.value = '';
+}
+
+async function _refreshConfigPats() {
+  const errEl = document.getElementById('config-error');
+  if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+  const listEl = document.getElementById('config-pats-list');
+  const emptyEl = document.getElementById('config-pats-empty');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  let inventory;
+  try {
+    const res = await authedFetch('/config/pats');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    inventory = await res.json();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Failed to load PATs: ' + err.message; }
+    return;
+  }
+  const rows = [];
+  // User-level (OAuth-fallback) row per provider, even when absent —
+  // gives the user a place to PASTE a value if they want to set one.
+  for (const provider of ['github', 'gitee']) {
+    const meta = inventory.userLevel && inventory.userLevel[provider];
+    rows.push(_renderConfigPatRow({
+      kind: 'user-level',
+      provider,
+      owner: null,
+      repo: null,
+      alias: null,
+      present: !!(meta && meta.present),
+      last4: meta && meta.last4,
+    }));
+  }
+  // Per-repo rows.
+  for (const r of (inventory.perRepo || [])) {
+    rows.push(_renderConfigPatRow({
+      kind: 'per-repo',
+      provider: r.provider,
+      owner: r.owner,
+      repo: r.repo,
+      alias: r.alias || null,
+      present: true,
+      last4: r.last4,
+    }));
+  }
+  for (const el of rows) listEl.appendChild(el);
+  const hasAny = (inventory.perRepo && inventory.perRepo.length)
+    || (inventory.userLevel.github && inventory.userLevel.github.present)
+    || (inventory.userLevel.gitee && inventory.userLevel.gitee.present);
+  if (emptyEl) emptyEl.hidden = hasAny;
+}
+
+function _renderConfigPatRow({ kind, provider, owner, repo, alias, present, last4 }) {
+  const row = document.createElement('div');
+  row.className = 'config-pat-row';
+  row.dataset.kind = kind;
+  row.dataset.provider = provider;
+  if (owner) row.dataset.owner = owner;
+  if (repo) row.dataset.repo = repo;
+  if (alias) row.dataset.alias = alias;
+  const label = (kind === 'user-level')
+    ? `${provider} (user-level / OAuth fallback)`
+    : `${provider}/${owner}/${repo}${alias ? '#' + alias : ''}`;
+  const masked = present ? `••••${escHtml(last4 || '')}` : '(none)';
+  row.innerHTML = `
+    <span class="config-pat-label">${escHtml(label)}</span>
+    <span class="config-pat-value">${masked}</span>
+    <span class="config-pat-actions">
+      <button class="config-pat-replace" title="Set or replace this PAT">Set</button>
+      ${present ? '<button class="config-pat-delete" title="Delete this PAT">Delete</button>' : ''}
+    </span>
+  `;
+  row.querySelector('.config-pat-replace').addEventListener('click', () => _replaceConfigPat({ kind, provider, owner, repo, alias }));
+  const delBtn = row.querySelector('.config-pat-delete');
+  if (delBtn) delBtn.addEventListener('click', () => _deleteConfigPat({ kind, provider, owner, repo, alias }));
+  return row;
+}
+
+async function _replaceConfigPat({ kind, provider, owner, repo, alias }) {
+  // Prompt the user for the new value. `prompt()` is the cheapest
+  // affordance that doesn\'t require a second modal; the field is
+  // wiped after submit so the token doesn\'t linger in DOM.
+  const label = (kind === 'user-level')
+    ? `${provider} user-level token`
+    : `${provider}/${owner}/${repo}${alias ? '#' + alias : ''}`;
+  const tok = window.prompt(`Paste new PAT for ${label}:`);
+  if (!tok || !tok.trim()) return;
+  const errEl = document.getElementById('config-error');
+  try {
+    if (kind === 'user-level') {
+      await authedFetch('/config/pats/user-level', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, token: tok.trim() }),
+      });
+    } else {
+      await authedFetch('/config/pats/per-repo', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, owner, repo, token: tok.trim(), alias }),
+      });
+    }
+    await _refreshConfigPats();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Failed to set PAT: ' + err.message; }
+  }
+}
+
+async function _deleteConfigPat({ kind, provider, owner, repo, alias }) {
+  const label = (kind === 'user-level')
+    ? `${provider} user-level token`
+    : `${provider}/${owner}/${repo}${alias ? '#' + alias : ''}`;
+  if (!confirm(`Delete PAT for ${label}?`)) return;
+  const errEl = document.getElementById('config-error');
+  try {
+    let url;
+    if (kind === 'user-level') {
+      url = `/config/pats/user-level/${encodeURIComponent(provider)}`;
+    } else {
+      url = `/config/pats/per-repo/${encodeURIComponent(provider)}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+      if (alias) url += `?alias=${encodeURIComponent(alias)}`;
+    }
+    await authedFetch(url, { method: 'DELETE' });
+    await _refreshConfigPats();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Failed to delete PAT: ' + err.message; }
+  }
+}
+
+async function _saveConfigPerRepoPat() {
+  const provider = document.getElementById('config-pat-provider').value;
+  const owner = document.getElementById('config-pat-owner').value.trim();
+  const repo = document.getElementById('config-pat-repo').value.trim();
+  const alias = document.getElementById('config-pat-alias').value.trim() || null;
+  const tokInput = document.getElementById('config-pat-token');
+  const token = tokInput.value.trim();
+  const errEl = document.getElementById('config-error');
+  if (!owner || !repo || !token) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'owner, repo, and token are required'; }
+    return;
+  }
+  try {
+    await authedFetch('/config/pats/per-repo', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, owner, repo, token, alias }),
+    });
+    document.getElementById('config-pat-owner').value = '';
+    document.getElementById('config-pat-repo').value = '';
+    document.getElementById('config-pat-alias').value = '';
+    tokInput.value = '';
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    await _refreshConfigPats();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = 'Failed to save PAT: ' + err.message; }
   }
 }
 

@@ -559,6 +559,51 @@
     </div>
   </div>
 
+  <!-- fr-87: Config modal. Opens when the user clicks the @login chip
+       in the status bar. Per-user surface for PAT management — never
+       renders raw token values; only metadata (last4) returned by
+       GET /config/pats. Sign-out moved INSIDE this modal (was a
+       confirm() prompt on the chip click, displaced by fr-87). -->
+  <div id="config-modal" hidden>
+    <div id="config-dialog">
+      <div id="config-header">
+        <h2 id="config-title">Config</h2>
+        <button id="config-close" title="Close">&times;</button>
+      </div>
+      <section class="config-section" id="config-pats-section">
+        <h3>Personal access tokens</h3>
+        <p class="config-section-hint">Stored per-user on this myco
+          instance. Shown with the last 4 characters only — paste a
+          new value to replace. Used by /feature, /bug, /restore, and
+          claude's git tool when working with private repos.</p>
+        <div id="config-pats-empty" class="config-empty" hidden>
+          You have no PATs stored. Add one below or use
+          <code>/setpat &lt;token&gt;</code> from a session.
+        </div>
+        <div id="config-pats-list"></div>
+        <div id="config-pats-add">
+          <h4>Add a per-repo PAT</h4>
+          <div class="config-pat-form">
+            <select id="config-pat-provider">
+              <option value="github">github</option>
+              <option value="gitee">gitee</option>
+            </select>
+            <input id="config-pat-owner" type="text" placeholder="owner (e.g. kkrazy)" autocomplete="off" />
+            <input id="config-pat-repo" type="text" placeholder="repo (e.g. myco)" autocomplete="off" />
+            <input id="config-pat-alias" type="text" placeholder="alias (optional)" autocomplete="off" />
+            <input id="config-pat-token" type="password" placeholder="paste token" autocomplete="off" spellcheck="false" />
+            <button id="config-pat-save">Save</button>
+          </div>
+        </div>
+      </section>
+      <section class="config-section" id="config-account-section">
+        <h3>Account</h3>
+        <button id="config-signout">Sign out</button>
+      </section>
+      <div id="config-error" hidden></div>
+    </div>
+  </div>
+
   <!-- fr-50: file-edit conflict modal. Shown when a Save (PUT /file)
        comes back with 409 ERR_MTIME_CONFLICT — the file changed on
        disk since the user opened it (another collaborator, a claude

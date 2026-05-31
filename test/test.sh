@@ -2502,6 +2502,15 @@ test_chat_window() {
   # (distinct from chat-clear) so clients wipe visible pane while
   # history remains scrollable via load-older.
   node_test_result test/fr-86-clear-new-restart-session.test.js "test/fr-86-clear-new-restart-session.test.js (19 cases)"
+  # fr-87 (the second, id-allocator reuse): Config page MVP — let
+  # regular users manage their own PATs via a web modal instead of
+  # typing /setpat in chat. Adds listAllPats + remove[User|Repo]Token
+  # helpers, 5 /config/pats routes (auth-required, NEVER returns raw
+  # token), a #config-modal in index.html, and a click handler on
+  # #user-stamp that opens it (sign-out moved INTO the modal).
+  # Security invariant locked in tests: GET response shape is
+  # metadata-only (present + last4), never raw value.
+  node_test_result test/fr-87-config-page-pats.test.js "test/fr-87-config-page-pats.test.js (17 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

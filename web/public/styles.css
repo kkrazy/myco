@@ -1009,6 +1009,107 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 #spawn-dialog h2 { font-size: 1rem; }
 
+/* fr-87: Config modal (PAT management + sign-out). Mirrors the spawn-
+   modal pattern (dim backdrop + centered card) so it inherits the
+   project's modal feel without inventing new visual language. */
+#config-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+#config-dialog {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  width: min(540px, 92vw);
+  max-height: 84vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+#config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#config-header h2 { font-size: 1.05rem; margin: 0; }
+#config-close {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.config-section { display: flex; flex-direction: column; gap: 10px; }
+.config-section h3 { font-size: .85rem; margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.config-section h4 { font-size: .8rem; margin: 0; color: var(--muted); }
+.config-section-hint { font-size: .8rem; color: var(--muted); margin: 0; line-height: 1.4; }
+.config-empty { font-size: .85rem; color: var(--muted); padding: 8px 12px; border: 1px dashed var(--border); border-radius: 6px; }
+.config-pat-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: .85rem;
+}
+.config-pat-label { font-family: var(--mono, monospace); color: var(--text); }
+.config-pat-value { font-family: var(--mono, monospace); color: var(--muted); }
+.config-pat-actions { display: flex; gap: 6px; }
+.config-pat-actions button {
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.config-pat-actions .config-pat-delete { color: #ff8a8a; }
+.config-pat-form {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.config-pat-form input,
+.config-pat-form select {
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: .85rem;
+}
+.config-pat-form #config-pat-token { grid-column: 1 / -1; }
+.config-pat-form #config-pat-save { grid-column: 1 / -1; padding: 8px; cursor: pointer; }
+#config-signout {
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: .85rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+#config-error {
+  color: #ff8a8a;
+  font-size: .85rem;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 138, 138, .4);
+  border-radius: 6px;
+}
+
 #spawn-dialog label {
   display: flex;
   flex-direction: column;

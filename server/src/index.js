@@ -563,6 +563,60 @@ app.get('/workspace', requireAuth, (req, res) => {
   });
 });
 
+// fr-87: Config page endpoints. Per-user surface for managing the
+// user's stored PATs (github + gitee). All routes are requireAuth-
+// gated; req.user is the only identity the routes ever mutate or
+// read PATs for — no impersonation possible.
+//
+// SECURITY INVARIANT: the GET response NEVER includes a raw token
+// value, only metadata (present:bool + last4). Raw tokens land in
+// rec.chat / events.jsonl / browser DevTools / proxy logs as soon
+// as they leave the server, so the inventory endpoint must stay
+// metadata-only. The PUT routes accept tokens IN (the user types
+// them); the DELETE routes reference them only by repo identifier.
+// Future readers: do NOT "simplify" by returning getToken's raw
+// string from the GET handler.
+const gitTokensMod = require('./git-tokens');
+
+app.get('/config/pats', requireAuth, (req, res) => {
+  // Inventory: shape { userLevel: {github, gitee}, perRepo: [...] }.
+  // Each entry is null OR { present:true, last4 }.
+  res.json(gitTokensMod.listAllPats(req.user));
+});
+
+app.put('/config/pats/user-level', requireAuth, (req, res) => {
+  const { provider, token } = req.body || {};
+  if (!provider || typeof provider !== 'string') return res.status(400).json({ error: 'provider required' });
+  if (!token || typeof token !== 'string' || !token.trim()) return res.status(400).json({ error: 'token required' });
+  try { gitTokensMod.setUserToken(req.user, provider, token); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
+  res.json({ ok: true });
+});
+
+app.put('/config/pats/per-repo', requireAuth, (req, res) => {
+  const { provider, owner, repo, token, alias } = req.body || {};
+  if (!provider || typeof provider !== 'string') return res.status(400).json({ error: 'provider required' });
+  if (!owner || typeof owner !== 'string') return res.status(400).json({ error: 'owner required' });
+  if (!repo || typeof repo !== 'string') return res.status(400).json({ error: 'repo required' });
+  if (!token || typeof token !== 'string' || !token.trim()) return res.status(400).json({ error: 'token required' });
+  try { gitTokensMod.setRepoToken(req.user, provider, owner, repo, token, alias || null); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
+  res.json({ ok: true });
+});
+
+app.delete('/config/pats/user-level/:provider', requireAuth, (req, res) => {
+  const removed = gitTokensMod.removeUserToken(req.user, req.params.provider);
+  res.json({ ok: true, removed });   // `removed:false` is informational — idempotent route
+});
+
+app.delete('/config/pats/per-repo/:provider/:owner/:repo', requireAuth, (req, res) => {
+  // Optional ?alias=… query param targets a specific aliased slot.
+  // Without it, the un-aliased default slot is removed.
+  const alias = (req.query && typeof req.query.alias === 'string' && req.query.alias.trim()) || null;
+  const removed = gitTokensMod.removeRepoToken(req.user, req.params.provider, req.params.owner, req.params.repo, alias);
+  res.json({ ok: true, removed });
+});
+
 const TLS_CERT_PATH = process.env.TLS_CERT_PATH || '';
 const TLS_KEY_PATH = process.env.TLS_KEY_PATH || '';
 const tlsEnabled = !!(TLS_CERT_PATH && TLS_KEY_PATH);

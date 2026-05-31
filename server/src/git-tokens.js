@@ -182,6 +182,100 @@ function setUserToken(user, provider, token) {
 
 // ── Inspect ─────────────────────────────────────────────────────────────────
 
+// fr-87: Config page helpers. The web Config modal calls listAllPats
+// to render the inventory and removeRepoToken / removeUserToken when
+// the user clicks Delete on a row. NEVER returns raw token values —
+// only metadata (present:bool + last4) per the never-leak-the-secret
+// invariant. The PUT routes in index.js still call the existing
+// setUserToken / setRepoToken setters; only delete + safe-list are
+// new helpers.
+
+// Mask a raw token to metadata-only form: { present:true, last4 }.
+// Defensive null returns for falsy / non-string input so route handlers
+// can pass through getter results without branching.
+function _maskToken(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s) return null;
+  return { present: true, last4: s.slice(-4) };
+}
+
+// Returns the full PAT inventory for `user` in safe (masked) form.
+// Shape:
+//   { userLevel: { github: meta|null, gitee: meta|null },
+//     perRepo:   [{ provider, owner, repo, alias, last4 }, ...] }
+// fr-82: aliased entries surface with their alias field set; un-aliased
+// entries have alias: null. The key regex correctly splits
+// "github/owner/repo#alias" so the repo field stays as "repo".
+function listAllPats(user) {
+  if (!user) return { userLevel: { github: null, gitee: null }, perRepo: [] };
+  const store = _load();
+  const entry = store[user];
+  if (!entry || typeof entry !== 'object') {
+    return { userLevel: { github: null, gitee: null }, perRepo: [] };
+  }
+  const out = {
+    userLevel: {
+      github: _maskToken(entry.github),
+      gitee:  _maskToken(entry.gitee),
+    },
+    perRepo: [],
+  };
+  for (const key of Object.keys(entry)) {
+    // Skip the user-level slots themselves; only collect repo-shaped keys.
+    if (key === 'github' || key === 'gitee') continue;
+    const m = key.match(/^([a-z]+)\/([^/]+)\/(.+?)(?:#(.+))?$/);
+    if (!m) continue;
+    const provider = _normalizeProvider(m[1]);
+    if (!provider) continue;
+    out.perRepo.push({
+      provider,
+      owner: m[2],
+      repo:  m[3],
+      alias: m[4] || null,
+      last4: _maskToken(entry[key]).last4,
+    });
+  }
+  out.perRepo.sort((a, b) =>
+    (a.provider + '/' + a.owner + '/' + a.repo + (a.alias ? '#' + a.alias : ''))
+      .localeCompare(b.provider + '/' + b.owner + '/' + b.repo + (b.alias ? '#' + b.alias : '')));
+  return out;
+}
+
+// Delete the user-level OAuth-fallback PAT for `(user, provider)`.
+// Idempotent: returns false if no such slot exists; never throws.
+function removeUserToken(user, provider) {
+  if (!user) return false;
+  const p = _normalizeProvider(provider);
+  if (!p) return false;
+  const store = _load();
+  const entry = store[user];
+  if (!entry || typeof entry !== 'object') return false;
+  if (!(p in entry)) return false;
+  delete entry[p];
+  _persist();
+  return true;
+}
+
+// Delete the per-repo PAT slot for `(user, provider, owner, repo,
+// alias?)`. Idempotent; never throws. Sibling aliased entries on the
+// same repo are preserved.
+function removeRepoToken(user, provider, owner, repo, alias) {
+  if (!user || !owner || !repo) return false;
+  const p = _normalizeProvider(provider);
+  if (!p) return false;
+  const key = alias
+    ? `${p}/${owner}/${repo}#${alias}`
+    : `${p}/${owner}/${repo}`;
+  const store = _load();
+  const entry = store[user];
+  if (!entry || typeof entry !== 'object') return false;
+  if (!(key in entry)) return false;
+  delete entry[key];
+  _persist();
+  return true;
+}
+
 // Returns all repos `user` has per-repo PATs for. Useful for a future
 // "show my tokens" UI; not used by handleIssue.
 function listRepos(user) {
@@ -210,6 +304,10 @@ module.exports = {
   setUserToken,
   listRepos,
   listAliases,                 // fr-82
+  // fr-87: Config page helpers — safe inventory + idempotent delete.
+  listAllPats,
+  removeRepoToken,
+  removeUserToken,
   KNOWN_PROVIDERS,
   _resetCacheForTest,
   _tokensFile: () => TOKENS_FILE,
