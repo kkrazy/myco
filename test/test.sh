@@ -2475,6 +2475,16 @@ test_chat_window() {
   # User-reported as "i logged in as kkrazy and i can see demo001"
   # (Demo001 was owned by labxnow with no admins/viewers).
   node_test_result test/fr-87r-sessions-all-flag-leak.test.js "test/fr-87r-sessions-all-flag-leak.test.js (7 cases)"
+  # bug-41: AskUserQuestion had no escape hatch — Esc just hid the
+  # modal, leaving the agent stuck on the canUseTool Promise; users
+  # had no way to cancel or supply free-text when no option fit.
+  # Fix: auto-append synthetic Other + Cancel options to every
+  # AskUserQuestion menu (server-side, _askNextSubQuestion); branch
+  # on the synthetic flag in resolveMenuPick (cancel→behavior:deny,
+  # freeText→answer="Other" + chat-input focus); Esc on client now
+  # picks the Cancel synthetic so the agent unblocks instead of
+  # silently hanging.
+  node_test_result test/bug-41-askuserquestion-escape-hatch.test.js "test/bug-41-askuserquestion-escape-hatch.test.js (12 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

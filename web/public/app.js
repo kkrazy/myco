@@ -7424,19 +7424,43 @@ function _sendStopAgent() {
   catch (err) { console.warn('[stop] interrupt send failed:', err && err.message); }
 }
 
-// Global key handler for the permission modal: Esc defers, digits 1-9
-// pick the matching option (single-select only — multi-select needs
-// explicit Submit). Registered once at chat-UI init.
+// Global key handler for the permission modal: Esc cancels (bug-41),
+// digits 1-9 pick the matching option (single-select only — multi-
+// select needs explicit Submit). Registered once at chat-UI init.
 function _bindPermModalKeys() {
   if (document.body.dataset.permKeysBound === '1') return;
   document.body.dataset.permKeysBound = '1';
   document.addEventListener('keydown', (e) => {
     const modal = document.getElementById('perm-modal');
     if (!modal || modal.hidden) return;
-    // Esc → defer. Doesn't interrupt the agent — the menus remain in
-    // the queue, the user can reopen via the sticky chat card.
+    // bug-41: Esc no longer just hides the modal (which left the agent
+    // stuck on an unresolved AskUserQuestion Promise — the literal
+    // user-reported symptom). For AskUserQuestion menus, Esc now picks
+    // the synthetic Cancel option that _askNextSubQuestion auto-
+    // appends; the server resolves with behavior:'deny' and the agent
+    // unblocks. For permission menus (Allow/Deny shape) where no
+    // synthetic Cancel exists, Esc falls back to the legacy defer
+    // behavior — the user can reopen via the chat-pane menu card.
     if (e.key === 'Escape') {
       e.preventDefault();
+      const q = state.pendingMenuQueue || [];
+      const idx = state.pendingMenuIdx || 0;
+      const cur = q[idx];
+      // Look for the auto-appended Cancel synthetic on the current
+      // menu. Per agent-session.js _askNextSubQuestion, it's tagged
+      // with synthetic:'cancel'. Falls back to defer if absent (older
+      // server build, permission-flavour menu, or unknown menu shape).
+      if (cur && Array.isArray(cur.options)) {
+        const cancelOpt = cur.options.find((o) => o && o.synthetic === 'cancel');
+        if (cancelOpt && cur.hash && sendMenuPick(cancelOpt.n, cur.hash)) {
+          _markAwaitingClaude();
+          _markChatMenuAnswered(cur.hash, { pickedN: cancelOpt.n, cancelled: true });
+          _advanceModalAfterResolve();
+          return;
+        }
+      }
+      // Fallback: legacy defer (just hide). Keeps Esc functional on
+      // permission menus and older AskUserQuestion shapes.
       state.permModalDismissed = true;
       _renderPermModal();
       return;

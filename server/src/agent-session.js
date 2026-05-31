@@ -1008,6 +1008,31 @@ class AgentSession extends EventEmitter {
       description: o.description || '',
       ...(isMulti ? { checkbox: true, checked: false } : {}),
     }));
+    // bug-41: auto-append TWO synthetic options to every AskUserQuestion
+    // menu — Other (free-text escape hatch) and Cancel. They satisfy the
+    // SDK's promise to the model ("Users will always be able to select
+    // 'Other' to provide custom text input") and give the user an
+    // explicit way out when no presented option fits. Tagged with
+    // `synthetic` so resolveMenuPick routes them to the freeText / deny
+    // branches instead of feeding their labels back into
+    // updatedInput.answers (which would surprise the model — it never
+    // declared these options).
+    //
+    // Non-checkboxes even in multi-select mode: picking Other or Cancel
+    // mid-selection short-circuits and resolves immediately rather than
+    // toggling. That matches the user's intent ("get me out").
+    menuOpts.push({
+      n: menuOpts.length + 1,
+      label: 'Other — type a custom answer',
+      description: 'Pick this to type your own answer in the chat input below.',
+      synthetic: 'freeText',
+    });
+    menuOpts.push({
+      n: menuOpts.length + 1,
+      label: 'Cancel',
+      description: 'Cancel this question. Claude will pick a different approach.',
+      synthetic: 'cancel',
+    });
     const menu = {
       kind: 'plan',
       question: q.question || '',
@@ -1171,6 +1196,63 @@ class AgentSession extends EventEmitter {
       const i = pending.questionIdx;
       const q = (shared && shared.questions && shared.questions[i]) || null;
       const opts = (q && q.options) || [];
+      // bug-41: check the RENDERED menu first (pending.options) to
+      // detect synthetic Other / Cancel picks — those n values live
+      // beyond opts.length and would otherwise fall through to the
+      // "invalid option" path. The synthetic flag rides on the rendered
+      // option so we can branch without changing q.options (the SDK
+      // would choke on options it never declared).
+      const rendered = (pending.options || []).find((o) => o.n === n);
+      if (rendered && rendered.synthetic === 'cancel') {
+        // User wants out. Resolve the SDK canUseTool Promise with deny
+        // so the model sees the cancellation and decides how to
+        // proceed (typically: ask in plain prose or switch tack).
+        // Stop the whole multi-question pack here — once the user
+        // cancels one sub-question, asking the rest would be hostile.
+        this._emit({
+          type: 'permission_resolved',
+          toolName: 'AskUserQuestion',
+          hash,
+          pickedN: n,
+          decision: 'cancel',
+          subQuestionIdx: i,
+          subQuestionTotal: shared.questions.length,
+        });
+        shared.resolve({
+          behavior: 'deny',
+          message: 'User cancelled this question via myco chat pane (no option fit).',
+        });
+        return true;
+      }
+      if (rendered && rendered.synthetic === 'freeText') {
+        // User wants to type a custom answer. Record "Other" as the
+        // answer (matches the SDK convention — the model already knows
+        // "Other" means "see the next user message for the freeform
+        // reply"). Client-side _permOptionIsFreeText regex catches the
+        // "Other —" label and focuses the chat input.
+        shared.answers[q.question || ''] = 'Other';
+        this._emit({
+          type: 'permission_resolved',
+          toolName: 'AskUserQuestion',
+          hash,
+          pickedN: n,
+          pickedLabel: 'Other',
+          subQuestionIdx: i,
+          subQuestionTotal: shared.questions.length,
+          synthetic: 'freeText',
+        });
+        shared.askedIdx = i + 1;
+        if (shared.askedIdx < shared.questions.length) {
+          this._askNextSubQuestion(shared);
+          return true;
+        }
+        shared.resolve({
+          behavior: 'allow',
+          updatedInput: { questions: shared.questions, answers: shared.answers },
+        });
+        return true;
+      }
+      // Regular model-provided option pick (n ≤ opts.length).
       const picked = opts[n - 1];
       if (!picked) {
         if (shared) shared.resolve({ behavior: 'deny', message: 'User picked an invalid option' });
