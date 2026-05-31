@@ -923,6 +923,22 @@ function showUserStamp() {
       openConfigModal();
     });
   }
+  // bug-44: sidebar-header Config button. Same auth gate as the chip
+  // (state.chatUser is set) and same click target (openConfigModal).
+  // Lives at the TOP of the mobile home view so users don't have to
+  // scroll to the status-bar at the bottom to find Config. Hidden
+  // until auth so unauth'd users don't see a button that 401s.
+  const btnCfg = document.getElementById('btn-config');
+  if (btnCfg) {
+    btnCfg.hidden = !state.chatUser;
+    if (state.chatUser && !btnCfg.dataset.configBound) {
+      btnCfg.dataset.configBound = '1';
+      btnCfg.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openConfigModal();
+      });
+    }
+  }
 }
 
 // fr-87: Config modal — per-user PAT management + sign-out. Fetches

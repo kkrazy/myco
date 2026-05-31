@@ -313,13 +313,19 @@ t('static guard: index.html declares #config-modal', () => {
 
 t('static guard: app.js #user-stamp click handler opens config modal (NOT confirm sign-out)', () => {
   const src = _read('web/public/app.js');
-  // showUserStamp must wire the chip\'s click to open #config-modal
+  // showUserStamp must wire the chip\'s click to open the config UI
   // instead of running the legacy confirm(\'Sign out?\') flow.
+  // Either form is accepted: a direct `config-modal` literal (HTML
+  // id reference) OR an `openConfigModal()` call (the helper name).
+  // bug-44 introduced extra binding code in showUserStamp (sidebar-
+  // header Config button), pushing the first `config-modal` literal
+  // past the original 1200-char window; the openConfigModal reference
+  // stays at the chip click handler regardless.
   const fnAt = src.indexOf('function showUserStamp');
   assert.ok(fnAt > 0);
-  const window = src.slice(fnAt, fnAt + 1200);
-  assert.ok(/config-modal/.test(window),
-    'showUserStamp click handler must reference config-modal so clicking the @login chip opens the config UI');
+  const window = src.slice(fnAt, fnAt + 1500);
+  assert.ok(/config-modal|openConfigModal/.test(window),
+    'showUserStamp click handler must reference the Config UI via either the `config-modal` id literal or the `openConfigModal()` helper call');
   // The legacy confirm-signout text must NOT be the chip\'s click body
   // anymore (it should live on a separate sign-out button inside the
   // modal — that\'s tested by a separate guard below).

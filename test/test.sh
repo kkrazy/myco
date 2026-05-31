@@ -2520,6 +2520,15 @@ test_chat_window() {
   # exist + cite bug-43 so a future restyle doesn't silently lose
   # the fix.
   node_test_result test/bug-43-mobile-hud-critic-overflow.test.js "test/bug-43-mobile-hud-critic-overflow.test.js (5 cases)"
+  # bug-44: Config page not visible on mobile pre-session. Pre-fix
+  # the only Config entry was the @login chip in #status-bar at
+  # the BOTTOM of the sidebar — users overlooked it and thought
+  # Config was gated until a session opened. Fix: dedicated
+  # #btn-config sidebar-header icon (mirrors btn-admin/btn-manual
+  # pattern) that opens the same fr-87 Config modal. Hidden until
+  # state.chatUser is set. Static guards lock the markup, click
+  # binding, auth gate, and bug-44 marker comment.
+  node_test_result test/bug-44-mobile-config-entry.test.js "test/bug-44-mobile-config-entry.test.js (5 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/
