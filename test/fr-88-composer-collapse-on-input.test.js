@@ -159,6 +159,36 @@ t('the composer-has-content toggle hooks the textarea `input` event (not just on
     'the .composer-has-content toggle must be wired to the textarea `input` event so it fires on every keystroke (not just on form submit or blur). Found neither input-listener-then-toggle nor toggle-then-input-listener within a 2500-char window (fr-88).');
 });
 
+// ── fr-88 r2: Critic select collapses too ──
+//
+// User: "Critic button should collapse to icon only too."
+//
+// The <select id="composer-critic-select"> isn't a `.composer-btn`
+// but it sits in the same actions row and takes ~120px when its
+// option label ("⚖️ Critic: Gemini") is visible. Under the same
+// .composer-has-content class, clamp its max-width so only the
+// ⚖️ glyph + the native dropdown arrow remain visible at rest.
+// The option list still opens at full width on click — browsers
+// render the open dropdown chrome at its intrinsic width
+// regardless of the closed-state clamp. bug-43 already had a
+// mobile cap of 90px; fr-88 r2 narrows further to icon-only when
+// the user is actively typing.
+
+t('fr-88 r2: .composer-critic-select clamps to icon-only width when .composer-has-content is set', () => {
+  const css = _read('web/public/styles.css');
+  // Find a rule whose selector includes both .composer-has-content
+  // and .composer-critic-select. It must set a small max-width
+  // (≤ 40px) so only the ⚖️ glyph + dropdown arrow are visible.
+  const ruleRe = /([^{}]*\.composer-has-content[^{}]*\.composer-critic-select[^{}]*|\.composer-has-content[\s\S]*?\.composer-critic-select[\s\S]*?)\{([^}]*)\}/;
+  const m = css.match(ruleRe);
+  assert.ok(m, 'styles.css must contain a rule whose selector references BOTH .composer-has-content AND .composer-critic-select so the critic dropdown collapses too (fr-88 r2 — "Critic button should collapse to icon only too").');
+  const body = m[2];
+  const mw = body.match(/max-width:\s*(\d+)px/);
+  assert.ok(mw, '.composer-critic-select under .composer-has-content must declare a max-width in px to clamp the closed-state visual to the ⚖️ glyph + dropdown arrow only.');
+  const w = parseInt(mw[1], 10);
+  assert.ok(w <= 40, `.composer-critic-select max-width under .composer-has-content must be ≤ 40px (icon-only floor) — got ${w}px. bug-43's 90px mobile cap is too wide for "icon only".`);
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {
