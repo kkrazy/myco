@@ -3853,9 +3853,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    composer has typed content; r7 locks it to 24×24 matching the
    collapsed buttons exactly. */
 .composer.composer-has-content .composer-critic-select {
-  width: 24px;
-  min-width: 24px;
-  max-width: 24px;
+  /* fr-88 r13: 34px wide to match the buttons (was 24px). */
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
   /* fr-88 r12: height constant 34px in collapsed state too. */
   height: 34px;
   min-height: 34px;
@@ -3922,14 +3923,15 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    min-width: 24px AND max-width: 24px AND min-height/max-height
    so mobile can't pump the dimensions back up. */
 .composer.composer-has-content .composer-btn {
-  width: 24px;
-  min-width: 24px;
-  max-width: 24px;
-  /* fr-88 r12: keep expanded height (34px) in collapsed state.
-     User: "the height for expanded and shrinked mode should
-     remain the same". The icon at 16×16 sits centered within
-     the 34px-tall box via display:flex + align-items:center
-     from the base rule. */
+  /* fr-88 r13: square 34×34 collapsed buttons (was 24×34
+     rectangles). User: "make the collapse button of size 34x34".
+     With the 16×16 icon and 4px padding, content area is 26×26
+     — icon sits centered via base rule's display:flex +
+     align-items:center + justify-content:center. */
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  /* fr-88 r12: keep expanded height (34px) in collapsed state. */
   height: 34px;
   min-height: 34px;
   max-height: 34px;
@@ -3948,9 +3950,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #chat-form.composer.composer-has-content #chat-mic,
 #chat-form.composer.composer-has-content #chat-diagram,
 #chat-form.composer.composer-has-content #chat-send {
-  width: 24px;
-  min-width: 24px;
-  max-width: 24px;
+  /* fr-88 r13: 34×34 squares (was 24×34). */
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
   /* fr-88 r12: height constant 34px across modes — matches the
      class-chain rule above; this ID-based override beats per-id
      mobile rules like #chat-send { min-height: 40px }. */
@@ -3993,9 +3996,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    emoji overflowed, causing browsers to skip the initial paint
    until first user interaction. */
 #chat-form.composer.composer-has-content #composer-critic-select {
-  width: 24px;
-  min-width: 24px;
-  max-width: 24px;
+  /* fr-88 r13: 34px wide to match the buttons (was 24px). */
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
   /* fr-88 r12: 34px height matching the buttons in collapsed
      state. The ⚖️ emoji at font-size: 16px sits centered. */
   height: 34px;

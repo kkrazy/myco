@@ -312,7 +312,7 @@ t('fr-88 r4: .composer-has-content .composer-critic-select max-width tightens to
   const mw = body.match(/max-width:\s*(\d+)px/);
   assert.ok(mw, '.composer-critic-select under .composer-has-content must declare a max-width');
   const w = parseInt(mw[1], 10);
-  assert.ok(w <= 32, `.composer-critic-select effective max-width must be ≤ 32px to match the r4 button width — got ${w}px. (r2 had 36; r4 tightens.)`);
+  assert.ok(w <= 40, `.composer-critic-select effective max-width must be ≤ 40px to match the collapsed button width (r2: 36, r4: 28, r13: 34) — got ${w}px.`);
 });
 
 // ── fr-88 r6: uniform width + height ──
@@ -366,7 +366,7 @@ t('fr-88 r6: collapsed override also locks .composer-btn width (must override ba
   const w = body.match(/width:\s*(\d+)px/);
   assert.ok(w, '.composer-has-content .composer-btn must EXPLICITLY override width — without it, the base 90px lock from r6 keeps the collapsed buttons 90px wide even at 24px tall (broken aspect ratio).');
   const wpx = parseInt(w[1], 10);
-  assert.ok(wpx <= 28, `.composer-has-content .composer-btn width must be ≤ 28px so the collapsed button hugs the 16px icon — got ${wpx}px (fr-88 r6).`);
+  assert.ok(wpx <= 40, `.composer-has-content .composer-btn width must be ≤ 40px so the collapsed button is icon-only — got ${wpx}px (fr-88 r6 + r13 squared 24→34).`);
 });
 
 // ── fr-88 r7: ACTUAL uniformity (verified with JSDOM cascade) ──
@@ -419,8 +419,8 @@ t('fr-88 r7: .composer-critic-select locks to 24×24 in collapsed state (matches
   while ((m = re.exec(css))) last = m;
   assert.ok(last, '.composer-has-content .composer-critic-select rule must exist');
   const body = last[1];
-  assert.ok(/width:\s*24px/.test(body),
-    '.composer-critic-select collapsed rule must declare width: 24px so the select matches the buttons exactly (fr-88 r7). r2/r4 only set max-width which left height + actual width browser-dependent — visibly different from the 24×24 buttons.');
+  assert.ok(/width:\s*34px/.test(body),
+    '.composer-critic-select collapsed rule must declare width: 34px so the select matches the buttons exactly (fr-88 r7+r13). r2/r4 only set max-width which left height + actual width browser-dependent; r13 squares the collapsed buttons at 34×34.');
   assert.ok(/height:\s*34px/.test(body),
     '.composer-critic-select collapsed rule must declare height: 34px (fr-88 r12 — height constant across modes; r7 originally set 24, r12 raised to match expanded).');
   assert.ok(/appearance:\s*none/.test(body),
@@ -462,12 +462,13 @@ t('fr-88 r8: class-chain collapse rule sets min/max width AND min/max height (de
   const m = css.match(re);
   assert.ok(m, 'class-chain collapse rule must exist');
   const body = m[1];
-  // r8 width contract = 24px (collapse to icon-only width). r12
-  // height contract = 34px (constant across modes). Mobile @media
-  // rules can't override either when both min/max are set.
+  // r13 width contract = 34px (square 34×34 collapsed; was 24px
+  // in r8). r12 height contract = 34px (constant across modes).
+  // Mobile @media rules can't override either when both min/max
+  // are set.
   for (const prop of ['width', 'min-width', 'max-width']) {
-    assert.ok(new RegExp(`${prop}:\\s*24px`).test(body),
-      `.composer.composer-has-content .composer-btn must declare ${prop}: 24px so mobile @media (max-width: 900px) .composer-btn { min-width: 80px } can't bleed through (fr-88 r8). Body: ${body.slice(0, 200)}`);
+    assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
+      `.composer.composer-has-content .composer-btn must declare ${prop}: 34px so mobile @media (max-width: 900px) .composer-btn { min-width: 80px } can't bleed through (fr-88 r8 + r13 squared). Body: ${body.slice(0, 200)}`);
   }
   for (const prop of ['height', 'min-height', 'max-height']) {
     assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
@@ -502,8 +503,8 @@ t('fr-88 r8: ID-based collapse overrides exist for all 5 elements (beats #chat-s
   for (const id of ids) {
     const body = seen.get(id);
     for (const prop of ['width', 'min-width', 'max-width']) {
-      assert.ok(new RegExp(`${prop}:\\s*24px`).test(body),
-        `ID-based collapse rule covering #${id} must declare ${prop}: 24px so #chat-send-style per-id mobile rules can't pump it back up. Found body: ${body.slice(0, 200)}`);
+      assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
+        `ID-based collapse rule covering #${id} must declare ${prop}: 34px so #chat-send-style per-id mobile rules can't pump it back up (fr-88 r13 squared 24→34). Found body: ${body.slice(0, 200)}`);
     }
   }
 });
