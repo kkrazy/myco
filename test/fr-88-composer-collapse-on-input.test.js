@@ -639,6 +639,72 @@ t('fr-88 r10: model options use short labels (no "Critic:" prefix)', () => {
     `composer-critic-select must keep ≥ 2 model options after r10 (currently expecting Gemini/Codex/Hosted) — found ${modelOptions.length}.`);
 });
 
+// ── fr-88 r11: uniform dimensions in BOTH states ──
+//
+// User: "the size of the buttons in composer-actions should be
+// the same both in width and height, both in expanded or
+// shrinked mode"
+//
+// Pre-r11 in expanded (resting) state:
+//   · #chat-send carried `min-height: 40px` from the mobile
+//     @media (max-width: 900px) rule. ID specificity 0,1,0,0 beat
+//     my class-chain `.composer-btn { height: 34px }` (0,0,1,0)
+//     so Send rendered 90×40 on mobile while the other three
+//     buttons rendered 90×34.
+//   · #composer-critic-select had no dimension rules in expanded
+//     state (different element type than .composer-btn) so the
+//     select used the browser's native content-driven size —
+//     typically 30-40px tall depending on browser + option text.
+//
+// r11 adds an expanded-state ID-based lock paralleling the
+// collapsed r8 rule, just without the .composer-has-content gate:
+//
+//   #chat-form.composer #<id> { width:90; …; height:34; … }
+//
+// Specificity 0,1,2,1 — beats the per-id mobile rules. The r8
+// collapsed sibling at 0,1,3,1 (extra .composer-has-content class)
+// wins when typed input is present, so collapse to 24×24 still
+// fires correctly.
+
+t('fr-88 r11: expanded-state ID-based lock exists for all 5 elements', () => {
+  let css = _read('web/public/styles.css');
+  css = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const ids = ['claude-stop', 'chat-mic', 'chat-diagram', 'chat-send', 'composer-critic-select'];
+  const ruleRe = /([^{}]+)\{([^}]*)\}/g;
+  const seen = new Map();
+  let m;
+  while ((m = ruleRe.exec(css))) {
+    const selector = m[1];
+    // EXPANDED rule must be ID-based AND NOT gated by
+    // .composer-has-content. Reject any selector containing the
+    // collapse class so we only pick the resting-state lock.
+    if (/composer-has-content/.test(selector)) continue;
+    if (!/#chat-form/.test(selector)) continue;
+    for (const id of ids) {
+      if (new RegExp(`#${id}\\b`).test(selector) && !seen.has(id)) {
+        seen.set(id, m[2]);
+      }
+    }
+  }
+  for (const id of ids) {
+    assert.ok(seen.has(id),
+      `ID #${id} must be referenced in an expanded-state #chat-form.composer #<id> rule (NOT gated by .composer-has-content) so its per-id mobile rule can't override resting dimensions (fr-88 r11).`);
+  }
+  // Each rule body must lock width=90px AND height=34px (with
+  // matching min/max defenses).
+  for (const id of ids) {
+    const body = seen.get(id);
+    for (const prop of ['width', 'min-width', 'max-width']) {
+      assert.ok(new RegExp(`${prop}:\\s*90px`).test(body),
+        `expanded-state ID rule covering #${id} must declare ${prop}: 90px so the resting dimensions are uniform (fr-88 r11). Body: ${body.slice(0, 200)}`);
+    }
+    for (const prop of ['height', 'min-height', 'max-height']) {
+      assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
+        `expanded-state ID rule covering #${id} must declare ${prop}: 34px so the resting heights are uniform (fr-88 r11). Body: ${body.slice(0, 200)}`);
+    }
+  }
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {

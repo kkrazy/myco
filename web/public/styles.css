@@ -3950,6 +3950,33 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   max-height: 24px;
   padding: 4px;
 }
+/* fr-88 r11: EXPANDED-state ID-based dimension lock for all 5
+   composer-action elements. Pre-r11 in expanded mode:
+     · #chat-send had min-height: 40px from the mobile @media
+       (max-width: 900px) rule with ID specificity 0,1,0,0 — beat
+       my class-chain .composer-btn { height: 34px } at 0,0,1,0
+       so Send rendered 90×40 while others rendered 90×34.
+     · #composer-critic-select had no dimension rules at all
+       (different element type than .composer-btn) so the select
+       rendered at its native content-driven size — usually
+       30-40px tall depending on browser and content.
+   The ID-based selector at 0,1,2,1 outranks both — same shape as
+   the r8 collapse rule below, just without the .composer-has-
+   content gate so it applies AT REST. The .composer-has-content
+   sibling rule above has higher specificity (extra class), so
+   collapse still wins when typed input is present. */
+#chat-form.composer #claude-stop,
+#chat-form.composer #chat-mic,
+#chat-form.composer #chat-diagram,
+#chat-form.composer #chat-send,
+#chat-form.composer #composer-critic-select {
+  width: 90px;
+  min-width: 90px;
+  max-width: 90px;
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+}
 /* fr-88 r9: Critic select gets its own ID-based dimension lock
    without the padding: 4px the buttons need. The select shows the
    ⚖️ emoji whose rendered width (~18-20px) needs the full 24px
