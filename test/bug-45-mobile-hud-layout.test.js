@@ -138,22 +138,29 @@ t('.hud-task-status / .timeline-step font-size ≥ 12px on mobile (was 11px desk
 
 // ── tap-target: Stop button no longer thumb-tiny ──
 
-t('.hud-stop-btn min-height ≥ 36px on mobile (Apple HIG/Material tap-target floor)', () => {
+t('bug-45 r1 → r8: .hud-stop-btn mobile rule does NOT declare a min-height bump (Stop matches .hud-task-id at 20px outer)', () => {
+  // r1 had `min-height: 36px` on the Stop button for the Apple HIG
+  // tap-target floor. r8 dropped it per user ask: "the hud-stop-
+  // btn should have the same height as the hud-task-id, 20px".
+  // The Esc key still works as a destructive-action affordance for
+  // keyboard users; touch-only users tap a 20px button.
   const css = _read('web/public/styles.css');
   const body = extractMobileMediaBody(css);
-  const m = body.match(/\.hud-stop-btn\s*\{[^}]*min-height:\s*(\d+)px/);
-  assert.ok(m, '.hud-stop-btn inside @media must declare min-height — desktop padding 3px 8px gives ~22px which is below the tap-target floor (bug-45).');
-  const minH = parseInt(m[1], 10);
-  assert.ok(minH >= 36, `.hud-stop-btn mobile min-height must be ≥ 36px — got ${minH}px. Apple HIG = 44px, Material = 48px; 36px is the absolute floor.`);
+  const m = body.match(/\.hud-stop-btn\s*\{([^}]*)\}/);
+  if (m) {
+    assert.ok(!/min-height:/.test(m[1]),
+      '.hud-stop-btn inside @media must NOT declare a min-height anymore (bug-45 r8). r1\'s 36px tap-target is retired in favor of visual uniformity with .hud-task-id at 20px outer.');
+  }
 });
 
-t('.hud-stop-btn padding bumped on mobile (more vertical room for the tap)', () => {
+t('bug-45 r1 → r8: .hud-stop-btn mobile rule does NOT bump padding (matches the .hud-task-id 2×8 pattern)', () => {
   const css = _read('web/public/styles.css');
   const body = extractMobileMediaBody(css);
-  const m = body.match(/\.hud-stop-btn\s*\{[^}]*padding:\s*(\d+)px\s+(\d+)px/);
-  assert.ok(m, '.hud-stop-btn inside @media must declare padding (bug-45 tap-target bump)');
-  const vert = parseInt(m[1], 10);
-  assert.ok(vert >= 6, `.hud-stop-btn mobile vertical padding must be ≥ 6px — got ${vert}px. Desktop 3px is too tight for fingers.`);
+  const m = body.match(/\.hud-stop-btn\s*\{([^}]*)\}/);
+  if (m) {
+    assert.ok(!/padding:\s*8px\s+14px/.test(m[1]),
+      '.hud-stop-btn inside @media must NOT bump padding to 8×14 anymore — that was r1\'s tap-target; r8 lets the desktop padding 2×8 win so Stop\'s outer height matches the badge\'s 20px.');
+  }
 });
 
 // ── timeline wrap: 4 steps stay visible without horizontal scroll ──

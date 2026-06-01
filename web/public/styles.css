@@ -8606,18 +8606,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   .timeline-step {
     font-size: 12px;
   }
-  /* bug-45: Stop is the only destructive action in the HUD — its
-     tap target must clear the 36px floor (Apple HIG suggests 44px,
-     Material 48px; we use 36 to keep the HUD compact while still
-     usable with a thumb). Padding bump from 3px 8px → 8px 14px
-     gives finger-friendly horizontal headroom too. r6 reverts the
-     mobile radius to 4px (matches the desktop square shape from
-     r6); r5's 999px fully-rounded pill is gone — user wants a
-     square button at every breakpoint. */
+  /* bug-45 r8: Stop drops the mobile tap-target bump (was r1's
+     min-height: 36 + padding 8×14 for Apple HIG). User: "the hud-
+     stop-btn should have the same height as the hud-task-id,
+     20px" — visual uniformity with the badge wins over tap-target
+     compliance. The Esc key still works on devices with a keyboard;
+     touch-only users tap a 20px button. Border-radius stays 4px
+     (square, matching desktop r6). */
   .hud-stop-btn {
-    min-height: 36px;
-    padding: 8px 14px;
-    font-size: 13px;
     border-radius: 4px;
   }
   /* bug-45: 4 timeline steps on a phone wrap to 2 rows of 2 instead
