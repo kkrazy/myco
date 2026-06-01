@@ -3832,12 +3832,6 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .composer.composer-has-content .composer-btn-kbd {
   display: none;
 }
-/* The .composer-critic-select element's base rules live further
-   down in styles.css; mobile overrides for it are in the
-   @media (max-width: 600px) block — see bug-43 (90px max-width
-   cap to stop critic-select from crowding the chat input on
-   narrow viewports). r4 below tightens further to 28px when the
-   composer has typed content. */
 .composer.composer-has-content .composer-critic-select {
   max-width: 36px;
   overflow: hidden;
@@ -3886,36 +3880,84 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 
 /* Send: filled accent disc, dark icon + label. */
-/* fr-88 r5: all composer buttons share the same look and feel at
-   rest — Send + Stop both inherit the base .composer-btn neutral
-   chrome (transparent bg, --text color, no border). Per-variant
-   color only fires on :hover so destructive vs primary intent is
-   still telegraphed before the click. Pre-r5 Send was always
-   accent-green and Stop was always red-tinted, which broke the
-   user's "all composer buttons should have the same look and
-   feel" request. */
+.composer-btn-send {
+  background: var(--accent, #4caf82);
+  color: #08120d;
+}
 .composer-btn-send:hover {
   background: #5fbe93;
   color: #08120d;
 }
 
-/* fr-88 r5: Mic (#chat-mic) removed from index.html — these
-   .composer-btn-mic rules + the chat-mic-pulse keyframes are
-   deleted as dead code. _bindVoiceInput() in app.js self-bails
-   when getElementById('chat-mic') returns null, so the JS stays
-   in place for easy future revival. */
+/* Mic: voice input toggle. Currently SHIPPED AS DISABLED (button
+   carries the disabled attribute in HTML) — visual treatment makes
+   that obvious: 40% opacity, dashed border, strikethrough across
+   the WHOLE button (icon + label), not-allowed cursor on hover,
+   no hover-state lift. Tooltip explains "Voice input — in
+   progress · coming soon". Hidden via the `hidden` HTML attribute
+   until JS confirms SpeechRecognition is supported, then revealed
+   but still disabled. */
+.composer-btn-mic {
+  background: rgba(255, 255, 255, .03);
+  color: rgba(255, 255, 255, .45);
+  border: 1px dashed rgba(255, 255, 255, .18);
+  opacity: 0.45;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: rgba(255, 255, 255, .55);
+  cursor: not-allowed;
+  position: relative;
+}
+.composer-btn-mic .composer-icon {
+  opacity: 0.7;
+}
+.composer-btn-mic:hover {
+  /* No hover lift — disabled state should feel inert. */
+  background: rgba(255, 255, 255, .03);
+  border-color: rgba(255, 255, 255, .18);
+  color: rgba(255, 255, 255, .45);
+}
+.composer-btn-mic:disabled,
+.composer-btn-mic[disabled],
+.composer-btn-mic[aria-disabled="true"] {
+  pointer-events: auto;        /* allow tooltip on hover */
+  cursor: not-allowed;
+}
+/* (Retired) Tiny "soon" badge on the mic button. The strikethrough
+   + dashed border + disabled state already read as WIP — the extra
+   chip cluttered the composer. */
+.composer-btn-mic:hover {
+  background: rgba(255, 255, 255, .10);
+  border-color: rgba(255, 255, 255, .25);
+}
+.composer-btn-mic.chat-mic-recording {
+  background: rgba(255, 80, 80, .18);
+  color: #ff8080;
+  border-color: rgba(255, 80, 80, .55);
+  animation: chat-mic-pulse 1.4s ease-in-out infinite;
+}
+.composer-btn-mic.chat-mic-recording:hover {
+  background: rgba(255, 80, 80, .28);
+  color: #ffb0b0;
+}
+@keyframes chat-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 80, 80, .35); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 80, 80, 0);   }
+}
+.composer-btn-mic[hidden] { display: none !important; }
 
-/* Stop: visible only when claude is running (.composer-running).
-   Resting chrome inherits .composer-btn base (no variant override
-   at rest — fr-88 r5). Hover-intent red is preserved so
-   destructive intent is still telegraphed before click. */
+/* Stop: red tinted button next to Send. Visible only when claude
+   is running (.composer-running). */
 .composer-btn-stop {
+  background: rgba(255, 130, 130, .14);
+  color: #ff8a8a;
+  border: 1px solid rgba(255, 130, 130, .35);
   display: none;
 }
 .composer-btn-stop:hover {
   background: rgba(255, 130, 130, .24);
   color: #ffb0b0;
-  border: 1px solid rgba(255, 130, 130, .55);
+  border-color: rgba(255, 130, 130, .55);
 }
 /* bug-19: composer-blocked styling — read-only viewer typed a
  * message that would be denied (no @mention, no allowed slash).
