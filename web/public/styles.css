@@ -3850,8 +3850,22 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .composer.composer-has-content .composer-actions {
   min-width: 0;
 }
+/* fr-88 r4: r3's `padding: 0 10px` made buttons 36px wide (still
+   20px wider than the 16px icon) and the base `height: 34px` kept
+   them tall. User: "The shrinked button is still a lot wider than
+   the icon." Drop padding to 4px all around AND override height to
+   24px so each button is a tight 24×24 square hugging the icon —
+   the icon is centered by the existing display:flex +
+   justify-content:center + align-items:center. The Critic select's
+   r2 `max-width: 36px` is loosened to 28px below to match (no
+   chrome change beyond width to keep the native dropdown chevron
+   visible). */
 .composer.composer-has-content .composer-btn {
-  padding: 0 10px;
+  padding: 4px;
+  height: 24px;
+}
+.composer.composer-has-content .composer-critic-select {
+  max-width: 28px;
 }
 .composer-btn-kbd {
   font: inherit;

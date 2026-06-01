@@ -2600,7 +2600,7 @@ test_chat_window() {
   # input-listener wiring; the marker check is anchored ±1500 chars
   # around `composer-has-content` so the unrelated older fr-88(r)
   # comments can't satisfy it by accident.
-  node_test_result test/fr-88-composer-collapse-on-input.test.js "test/fr-88-composer-collapse-on-input.test.js (10 cases)"
+  node_test_result test/fr-88-composer-collapse-on-input.test.js "test/fr-88-composer-collapse-on-input.test.js (13 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

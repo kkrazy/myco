@@ -232,11 +232,86 @@ t('fr-88 r3: .composer-has-content .composer-btn tightens horizontal padding so 
   const m = css.match(ruleRe);
   assert.ok(m, 'styles.css must contain a rule for `.composer-has-content .composer-btn` (no -label/-kbd suffix) so button padding tightens (fr-88 r3).');
   const body = m[1];
-  const p = body.match(/padding:\s*(\d+)(?:px)?\s+(\d+)(?:px)?/);
-  assert.ok(p, '.composer-btn under .composer-has-content must declare padding with horizontal value reduced from the base 12px.');
-  const horizontal = parseInt(p[2], 10);
+  // r3 was `padding: 0 10px` (two values); r4 tightens to
+  // `padding: 4px` (single shorthand, all sides). Accept either
+  // form — parse every numeric value in the padding shorthand
+  // and treat the SMALLEST horizontal-relevant value as the
+  // "horizontal padding" floor.
+  const p = body.match(/padding:\s*([^;]+);/);
+  assert.ok(p, '.composer-btn under .composer-has-content must declare padding (fr-88 r3+).');
+  const values = p[1].trim().split(/\s+/).map(v => parseInt(v, 10)).filter(n => !isNaN(n));
+  assert.ok(values.length > 0, '.composer-btn padding must resolve to numeric values');
+  // Horizontal padding in CSS shorthand:
+  //   1 value:  v applies to all sides → horizontal = v
+  //   2 values: v h → horizontal = values[1]
+  //   3 values: top h bottom → horizontal = values[1]
+  //   4 values: t r b l → horizontal = max(values[1], values[3])
+  let horizontal;
+  if (values.length === 1) horizontal = values[0];
+  else if (values.length === 2 || values.length === 3) horizontal = values[1];
+  else horizontal = Math.max(values[1], values[3]);
   assert.ok(horizontal < 12,
-    `.composer-btn under .composer-has-content must use horizontal padding < 12px (base) — got ${horizontal}px. The base 12px×2 around a 16px icon gives 40px-wide buttons that don't read as "icon-only".`);
+    `.composer-btn under .composer-has-content must use horizontal padding < 12px (base) — got ${horizontal}px from "${p[1].trim()}". The base 12px×2 around a 16px icon gives 40px-wide buttons that don't read as "icon-only".`);
+});
+
+// ── fr-88 r4: hug the icon — tight padding + shrunk height ──
+//
+// User: "The shrinked button is still a lot wider than the icon."
+//
+// r3's `padding: 0 10px` left 20px of horizontal padding around
+// the 16px icon (36px-wide button) — still visibly wider than the
+// icon. And the base `height: 34px` from .composer-btn kept each
+// button tall regardless of how tight the padding got. r4 drops
+// the button to 24×24 (16px icon + 4px padding on every side)
+// AND tightens the Critic clamp from 36px to 28px to match.
+
+t('fr-88 r4: .composer-has-content .composer-btn drops to height ≤ 26 (hugs the 16px icon vertically)', () => {
+  const css = _read('web/public/styles.css');
+  const ruleRe = /\.composer-has-content\s+\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(ruleRe);
+  assert.ok(m, 'styles.css must contain a rule for `.composer-has-content .composer-btn` (r4 shrinks height + padding).');
+  const body = m[1];
+  const h = body.match(/height:\s*(\d+)px/);
+  assert.ok(h, '.composer-btn under .composer-has-content must declare height to override the base `height: 34px` — r3 left this and the button stayed tall.');
+  const heightPx = parseInt(h[1], 10);
+  assert.ok(heightPx <= 26, `.composer-btn collapsed height must be ≤ 26px so the button hugs the 16px icon — got ${heightPx}px. Base 34px was visually a tall pill regardless of width (fr-88 r4).`);
+});
+
+t('fr-88 r4: .composer-has-content .composer-btn padding ≤ 6px on every side', () => {
+  const css = _read('web/public/styles.css');
+  const ruleRe = /\.composer-has-content\s+\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(ruleRe);
+  assert.ok(m);
+  const body = m[1];
+  // Padding can be expressed as `padding: 4px;` (all sides) or
+  // `padding: 4px 4px;` etc. We accept any shorthand whose every
+  // resolved value is ≤ 6.
+  const p = body.match(/padding:\s*([^;]+);/);
+  assert.ok(p, '.composer-btn under .composer-has-content must declare padding (r4).');
+  const values = p[1].trim().split(/\s+/).map(v => parseInt(v, 10)).filter(n => !isNaN(n));
+  assert.ok(values.length > 0, '.composer-btn padding must resolve to numeric values');
+  for (const v of values) {
+    assert.ok(v <= 6, `.composer-btn padding values must all be ≤ 6px so the button hugs the icon — found ${v}px in "${p[1]}" (fr-88 r4).`);
+  }
+});
+
+t('fr-88 r4: .composer-has-content .composer-critic-select max-width tightens to ≤ 32px (matches the smaller button width)', () => {
+  const css = _read('web/public/styles.css');
+  // Find ALL rules whose selector matches `.composer-has-content
+  // .composer-critic-select` — the LAST one wins by source order.
+  // Assert the winning max-width is ≤ 32px (r4 floor; r2 had 36).
+  const re = /\.composer-has-content\s+\.composer-critic-select\s*\{([^}]*)\}/g;
+  let lastMatch = null;
+  let m;
+  while ((m = re.exec(css))) {
+    lastMatch = m;
+  }
+  assert.ok(lastMatch, 'styles.css must contain at least one `.composer-has-content .composer-critic-select` rule');
+  const body = lastMatch[1];
+  const mw = body.match(/max-width:\s*(\d+)px/);
+  assert.ok(mw, '.composer-critic-select under .composer-has-content must declare a max-width');
+  const w = parseInt(mw[1], 10);
+  assert.ok(w <= 32, `.composer-critic-select effective max-width must be ≤ 32px to match the r4 button width — got ${w}px. (r2 had 36; r4 tightens.)`);
 });
 
 // ── marker comment ──
