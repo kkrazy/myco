@@ -368,6 +368,64 @@ t('fr-88 r6: collapsed override also locks .composer-btn width (must override ba
   assert.ok(wpx <= 28, `.composer-has-content .composer-btn width must be ≤ 28px so the collapsed button hugs the 16px icon — got ${wpx}px (fr-88 r6).`);
 });
 
+// ── fr-88 r7: ACTUAL uniformity (verified with JSDOM cascade) ──
+//
+// User after r6: "The buttons are of different size after shrink."
+// Measured the actual cascade with JSDOM and saw:
+//   #claude-stop    width=24 height=24 border-top=1px solid    → content area 14px (overflow)
+//   #chat-mic       width=24 height=24 border-top=1px dashed   → content area 14px (overflow)
+//   #chat-diagram   width=24 height=24 border-top=0            → content area 16px (fits)
+//   #chat-send      width=24 height=24 border-top=0            → content area 16px (fits)
+//   #composer-critic-select  width=auto height=auto (NO collapse rule applied — different element type)
+//
+// Outer dimensions were equal (24×24) but variant borders ate
+// 2px of content area on Mic + Stop, while Draw + Send kept the
+// full 16px. The 16px SVG icon overflowed by 1px on Mic + Stop,
+// making them visibly larger. Critic select wasn't sized at all,
+// staying at native auto/auto. r7 fixes both:
+//
+//   .composer-has-content .composer-btn-mic,
+//   .composer-has-content .composer-btn-stop { border: 0 }
+//
+//   .composer-has-content .composer-critic-select {
+//     width: 24px; height: 24px; max-width: 24px;
+//     padding: 4px; border: 0; appearance: none;
+//   }
+
+t('fr-88 r7: bordered variants (Mic + Stop) get border: 0 in collapsed state', () => {
+  const css = _read('web/public/styles.css');
+  // Find a rule whose selector references .composer-has-content
+  // AND either .composer-btn-mic or .composer-btn-stop and sets
+  // border: 0 (or border-width: 0). The simplest: look for the
+  // r7 paired selector that hits both.
+  const re = /\.composer-has-content\s+\.composer-btn-mic[^{]*\.composer-has-content\s+\.composer-btn-stop\s*\{([^}]*)\}|\.composer-has-content\s+\.composer-btn-stop[^{]*\.composer-has-content\s+\.composer-btn-mic\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, 'styles.css must contain a comma-joined rule covering BOTH `.composer-has-content .composer-btn-mic` AND `.composer-has-content .composer-btn-stop` so their variant borders (dashed/solid 1px) get zeroed in collapsed state. Without this, the 16px icon overflows the 14px content area on those two variants while Draw + Send (no border) sit flush — visibly different sizes (fr-88 r7).');
+  const body = m[1] || m[2];
+  assert.ok(/border(-width)?:\s*0/.test(body),
+    'the bordered-variants collapse rule must set border: 0 (or border-width: 0) so all four .composer-btn variants share the same 16px content area at 24×24 outer (fr-88 r7).');
+});
+
+t('fr-88 r7: .composer-critic-select locks to 24×24 in collapsed state (matches the buttons)', () => {
+  const css = _read('web/public/styles.css');
+  // Find the LAST .composer-has-content .composer-critic-select
+  // rule (cascade winner). It must declare width: 24px AND
+  // height: 24px so the select sits at the same dimensions as
+  // the four .composer-btn elements when collapsed.
+  const re = /\.composer-has-content\s+\.composer-critic-select\s*\{([^}]*)\}/g;
+  let last = null;
+  let m;
+  while ((m = re.exec(css))) last = m;
+  assert.ok(last, '.composer-has-content .composer-critic-select rule must exist');
+  const body = last[1];
+  assert.ok(/width:\s*24px/.test(body),
+    '.composer-critic-select collapsed rule must declare width: 24px so the select matches the buttons exactly (fr-88 r7). r2/r4 only set max-width which left height + actual width browser-dependent — visibly different from the 24×24 buttons.');
+  assert.ok(/height:\s*24px/.test(body),
+    '.composer-critic-select collapsed rule must declare height: 24px (fr-88 r7).');
+  assert.ok(/appearance:\s*none/.test(body),
+    '.composer-critic-select collapsed rule must declare appearance: none so the native dropdown chevron doesn\'t eat into the 16×16 icon slot (fr-88 r7).');
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {

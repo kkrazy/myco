@@ -3850,11 +3850,23 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    @media (max-width: 600px) block — see bug-43 (90px max-width
    cap to stop critic-select from crowding the chat input on
    narrow viewports). r4 below tightens further to 28px when the
-   composer has typed content. */
+   composer has typed content; r7 locks it to 24×24 matching the
+   collapsed buttons exactly. */
 .composer.composer-has-content .composer-critic-select {
-  max-width: 36px;
+  width: 24px;
+  height: 24px;
+  max-width: 24px;
+  padding: 4px;
   overflow: hidden;
   text-overflow: clip;
+  /* r7: kill the select's native 1px border + drop the
+     appearance to avoid the browser-chrome chevron eating
+     into the icon's 16×16 slot (the option-list still opens
+     on click via the underlying <select>; only the closed
+     visual is collapsed). */
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 /* fr-88 r3: even after r1/r2 hid the labels + kbd + clamped the
    Critic select, the buttons were still ~40px wide because
@@ -3869,27 +3881,39 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .composer.composer-has-content .composer-actions {
   min-width: 0;
 }
-/* fr-88 r4: r3's `padding: 0 10px` made buttons 36px wide (still
-   20px wider than the 16px icon) and the base `height: 34px` kept
-   them tall. User: "The shrinked button is still a lot wider than
-   the icon." Drop padding to 4px all around AND override height to
-   24px so each button is a tight 24×24 square hugging the icon —
-   the icon is centered by the existing display:flex +
-   justify-content:center + align-items:center. The Critic select's
-   r2 `max-width: 36px` is loosened to 28px below to match (no
-   chrome change beyond width to keep the native dropdown chevron
-   visible).
-   fr-88 r6: also lock width: 24px (must override the base 90px
-   width lock added in r6 — without this, the collapsed buttons
-   stay 90px wide even at 24px tall). */
+/* fr-88 r4-r7: r3's `padding: 0 10px` made buttons 36px wide
+   (still 20px wider than the 16px icon) and the base `height:
+   34px` kept them tall. r4 dropped to 24×24 square hugging the
+   icon. r6 added the width:24 lock + base 90×34 lock. r7 zeros
+   borders on variants in collapsed state — measured with JSDOM
+   that Mic + Stop carry 1px borders (dashed + solid), eating 2px
+   of content area, so their 16px icon overflows the 14px content
+   region while Draw + Send (border 0) sit flush. Visible result:
+   Mic/Stop icons looked 1px larger than Draw/Send. Zeroing the
+   border in collapsed state equalises content area at 16px
+   exactly across all four variants. */
 .composer.composer-has-content .composer-btn {
   width: 24px;
   height: 24px;
   padding: 4px;
 }
-.composer.composer-has-content .composer-critic-select {
-  max-width: 28px;
+/* fr-88 r7: even with explicit width: 24px + box-sizing: border-
+   box, variant borders (Mic dashed, Stop solid) eat into content
+   area, making their icons visibly larger than the borderless
+   Draw + Send. Zero borders on the bordered variants in collapsed
+   state ONLY so resting-state chrome (dashed Mic, red Stop) is
+   preserved when buttons have room for a border. */
+.composer.composer-has-content .composer-btn-mic,
+.composer.composer-has-content .composer-btn-stop {
+  border: 0;
 }
+/* fr-88 r7: the r4-era critic-collapse override (max-width: 28px,
+   collapsed state) that lived here is removed as dead code — the
+   r7 rule earlier in the file locks width: 24px + max-width: 24px,
+   so a 28px cap is moot. Removing it also keeps the cascade-order
+   grep test honest (the test reads the last collapsed rule for
+   the select and expects width/height locks; a stray max-width-
+   only rule would mask them). */
 .composer-btn-kbd {
   font: inherit;
   font-size: 0.66rem;
