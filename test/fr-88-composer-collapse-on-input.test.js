@@ -565,6 +565,80 @@ t('fr-88 r9: ID-based Critic override has its own padding: 0 (not lumped with bu
     'standalone Critic ID-rule must declare padding: 0 (fr-88 r9). Found body: ' + body.slice(0, 200));
 });
 
+// ── fr-88 r10: short Critic option labels + placeholder ──
+//
+// User: "the critic label is too long, just show critic when
+// nothing is selected, or model name when a model is selected,
+// in shrink mode, it should show icon only"
+//
+// Pre-r10 options: "⚖️ Critic: Gemini" / "⚖️ Critic: Codex" /
+// "⚖️ Critic: Hosted" — at the desktop 11px font those render
+// ~110-120px wide closed. Mobile bug-43 already capped to 90px
+// with overflow ellipsis so users saw "⚖️ Critic:" with the
+// model name clipped.
+//
+// r10 splits this into:
+//   · A `<option value="" disabled selected>⚖️ Critic</option>`
+//     placeholder for fresh sessions — disabled so it can't be
+//     re-selected after the user picks a model. Shows "⚖️ Critic"
+//     until a model is picked.
+//   · Model options keep "⚖️ Gemini" / "⚖️ Codex" / "⚖️ Hosted"
+//     (no "Critic:" prefix) so once a model is picked the select
+//     reads as just the model name.
+//
+// In shrink mode (.composer-has-content), the existing r9
+// width:24 + padding:0 + overflow:hidden already clips everything
+// past the leading ⚖️ glyph — so the user's "icon only in shrink
+// mode" requirement is already met by the prior rounds. No new
+// CSS needed; only the option labels change.
+
+t('fr-88 r10: Critic placeholder option <option value="" disabled selected>⚖️ Critic</option> exists', () => {
+  const html = _read('web/public/index.html');
+  // Find the <select id="composer-critic-select"> block + extract
+  // its option children.
+  const selectMatch = html.match(/<select[^>]*id="composer-critic-select"[^>]*>([\s\S]*?)<\/select>/);
+  assert.ok(selectMatch, '<select id="composer-critic-select"> must exist in index.html');
+  const inner = selectMatch[1];
+  // The placeholder must be the FIRST <option> child and must
+  // carry value="", disabled, AND selected attributes.
+  const firstOption = inner.match(/<option\b[^>]*>([^<]*)<\/option>/);
+  assert.ok(firstOption, 'composer-critic-select must contain at least one <option>');
+  const openTag = firstOption[0].match(/<option\b[^>]*>/)[0];
+  const body = firstOption[1];
+  assert.ok(/value=""/.test(openTag),
+    'first <option> in composer-critic-select must declare value="" (placeholder; selecting it doesn\'t POST a real modelId) — fr-88 r10.');
+  assert.ok(/\bdisabled\b/.test(openTag),
+    'first <option> in composer-critic-select must be `disabled` so the user can\'t re-select the placeholder after picking a model (fr-88 r10).');
+  assert.ok(/\bselected\b/.test(openTag),
+    'first <option> in composer-critic-select must be `selected` so fresh sessions render "⚖️ Critic" by default (fr-88 r10).');
+  assert.ok(/⚖️\s*Critic/.test(body),
+    'placeholder option text must contain "⚖️ Critic" (fr-88 r10). Found body: ' + JSON.stringify(body));
+  assert.ok(!/Critic:/.test(body),
+    'placeholder option must NOT contain the verbose "Critic:" prefix — that\'s the pre-r10 string fr-88 r10 retires.');
+});
+
+t('fr-88 r10: model options use short labels (no "Critic:" prefix)', () => {
+  const html = _read('web/public/index.html');
+  const selectMatch = html.match(/<select[^>]*id="composer-critic-select"[^>]*>([\s\S]*?)<\/select>/);
+  assert.ok(selectMatch);
+  const inner = selectMatch[1];
+  // All non-placeholder options (value!="") must have short labels.
+  const options = [...inner.matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)];
+  for (const m of options) {
+    const attrs = m[1];
+    const text = m[2];
+    if (/value=""/.test(attrs)) continue;  // skip placeholder
+    assert.ok(!/Critic:/.test(text),
+      `model option text must NOT contain the "Critic:" prefix (fr-88 r10). Found: ${JSON.stringify(text)} on option with attrs ${attrs}`);
+    assert.ok(/⚖️/.test(text),
+      `model option text must keep the ⚖️ glyph so the closed-select preview shows the icon (fr-88 r10). Found: ${JSON.stringify(text)}`);
+  }
+  // Make sure we have at least 2 model options remaining.
+  const modelOptions = options.filter(m => !/value=""/.test(m[1]));
+  assert.ok(modelOptions.length >= 2,
+    `composer-critic-select must keep ≥ 2 model options after r10 (currently expecting Gemini/Codex/Hosted) — found ${modelOptions.length}.`);
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {
