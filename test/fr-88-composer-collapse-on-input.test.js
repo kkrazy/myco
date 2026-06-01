@@ -314,6 +314,126 @@ t('fr-88 r4: .composer-has-content .composer-critic-select max-width tightens to
   assert.ok(w <= 32, `.composer-critic-select effective max-width must be ≤ 32px to match the r4 button width — got ${w}px. (r2 had 36; r4 tightens.)`);
 });
 
+// ── fr-88 r5: same look + feel, mic removed ──
+//
+// User: "All the buttons in the composer should have the same look
+// and feel. Remove the speak button for now."
+//
+// Pre-r5:
+//   · #chat-mic was always present in index.html (visibility gated
+//     by SpeechRecognition support — JS revealed it via btn.hidden
+//     = false). Mic carried strikethrough/dashed disabled chrome.
+//   · .composer-btn-send had `background: var(--accent)` at rest
+//     (green primary).
+//   · .composer-btn-stop had `background: rgba(255,130,130,.14)`
+//     + red border at rest.
+// Net effect: 4 buttons, 4 distinct chromes. User wants them to
+// look the same at rest.
+//
+// r5:
+//   · #chat-mic markup is removed from index.html.
+//     _bindVoiceInput() in app.js self-bails on the null lookup,
+//     so it stays in place as a quiet no-op (easy revival: just
+//     re-add the button HTML).
+//   · .composer-btn-send loses its resting background + color
+//     declarations (keeps the :hover green).
+//   · .composer-btn-stop loses its resting background + border
+//     declarations (keeps display:none gate + :hover red).
+// All three remaining buttons (Stop / Draw / Send) inherit
+// `.composer-btn`'s neutral chrome at rest; hover-intent
+// (green for Send, red for Stop) is preserved.
+
+t('fr-88 r5: #chat-mic button removed from index.html', () => {
+  const html = _read('web/public/index.html');
+  assert.ok(!/id="chat-mic"/.test(html),
+    'index.html must NOT declare id="chat-mic" anymore (fr-88 r5 removed the Speak button per user ask "Remove the speak button for now").');
+});
+
+t('fr-88 r5: _bindVoiceInput stays in app.js for easy revival (self-bails on null lookup)', () => {
+  // Removing the button visually is "for now" — the JS that wires
+  // it stays so adding the HTML back is a one-line revival. The
+  // function MUST self-bail on the null lookup to be a no-op while
+  // the button is absent.
+  const app = _read('web/public/app.js');
+  assert.ok(/function\s+_bindVoiceInput/.test(app),
+    '_bindVoiceInput() must remain in app.js for easy mic revival (fr-88 r5 only removed the visible button HTML, not the supporting JS).');
+  // Find the function body. Walk balanced braces from the opening.
+  const fnAt = app.indexOf('function _bindVoiceInput');
+  const braceAt = app.indexOf('{', fnAt);
+  let depth = 1;
+  let end = braceAt + 1;
+  for (let i = braceAt + 1; i < app.length; i++) {
+    if (app[i] === '{') depth++;
+    else if (app[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const body = app.slice(braceAt, end);
+  assert.ok(/getElementById\(['"]chat-mic['"]\)/.test(body),
+    '_bindVoiceInput must look up #chat-mic so it can self-bail when the button is absent (fr-88 r5).');
+  assert.ok(/if\s*\(\s*!btn[\s\S]*?return/.test(body),
+    '_bindVoiceInput must `if (!btn ...) return` so it\'s a quiet no-op when #chat-mic is removed from the DOM (fr-88 r5).');
+});
+
+t('fr-88 r5: .composer-btn-send drops resting background (matches base .composer-btn chrome)', () => {
+  const css = _read('web/public/styles.css');
+  // Find the resting .composer-btn-send rule (NOT the :hover one).
+  // Pattern: `.composer-btn-send {` followed by `}` — no `:hover`
+  // before the `{`.
+  const re = /\n\.composer-btn-send\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  if (m) {
+    const body = m[1];
+    assert.ok(!/background\s*:/.test(body),
+      `.composer-btn-send resting rule must NOT declare background — that breaks the fr-88 r5 "same look + feel" contract (Send should inherit .composer-btn's transparent base at rest). Found: ${body.slice(0, 100)}`);
+  }
+  // If no resting rule exists at all, that's also acceptable — the
+  // base .composer-btn applies. (The assertion above is no-op then.)
+});
+
+t('fr-88 r5: .composer-btn-send:hover still flips green (intent on hover preserved)', () => {
+  const css = _read('web/public/styles.css');
+  const re = /\.composer-btn-send:hover\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, '.composer-btn-send:hover must still exist — fr-88 r5 strips the resting color but keeps hover-intent green so users still see "this is Send" before the click.');
+  const body = m[1];
+  assert.ok(/background\s*:/.test(body),
+    '.composer-btn-send:hover must declare a background (green intent on hover). Found body: ' + body.slice(0, 100));
+});
+
+t('fr-88 r5: .composer-btn-stop drops resting background + border (matches base)', () => {
+  const css = _read('web/public/styles.css');
+  const re = /\n\.composer-btn-stop\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, '.composer-btn-stop resting rule must still exist (it carries the display:none gate so Stop only shows during .composer-running).');
+  const body = m[1];
+  assert.ok(!/background\s*:/.test(body),
+    `.composer-btn-stop resting rule must NOT declare background — base .composer-btn neutral chrome applies. Found: ${body.slice(0, 100)}`);
+  assert.ok(!/^\s*border\s*:|;\s*border\s*:/.test(body),
+    `.composer-btn-stop resting rule must NOT declare a border — base .composer-btn has border: 0. Found: ${body.slice(0, 100)}`);
+});
+
+t('fr-88 r5: .composer-btn-stop:hover still flips red (destructive intent preserved)', () => {
+  const css = _read('web/public/styles.css');
+  const re = /\.composer-btn-stop:hover\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, '.composer-btn-stop:hover must still exist — fr-88 r5 strips the resting red but keeps hover-intent so users see destructive-intent before the click.');
+  const body = m[1];
+  assert.ok(/background\s*:|color\s*:|border\s*:/.test(body),
+    '.composer-btn-stop:hover must declare at least one intent-color property (background / color / border) so destructive intent is telegraphed. Found body: ' + body.slice(0, 100));
+});
+
+t('fr-88 r5: .composer-btn-mic styles deleted (dead code now that #chat-mic is gone)', () => {
+  const css = _read('web/public/styles.css');
+  // The rules can totally vanish OR be commented out. Either way,
+  // no LIVE rule should declare .composer-btn-mic outside of a
+  // comment block. The easy check: there should be no SELECTOR
+  // line beginning with `.composer-btn-mic` followed by `{`.
+  // (Comments use `/* ... */` and won't have a `{` immediately
+  // after the selector text.)
+  const re = /\n\.composer-btn-mic[^a-zA-Z0-9_-][^{]*\{/;
+  assert.ok(!re.test(css),
+    'styles.css must NOT carry live .composer-btn-mic rules anymore (fr-88 r5 deleted them as dead code once #chat-mic was removed from index.html).');
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {

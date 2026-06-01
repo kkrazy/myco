@@ -181,15 +181,12 @@
               <span class="composer-btn-label">Stop</span>
               <kbd class="composer-btn-kbd">Esc</kbd>
             </button>
-            <!-- Voice input — Web Speech API (SpeechRecognition).
-                 Hidden via JS when the browser doesn't expose it.
-                 Click toggles recording; interim transcript streams
-                 into the textarea live, final goes once silence
-                 break is detected by the engine. -->
-            <button type="button" id="chat-mic" class="composer-btn composer-btn-mic" title="Voice input — in progress · coming soon" aria-label="Voice input (in progress)" aria-pressed="false" aria-disabled="true" disabled hidden>
-              <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 19v3"/></svg>
-              <span class="composer-btn-label">Speak</span>
-            </button>
+            <!-- fr-88 r5: #chat-mic Voice-input button removed
+                 per user ask ("Remove the speak button for now").
+                 _bindVoiceInput() in app.js self-bails on
+                 getElementById('chat-mic') === null, so the JS is a
+                 quiet no-op and the supporting code stays in place
+                 for easy future revival — just re-add this block. -->
             <!-- fr-84: open the in-browser freehand drawing modal.
                  Saved diagrams are inserted into the chat input as
                  markdown image links and rendered inline for every
