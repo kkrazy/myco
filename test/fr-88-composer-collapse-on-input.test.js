@@ -189,6 +189,56 @@ t('fr-88 r2: .composer-critic-select clamps to icon-only width when .composer-ha
   assert.ok(w <= 40, `.composer-critic-select max-width under .composer-has-content must be ≤ 40px (icon-only floor) — got ${w}px. bug-43's 90px mobile cap is too wide for "icon only".`);
 });
 
+// ── fr-88 r3: button + column actually shrink to fit ──
+//
+// User: "The buttons in the composer is not shrinked to fit the
+// icon only. The width should be just enough for the icon."
+//
+// Hiding the label/kbd via display:none was necessary but not
+// sufficient — the buttons were still ~40px wide because:
+//   (a) .composer-btn carries `padding: 0 12px` (24px horizontal
+//       padding around the 16px icon = 40px wide button)
+//   (b) .composer-actions carries `min-width: 90px` so even if
+//       individual buttons shrank, the parent column held the
+//       width and let the buttons fill it via align-items: stretch
+//
+// r3 drops both under .composer-has-content:
+//   · .composer-actions { min-width: 0 } — column shrinks to fit
+//   · .composer-btn { padding: 0 10px } — 16 + 20 = 36px wide
+//     button, matches r2's Critic-select max-width: 36px so the
+//     icon-only column reads as one unified strip.
+
+t('fr-88 r3: .composer-has-content .composer-actions drops min-width so the column shrinks to fit', () => {
+  const css = _read('web/public/styles.css');
+  const ruleRe = /([^{}]*\.composer-has-content[^{}]*\.composer-actions[^{}]*|\.composer-has-content[\s\S]*?\.composer-actions[\s\S]*?)\{([^}]*)\}/;
+  const m = css.match(ruleRe);
+  assert.ok(m, 'styles.css must contain a rule whose selector references BOTH .composer-has-content AND .composer-actions so the action column can shrink to fit (fr-88 r3 — the default min-width: 90px held the column wide regardless of inner content).');
+  const body = m[2];
+  const mw = body.match(/min-width:\s*(\d+|auto|0)/);
+  assert.ok(mw, '.composer-actions under .composer-has-content must declare min-width — without dropping the base 90px floor, the column stays wide.');
+  const v = mw[1];
+  assert.ok(v === '0' || v === 'auto' || (parseInt(v, 10) <= 40),
+    `.composer-actions under .composer-has-content must drop min-width to 0 / auto / ≤ 40px so the column collapses to fit the icon-only buttons — got "${v}". The base rule's 90px held the column wide and let align-items:stretch keep buttons at full column width even after the label hid.`);
+});
+
+t('fr-88 r3: .composer-has-content .composer-btn tightens horizontal padding so the button hugs its icon', () => {
+  const css = _read('web/public/styles.css');
+  // Find a rule whose selector matches `.composer-has-content`
+  // AND `.composer-btn` (NOT `.composer-btn-label` or
+  // `.composer-btn-kbd`). The simplest disambiguation: look for
+  // a selector ending in `.composer-btn` (followed by `{` or `,`
+  // or whitespace before `{`).
+  const ruleRe = /\.composer-has-content\s+\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(ruleRe);
+  assert.ok(m, 'styles.css must contain a rule for `.composer-has-content .composer-btn` (no -label/-kbd suffix) so button padding tightens (fr-88 r3).');
+  const body = m[1];
+  const p = body.match(/padding:\s*(\d+)(?:px)?\s+(\d+)(?:px)?/);
+  assert.ok(p, '.composer-btn under .composer-has-content must declare padding with horizontal value reduced from the base 12px.');
+  const horizontal = parseInt(p[2], 10);
+  assert.ok(horizontal < 12,
+    `.composer-btn under .composer-has-content must use horizontal padding < 12px (base) — got ${horizontal}px. The base 12px×2 around a 16px icon gives 40px-wide buttons that don't read as "icon-only".`);
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {

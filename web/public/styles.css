@@ -3837,6 +3837,22 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow: hidden;
   text-overflow: clip;
 }
+/* fr-88 r3: even after r1/r2 hid the labels + kbd + clamped the
+   Critic select, the buttons were still ~40px wide because
+   .composer-btn has `padding: 0 12px` AND the parent
+   .composer-actions has `min-width: 90px`. Drop both under the
+   collapse class so each button hugs its 16px icon (16 + 20 = 36px
+   wide, matching the r2 Critic clamp for a visually unified
+   icon-only column) and the action column itself shrinks to fit.
+   `min-width: 0` (not `auto`) because some flex implementations
+   compute `auto` to the content's min-content size, which can
+   still be ~90px if the longest child claims it. */
+.composer.composer-has-content .composer-actions {
+  min-width: 0;
+}
+.composer.composer-has-content .composer-btn {
+  padding: 0 10px;
+}
 .composer-btn-kbd {
   font: inherit;
   font-size: 0.66rem;
