@@ -8286,20 +8286,25 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: rgba(255, 255, 255, 0.15);
 }
 
-/* bug-45 r3: adopt the queue action-button look (.runqueue-clear
-   family) so the HUD's Stop reads as the same visual family as the
-   queue strip's Cancel/Resume/Clear right below it. Pre-r3 Stop was
-   "always red" (red bg + red border + red text). The queue's
-   convention is "muted by default, intent-color on hover" — a calmer
-   resting state, and consistent across the chat-pane action surface.
-   The mobile @media block keeps the bug-45 r1 tap-target bump
-   (min-height: 36px) so phones don't lose the Apple-HIG-floor fix. */
+/* bug-45 r5: Stop adopts the pill-chip family (.runqueue-chip)
+   instead of r3's action-button family. User: "The stop button
+   should have the same look and feel as others (pill)." All HUD
+   chrome — id badge, timeline steps, Stop — now reads as one
+   visual family with the queue chips below it: border-radius 12px,
+   --bg-input neutral bg, --border-soft border, monospace.
+   Resting state is the same neutral chip; hover keeps the red
+   intent color so destructive intent is still telegraphed before
+   the click. The mobile @media block keeps the bug-45 r1
+   tap-target bump (min-height: 36px) so phones still clear the
+   Apple-HIG floor — the radius is bumped to 999px on mobile so
+   the larger button is fully rounded rather than a soft pill. */
 .hud-stop-btn {
-  background: transparent;
+  background: var(--bg-input, rgba(128, 128, 128, 0.15));
   color: var(--muted);
-  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
-  padding: 1px 6px;
-  border-radius: 4px;
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.25));
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-family: var(--mono, monospace);
   font-size: 11px;
   cursor: pointer;
   display: flex;
@@ -8374,11 +8379,15 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
      tap target must clear the 36px floor (Apple HIG suggests 44px,
      Material 48px; we use 36 to keep the HUD compact while still
      usable with a thumb). Padding bump from 3px 8px → 8px 14px
-     gives finger-friendly horizontal headroom too. */
+     gives finger-friendly horizontal headroom too. r5 bumps the
+     radius to 999px so the larger button stays fully-rounded
+     (pill family invariant) at its 36px height — 12px would read
+     as a soft-square at this scale. */
   .hud-stop-btn {
     min-height: 36px;
     padding: 8px 14px;
     font-size: 13px;
+    border-radius: 999px;
   }
   /* bug-45: 4 timeline steps on a phone wrap to 2 rows of 2 instead
      of horizontal-scrolling a 24px-tall strip. flex-wrap: wrap

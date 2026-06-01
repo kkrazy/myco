@@ -2535,7 +2535,7 @@ test_chat_window() {
   # Static-grep guards lock each rule + the bug-45 marker so a
   # future restyle doesn't silently revert to "everything inherits
   # desktop values + overflow-x: auto".
-  node_test_result test/bug-45-mobile-hud-layout.test.js "test/bug-45-mobile-hud-layout.test.js (21 cases)"
+  node_test_result test/bug-45-mobile-hud-layout.test.js "test/bug-45-mobile-hud-layout.test.js (22 cases)"
   # bug-44: Config page not visible on mobile pre-session. Pre-fix
   # the only Config entry was the @login chip in #status-bar at
   # the BOTTOM of the sidebar — users overlooked it and thought

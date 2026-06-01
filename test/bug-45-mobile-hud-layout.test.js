@@ -248,20 +248,56 @@ t('_getHUDActiveStep returns short labels matching the steps[] array', () => {
 // look and matches the queue's "muted resting, red on hover"
 // convention.
 
-t('bug-45 r3: .hud-stop-btn desktop matches queue action-button family (transparent bg, muted color, soft border)', () => {
+t('bug-45 r5: .hud-stop-btn desktop matches the queue PILL family (.runqueue-chip — --bg-input bg, --border-soft border, 12px radius, monospace)', () => {
   const css = _read('web/public/styles.css');
-  // Find the top-level (non-@media) .hud-stop-btn rule. It must
-  // declare transparent background AND muted text color, NOT the
-  // pre-r3 "always red" theme.
+  // Find the top-level (non-@media) .hud-stop-btn rule. r5 moves
+  // Stop FROM r3's action-button family (transparent bg, 4px
+  // square) INTO the pill-chip family (--bg-input bg, 12px pill,
+  // monospace) — matches .runqueue-chip exactly, so the whole HUD
+  // reads as one visual family with the queue strip below it.
   const m = css.match(/\n\.hud-stop-btn\s*\{([^}]*)\}/);
   assert.ok(m, '.hud-stop-btn base rule must exist in styles.css');
   const body = m[1];
-  assert.ok(/background:\s*transparent/.test(body),
-    '.hud-stop-btn desktop bg must be transparent (queue action-button family) — pre-r3 was rgba(248,81,73,0.15) red.');
+  assert.ok(/background:\s*var\(--bg-input/.test(body),
+    '.hud-stop-btn desktop bg must use --bg-input token (pill-chip family — same as .runqueue-chip). r3 used `transparent` (action-button family); r5 promotes Stop into the pill family per user ask: "stop button should have the same look and feel as others (pill)".');
   assert.ok(/color:\s*var\(--muted/.test(body),
-    '.hud-stop-btn desktop color must use --muted token — same as .runqueue-clear/.runqueue-cancel/.runqueue-resume.');
+    '.hud-stop-btn desktop color must use --muted token — neutral resting state, intent color on hover.');
+  assert.ok(/border-radius:\s*12px/.test(body),
+    '.hud-stop-btn must use border-radius: 12px (pill) — matches .runqueue-chip. r3 used 4px (square action-button).');
+  assert.ok(/font-family:\s*var\(--mono/.test(body),
+    '.hud-stop-btn must use --mono font family — matches .runqueue-chip pill convention.');
   assert.ok(!/color:\s*#ff7b72/.test(body),
-    '.hud-stop-btn must NOT set a hardcoded red color — that was the pre-r3 always-red look; intent color now only on hover.');
+    '.hud-stop-btn must NOT set a hardcoded red color — intent color (red) only on hover.');
+});
+
+t('bug-45 r5: .hud-stop-btn mobile @media bumps radius to 999px (fully-rounded at the 36px tap-target height)', () => {
+  const css = _read('web/public/styles.css');
+  // The mobile override block must declare border-radius: 999px on
+  // .hud-stop-btn so the bigger phone-size button stays fully-
+  // rounded (matching the pill-family invariant) rather than reading
+  // as a soft-square at 36px height with a 12px radius.
+  const re = /@media\s*\(\s*max-width:\s*600px\s*\)\s*\{/g;
+  let found = false;
+  let m;
+  while ((m = re.exec(css))) {
+    const startAt = m.index + m[0].length;
+    let depth = 1;
+    for (let i = startAt; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          const body = css.slice(startAt, i);
+          if (/\.hud-stop-btn\s*\{[^}]*border-radius:\s*999px/.test(body)) {
+            found = true;
+          }
+          break;
+        }
+      }
+    }
+    if (found) break;
+  }
+  assert.ok(found, '.hud-stop-btn inside @media (max-width: 600px) must set border-radius: 999px so the larger tap-target button stays a true pill (r5).');
 });
 
 t('bug-45 r3: .hud-stop-btn:hover turns red (intent on hover, queue convention)', () => {
