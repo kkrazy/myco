@@ -265,16 +265,17 @@ t('fr-88 r3: .composer-has-content .composer-btn tightens horizontal padding so 
 // the button to 24×24 (16px icon + 4px padding on every side)
 // AND tightens the Critic clamp from 36px to 28px to match.
 
-t('fr-88 r4: .composer-has-content .composer-btn drops to height ≤ 26 (hugs the 16px icon vertically)', () => {
+t('fr-88 r4 → r12: .composer-has-content .composer-btn declares explicit height (was 24px r4, now 34px r12 to match expanded)', () => {
   const css = _read('web/public/styles.css');
   const ruleRe = /\.composer-has-content\s+\.composer-btn\s*\{([^}]*)\}/;
   const m = css.match(ruleRe);
-  assert.ok(m, 'styles.css must contain a rule for `.composer-has-content .composer-btn` (r4 shrinks height + padding).');
+  assert.ok(m, 'styles.css must contain a rule for `.composer-has-content .composer-btn`.');
   const body = m[1];
   const h = body.match(/height:\s*(\d+)px/);
-  assert.ok(h, '.composer-btn under .composer-has-content must declare height to override the base `height: 34px` — r3 left this and the button stayed tall.');
+  assert.ok(h, '.composer-btn under .composer-has-content must declare height. r4 dropped it to 24px; r12 raised it back to 34px so the height stays constant across modes (user: "the height for expanded and shrinked mode should remain the same").');
   const heightPx = parseInt(h[1], 10);
-  assert.ok(heightPx <= 26, `.composer-btn collapsed height must be ≤ 26px so the button hugs the 16px icon — got ${heightPx}px. Base 34px was visually a tall pill regardless of width (fr-88 r4).`);
+  assert.ok(heightPx === 34,
+    `.composer-btn collapsed height must be 34px (matching expanded) per fr-88 r12 — got ${heightPx}px.`);
 });
 
 t('fr-88 r4: .composer-has-content .composer-btn padding ≤ 6px on every side', () => {
@@ -420,8 +421,8 @@ t('fr-88 r7: .composer-critic-select locks to 24×24 in collapsed state (matches
   const body = last[1];
   assert.ok(/width:\s*24px/.test(body),
     '.composer-critic-select collapsed rule must declare width: 24px so the select matches the buttons exactly (fr-88 r7). r2/r4 only set max-width which left height + actual width browser-dependent — visibly different from the 24×24 buttons.');
-  assert.ok(/height:\s*24px/.test(body),
-    '.composer-critic-select collapsed rule must declare height: 24px (fr-88 r7).');
+  assert.ok(/height:\s*34px/.test(body),
+    '.composer-critic-select collapsed rule must declare height: 34px (fr-88 r12 — height constant across modes; r7 originally set 24, r12 raised to match expanded).');
   assert.ok(/appearance:\s*none/.test(body),
     '.composer-critic-select collapsed rule must declare appearance: none so the native dropdown chevron doesn\'t eat into the 16×16 icon slot (fr-88 r7).');
 });
@@ -461,10 +462,16 @@ t('fr-88 r8: class-chain collapse rule sets min/max width AND min/max height (de
   const m = css.match(re);
   assert.ok(m, 'class-chain collapse rule must exist');
   const body = m[1];
-  for (const prop of ['width', 'min-width', 'max-width', 'height', 'min-height', 'max-height']) {
-    const re2 = new RegExp(`${prop}:\\s*24px`);
-    assert.ok(re2.test(body),
-      `.composer.composer-has-content .composer-btn must declare ${prop}: 24px so mobile @media (max-width: 900px) rules .composer-btn { min-width: 80px } can't bleed through (fr-88 r8). Found body: ${body.slice(0, 200)}`);
+  // r8 width contract = 24px (collapse to icon-only width). r12
+  // height contract = 34px (constant across modes). Mobile @media
+  // rules can't override either when both min/max are set.
+  for (const prop of ['width', 'min-width', 'max-width']) {
+    assert.ok(new RegExp(`${prop}:\\s*24px`).test(body),
+      `.composer.composer-has-content .composer-btn must declare ${prop}: 24px so mobile @media (max-width: 900px) .composer-btn { min-width: 80px } can't bleed through (fr-88 r8). Body: ${body.slice(0, 200)}`);
+  }
+  for (const prop of ['height', 'min-height', 'max-height']) {
+    assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
+      `.composer.composer-has-content .composer-btn must declare ${prop}: 34px so the collapsed height stays uniform with the expanded state (fr-88 r12). Body: ${body.slice(0, 200)}`);
   }
 });
 
@@ -701,6 +708,89 @@ t('fr-88 r11: expanded-state ID-based lock exists for all 5 elements', () => {
     for (const prop of ['height', 'min-height', 'max-height']) {
       assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
         `expanded-state ID rule covering #${id} must declare ${prop}: 34px so the resting heights are uniform (fr-88 r11). Body: ${body.slice(0, 200)}`);
+    }
+  }
+});
+
+// ── fr-88 r12: constant 34px height + Draw boundary ──
+//
+// User: "the draw button should have a 'boundary' and the height
+// for expanded and shrinked mode should remain the same"
+//
+// r12 keeps width-only collapse (90 → 24px) but holds the height
+// constant at 34px in BOTH states. The .composer-actions column
+// keeps the same vertical footprint whether the user is typing
+// or not; only horizontal width reclamation happens. Visually:
+//   expanded:  90×34 rectangles
+//   collapsed: 24×34 narrow rectangles (icon centered)
+//
+// Draw button gets an explicit `1px solid` border so it reads as
+// a tangible button at rest (Mic dashed, Stop red, Send filled —
+// only Draw was border-less).
+
+t('fr-88 r12: .composer-btn-diagram declares an explicit border', () => {
+  const css = _read('web/public/styles.css');
+  const m = css.match(/\n\.composer-btn-diagram\s*\{([^}]*)\}/);
+  assert.ok(m, '.composer-btn-diagram rule must exist (with rule body, not just a stub comment).');
+  const body = m[1];
+  assert.ok(/border:\s*1px\s+solid/.test(body),
+    '.composer-btn-diagram must declare an explicit `border: 1px solid …` so the Draw button has a visible boundary at rest (fr-88 r12). Found body: ' + body.slice(0, 200));
+});
+
+t('fr-88 r12: collapsed-state class-chain rule keeps height: 34px (not 24px)', () => {
+  const css = _read('web/public/styles.css');
+  const re = /\.composer\.composer-has-content\s+\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m);
+  const body = m[1];
+  for (const prop of ['height', 'min-height', 'max-height']) {
+    assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
+      `.composer-has-content .composer-btn must declare ${prop}: 34px so the collapsed buttons stay the same height as the resting state (fr-88 r12 — user: "the height for expanded and shrinked mode should remain the same"). Body: ${body.slice(0, 200)}`);
+    assert.ok(!new RegExp(`${prop}:\\s*24px`).test(body),
+      `.composer-has-content .composer-btn must NOT declare ${prop}: 24px anymore — r12 changes the collapsed height to 34px.`);
+  }
+});
+
+t('fr-88 r12: collapsed-state ID-based override (for the 4 buttons) keeps height: 34px', () => {
+  let css = _read('web/public/styles.css');
+  css = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Find a rule whose selector includes #chat-form.composer.
+  // composer-has-content AND at least one of #claude-stop or
+  // #chat-send (signaling it's the button-id rule, not the
+  // Critic rule). Body must declare height: 34px.
+  const ruleRe = /([^{}]+)\{([^}]*)\}/g;
+  let found = null;
+  let m;
+  while ((m = ruleRe.exec(css))) {
+    const sel = m[1];
+    if (!/composer-has-content/.test(sel)) continue;
+    if (!/#chat-form/.test(sel)) continue;
+    if (!/#claude-stop|#chat-send/.test(sel)) continue;
+    if (/#composer-critic-select/.test(sel)) continue;  // skip Critic rule
+    found = m[2];
+    break;
+  }
+  assert.ok(found, 'collapsed-state ID-based override for the 4 buttons must exist');
+  for (const prop of ['height', 'min-height', 'max-height']) {
+    assert.ok(new RegExp(`${prop}:\\s*34px`).test(found),
+      `collapsed-state ID-based button override must declare ${prop}: 34px so the collapsed height matches the expanded state (fr-88 r12). Body: ${found.slice(0, 200)}`);
+  }
+});
+
+t('fr-88 r12: collapsed-state Critic select rules keep height: 34px', () => {
+  let css = _read('web/public/styles.css');
+  css = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Find BOTH the class-chain and ID-based collapsed rules for
+  // the Critic select. Each must declare height: 34px.
+  const re = /\.composer-has-content\s+\.composer-critic-select\s*\{([^}]*)\}|#chat-form\.composer\.composer-has-content\s+#composer-critic-select\s*\{([^}]*)\}/g;
+  const bodies = [];
+  let m;
+  while ((m = re.exec(css))) bodies.push(m[1] || m[2]);
+  assert.ok(bodies.length >= 1, 'at least one collapsed-state critic rule must exist');
+  for (const body of bodies) {
+    for (const prop of ['height', 'min-height', 'max-height']) {
+      assert.ok(new RegExp(`${prop}:\\s*34px`).test(body),
+        `collapsed-state critic-select rule must declare ${prop}: 34px (fr-88 r12). Body: ${body.slice(0, 200)}`);
     }
   }
 });

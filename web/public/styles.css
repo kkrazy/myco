@@ -3856,9 +3856,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 24px;
   min-width: 24px;
   max-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
+  /* fr-88 r12: height constant 34px in collapsed state too. */
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
   /* fr-88 r9: zero padding (was four px). The Critic select shows
      the selected option's text — currently "⚖️ Critic: Gemini" and
      siblings. With width 24 + box-sizing border-box + padding of
@@ -3924,9 +3925,14 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 24px;
   min-width: 24px;
   max-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
+  /* fr-88 r12: keep expanded height (34px) in collapsed state.
+     User: "the height for expanded and shrinked mode should
+     remain the same". The icon at 16×16 sits centered within
+     the 34px-tall box via display:flex + align-items:center
+     from the base rule. */
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
   padding: 4px;
 }
 /* fr-88 r8: ID-based collapse override. The mobile @media block
@@ -3945,9 +3951,12 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 24px;
   min-width: 24px;
   max-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
+  /* fr-88 r12: height constant 34px across modes — matches the
+     class-chain rule above; this ID-based override beats per-id
+     mobile rules like #chat-send { min-height: 40px }. */
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
   padding: 4px;
 }
 /* fr-88 r11: EXPANDED-state ID-based dimension lock for all 5
@@ -3987,9 +3996,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   width: 24px;
   min-width: 24px;
   max-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
+  /* fr-88 r12: 34px height matching the buttons in collapsed
+     state. The ⚖️ emoji at font-size: 16px sits centered. */
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
   padding: 0;
 }
 /* fr-88 r7: even with explicit width: 24px + box-sizing: border-
@@ -8298,7 +8309,13 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
    Most of the visual chrome inherits from .composer-btn — this rule
    just keeps the hover affordance consistent (the diagram-specific
    tone is subtle: same as Speak when present). */
-.composer-btn-diagram { /* relies on .composer-btn cascade — no extra rules needed */ }
+/* fr-88 r12: Draw button gets an explicit boundary so it reads
+   as a tangible button at rest (the other variants all have
+   visible chrome — Mic dashed border, Stop red border, Send
+   accent fill). User: "the draw button should have a boundary". */
+.composer-btn-diagram {
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
+}
 
 /* bug-39: KaTeX display math — let wide equations scroll horizontally
    instead of overflowing the chat bubble / card width. Inline math
