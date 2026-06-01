@@ -7165,19 +7165,26 @@ function _renderRunQueueStrip() {
   _updateTaskHUD();
 }
 
+// bug-45 round 2: pipeline labels shortened from
+//   ['Analysis', 'Writing Code', 'Verification', 'Critique']
+// to ['Analyze', 'Code', 'Verify', 'Critic'] (≤7 chars each) so the
+// 4-chip pipeline fits on a phone without horizontal scroll. The
+// return strings here MUST match the steps[] array in
+// _updateTaskHUD — they're compared by ===; a typo silently breaks
+// the .active class highlight without erroring.
 function _getHUDActiveStep() {
   if (state.awaitingVerdict) {
-    return 'Critique';
+    return 'Critic';
   }
   const openCalls = state.openToolCalls || [];
   if (openCalls.some(tc => tc.name === 'Bash') || (state.claudeStatusLine && state.claudeStatusLine.includes('Bash'))) {
-    return 'Verification';
+    return 'Verify';
   }
-  if (openCalls.some(tc => ['Edit', 'Write', 'MultiEdit'].includes(tc.name)) || 
+  if (openCalls.some(tc => ['Edit', 'Write', 'MultiEdit'].includes(tc.name)) ||
       (state.claudeStatusLine && (state.claudeStatusLine.includes('Edit') || state.claudeStatusLine.includes('Write') || state.claudeStatusLine.includes('MultiEdit')))) {
-    return 'Writing Code';
+    return 'Code';
   }
-  return 'Analysis';
+  return 'Analyze';
 }
 
 let _hudTimerInterval = null;
@@ -7213,7 +7220,10 @@ function _updateTaskHUD() {
   const activeStep = _getHUDActiveStep();
 
   // Format steps
-  const steps = ['Analysis', 'Writing Code', 'Verification', 'Critique'];
+  // bug-45 round 2: short forms so the 4 chips don't reflow to a
+  // second row at mobile widths. Must stay in sync with
+  // _getHUDActiveStep above (string === comparison).
+  const steps = ['Analyze', 'Code', 'Verify', 'Critic'];
   const stepsHtml = steps.map(s => {
     const isActive = s === activeStep;
     return `<span class="timeline-step ${isActive ? 'active' : ''}">${isActive ? '⚡ ' : ''}${s}</span>`;

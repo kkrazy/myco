@@ -177,12 +177,64 @@ t('.hud-progress-timeline overflow-x switched off on mobile (auto-scroll removed
   }
 });
 
+// ── bug-45 round 2: pipeline labels shortened ──
+//
+// The 4-step "Analysis → Writing Code → Verification → Critique"
+// labels were verbose enough that even after the flex-wrap, the
+// chips wrapped to 2 rows on mid-width phones. User asked to
+// "rewrite for shorter word" — replaced with one-word forms (≤7
+// chars each) so the 4 chips fit on a single row at typical phone
+// widths (375px+) while still being readable.
+
+t('app.js HUD pipeline uses short labels: Analyze / Code / Verify / Critic', () => {
+  const app = _read('web/public/app.js');
+  // The display array MUST contain the new short labels. Old
+  // verbose forms ("Analysis", "Writing Code", "Verification",
+  // "Critique") in the steps array must be gone.
+  const stepsMatch = app.match(/const\s+steps\s*=\s*\[([^\]]+)\]/);
+  assert.ok(stepsMatch, '_updateTaskHUD must declare `const steps = [...]` with the 4 pipeline labels.');
+  const stepsBody = stepsMatch[1];
+  assert.ok(/'Analyze'/.test(stepsBody),  "steps[] must contain 'Analyze' (bug-45 round 2 short form)");
+  assert.ok(/'Code'/.test(stepsBody),     "steps[] must contain 'Code'");
+  assert.ok(/'Verify'/.test(stepsBody),   "steps[] must contain 'Verify'");
+  assert.ok(/'Critic'/.test(stepsBody),   "steps[] must contain 'Critic'");
+  assert.ok(!/'Analysis'/.test(stepsBody),     "steps[] must NOT carry the verbose 'Analysis' (replaced with 'Analyze' in bug-45 round 2)");
+  assert.ok(!/'Writing Code'/.test(stepsBody), "steps[] must NOT carry the verbose 'Writing Code' (replaced with 'Code')");
+  assert.ok(!/'Verification'/.test(stepsBody), "steps[] must NOT carry the verbose 'Verification' (replaced with 'Verify')");
+  assert.ok(!/'Critique'/.test(stepsBody),     "steps[] must NOT carry the verbose 'Critique' (replaced with 'Critic')");
+});
+
+t('_getHUDActiveStep returns short labels matching the steps[] array', () => {
+  // Active-step highlight uses string === comparison
+  // (s === activeStep), so if the resolver returns 'Verification'
+  // but steps[] holds 'Verify', no chip gets the .active class and
+  // the highlight silently breaks. Lock the four return strings.
+  const app = _read('web/public/app.js');
+  const fnMatch = app.match(/function\s+_getHUDActiveStep\s*\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fnMatch, '_getHUDActiveStep function must exist in app.js');
+  const body = fnMatch[0];
+  assert.ok(/return\s+'Critic'/.test(body),  "_getHUDActiveStep must return 'Critic' (not 'Critique')");
+  assert.ok(/return\s+'Verify'/.test(body),  "_getHUDActiveStep must return 'Verify' (not 'Verification')");
+  assert.ok(/return\s+'Code'/.test(body),    "_getHUDActiveStep must return 'Code' (not 'Writing Code')");
+  assert.ok(/return\s+'Analyze'/.test(body), "_getHUDActiveStep must return 'Analyze' (not 'Analysis')");
+  assert.ok(!/return\s+'Critique'/.test(body),     "_getHUDActiveStep must NOT return the stale 'Critique'");
+  assert.ok(!/return\s+'Verification'/.test(body), "_getHUDActiveStep must NOT return the stale 'Verification'");
+  assert.ok(!/return\s+'Writing Code'/.test(body), "_getHUDActiveStep must NOT return the stale 'Writing Code'");
+  assert.ok(!/return\s+'Analysis'/.test(body),     "_getHUDActiveStep must NOT return the stale 'Analysis'");
+});
+
 // ── marker comment ──
 
 t('a comment naming bug-45 explains the mobile HUD readability/tap-target/wrap fix', () => {
   const css = _read('web/public/styles.css');
   assert.ok(/bug-45/.test(css),
     'a comment in styles.css must name bug-45 near the mobile HUD rules so a future restyle understands why the @media block carries explicit font-sizes + a tap-target floor + flex-wrap for the timeline (and does not silently revert to "everything inherits desktop values + overflow-x: auto").');
+});
+
+t('a comment naming bug-45 in app.js explains the short-label sync invariant', () => {
+  const app = _read('web/public/app.js');
+  assert.ok(/bug-45/.test(app),
+    'a comment in app.js must name bug-45 near the pipeline labels so a future refactor knows the steps[] array and _getHUDActiveStep return strings must stay in sync (string === comparison drives the .active highlight — a label drift silently breaks the active chip).');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
