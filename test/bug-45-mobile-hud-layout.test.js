@@ -223,6 +223,97 @@ t('_getHUDActiveStep returns short labels matching the steps[] array', () => {
   assert.ok(!/return\s+'Analysis'/.test(body),     "_getHUDActiveStep must NOT return the stale 'Analysis'");
 });
 
+// ── bug-45 round 3: HUD buttons adopt the queue's look + feel ──
+//
+// User: "Make all hud button to have the same look and feel as the
+// queue." The queue strip carries two visual languages:
+//
+//   · Pill-chip family (.runqueue-chip): border-radius 12px,
+//     subtle bg-input bg, soft 1px border, monospace, neutral by
+//     default with status tints (running=green, failed=red).
+//   · Action-button family (.runqueue-clear / -cancel / -resume):
+//     transparent bg, muted text + soft 1px border, square 4px
+//     radius, intent color (red/green) only on hover.
+//
+// The HUD's chrome maps to those families one-to-one:
+//   · .hud-stop-btn       → action-button family (the only
+//                             actual <button> in the HUD)
+//   · .hud-task-id        → pill-chip (identity badge)
+//   · .timeline-step      → pill-chip (pipeline steps)
+//   · .timeline-step.active → status-tinted pill (purple),
+//                              same idiom as .runqueue-chip-running
+//
+// The mobile @media block from r1 stays — phones still get the
+// 36px tap-target floor on Stop. Desktop loses the always-red
+// look and matches the queue's "muted resting, red on hover"
+// convention.
+
+t('bug-45 r3: .hud-stop-btn desktop matches queue action-button family (transparent bg, muted color, soft border)', () => {
+  const css = _read('web/public/styles.css');
+  // Find the top-level (non-@media) .hud-stop-btn rule. It must
+  // declare transparent background AND muted text color, NOT the
+  // pre-r3 "always red" theme.
+  const m = css.match(/\n\.hud-stop-btn\s*\{([^}]*)\}/);
+  assert.ok(m, '.hud-stop-btn base rule must exist in styles.css');
+  const body = m[1];
+  assert.ok(/background:\s*transparent/.test(body),
+    '.hud-stop-btn desktop bg must be transparent (queue action-button family) — pre-r3 was rgba(248,81,73,0.15) red.');
+  assert.ok(/color:\s*var\(--muted/.test(body),
+    '.hud-stop-btn desktop color must use --muted token — same as .runqueue-clear/.runqueue-cancel/.runqueue-resume.');
+  assert.ok(!/color:\s*#ff7b72/.test(body),
+    '.hud-stop-btn must NOT set a hardcoded red color — that was the pre-r3 always-red look; intent color now only on hover.');
+});
+
+t('bug-45 r3: .hud-stop-btn:hover turns red (intent on hover, queue convention)', () => {
+  const css = _read('web/public/styles.css');
+  const m = css.match(/\.hud-stop-btn:hover\s*\{([^}]*)\}/);
+  assert.ok(m, '.hud-stop-btn:hover rule must exist');
+  const body = m[1];
+  // Either #d32f2f (queue red) or any red-ish hex/rgba is fine —
+  // the point is hover signals destructive intent.
+  assert.ok(/color:\s*#?d32f2f|color:\s*#?ff/.test(body),
+    '.hud-stop-btn:hover must shift color to a red — same convention as .runqueue-clear:hover.');
+});
+
+t('bug-45 r3: .hud-task-id chip adopts pill chrome (border-radius 12px, soft bg/border)', () => {
+  const css = _read('web/public/styles.css');
+  const m = css.match(/\.hud-task-id\s*\{([^}]*)\}/);
+  assert.ok(m, '.hud-task-id rule must exist');
+  const body = m[1];
+  assert.ok(/border-radius:\s*12px/.test(body),
+    '.hud-task-id must use border-radius: 12px (pill) — matches .runqueue-chip. Pre-r3 was 4px (square).');
+  assert.ok(/background:\s*var\(--bg-input/.test(body),
+    '.hud-task-id background must use --bg-input token — same as .runqueue-chip.');
+  assert.ok(/border:\s*1px\s+solid\s+var\(--border-soft/.test(body),
+    '.hud-task-id border must use --border-soft token — same as .runqueue-chip.');
+});
+
+t('bug-45 r3: .timeline-step chip adopts pill chrome (border-radius 12px, explicit border)', () => {
+  const css = _read('web/public/styles.css');
+  // Match the base .timeline-step rule (not the .active variant).
+  // Use a regex that demands exactly `.timeline-step {` (not
+  // `.timeline-step.active {`).
+  const re = /\n\.timeline-step\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, '.timeline-step base rule must exist');
+  const body = m[1];
+  assert.ok(/border-radius:\s*12px/.test(body),
+    '.timeline-step must use border-radius: 12px (pill) — matches .runqueue-chip. Pre-r3 was 4px.');
+  assert.ok(/border:\s*1px\s+solid\s+var\(--border-soft/.test(body),
+    '.timeline-step must declare a soft 1px border — pre-r3 was border-less. Matches .runqueue-chip.');
+  assert.ok(/background:\s*var\(--bg-input/.test(body),
+    '.timeline-step background must use --bg-input token — same as .runqueue-chip neutral resting state.');
+});
+
+t('bug-45 r3: .timeline-step.active overrides border to purple (status-tint idiom)', () => {
+  const css = _read('web/public/styles.css');
+  const m = css.match(/\.timeline-step\.active\s*\{([^}]*)\}/);
+  assert.ok(m, '.timeline-step.active rule must exist');
+  const body = m[1];
+  assert.ok(/border-color:\s*rgba\(192,\s*132,\s*252/.test(body),
+    '.timeline-step.active must override border-color to purple rgba(192,132,252,…) so the active chip pops — same idiom as .runqueue-chip-running tinting border green.');
+});
+
 // ── marker comment ──
 
 t('a comment naming bug-45 explains the mobile HUD readability/tap-target/wrap fix', () => {

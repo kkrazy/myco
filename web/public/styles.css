@@ -8173,7 +8173,15 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-weight: 500;
 }
 
-/* Pinned Task HUD at the top of the chat pane */
+/* Pinned Task HUD at the top of the chat pane.
+   Mobile overrides for this surface live in the
+   @media (max-width: 600px) block further down — see bug-43
+   (horizontal-overflow + critic-select cap), bug-45 r1 (type
+   scale + Stop tap-target + timeline flex-wrap), bug-45 r2
+   (short pipeline labels), bug-45 r3 (queue-matching chrome on
+   .hud-stop-btn / .hud-task-id / .timeline-step). Touch the
+   @media block when changing any of those — the static tests
+   anchor on each marker. */
 .chat-hud-task {
   position: sticky;
   top: 0;
@@ -8200,15 +8208,21 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   gap: 8px;
 }
 
+/* bug-45 r3: chip-pill chrome matching .runqueue-chip — same
+   border-radius (12px), same neutral bg/border tokens, same
+   monospace family. Removed the always-purple bg/border (kept
+   purple TEXT for legibility against the bg-soft) so the HUD's
+   identity badge reads as the same visual family as the queue
+   chips right below it. */
 .hud-task-id {
-  background: rgba(192, 132, 252, 0.2);
+  background: var(--bg-input, rgba(128, 128, 128, 0.15));
   color: #c084fc;
-  border: 1px solid rgba(192, 132, 252, 0.4);
-  padding: 1px 6px;
-  border-radius: 4px;
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.25));
+  padding: 2px 8px;
+  border-radius: 12px;
   font-size: 11px;
   font-weight: bold;
-  font-family: monospace;
+  font-family: var(--mono, monospace);
 }
 
 .hud-task-text {
@@ -8240,18 +8254,29 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   overflow-x: auto;
 }
 
+/* bug-45 r3: pipeline-step chip adopts .runqueue-chip chrome —
+   border-radius: 12px (pill), explicit border, neutral bg token.
+   Keeps gap+padding so the ⚡ + label spacing reads the same;
+   the visual delta is shape (square→pill) + the new border. */
 .timeline-step {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  background: var(--bg-input, rgba(128, 128, 128, 0.15));
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.25));
   white-space: nowrap;
 }
 
+/* bug-45 r3: active variant follows the queue's status-tinted
+   convention (.runqueue-chip-running adds a green tint + green
+   border). Active pipeline step tints purple AND overrides the
+   neutral border so the active chip pops against the inactive
+   ones — same visual idiom as the queue's "running" chip. */
 .timeline-step.active {
   background: rgba(192, 132, 252, 0.15);
+  border-color: rgba(192, 132, 252, 0.5);
   color: #c084fc; /* Active state indicator purple */
   font-weight: 500;
   box-shadow: 0 0 8px rgba(192, 132, 252, 0.2);
@@ -8261,11 +8286,19 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: rgba(255, 255, 255, 0.15);
 }
 
+/* bug-45 r3: adopt the queue action-button look (.runqueue-clear
+   family) so the HUD's Stop reads as the same visual family as the
+   queue strip's Cancel/Resume/Clear right below it. Pre-r3 Stop was
+   "always red" (red bg + red border + red text). The queue's
+   convention is "muted by default, intent-color on hover" — a calmer
+   resting state, and consistent across the chat-pane action surface.
+   The mobile @media block keeps the bug-45 r1 tap-target bump
+   (min-height: 36px) so phones don't lose the Apple-HIG-floor fix. */
 .hud-stop-btn {
-  background: rgba(248, 81, 73, 0.15);
-  color: #ff7b72;
-  border: 1px solid rgba(248, 81, 73, 0.3);
-  padding: 3px 8px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
+  padding: 1px 6px;
   border-radius: 4px;
   font-size: 11px;
   cursor: pointer;
@@ -8276,8 +8309,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .hud-stop-btn:hover {
-  background: rgba(248, 81, 73, 0.25);
-  border-color: #ff7b72;
+  color: #d32f2f;
+  border-color: #d32f2f;
 }
 
 /* bug-43: mobile overrides for the HUD + critic-select. On narrow
