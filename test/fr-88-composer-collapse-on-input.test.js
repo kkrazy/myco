@@ -314,6 +314,60 @@ t('fr-88 r4: .composer-has-content .composer-critic-select max-width tightens to
   assert.ok(w <= 32, `.composer-critic-select effective max-width must be ≤ 32px to match the r4 button width — got ${w}px. (r2 had 36; r4 tightens.)`);
 });
 
+// ── fr-88 r6: uniform width + height ──
+//
+// User: "Revert the last change. Then make sure all buttons have
+// the same width and height."
+//
+// r5 had unified the chrome (drop Send accent green + Stop red,
+// remove Mic). User reverted that and asked for explicit
+// dimensional uniformity instead. r6 locks .composer-btn to a
+// fixed 90×34 at rest and 24×24 collapsed, regardless of variant
+// (Mic / Send / Stop / Draw). Even with the variant chromes back
+// (Send green bg, Stop red, Mic dashed border + strikethrough),
+// the buttons all render at the same outer pixel dimensions
+// because the base class wins on the dimension props.
+
+t('fr-88 r6: .composer-btn base rule locks an explicit width AND height (uniform across variants)', () => {
+  const css = _read('web/public/styles.css');
+  // Find the base `.composer-btn {` rule (NOT a variant
+  // `.composer-btn-foo` rule). Look for `.composer-btn` followed
+  // by whitespace + `{` with no `-` or `:` in between.
+  const re = /\n\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, '.composer-btn base rule must exist');
+  const body = m[1];
+  const w = body.match(/width:\s*(\d+)px/);
+  const h = body.match(/height:\s*(\d+)px/);
+  assert.ok(w, '.composer-btn base must declare an explicit width: …px so all variants (Stop / Mic / Draw / Send) render at the same outer pixel width regardless of label content (fr-88 r6).');
+  assert.ok(h, '.composer-btn base must declare an explicit height: …px so all variants render at the same outer pixel height regardless of variant chrome (fr-88 r6).');
+  // Both must be positive
+  assert.ok(parseInt(w[1], 10) >= 24, `.composer-btn width must be a sensible button width (≥24px) — got ${w[1]}px.`);
+  assert.ok(parseInt(h[1], 10) >= 24, `.composer-btn height must be a sensible button height (≥24px) — got ${h[1]}px.`);
+});
+
+t('fr-88 r6: .composer-btn carries flex-shrink: 0 so the column can\'t squish individual variants differently', () => {
+  const css = _read('web/public/styles.css');
+  const re = /\n\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m);
+  const body = m[1];
+  assert.ok(/flex-shrink:\s*0/.test(body),
+    '.composer-btn must declare flex-shrink: 0 so the .composer-actions flex column can\'t squish individual variants (e.g. Mic with its dashed border) at a different rate than the others. The width: 90px lock is only honoured when shrink is disabled (fr-88 r6).');
+});
+
+t('fr-88 r6: collapsed override also locks .composer-btn width (must override base 90px)', () => {
+  const css = _read('web/public/styles.css');
+  const re = /\.composer-has-content\s+\.composer-btn\s*\{([^}]*)\}/;
+  const m = css.match(re);
+  assert.ok(m, '.composer-has-content .composer-btn rule must exist (fr-88 r4+)');
+  const body = m[1];
+  const w = body.match(/width:\s*(\d+)px/);
+  assert.ok(w, '.composer-has-content .composer-btn must EXPLICITLY override width — without it, the base 90px lock from r6 keeps the collapsed buttons 90px wide even at 24px tall (broken aspect ratio).');
+  const wpx = parseInt(w[1], 10);
+  assert.ok(wpx <= 28, `.composer-has-content .composer-btn width must be ≤ 28px so the collapsed button hugs the 16px icon — got ${wpx}px (fr-88 r6).`);
+});
+
 // ── marker comment ──
 
 t('a comment naming fr-88 sits NEAR the composer-has-content code so a future restyle finds the rationale (disambiguates from the pre-existing fr-88-r blocking-modal feature in app.js)', () => {

@@ -3788,7 +3788,19 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding: 0;
   min-width: 90px;
 }
+/* fr-88 r6: explicit width + height lock on every .composer-btn so
+   the four variants (Stop / Mic / Draw / Send) render at identical
+   dimensions regardless of label length OR variant chrome (Mic's
+   dashed border, Send's accent fill, Stop's red tint). User:
+   "make sure all buttons have the same width and height." Without
+   the explicit lock, button width is content-driven (label "Stop
+   Esc" is wider than "Draw") and the .composer-actions column
+   stretches each child to fill its 90px min-width — but variant
+   borders (Mic's 1px dashed) and per-variant padding could still
+   drift outer dimensions by a few pixels even with border-box.
+   The collapsed override below tightens both to 24×24. */
 .composer-btn {
+  width: 90px;
   height: 34px;
   padding: 0 12px;
   border: 0;
@@ -3803,6 +3815,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font: inherit;
   font-size: 0.84rem;
   font-weight: 500;
+  flex-shrink: 0;
   transition: background .12s ease, color .12s ease, transform .08s ease;
 }
 .composer-btn:hover { background: rgba(255, 255, 255, .07); }
@@ -3832,6 +3845,12 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .composer.composer-has-content .composer-btn-kbd {
   display: none;
 }
+/* The .composer-critic-select element's base rules live further
+   down in styles.css; mobile overrides for it are in the
+   @media (max-width: 600px) block — see bug-43 (90px max-width
+   cap to stop critic-select from crowding the chat input on
+   narrow viewports). r4 below tightens further to 28px when the
+   composer has typed content. */
 .composer.composer-has-content .composer-critic-select {
   max-width: 36px;
   overflow: hidden;
@@ -3859,10 +3878,14 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    justify-content:center + align-items:center. The Critic select's
    r2 `max-width: 36px` is loosened to 28px below to match (no
    chrome change beyond width to keep the native dropdown chevron
-   visible). */
+   visible).
+   fr-88 r6: also lock width: 24px (must override the base 90px
+   width lock added in r6 — without this, the collapsed buttons
+   stay 90px wide even at 24px tall). */
 .composer.composer-has-content .composer-btn {
-  padding: 4px;
+  width: 24px;
   height: 24px;
+  padding: 4px;
 }
 .composer.composer-has-content .composer-critic-select {
   max-width: 28px;
