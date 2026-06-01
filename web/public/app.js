@@ -7242,10 +7242,12 @@ function _updateTaskHUD() {
         <span class="hud-task-text" title="${escHtml(itemText)}">${escHtml(itemText)}</span>
       </div>
       <div class="hud-task-status">
-        <span id="hud-duration-text">[⏱️ ${getElapsedStr()}]</span>
+        <!-- bug-45 r4: bare elapsed (no clock emoji, no brackets)
+             + icon-only Stop. Tooltip + aria-label keep the
+             affordance discoverable / a11y-readable. -->
+        <span id="hud-duration-text">${getElapsedStr()}</span>
         <button type="button" class="hud-stop-btn" title="Stop execution (Esc)" aria-label="Stop">
           <svg class="composer-icon" viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px;margin:0;"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-          Stop
         </button>
       </div>
     </div>
@@ -7267,7 +7269,9 @@ function _updateTaskHUD() {
     _hudTimerInterval = setInterval(() => {
       const durText = document.getElementById('hud-duration-text');
       if (durText) {
-        durText.textContent = `[⏱️ ${getElapsedStr()}]`;
+        // bug-45 r4: bare time (no clock emoji, no brackets) —
+        // must mirror the initial-render string above.
+        durText.textContent = getElapsedStr();
       }
     }, 1000);
   }

@@ -314,6 +314,84 @@ t('bug-45 r3: .timeline-step.active overrides border to purple (status-tint idio
     '.timeline-step.active must override border-color to purple rgba(192,132,252,…) so the active chip pops — same idiom as .runqueue-chip-running tinting border green.');
 });
 
+// ── bug-45 round 4: strip Stop label + clock emoji from HUD status ──
+//
+// User: "Remove the stop text on the stop button of hud, also the
+// clock icon, just show the time."
+//
+// Two render strings in web/public/app.js carry the affordances:
+//   · The button's child text "Stop" (after the SVG rect icon) —
+//     gone. The button keeps title="Stop execution (Esc)" +
+//     aria-label="Stop" so the affordance stays discoverable on
+//     hover/long-press and announced by screen readers; only the
+//     visible label is removed.
+//   · The elapsed-time span "[⏱️ ${getElapsedStr()}]" — gone,
+//     replaced with bare `${getElapsedStr()}`. Both the initial
+//     render (around line 7245) AND the setInterval ticker
+//     (around line 7270) must produce the bare form; if the
+//     ticker still wraps the brackets/emoji back in, every second
+//     re-introduces them.
+
+t('bug-45 r4: HUD Stop button has no visible "Stop" text child', () => {
+  const app = _read('web/public/app.js');
+  // Find the .hud-stop-btn button literal in the _updateTaskHUD
+  // template string. Walk forward to the matching </button>. The
+  // slice between MUST NOT contain a bare "Stop" word as visible
+  // text. (We allow attributes like title="Stop execution (Esc)"
+  // and aria-label="Stop" — they sit inside the OPENING <button>
+  // tag, before the slice we examine.)
+  const openMatch = app.match(/<button[^>]*class="hud-stop-btn"[^>]*>/);
+  assert.ok(openMatch, '.hud-stop-btn button opening tag must exist in app.js');
+  const openEnd = openMatch.index + openMatch[0].length;
+  const closeAt = app.indexOf('</button>', openEnd);
+  assert.ok(closeAt > openEnd, '.hud-stop-btn button must have a closing </button>');
+  const innerHtml = app.slice(openEnd, closeAt);
+  assert.ok(!/\bStop\b/.test(innerHtml),
+    '.hud-stop-btn must NOT carry a visible "Stop" text child (icon-only per bug-45 r4). Found in inner HTML: ' + JSON.stringify(innerHtml.slice(0, 200)));
+});
+
+t('bug-45 r4: HUD Stop button keeps title + aria-label for a11y', () => {
+  const app = _read('web/public/app.js');
+  const openMatch = app.match(/<button[^>]*class="hud-stop-btn"[^>]*>/);
+  assert.ok(openMatch, '.hud-stop-btn opening tag must exist');
+  const openTag = openMatch[0];
+  assert.ok(/title="Stop execution[^"]*"/.test(openTag),
+    '.hud-stop-btn must keep title="Stop execution (Esc)" so the affordance is discoverable on hover (icon-only buttons without titles are user-hostile).');
+  assert.ok(/aria-label="Stop"/.test(openTag),
+    '.hud-stop-btn must keep aria-label="Stop" so screen readers still announce the button (icon-only without aria-label reads as nothing).');
+});
+
+t('bug-45 r4: #hud-duration-text initial render is bare time (no clock emoji, no brackets)', () => {
+  const app = _read('web/public/app.js');
+  // The initial render uses a template literal — must show
+  // `${getElapsedStr()}` without the [⏱️ … ] wrapper.
+  const m = app.match(/<span id="hud-duration-text">([^<]*)<\/span>/);
+  assert.ok(m, 'app.js must declare a #hud-duration-text span');
+  const content = m[1];
+  assert.ok(!/⏱/.test(content),
+    '#hud-duration-text initial content must NOT contain the ⏱️ clock emoji (bug-45 r4). Found: ' + JSON.stringify(content));
+  assert.ok(!/\[/.test(content) && !/\]/.test(content),
+    '#hud-duration-text initial content must NOT wrap the time in [brackets] (bug-45 r4). Found: ' + JSON.stringify(content));
+  assert.ok(/getElapsedStr\(\)/.test(content),
+    '#hud-duration-text must still interpolate getElapsedStr() so the timer renders.');
+});
+
+t('bug-45 r4: setInterval ticker also writes the bare time (no emoji/brackets)', () => {
+  const app = _read('web/public/app.js');
+  // The ticker MUST match the initial render's shape or the
+  // brackets/emoji re-appear after 1s. Look at the
+  // durText.textContent assignment inside the ticker.
+  const tickMatch = app.match(/_hudTimerInterval\s*=\s*setInterval[\s\S]*?durText\.textContent\s*=\s*([^;]+);/);
+  assert.ok(tickMatch, 'the HUD timer setInterval must assign durText.textContent');
+  const rhs = tickMatch[1];
+  assert.ok(!/⏱/.test(rhs),
+    'HUD timer ticker must NOT re-insert the ⏱️ clock emoji every second (bug-45 r4). Found assignment RHS: ' + rhs.trim());
+  assert.ok(!/\[/.test(rhs) && !/\]/.test(rhs),
+    'HUD timer ticker must NOT wrap the time in [brackets] (bug-45 r4). Found: ' + rhs.trim());
+  assert.ok(/getElapsedStr\(\)/.test(rhs),
+    'HUD timer ticker must still call getElapsedStr() so the time updates.');
+});
+
 // ── marker comment ──
 
 t('a comment naming bug-45 explains the mobile HUD readability/tap-target/wrap fix', () => {
