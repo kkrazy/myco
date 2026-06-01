@@ -2584,6 +2584,23 @@ test_chat_window() {
   # buildIdentity logic (4 cases) + auth.profileByLogin export +
   # agent-session.js static-grep guards for the env-injection wiring.
   node_test_result test/fr-26-git-author-identity.test.js "test/fr-26-git-author-identity.test.js (10 cases)"
+  # fr-88 (composer-collapse — note: distinct from the older fr-88(r)
+  # blocking-modal feature that lives in app.js around line 1764+):
+  # the four .composer-btn action buttons (Stop / Mic / Draw / Send)
+  # in the chat composer collapse to icon-only when the textarea has
+  # non-whitespace content, freeing horizontal space for the typed
+  # message. Implementation: bindChatUi() in app.js toggles
+  # `.composer-has-content` on #chat-form via the same `input` event
+  # the existing autoResize() + _syncGuestSendState() consume; the
+  # CSS rule under .composer.composer-has-content hides
+  # .composer-btn-label + .composer-btn-kbd (display:none so the
+  # slot fully collapses — visibility:hidden would leave a gap).
+  # title + aria-label on each button stay so a11y survives. Locks
+  # the label/aria markup invariants, the CSS rule, and the JS
+  # input-listener wiring; the marker check is anchored ±1500 chars
+  # around `composer-has-content` so the unrelated older fr-88(r)
+  # comments can't satisfy it by accident.
+  node_test_result test/fr-88-composer-collapse-on-input.test.js "test/fr-88-composer-collapse-on-input.test.js (7 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/

@@ -4017,6 +4017,26 @@
           "user": "kkrazy",
           "text": "Its too wide and too small for mobile.",
           "ts": "2026-05-31T23:57:06.307Z"
+        },
+        {
+          "id": "05376f5e2c14",
+          "user": "claude",
+          "text": "✓ success · 568.0s · $4.1492 · 32↓/26173↑\n\nbug-45 ready to commit:\n\n| Layer | Change |\n|---|---|\n| CSS | `web/public/styles.css` @media (max-width: 600px) block extended with type-scale bumps, Stop-button tap target, timeline `flex-wrap: wrap` |\n| Test | `test/bug-45-mobile-hud-layout.test.js` (9 cases) wired into `test/test.sh` |\n| Plan | `bug-45.runs[0]` stamped completed with summary |\n\n**Test results:** bug-45 9/9 green. bug-43 5/5, bug-44 5/5, fr-87 r3 7/7, fr-87 r4 7/7 — all still green (adjacent HUD/mobile suites unaffected).\n\n**Diff (working tree):**\n```\n?? test/bug-45-mobile-hud-layout.test.js\n M web/public/styles.css\n M test/test.sh\n M _myco_/plan.json\n```\n\nAwaiting `commit + push + deploy` direction. If you want, I can also schedule a mobile screenshot check via `test/test-browser.sh` to visually verify on a real head…",
+          "ts": "2026-06-01T00:07:08.702Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-31T23:57:40.258Z"
+          }
+        },
+        {
+          "id": "e48e880861c6",
+          "user": "claude",
+          "text": "✓ success · 9.3s · $6.1235 · 6↓/485↑\n\n**Both deploys GREEN.** bug-45 live on both targets:\n\n| Target | URL | Build stamp | bug-45 in CSS |\n|---|---|---|---|\n| Prod | `https://myco.labxnow.ai/` | `2026-06-01T00:11:56Z` | YES (5 ×) |\n| Canary | `https://opti.labxnow.ai/` | `2026-06-01T00:12:29Z` | YES (5 ×) |\n\nBoth serving `76eb233`. Logs clean, only the expected swap-window 502s, no `[fr-26]` spam, no startup tracebacks. CLAUDE.md opti retirement language stays unchanged.\n\n**Try it from your phone:** the running task HUD should now have larger task title (14 px), 12 px badges/labels, a thumb-friendly Stop button (36 px tall + 8 px×14 px padding), and the Analysis → Writing → Verification → Critique pipeline wraps to 2 rows instead of horizontal-scrolling.\n\n**Session run-list closeout:**\n- fr-87 r4 (single Config icon) — ship…",
+          "ts": "2026-06-01T00:13:29.331Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-05-31T23:57:40.236Z"
+          }
         }
       ],
       "meta": {
@@ -4027,12 +4047,47 @@
       "description": "**Problem:** HUD display is awkward to use on mobile viewports.\n**Expected:** HUD elements sized, spaced, and positioned for comfortable touch use on small screens.\n**Actual:** Current HUD layout is not adjusted for mobile and degrades usability.",
       "runs": [
         {
+          "status": "success",
+          "ts": "2026-06-01T00:07:08.702Z",
+          "startedAt": "2026-05-31T23:57:40.258Z",
+          "summary": "568.0s · 32→26173 tok",
+          "result": "bug-45 ready to commit:\n\n| Layer | Change |\n|---|---|\n| CSS | `web/public/styles.css` @media (max-width: 600px) block extended with type-scale bumps, Stop-button tap target, timeline `flex-wrap: wrap` |\n| Test | `test/bug-45-mobile-hud-layout.test.js` (9 cases) wired into `test/test.sh` |\n| Plan | `bug-45.runs[0]` stamped completed with summary |\n\n**Test results:** bug-45 9/9 green. bug-43 5/5, bug-44 5/5, fr-87 r3 7/7, fr-87 r4 7/7 — all still green (adjacent HUD/mobile suites unaffected).\n\n**Diff (working tree):**\n```\n?? test/bug-45-mobile-hud-layout.test.js\n M web/public/styles.css\n M test/test.sh\n M _myco_/plan.json\n```\n\nAwaiting `commit + push + deploy` direction. If you want, I can also schedule a mobile screenshot check via `test/test-browser.sh` to visually verify on a real headless Chromium viewport — though the static-grep guards already lock the contract."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-01T00:13:29.331Z",
+          "startedAt": "2026-05-31T23:57:40.236Z",
+          "summary": "9.3s · 6→485 tok",
+          "result": "**Both deploys GREEN.** bug-45 live on both targets:\n\n| Target | URL | Build stamp | bug-45 in CSS |\n|---|---|---|---|\n| Prod | `https://myco.labxnow.ai/` | `2026-06-01T00:11:56Z` | YES (5 ×) |\n| Canary | `https://opti.labxnow.ai/` | `2026-06-01T00:12:29Z` | YES (5 ×) |\n\nBoth serving `76eb233`. Logs clean, only the expected swap-window 502s, no `[fr-26]` spam, no startup tracebacks. CLAUDE.md opti retirement language stays unchanged.\n\n**Try it from your phone:** the running task HUD should now have larger task title (14 px), 12 px badges/labels, a thumb-friendly Stop button (36 px tall + 8 px×14 px padding), and the Analysis → Writing → Verification → Critique pipeline wraps to 2 rows instead of horizontal-scrolling.\n\n**Session run-list closeout:**\n- fr-87 r4 (single Config icon) — shipped ✓\n- fr-26 (git author identity) — shipped ✓\n- bug-45 (mobile HUD layout) — shipped ✓\n\n**Open:** PAT rotation (token still in chat history + secret-scanning alert), and `td-32` (LLM-token security check) sits queued from a couple turns ago.\n\nStanding by."
+        }
+      ]
+    },
+    {
+      "id": "fr-88",
+      "text": "Collapse chat composer buttons to icon-only when user starts typing",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-01T01:01:15.361Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the chat composer buttons should shrink to icon only as soon as i start typing to leave more space for text content",
+        "rewritten": true
+      },
+      "description": "**Problem:** Composer action buttons occupy horizontal space needed for the text input once the user begins typing.\n**Expected:** As soon as input is non-empty, buttons shrink to icon-only, freeing room for text content.\n**Actual:** Buttons retain their full label+icon width regardless of input state, crowding the typed message.",
+      "runs": [
+        {
           "status": "completed",
-          "ts": "2026-06-01T00:00:00.000Z",
-          "summary": "Mobile UX round 2 on #chat-hud-task (the task-status bar above #runqueue-strip — user disambiguated as 'above the queue list'). bug-43 had stopped the horizontal overflow but left readability + tap-target gaps. Fix extends the same @media (max-width: 600px) block in web/public/styles.css: font-size bumps (.hud-task-text → 14px, .hud-task-id / .hud-task-status / .timeline-step → 12px), .hud-stop-btn gets min-height: 36px + 8px×14px padding + 13px font (clears the tap-target floor), .hud-progress-timeline switches to flex-wrap: wrap + overflow-x: visible + row-gap: 6px so the 4-step Analysis→Writing→Verification→Critique pipeline wraps to 2 rows instead of horizontal-scrolling. Tests: test/bug-45-mobile-hud-layout.test.js (9 cases) wired into test/test.sh. Adjacent suites stayed green: bug-43 (5/5), bug-44 (5/5), fr-87 r3/r4 (7/7 each). Not yet committed/pushed — awaiting user direction. Anti-bloat note: scope kept to exactly the user's 'too wide and too small' report; no new breakpoint, no JS changes, no Stop-button reposition, no second-row layout beyond the flex-wrap on the timeline."
+          "ts": "2026-06-01T01:15:00.000Z",
+          "summary": "Implementation: bindChatUi() in web/public/app.js adds a `_syncComposerHasContent` listener on the textarea's `input` event that toggles `.composer-has-content` on #chat-form based on `input.value.trim().length > 0`. The CSS rule in web/public/styles.css (next to .composer-btn-label base rule) collapses `.composer-btn-label` AND `.composer-btn-kbd` (Esc hint) to `display: none` when the class is set — slot fully collapses so the textarea gains real width. The four affected .composer-btn elements (Stop / Mic / Draw / Send) keep their `title` + `aria-label` attrs so hover tooltips + screen readers still announce each action when only the icon shows. Whitespace-only input doesn't trigger the collapse. Out of scope (anti-bloat §3): the <select id='composer-critic-select'> is not a `.composer-btn` and is intentionally untouched — bug-43 already caps it on mobile, and changing select dropdowns would be a different concern. Naming note: there's a pre-existing fr-88(r) feature in app.js + styles.css about a blocking connection-overlay modal — unrelated to this composer-collapse work. Both share the same plan-item id `fr-88` by coincidence; the new marker comments + the regression test's ±1500-char proximity check around `composer-has-content` disambiguate. Tests: test/fr-88-composer-collapse-on-input.test.js (7 cases) wired into test/test.sh. Locks markup invariants (every .composer-btn carries .composer-btn-label + title + aria-label), the CSS rule, the JS toggle, and the input-event wiring. Adjacent suites stayed green: bug-45 (26/26), bug-43 (5/5), fr-87 r4 (7/7). Not yet committed/pushed — awaiting user direction."
         }
       ]
     }
   ],
-  "updatedAt": "2026-06-01T00:00:00.000Z"
+  "updatedAt": "2026-06-01T01:15:00.000Z"
 }

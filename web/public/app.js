@@ -7884,6 +7884,22 @@ function bindChatUi() {
   input.addEventListener('input', _syncGuestSendState);
   _syncGuestSendState();
 
+  // fr-88 (composer-collapse — distinct from the older fr-88(r)
+  // blocking-modal feature in this file): the four .composer-btn
+  // action buttons take horizontal real estate that crowds the
+  // typed message. Toggle `.composer-has-content` on the form
+  // whenever the textarea has non-whitespace content; the CSS
+  // rule under that class hides .composer-btn-label +
+  // .composer-btn-kbd so the buttons collapse to icon-only and
+  // the textarea gains the freed width. Whitespace-only input
+  // doesn't trigger (typing a space shouldn't collapse anything).
+  function _syncComposerHasContent() {
+    const hasContent = (input.value || '').trim().length > 0;
+    form.classList.toggle('composer-has-content', hasContent);
+  }
+  input.addEventListener('input', _syncComposerHasContent);
+  _syncComposerHasContent();
+
   function submitChat() {
     const submitted = input.value;
     if (sendChatMessage(submitted)) {

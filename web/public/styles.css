@@ -3810,6 +3810,23 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .composer-btn:disabled { opacity: .35; cursor: not-allowed; }
 .composer-icon { width: 16px; height: 16px; display: block; flex: 0 0 auto; }
 .composer-btn-label { line-height: 1; }
+
+/* fr-88 (composer-collapse — NOT the older fr-88(r) blocking-modal
+   work above): once the user starts typing in the composer textarea,
+   the four `.composer-btn` action buttons (Stop / Mic / Draw / Send)
+   collapse to icon-only so the freed horizontal space goes to the
+   text content. JS in bindChatUi() toggles `.composer-has-content`
+   on #chat-form whenever `input.value.trim().length > 0`; this rule
+   hides every visible label (.composer-btn-label) AND the Esc-hint
+   kbd (.composer-btn-kbd) underneath that class. title="…" +
+   aria-label="…" on each button stay so hover tooltips + screen
+   readers still announce the action. `display: none` (not
+   `visibility: hidden`) so the slot fully collapses — `hidden`
+   would leave a gap and the textarea wouldn't actually gain space. */
+.composer.composer-has-content .composer-btn-label,
+.composer.composer-has-content .composer-btn-kbd {
+  display: none;
+}
 .composer-btn-kbd {
   font: inherit;
   font-size: 0.66rem;
