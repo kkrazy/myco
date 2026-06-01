@@ -8297,6 +8297,20 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
        the HUD has more horizontal room for the content it carries
    Future restyles touching these rules: keep the @media block
    intact — removing it re-introduces the bug. */
+/* bug-45: the bug-43 @media block kept the HUD from overflowing
+   horizontally but didn't address the rest of the mobile-UX defect:
+   (a) every HUD label/text/badge stayed at 11–13px which is below
+   the iOS readability floor on phones; (b) the Stop button used
+   desktop padding (3px×8px ≈ 22px tall) which is well under Apple
+   HIG's 44px tap-target floor and Material's 48px; (c) the 4-step
+   progress timeline relied on `overflow-x: auto` so users had to
+   horizontally swipe a 24px-tall strip just to see the last step
+   (Critique). The block below — fused into the same @media as the
+   bug-43 rules — bumps type scale, gives Stop a real tap target,
+   and lets the timeline `flex-wrap: wrap` onto a second row so all
+   4 steps stay visible. Future restyles touching the HUD: keep
+   each rule below — removing any silently re-introduces the report
+   ("too wide and too small"). */
 @media (max-width: 600px) {
   .composer-critic-select {
     max-width: 90px;
@@ -8305,9 +8319,42 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   }
   .hud-task-text {
     max-width: calc(100vw - 140px);   /* accounts for HUD padding + status pill */
+    font-size: 14px;                  /* bug-45: bump from 13px desktop */
   }
   .chat-hud-task {
     padding: 8px 10px;
+  }
+  /* bug-45: type-scale bumps so badges + status text + timeline
+     labels are legible on a phone (was 11px ≈ below iOS readable
+     floor). 12px is the smallest size that holds up at typical
+     phone ppi without forcing the user to zoom. */
+  .hud-task-id {
+    font-size: 12px;
+  }
+  .hud-task-status {
+    font-size: 12px;
+  }
+  .timeline-step {
+    font-size: 12px;
+  }
+  /* bug-45: Stop is the only destructive action in the HUD — its
+     tap target must clear the 36px floor (Apple HIG suggests 44px,
+     Material 48px; we use 36 to keep the HUD compact while still
+     usable with a thumb). Padding bump from 3px 8px → 8px 14px
+     gives finger-friendly horizontal headroom too. */
+  .hud-stop-btn {
+    min-height: 36px;
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+  /* bug-45: 4 timeline steps on a phone wrap to 2 rows of 2 instead
+     of horizontal-scrolling a 24px-tall strip. flex-wrap: wrap
+     replaces the desktop `overflow-x: auto`; overflow-x: visible
+     ensures the wrapped content is not clipped or scroll-bared. */
+  .hud-progress-timeline {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    row-gap: 6px;
   }
 }
 

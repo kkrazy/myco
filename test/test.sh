@@ -2520,6 +2520,22 @@ test_chat_window() {
   # exist + cite bug-43 so a future restyle doesn't silently lose
   # the fix.
   node_test_result test/bug-43-mobile-hud-critic-overflow.test.js "test/bug-43-mobile-hud-critic-overflow.test.js (5 cases)"
+  # bug-45: mobile HUD layout — round 2 of mobile HUD UX. bug-43
+  # stopped the @media (max-width: 600px) horizontal overflow, but
+  # the HUD was still hard to use on phones — text was 11–13px
+  # (below iOS readable floor), the Stop button was thumb-tiny
+  # (3×8px padding ≈ 22px tall, well under Apple HIG's 44px tap
+  # target), and the 4-step Analysis→Writing→Verification→Critique
+  # timeline horizontally-scrolled inside a 24px-tall strip so the
+  # user couldn't see all 4 steps at once. Fix extends the same
+  # @media block: font-size bumps (.hud-task-text → 14px, badges +
+  # timeline-step + status → 12px), Stop gets min-height:36px +
+  # 8px×14px padding + 13px font, timeline switches to flex-wrap:
+  # wrap + overflow-x: visible so the steps reflow to 2 rows.
+  # Static-grep guards lock each rule + the bug-45 marker so a
+  # future restyle doesn't silently revert to "everything inherits
+  # desktop values + overflow-x: auto".
+  node_test_result test/bug-45-mobile-hud-layout.test.js "test/bug-45-mobile-hud-layout.test.js (9 cases)"
   # bug-44: Config page not visible on mobile pre-session. Pre-fix
   # the only Config entry was the @login chip in #status-bar at
   # the BOTTOM of the sidebar — users overlooked it and thought
