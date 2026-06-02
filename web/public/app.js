@@ -8111,6 +8111,57 @@ function bindChatUi() {
       }
     }
   });
+  // fr-92: mobile swipe up/down on the composer surfaces history
+  // navigation since there's no arrow key on touch devices. The
+  // dispatched payload is a synthetic ArrowUp/ArrowDown keydown so
+  // the existing state-machine handler above runs unchanged — no
+  // duplication of the history-step logic + draft-save semantics.
+  //
+  // Swipe detection: short single-touch drag with vertical movement
+  // ≥ SWIPE_MIN_PX in ≤ SWIPE_MAX_MS. This filters out long scrolls
+  // (high duration) and small wobble (small distance). Multi-touch
+  // (pinch-zoom, two-finger scroll) is skipped — only e.touches[0].
+  //
+  // Cursor-position rewrite: the existing keydown handler only
+  // recalls history when the cursor is at the extreme start (Up) or
+  // end (Down) of the input — that guard exists so multi-line draft
+  // arrow nav still works on desktop. For swipes the user's intent
+  // is unambiguous ("navigate history regardless of cursor"), so
+  // before dispatching we move the cursor to the correct extreme.
+  // Side effect is benign: after history recall the cursor naturally
+  // ends up at value.length anyway.
+  const SWIPE_MIN_PX = 30;
+  const SWIPE_MAX_MS = 600;
+  let _fr92TouchY = null;
+  let _fr92TouchStartTime = 0;
+  input.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { _fr92TouchY = null; return; }
+    _fr92TouchY = e.touches[0].clientY;
+    _fr92TouchStartTime = Date.now();
+  }, { passive: true });
+  input.addEventListener('touchend', (e) => {
+    if (_fr92TouchY == null) return;
+    if (e.changedTouches.length !== 1) { _fr92TouchY = null; return; }
+    const dy = e.changedTouches[0].clientY - _fr92TouchY;
+    const elapsed = Date.now() - _fr92TouchStartTime;
+    _fr92TouchY = null;
+    if (elapsed > SWIPE_MAX_MS) return;
+    if (Math.abs(dy) < SWIPE_MIN_PX) return;
+    const isUp = dy < 0;
+    const key = isUp ? 'ArrowUp' : 'ArrowDown';
+    // Move the cursor to the extreme that the existing handler
+    // checks (start for Up, end for Down) so its guard accepts the
+    // synthetic event. Without this the handler's `selStart !== 0`
+    // / `selEnd !== value.length` early-return swallows the swipe.
+    try {
+      if (isUp) input.selectionStart = input.selectionEnd = 0;
+      else input.selectionStart = input.selectionEnd = input.value.length;
+    } catch {}
+    const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    input.dispatchEvent(ev);
+  }, { passive: true });
+  input.addEventListener('touchcancel', () => { _fr92TouchY = null; }, { passive: true });
+
   // Any non-arrow keystroke while browsing exits browsing mode (so
   // the user can mutate the recalled entry without arrows trapping
   // them in history). Caps the listener at one extra check.

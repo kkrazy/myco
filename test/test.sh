@@ -2743,6 +2743,20 @@ test_chat_window() {
   # filter + multi-candidate warn + persistence + attach.js wiring
   # + fr-94 Phase 2 marker comment.
   node_test_result test/fr-94-phase-2-migrate.test.js "test/fr-94-phase-2-migrate.test.js (9 cases)"
+  # fr-92: mobile users can't access composer history since touch
+  # devices have no arrow keys. Add a touchstart + touchend listener
+  # on #chat-input that detects vertical swipes (|dy| >= 30px in
+  # <= 600ms, single-touch only) and dispatches a synthetic
+  # KeyboardEvent('keydown', {key: 'ArrowUp' | 'ArrowDown'}) so the
+  # existing arrow-key handler's state-machine runs unchanged — no
+  # duplication of the history-step + draft-save logic. The swipe
+  # handler also positions the cursor at start (Up) / end (Down)
+  # before dispatch so the existing handler's cursor-position guard
+  # accepts the synthetic event. Locks: touchstart + touchend on
+  # input, synthetic ArrowUp/ArrowDown KeyboardEvent dispatch, cursor
+  # repositioning, distance + time thresholds, multi-touch skip, and
+  # a fr-92 marker comment.
+  node_test_result test/fr-92-mobile-swipe-history.test.js "test/fr-92-mobile-swipe-history.test.js (7 cases)"
   # fr-81 r1: @kkrazy reported the remote /fr /bug /td flow shipped
   # short captures verbatim to GitHub — the word-count threshold that
   # made sense for local plan items (quick captures stay quick) was
