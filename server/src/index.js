@@ -1579,11 +1579,22 @@ app.post('/api/admin/test-key', requireAdmin, async (req, res) => {
   const { which, key, endpoint, model } = req.body || {};
   if (!which) return res.json({ ok: false, error: 'missing `which` field' });
 
+  // fr-91 r4: wrap each probe in a 15s timeout so a hung SDK call
+  // (Gemini SDK occasionally hangs on stale connections) can't pin
+  // the request handler indefinitely. Client also has a 20s timeout
+  // — server-side cap is shorter so the response wins the race and
+  // the client gets a real error message rather than its own
+  // AbortError.
+  const withTimeout = (promise, ms = 15000) => Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`probe timed out after ${ms}ms`)), ms)),
+  ]);
+
   try {
-    if (which === 'anthropic') return res.json(await _probeAnthropicKey(key));
-    if (which === 'gemini')    return res.json(await _probeGeminiKey(key));
-    if (which === 'openai')    return res.json(await _probeOpenAIKey(key));
-    if (which === 'custom')    return res.json(await _probeCustomCriticKey(endpoint, key, model));
+    if (which === 'anthropic') return res.json(await withTimeout(_probeAnthropicKey(key)));
+    if (which === 'gemini')    return res.json(await withTimeout(_probeGeminiKey(key)));
+    if (which === 'openai')    return res.json(await withTimeout(_probeOpenAIKey(key)));
+    if (which === 'custom')    return res.json(await withTimeout(_probeCustomCriticKey(endpoint, key, model)));
     return res.json({ ok: false, error: `unknown key type: ${which}` });
   } catch (err) {
     return res.json({ ok: false, error: err && err.message || String(err) });

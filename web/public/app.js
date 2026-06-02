@@ -12613,11 +12613,21 @@ async function _runApiKeyTest(which) {
   statusEl.className = 'test-key-status testing';
   if (btn) btn.disabled = true;
 
+  // fr-91 r4: client-side timeout so a hung server probe can't
+  // leave the button stuck disabled forever. AbortController fires
+  // after 20s, the await rejects, the catch runs, the finally
+  // re-enables the button. Pre-r4 a misconfigured Gemini probe
+  // (SDK hang) would leave the button disabled until full page
+  // reload.
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 20000);
+
   try {
     const res = await authedFetch('/api/admin/test-key', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ which, key, endpoint, model }),
+      signal: ctrl.signal,
     });
     const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
     if (data.ok) {
@@ -12628,9 +12638,13 @@ async function _runApiKeyTest(which) {
       statusEl.className = 'test-key-status err';
     }
   } catch (err) {
-    statusEl.textContent = `✗ ${err && err.message || String(err)}`;
+    const msg = err && err.name === 'AbortError'
+      ? 'probe timed out after 20s'
+      : (err && err.message || String(err));
+    statusEl.textContent = `✗ ${msg}`;
     statusEl.className = 'test-key-status err';
   } finally {
+    clearTimeout(timeoutId);
     if (btn) btn.disabled = false;
   }
 }
