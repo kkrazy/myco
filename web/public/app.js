@@ -100,6 +100,24 @@ async function authedFetch(path, opts = {}) {
   return res;
 }
 
+// bug-47: viewer-tier file-API endpoints (/files, /files-changed,
+// /files/diff, /files/reconsider) accept either an owner/admin/viewer
+// Bearer token OR a `?s=<shareToken>` query param matching the
+// session id. Guest users who arrived via a share link have
+// state.shareToken set but no state.token, so authedFetch's Bearer
+// header alone won't pass the gate — the URL must also carry
+// `?s=<token>`. This helper appends it (picking `?` vs `&`
+// automatically) when state.shareToken is set; it's a no-op for
+// signed-in owners (state.shareToken is undefined for the normal
+// login flow), and the server's owner-tier check wins first if a
+// signed-in user happens to also have a stray share token, so
+// always appending when present is benign.
+function _withShareToken(url) {
+  if (!state || !state.shareToken) return url;
+  const sep = String(url).indexOf('?') === -1 ? '?' : '&';
+  return `${url}${sep}s=${encodeURIComponent(state.shareToken)}`;
+}
+
 // Composer context chips: detectable @-mentions in the textarea are
 // surfaced as deletable pills above the input. Helps the user see
 // what's attached at a glance instead of squinting at inline text.
@@ -6633,10 +6651,10 @@ async function _toggleInlineDiff(card, filePath) {
   card.appendChild(diffContainer);
   
   try {
-    const res = await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/files/diff?path=${encodeURIComponent(filePath)}`);
+    const res = await authedFetch(_withShareToken(`/sessions/${encodeURIComponent(state.activeId)}/files/diff?path=${encodeURIComponent(filePath)}`));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const d = await res.json();
-    
+
     if (d && d.diff) {
       // Render unified diff in pre element
       diffContainer.innerHTML = `<pre class="diff-code"><code>${escHtml(d.diff)}</code></pre>`;
@@ -7321,7 +7339,7 @@ function _renderVerdictPanel() {
   btnDiscard.addEventListener('click', async () => {
     if (!confirm('Are you sure you want to discard Claude\'s changes? This will revert files to HEAD.')) return;
     try {
-      const resChanged = await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/files-changed`);
+      const resChanged = await authedFetch(_withShareToken(`/sessions/${encodeURIComponent(state.activeId)}/files-changed`));
       if (resChanged.ok) {
         const changedData = await resChanged.json();
         const paths = (changedData.entries || []).map(x => x.path);
@@ -7358,7 +7376,7 @@ function _renderVerdictPanel() {
 
   btnAccept.addEventListener('click', async () => {
     try {
-      const resChanged = await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/files-changed`);
+      const resChanged = await authedFetch(_withShareToken(`/sessions/${encodeURIComponent(state.activeId)}/files-changed`));
       if (resChanged.ok) {
         const changedData = await resChanged.json();
         const paths = (changedData.entries || []).map(x => x.path);
@@ -9889,7 +9907,9 @@ function hideFilesView() {
 async function loadFileTree(relPath) {
   if (!state.activeId) return;
   const id = state.activeId;
-  const url = `/sessions/${encodeURIComponent(id)}/files?path=${encodeURIComponent(relPath || '.')}`;
+  // bug-47: wrap with _withShareToken so guest users (state.shareToken
+  // set, no state.token) can pass fileApiPreamble('viewer').
+  const url = _withShareToken(`/sessions/${encodeURIComponent(id)}/files?path=${encodeURIComponent(relPath || '.')}`);
   let res;
   try { res = await authedFetch(url); }
   catch (e) { showFilesTreeError(`Failed to list: ${e.message || e}`); return; }
@@ -9930,7 +9950,7 @@ async function loadPlanChangedFiles({ force } = {}) {
   const id = state.activeId;
   let res;
   try {
-    res = await authedFetch(`/sessions/${encodeURIComponent(id)}/files-changed`);
+    res = await authedFetch(_withShareToken(`/sessions/${encodeURIComponent(id)}/files-changed`));
   } catch (e) {
     if (msgEl) { msgEl.textContent = `Failed: ${e.message || e}`; msgEl.hidden = false; }
     return;
@@ -10229,7 +10249,8 @@ async function _togglePlanChangedFileExpand(li) {
   // Fetch + render.
   if (!state.activeId) return;
   const id = state.activeId;
-  const url = `/sessions/${encodeURIComponent(id)}/files/diff?path=${encodeURIComponent(path)}`;
+  // bug-47: wrap with _withShareToken so guests can fetch the diff.
+  const url = _withShareToken(`/sessions/${encodeURIComponent(id)}/files/diff?path=${encodeURIComponent(path)}`);
   let res;
   try { res = await authedFetch(url); }
   catch (e) {
@@ -10630,7 +10651,9 @@ function _togglePcfLineComment(lineEl) {
 async function _sendReconsider(filePath, comment, lineNo) {
   if (!state.activeId) return;
   const id = state.activeId;
-  const url = `/sessions/${encodeURIComponent(id)}/files/reconsider`;
+  // bug-47: wrap with _withShareToken so guests can POST to the
+  // viewer-readable /files/reconsider route.
+  const url = _withShareToken(`/sessions/${encodeURIComponent(id)}/files/reconsider`);
   let res;
   try {
     res = await authedFetch(url, {

@@ -4245,14 +4245,23 @@
       "addedAt": "2026-06-02T00:11:21.089Z",
       "addedBy": "labxnow",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "when logged in as a guest, the file explorer is not showing anything, guest user should still have view permission to the files",
         "rewritten": true
       },
-      "description": "**Problem:** Guest-authenticated users cannot browse files in the file explorer, blocking read-only access they are entitled to.\n**Expected:** When logged in as a guest, the file explorer lists files the guest role has view permission for.\n**Actual:** The file explorer renders empty for guest sessions, showing no files at all."
+      "description": "**Problem:** Guest-authenticated users cannot browse files in the file explorer, blocking read-only access they are entitled to.\n**Expected:** When logged in as a guest, the file explorer lists files the guest role has view permission for.\n**Actual:** The file explorer renders empty for guest sessions, showing no files at all.",
+      "runs": [
+        {
+          "status": "completed",
+          "ts": "2026-06-02T05:30:00.000Z",
+          "summary": "Root cause: viewer-tier file-API endpoints (GET /sessions/:id/files, /files-changed, /files/diff, POST /files/reconsider) are gated by fileApiPreamble('viewer'), which accepts EITHER an owner/admin/viewer Bearer token OR `?s=<shareToken>` matching the session id. The client's authedFetch only attaches the Bearer header — it never appended state.shareToken to the URL. Guests (who arrive via a share link, have state.shareToken set, but no state.token) therefore fell through every access tier in the preamble and got 401 on every file-API call — the File Explorer rendered the 'Failed to list: HTTP 401' branch with an empty tree. Fix: introduced a single `_withShareToken(url)` helper in web/public/app.js (right next to authedFetch) that appends `s=<token>` to the URL when state.shareToken is set, auto-picking `?` vs `&` based on whether the URL already carries a query. Wrapped every viewer-tier file-API callsite with the helper: loadFileTree (line ~9904), loadPlanChangedFiles (~9947), the per-file inline-diff fetcher in _planChangedDiffOpen (~10250), the chrome-batch diff fetch (~6650), the verdict-panel discard + accept handlers' /files-changed pre-fetch (~7342, ~7379), and the _sendReconsider POST (~10637). Helper is a no-op when state.shareToken is empty (the normal signed-in flow), and the server's owner-tier check wins first when a signed-in user happens to also carry a stray share token — so always appending when present is benign. Regression test: test/bug-47-guest-files-share-token.test.js (6 cases) — static-grep guards on the helper definition (function name + state.shareToken read + encodeURIComponent wrap + both `?`/`&` separators in the body), each of the 4 file-API path patterns ((/files?path=, /files-changed, /files/diff?path=, /files/reconsider) wrapping its URL with _withShareToken(...) within ±400 chars, and a bug-47 marker comment. Comment-stripping in the test ensures the helper's own doc-block (which mentions the route names verbatim) doesn't trip the guard. Wired into test/test.sh next to bug-46. Not yet committed/pushed — awaiting user direction."
+        }
+      ]
     },
     {
       "id": "fr-91",
@@ -4277,7 +4286,39 @@
           "summary": "Scope (per AskUserQuestion): Test buttons next to the 4 ADMIN API keys in the Config modal (Anthropic / Gemini / OpenAI / Custom Critic) — NOT per-repo PATs this round. Inline-warning policy: Save proceeds regardless of probe outcome. Implementation: (1) New `POST /api/admin/test-key` endpoint in server/src/index.js (with `requireAdmin` gate matching /api/admin/config) — 4 probe helpers (_probeAnthropicKey hits api.anthropic.com/v1/models with x-api-key + anthropic-version header; _probeGeminiKey runs a 1-token generateContent on gemini-2.5-flash via the @google/genai SDK; _probeOpenAIKey hits api.openai.com/v1/models with Bearer auth; _probeCustomCriticKey hits the user-supplied endpoint + /v1/models with optional Bearer key). (2) Four Test buttons + inline `.test-key-status` spans in web/public/index.html, sitting in the existing .input-with-reveal row. (3) FR91_BTN_IDS / FR91_INPUT_IDS / FR91_STATUS_IDS explicit maps in web/public/app.js + `_runApiKeyTest(which)` + `_bindApiKeyTestButtons()` wired into loadAdminConfig() so the Test buttons rebind every time the Config modal loads (idempotent via dataset.fr91Bound). (4) CSS: .btn-test-key + .test-key-status.{ok,err,testing} in web/public/styles.css. Tests: test/fr-91-admin-key-test.test.js (8 cases) wired into test/test.sh. Locks: endpoint route + requireAdmin gate, 4 branches in handler, probe targets (api.anthropic.com, api.openai.com, GoogleGenAI), 4 button ids inside #admin-config-form, 4 click handlers in app.js, .value reference near the endpoint URL, and a fr-91 marker comment. Adjacent suites stay green (bug-46 5/5, critic-gemini-calibration 9/9, fr-26 10/10, bug-45 26/26, fr-87 r4 7/7). Would have caught the bug-46 critic failure immediately: pasting a Gemini key + clicking Test would have shown ✓ or ✗ before any plan-item dispatch tried to use it. Not yet committed/pushed — awaiting user direction. Per-repo PATs (GitHub/Gitee via /setpat) are NOT covered this round per the AskUserQuestion answer."
         }
       ]
+    },
+    {
+      "id": "bug-48",
+      "text": "Handle `system` events with `task_progress` / `task_started` subtypes in agent frame handler",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-02T03:47:51.658Z",
+      "addedBy": "labxnow",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "4c445d39ba07",
+          "user": "labxnow",
+          "text": "the following should be handled too:  _appendAgentEvent @ app.js?v=2026-06-02T01%3A40%3A11Z:5866 _handleAgentFrame @ app.js?v=2026-06-02T01%3A40%3A11Z:5587 (anonymous) @ app.js?v=2026-06-02T01%3A40%3A11Z:1888Understand this warning app.js?v=2026-06-02T01%3A40%3A11Z:5866 [unknown_event] system {type: 'system', subtype: 'task_notification', task_id: 'b4qbxnpb3', tool_use_id: 'toolu_01TLtshWCp3bXFcdYYuLUXEY', status: 'completed', …}",
+          "ts": "2026-06-02T03:49:04.565Z"
+        },
+        {
+          "id": "dc7208f5ae02",
+          "user": "kkrazy",
+          "text": "Should try to handle all event type to inform use the status, but should make it as part of chrome batch to ensure ui cleaness",
+          "ts": "2026-06-02T04:33:51.280Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "should handle the following subtype properly: app.js?v=2026-06-02T01%3A40%3A11Z:5866 [unknown_event] system {type: 'system', subtype: 'task_progress', task_id: 'a9a0db873200cafb9', tool_use_id: 'toolu_013BbK1DN1GinPBBuGuYFtT5', description: 'Deploy 533fbfe to mycodev', …}\n_appendAgentEvent @ app.js?v=2026-06-02T01%3A40%3A11Z:5866\n_handleAgentFrame @ app.js?v=2026-06-02T01%3A40%3A11Z:5587\n(anonymous) @ app.js?v=2026-06-02T01%3A40%3A11Z:1888Understand this warning\napp.js?v=2026-06-02T01%3A40%3A11Z:5866 [unknown_event] system {type: 'system', subtype: 'task_progress', task_id: 'a9a0db873200cafb9', tool_use_id: 'toolu_013BbK1DN1GinPBBuGuYFtT5', description: 'Running Copy archive to mycodev', …}\n_appendAgentEvent @ app.js?v=2026-06-02T01%3A40%3A11Z:5866\n_handleAgentFrame @ app.js?v=2026-06-02T01%3A40%3A11Z:5587\n(anonymous) @ app.js?v=2026-06-02T01%3A40%3A11Z:1888Understand this warning\napp.js?v=2026-06-02T01%3A40%3A11Z:5866 [unknown_event] system {type: 'system', subtype: 'task_started', task_id: 'bqkohadtg', tool_use_id: 'toolu_01WGjujUVn2hdfg9jv6mMQbn', description: 'Copy archive to mycodev', …}",
+        "rewritten": true
+      },
+      "description": "**Problem:** Agent frame handler logs `[unknown_event]` warnings for valid `system` events emitted during task lifecycle, polluting the console and skipping UI updates.\n**Expected:** `_appendAgentEvent` recognizes `system` events with subtypes `task_progress` and `task_started` (and surfaces their `description` / `task_id` / `tool_use_id` in the UI).\n**Actual:** These subtypes fall through to the unknown-event branch and are dropped with a warning.\n**Context:** `app.js:5866` (`_appendAgentEvent`), called from `_handleAgentFrame` at `app.js:5587`. Example payloads: `{type:'system', subtype:'task_progress', task_id, tool_use_id, description:'Deploy 533fbfe to mycodev'}` and `{type:'system', subtype:'task_started', ...}`."
     }
   ],
-  "updatedAt": "2026-06-02T01:00:00.000Z"
+  "updatedAt": "2026-06-02T03:48:00.258Z"
 }

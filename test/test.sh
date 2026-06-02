@@ -2597,6 +2597,19 @@ test_chat_window() {
   # in fileApiPreamble, and the bug-46 marker comments in both
   # files.
   node_test_result test/bug-46-vote-cross-user.test.js "test/bug-46-vote-cross-user.test.js (5 cases)"
+  # bug-47: Guest users with viewer permission saw an empty File
+  # Explorer because the client's authedFetch only attached the Bearer
+  # token — it never appended `?s=<shareToken>`. fileApiPreamble('viewer')
+  # therefore fell through every access tier and returned 401 on
+  # /files, /files-changed, /files/diff, /files/reconsider. Fix
+  # introduces a `_withShareToken(url)` helper in web/public/app.js
+  # that appends `s=<token>` (picking `?` vs `&` automatically) when
+  # state.shareToken is set, and wraps each viewer-tier file-API URL
+  # with it (loadFileTree, loadPlanChangedFiles, the verdict-panel
+  # discard/accept handlers, the inline-diff fetcher, and the
+  # reconsider POST). Static-grep guards lock the helper definition
+  # + each callsite wrapping its URL + the bug-47 marker comment.
+  node_test_result test/bug-47-guest-files-share-token.test.js "test/bug-47-guest-files-share-token.test.js (6 cases)"
   # critic-gemini-calibration (2026-06-02): triggered by Gemini
   # returning 404 on the deprecated gemini-1.5-pro model name during
   # a bug-46 run-dispatch critique. Three calibrations land together:
