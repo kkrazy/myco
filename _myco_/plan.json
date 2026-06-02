@@ -3477,7 +3477,19 @@
         "rewriteRequested": "long",
         "originalText": "plan view should be able to pull down the issues from github or gittee or any git compatible repository and display with a indicator is remote",
         "rewritten": true
-      }
+      },
+      "runs": [
+        {
+          "status": "running",
+          "ts": "2026-06-02T23:24:30.578Z",
+          "summary": null
+        },
+        {
+          "status": "completed",
+          "ts": "2026-06-02T17:00:00.000Z",
+          "summary": "r1 (@kkrazy comment: 'the issue creation works now, but it's not rewriting it to proper format before submitting the issue'). Root cause: the remote-target branch in handleAddPlanItem (slashcmds.js ~line 363) was computing shouldRewrite via the same threshold expression as local plan items: `forceRewrite || wordCount > PLAN_ITEM_REWRITE_WORD_THRESHOLD`. The threshold (8 words) made sense for local quick captures — `/td auth flow broken` stays quick because it's just a local memo — but for remote issues the trade-off flips: a short remote capture still goes to a public bug tracker where Problem/Expected/Actual shape is always worth the extra rewrite call. fr-80 r5 had already added the rewrite path but gated it behind the same threshold; @kkrazy's r1 report surfaces that short captures (≤8 words, no `!`) were still landing raw on GitHub. Fix: in the remote branch ONLY, `shouldRewrite = true` unconditionally. The local-plan-item branch a few lines below keeps the threshold so local quick captures stay quick (verified by the fr-81 r1 test's second case + the existing fr-80 r5 test updated to reflect the new contract). Regression test: test/fr-81-r1-always-rewrite-remote.test.js (3 cases) — locks the remote-branch shouldRewrite is `= true` (not the threshold expression), the LOCAL-branch shouldRewrite still uses the threshold (didn't regress quick captures), and a fr-81 marker comment exists. Wired into test/test.sh after fr-94. The existing fr-80 r5 test (test/fr-80-remote-issue-routing.test.js) was updated to match the new contract: its 'must compute shouldRewrite (forceRewrite || wordCount > threshold)' assertion became 'must compute shouldRewrite = true' for the remote branch (now passes 19/19 instead of 18/19). Not yet committed/pushed/deployed — awaiting user direction."
+        }
+      ]
     },
     {
       "id": "fr-82",
@@ -4566,6 +4578,16 @@
             "kind": "run-summary",
             "runStartedAt": "2026-06-02T23:20:08.238Z"
           }
+        },
+        {
+          "id": "bf4ae5fb891b",
+          "user": "claude",
+          "text": "✓ success · 69.7s · $29.6028 · 7↓/4533↑\n\nThe critique text is truncated mid-sentence — I can see Gemini saying *\"The changes largely align with the stated goal... and address the critique...\"* but the rest is cut off. Without the specific flags, I'd be making speculative changes that may not address the real concern.\n\nCould you paste the full critique? Specifically interested in the part after *\"...address the critique\"* — that's where the new issues (if any) would be listed.\n\n**Status snapshot of all in-flight work:**\n\n| Item | State |\n|---|---|\n| fr-94 Phase 1 + r1 critique fixes | Implemented + tested locally, **uncommitted** |\n| fr-85 r8 (copy button + keep selection) | Just started searching code, no edits yet |\n| fr-92 (mobile swipe → arrow keys) | Dispatched but paused for critique handling |\n| fr-94 r2 critique | **Wai…",
+          "ts": "2026-06-02T23:24:03.568Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T23:22:53.909Z"
+          }
         }
       ],
       "meta": {
@@ -4602,8 +4624,15 @@
           "result": "**fr-94 r1 critique response — both concerns addressed locally:**\n\n1. ✅ **artifacts.js**: `findProjectRoot` now `console.warn`s + `return null` when `rec.mainProject` is set but the directory doesn't exist (instead of silently falling through to auto-detect). Test added.\n2. ✅ **sessions.js**: `_spawnViaGitClone` now passes `timeout: 120_000` (2 min) to `spawnSync`. ETIMEDOUT branch creates the empty dir + logs the timeout. Test added.\n\nTest envelope grew from 11 → 13 cases. fr-94 commit `97a9eb3` is still pending on this session — these r1 fixes will fold into the same commit when you say \"commit\" (or as a separate r1 commit, your call).\n\n**Outstanding from before the critique:** you also dispatched `fr-92` (mobile swipe → arrow-key history). I paused on it to handle the critique. Want me to:\n\n- **Resume fr-92** now (mobile swipe wiring is small)\n- **Commit/push fr-94 + r1 fixes first**, then fr-92\n- **Other priority**"
         },
         {
+          "status": "success",
+          "ts": "2026-06-02T23:24:03.568Z",
+          "startedAt": "2026-06-02T23:22:53.909Z",
+          "summary": "69.7s · 7→4533 tok",
+          "result": "The critique text is truncated mid-sentence — I can see Gemini saying *\"The changes largely align with the stated goal... and address the critique...\"* but the rest is cut off. Without the specific flags, I'd be making speculative changes that may not address the real concern.\n\nCould you paste the full critique? Specifically interested in the part after *\"...address the critique\"* — that's where the new issues (if any) would be listed.\n\n**Status snapshot of all in-flight work:**\n\n| Item | State |\n|---|---|\n| fr-94 Phase 1 + r1 critique fixes | Implemented + tested locally, **uncommitted** |\n| fr-85 r8 (copy button + keep selection) | Just started searching code, no edits yet |\n| fr-92 (mobile swipe → arrow keys) | Dispatched but paused for critique handling |\n| fr-94 r2 critique | **Waiting on full text** |\n\n**Suggested ordering once I have the full critique** (or you redirect):\n1. Address fr-94 r2 critique (the most recent dispatch)\n2. Commit + push the consolidated fr-94 (Phase 1 + r1 + r2) as one commit\n3. Resume fr-85 r8 (small change — copy button + preserve selection)\n4. Pick up fr-92\n\nDrop the full critique text and I'll resolve it, or tell me to reprioritize."
+        },
+        {
           "status": "running",
-          "ts": "2026-06-02T23:22:53.910Z",
+          "ts": "2026-06-02T23:24:30.819Z",
           "summary": null
         }
       ]
@@ -4618,7 +4647,26 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "bug-51",
+      "text": "Plan item ID wraps in mobile HUD as time ticker grows",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-02T23:27:14.360Z",
+      "addedBy": "labxnow",
+      "source": "user",
+      "voters": [
+        "labxnow"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "leave enough space for hud display in mobile mode so that the plan item id doesnt wrap as the time ticker grows.",
+        "rewritten": true
+      },
+      "description": "**Problem:** In mobile mode, the HUD doesn't reserve enough space for the time ticker, causing the plan item ID to wrap as the ticker widens.\n**Expected:** HUD layout reserves sufficient width for the growing time ticker so the plan item ID stays on a single line.\n**Actual:** As the time ticker grows, it squeezes the plan item ID and forces it to wrap."
     }
   ],
-  "updatedAt": "2026-06-02T23:23:12.342Z"
+  "updatedAt": "2026-06-02T23:27:20.326Z"
 }

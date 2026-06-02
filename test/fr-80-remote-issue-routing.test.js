@@ -230,21 +230,34 @@ t('slashcmds.js: r2 — /setpat @<target> <token> path stores PAT without needin
     'usage hint must advertise both `<token>` and `@<target> [--as <alias>] <token>` forms');
 });
 
-t('slashcmds.js: r5 — long /fr @<target> AND /fr! @<target> rewrite the body via claude before submit', () => {
-  // User report: "the issue creation works now, but it's not rewriting
-  // it to proper format before submitting the issue." r5 applies the
-  // same _PLAN_REWRITE_SYSTEM prompt used by local plan items, before
-  // the GitHub POST. Triggered by the existing word-count threshold
-  // (PLAN_ITEM_REWRITE_WORD_THRESHOLD) OR the explicit `!` force flag.
-  // shouldRewrite is computed in addPlanItem's @<target> branch and
-  // forwarded to handleRemoteIssue.
+t('slashcmds.js: r5 + fr-81 r1 — /fr @<target> ALWAYS rewrites the body via claude before submit (no threshold)', () => {
+  // User report (fr-80 r5): "the issue creation works now, but it's
+  // not rewriting it to proper format before submitting the issue."
+  // r5 applied the same _PLAN_REWRITE_SYSTEM prompt used by local
+  // plan items before the GitHub POST.
+  // User report (fr-81 r1, same complaint surfacing again on short
+  // captures): the word-count threshold meant short captures STILL
+  // skipped the rewrite. fr-81 r1 flips the remote branch to
+  // shouldRewrite = true unconditionally — short or long, remote
+  // issues always get the Problem/Expected/Actual shape. The local
+  // plan-item branch keeps the threshold (quick captures stay quick).
   //
-  // Pin: addPlanItem's @<target> branch computes wordCount + shouldRewrite
-  // AND forwards them to handleRemoteIssue.
+  // Pin: addPlanItem's @<target> branch computes shouldRewrite = true
+  // AND forwards it to handleRemoteIssue.
   const idxAdd = SRC.search(/function\s+addPlanItem\s*\(/);
   const winAdd = SRC.slice(idxAdd, idxAdd + 5000);
-  assert.ok(/wordCount\s*=\s*remainder\.split[\s\S]{0,200}shouldRewrite\s*=\s*forceRewrite\s*\|\|\s*wordCount\s*>\s*PLAN_ITEM_REWRITE_WORD_THRESHOLD/.test(winAdd),
-    'addPlanItem @<target> branch must compute shouldRewrite (forceRewrite || wordCount > threshold)');
+  // The remote branch's shouldRewrite is the LAST const-shouldRewrite
+  // assignment BEFORE the `return handleRemoteIssue(...)` call. It
+  // must equal `true` post-fr-81 r1 (the threshold expression was the
+  // pre-r1 contract).
+  const remoteCallAt = winAdd.search(/return\s+handleRemoteIssue\s*\(/);
+  assert.ok(remoteCallAt > -1, 'addPlanItem must call handleRemoteIssue.');
+  const beforeReturn = winAdd.slice(0, remoteCallAt);
+  const lastShouldRewrite = (beforeReturn.match(/const\s+shouldRewrite\s*=\s*[^;\n]+;/g) || []).pop();
+  assert.ok(lastShouldRewrite,
+    'a `const shouldRewrite = ...;` must precede the handleRemoteIssue call.');
+  assert.ok(/=\s*true\s*;/.test(lastShouldRewrite),
+    `the remote-branch shouldRewrite must be \`= true\` (fr-81 r1 — short remote captures still need the Problem/Expected/Actual rewrite). Got: ${lastShouldRewrite}`);
   assert.ok(/handleRemoteIssue\(\s*ctx,\s*layer,\s*targetName,\s*remainder,\s*alias,\s*shouldRewrite\s*\)/.test(winAdd),
     'addPlanItem must forward shouldRewrite to handleRemoteIssue');
   // Pin: handleRemoteIssue signature accepts shouldRewrite + runs the

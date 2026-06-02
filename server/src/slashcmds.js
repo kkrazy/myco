@@ -353,14 +353,21 @@ function addPlanItem(ctx, layer) {
       ctx.reply(`Usage: /${cmdName} @${targetName}${alias ? ' --as ' + alias : ''} <description>`);
       return;
     }
-    // fr-80 r5: same rewrite policy as local plan items applies to
-    // remote issues — short captures (≤ 8 words, no `!`) submit
-    // verbatim; long descriptions OR explicit `!` force-rewrite get
-    // the Problem/Expected/Actual rewrite via claude BEFORE the
-    // POST. Without this, /fr @myco landed unstructured one-liners
-    // on GitHub which the user explicitly flagged.
-    const wordCount = remainder.split(/\s+/).filter(Boolean).length;
-    const shouldRewrite = forceRewrite || wordCount > PLAN_ITEM_REWRITE_WORD_THRESHOLD;
+    // fr-80 r5: same rewrite policy as local plan items applied to
+    // remote issues — short captures (≤ 8 words, no `!`) submitted
+    // verbatim; long descriptions OR explicit `!` force-rewrite got
+    // the Problem/Expected/Actual rewrite via claude BEFORE the POST.
+    //
+    // fr-81 r1 (@kkrazy report: "the issue creation works now, but
+    // it's not rewriting it to proper format before submitting the
+    // issue"): remote issues now ALWAYS rewrite, regardless of word
+    // count. The cost-vs-quality trade-off flips when the target is a
+    // public bug tracker: a short `/fr @myco Add foo` deserves the
+    // same Problem/Expected/Actual shape as a long one. Local plan
+    // items still keep the threshold (quick captures stay quick) —
+    // see the `shouldRewrite` re-computation a few lines below for
+    // the non-remote path.
+    const shouldRewrite = true;
     // Route to remote issue + return — does NOT append a local plan
     // item (the user wanted this to land on the OTHER repo).
     return handleRemoteIssue(ctx, layer, targetName, remainder, alias, shouldRewrite);

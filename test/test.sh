@@ -2727,6 +2727,17 @@ test_chat_window() {
   #    sniffs URL vs name and forwards as gitCloneUrl / mainProjectName.
   #    This session migrated by hand: rec.mainProject = 'myco'.
   node_test_result test/fr-94-main-project.test.js "test/fr-94-main-project.test.js (13 cases — incl. r1 critique-response guards)"
+  # fr-81 r1: @kkrazy reported the remote /fr /bug /td flow shipped
+  # short captures verbatim to GitHub — the word-count threshold that
+  # made sense for local plan items (quick captures stay quick) was
+  # also applied to remote issues, which goes to a public bug tracker
+  # where Problem/Expected/Actual format is always worth the extra
+  # rewrite call. Fix: in the remote branch only, set shouldRewrite =
+  # true unconditionally. Local plan-item branch keeps the threshold.
+  # Locks: the remote-branch shouldRewrite assignment is `= true`, the
+  # local-branch shouldRewrite still uses the threshold, and a fr-81
+  # marker exists.
+  node_test_result test/fr-81-r1-always-rewrite-remote.test.js "test/fr-81-r1-always-rewrite-remote.test.js (3 cases)"
   # critic-gemini-calibration (2026-06-02): triggered by Gemini
   # returning 404 on the deprecated gemini-1.5-pro model name during
   # a bug-46 run-dispatch critique. Three calibrations land together:
