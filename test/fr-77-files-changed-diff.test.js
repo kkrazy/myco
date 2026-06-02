@@ -680,14 +680,15 @@ t('app.js: r14 Lucide icon registry + _lucideIcon helper defined', () => {
 
 t('app.js: r14 plan-item action row uses _lucideIcon (not emoji)', () => {
   // Per-item action row builders should reference _lucideIcon for run,
-  // edit, edited badge, close (✓ + ↻), comment-toggle, vote.
+  // edit, edited badge, close (× + ↻), comment-toggle, vote, and the
+  // per-comment delete trash. bug-49 removed the per-item trash button
+  // but the per-comment delete still uses 'trash'. close-icon-uses-x
+  // swapped the close glyph from 'check' to 'x' (per user report — ✓
+  // wasn't reading as close).
   const idx = APP.search(/const\s+voteBlock\s*=/);
-  // The inlined SVG strings + close+edit+delete templates ballooned the
-  // section past 8kB — slice 14kB to cover them all (voteBlock at line
-  // ~6750, the trash delete button is ~280 lines / ~13kB later).
   const win = APP.slice(idx, idx + 14000);
   for (const name of ['thumbs-up', 'message-square', 'play', 'pencil',
-                       'check', 'rotate-ccw', 'trash']) {
+                       'x', 'rotate-ccw', 'trash']) {
     assert.ok(new RegExp("_lucideIcon\\(['\"]" + name + "['\"]").test(win),
       `plan-item action row must use _lucideIcon('${name}')`);
   }

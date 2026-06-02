@@ -420,6 +420,10 @@ const LUCIDE_PATHS = {
   'pencil':        '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   'check':         '<polyline points="20 6 9 17 4 12"/>',
   'rotate-ccw':    '<path d="M3 12a9 9 0 1 0 9-9 9.74 9.74 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  // close-icon-uses-x: standard Lucide × glyph — two crossing strokes.
+  // Replaces the 'check' ✓ that the .artifact-item-close button was
+  // using; ✓ reads as "mark complete", × reads as "close".
+  'x':             '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   'trash':         '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
 };
 function _lucideIcon(name, cls) {
@@ -9047,10 +9051,12 @@ function renderArtifact(type, artifact) {
     const closeTitle = it.done
       ? 'Reopen this item (clears done state)'
       : 'Close this item (marks done — no claude dispatch)';
-    // Close icon = ✓ (mark done); Reopen icon = ↻ (restart). r14 swap
-    // to Lucide 'check' + 'rotate-ccw' SVGs (chrome family). Mobile
-    // shows just the icon; desktop adds the text label after.
-    const closeIcon = it.done ? _lucideIcon('rotate-ccw') : _lucideIcon('check');
+    // Close icon = × (close); Reopen icon = ↻ (restart). r14 first
+    // swapped to Lucide 'check' + 'rotate-ccw' SVGs (chrome family);
+    // close-icon-uses-x then swapped the close glyph from ✓ to × per
+    // user report — ✓ reads as "mark complete", × reads as "close".
+    // Mobile shows just the icon; desktop adds the text label after.
+    const closeIcon = it.done ? _lucideIcon('rotate-ccw') : _lucideIcon('x');
     const closeBtn = supportsVoting
       ? `<button class="artifact-item-close" data-type="${escHtml(type)}" data-id="${escHtml(it.id)}" data-done="${it.done ? '1' : '0'}" title="${escHtml(closeTitle)}" aria-label="${escHtml(closeLabel)}"><span class="btn-icon">${closeIcon}</span><span class="btn-text">${escHtml(closeLabel)}</span></button>`
       : '';

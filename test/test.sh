@@ -2676,6 +2676,13 @@ test_chat_window() {
   # new contract. Static-grep guards on the deleted symbols + the
   # surviving .artifact-item-close button + a bug-49 marker.
   node_test_result test/bug-49-trash-becomes-close.test.js "test/bug-49-trash-becomes-close.test.js (9 cases)"
+  # close-icon-uses-x: user reported the check icon (✓) on the
+  # .artifact-item-close button wasn't reading as "close" — ✓ reads
+  # as "mark complete". Swap to Lucide 'x' (the universal close
+  # glyph) for the open → close branch. Reopen branch stays at
+  # 'rotate-ccw'. Adds an 'x' entry to LUCIDE_PATHS (the registry
+  # didn't have one before).
+  node_test_result test/close-icon-uses-x.test.js "test/close-icon-uses-x.test.js (2 cases)"
   # critic-gemini-calibration (2026-06-02): triggered by Gemini
   # returning 404 on the deprecated gemini-1.5-pro model name during
   # a bug-46 run-dispatch critique. Three calibrations land together:
