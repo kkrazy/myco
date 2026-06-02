@@ -2626,6 +2626,25 @@ test_chat_window() {
   # the sessionId-keyed lookup, and the bug-47 marker — all inside the
   # openSession() body.
   node_test_result test/bug-47-r2-share-token-hydrate-on-open.test.js "test/bug-47-r2-share-token-hydrate-on-open.test.js (4 cases)"
+  # bug-47 r3: labxnow (a logged-in user, not a share-link guest) was
+  # getting 403 on the file-API on mycobeta even though the user had
+  # added them as viewer/admin. Root cause: the access-tier check was
+  # implemented FOUR times in server/src/sessions.js — once each in
+  # isOwnerAdminOrViewer / isOwnerOrAdmin / listSessions filter, plus
+  # inline inside index.js fileApiPreamble. Three of those four copies
+  # contained an identical hardcoded carve-out granting global access
+  # to {labxnow, kkrazy, ryan-blues} (added in f71495f as a dev-mode
+  # shortcut). fileApiPreamble was the only copy WITHOUT the carve-out
+  # — so labxnow could see + attach to any session via the helper-using
+  # paths but got 403 on /files. The fix extracts resolveAccessTier
+  # (sessionId, user) → 'owner' | 'viewer' | null as the single source
+  # of truth and has all four call sites delegate to it. Carve-out
+  # lives in ONE place (GLOBAL_OWNER_USERS Set). Locks: the new
+  # resolveAccessTier exists + is exported, returns the 3 documented
+  # values, isOwnerAdminOrViewer delegates to it, the carve-out is
+  # de-duplicated, fileApiPreamble references the helper, and a
+  # bug-47 r3 marker comment exists.
+  node_test_result test/bug-47-r3-access-tier-unified.test.js "test/bug-47-r3-access-tier-unified.test.js (6 cases)"
   # bug-48: SDK `system` events with task-lifecycle subtypes
   # (task_started / task_progress / task_notification) were falling
   # through to the unknown_event passthrough on the client, which

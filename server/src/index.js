@@ -33,7 +33,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const sessionsMod = require('./sessions');
-const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, isOwnerAdminOrViewer, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
+const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, isOwnerAdminOrViewer, resolveAccessTier, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
 const filesApi = require('./files');
 const { askAboutFile, ASSISTANT_USER } = require('./btw');
 const githubMod = require('./github');
@@ -821,25 +821,20 @@ function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' | 'authe
   if (!isAuthRequired()) {
     access = 'owner';                                    // single-user mode
   } else if (req.user) {
-    // fr-87 (private-by-default): tightened from the pre-fr-87 rule
-    // where any authenticated user got 'viewer' access to any session
-    // they could find the id for. Now only owner + admins + viewers
-    // (rec.admins[], rec.viewers[]) pass; everyone else falls through
-    // to the share-token check or rejects.
-    //
-    // Tier mapping:
-    //   owner / admin → 'owner' tier (admin inherits write surface per
-    //     fr-39, so files/accept, files/reject, etc. accept admins).
-    //   viewer        → 'viewer' tier (read-only).
-    //   authed        → bug-46 carve-out, handled above.
-    //   other         → null (try share token next).
-    if (rec.user === req.user) {
-      access = 'owner';
-    } else if (Array.isArray(rec.admins) && rec.admins.includes(req.user)) {
-      access = 'owner';
-    } else if (Array.isArray(rec.viewers) && rec.viewers.includes(req.user)) {
-      access = 'viewer';
-    }
+    // bug-47 r3: delegate to sessions.js resolveAccessTier(sessionId,
+    // user) — the SINGLE source of truth for access decisions. Pre-r3
+    // this block reimplemented the rec.user/admins/viewers ladder
+    // inline, which silently drifted from the same ladder in
+    // sessions.js isOwnerAdminOrViewer: the labxnow/kkrazy/ryan-blues
+    // hardcoded carve-out only lived there, so labxnow could attach
+    // to any session via the WS path (gated by isOwnerAdminOrViewer)
+    // but got 403 on the file-API (gated by this inline check). The
+    // helper returns 'owner' | 'viewer' | null with the same fr-87
+    // tier semantics — owner/admin → 'owner', viewer → 'viewer',
+    // global carve-out → 'viewer'. The bug-46 'authed' carve-out
+    // stays inline above this block; the shareTok fallback stays
+    // inline below.
+    access = resolveAccessTier(id, req.user);
   }
   if (!access) {
     const shareTok = (req.query && req.query.s) || '';

@@ -409,11 +409,11 @@ function getSessionAdmins(sessionId) {
 }
 
 function isOwnerOrAdmin(sessionId, user) {
-  if (user && (user.toLowerCase() === 'labxnow' || user.toLowerCase() === 'kkrazy' || user.toLowerCase() === 'ryan-blues')) return true;
-  const rec = getSessionRecord(sessionId);
-  if (!rec || !user) return false;
-  if (rec.user === user) return true;
-  return Array.isArray(rec.admins) && rec.admins.includes(user);
+  // bug-47 r3: delegate to resolveAccessTier — the carve-out + the
+  // rec.user/admins/viewers ladder both live there. 'owner' tier
+  // corresponds to "owner or admin" (admins are stored in rec.admins
+  // and resolveAccessTier maps them to 'owner').
+  return resolveAccessTier(sessionId, user) === 'owner';
 }
 
 function addAdminToSession(sessionId, user) {
@@ -499,13 +499,51 @@ function getSessionViewers(sessionId) {
   return Array.isArray(rec.viewers) ? rec.viewers.slice() : [];
 }
 
-function isOwnerAdminOrViewer(sessionId, user) {
-  if (user && (user.toLowerCase() === 'labxnow' || user.toLowerCase() === 'kkrazy' || user.toLowerCase() === 'ryan-blues')) return true;
+// bug-47 r3: SINGLE source of truth for "what tier does this user
+// have on this session?" Returns 'owner' | 'viewer' | null.
+//
+// Pre-r3, the access logic was implemented FOUR times — here in
+// isOwnerAdminOrViewer (boolean) AND in isOwnerOrAdmin (boolean) AND
+// in listSessions' filter (boolean) AND inline inside fileApiPreamble
+// (tier-aware) in server/src/index.js. All four copies hand-rolled
+// the rec.user / rec.admins / rec.viewers ladder, and three of them
+// also included an identical hardcoded global carve-out (added in
+// f71495f alongside the Gitee PAT work — a dev-mode shortcut so the
+// project collaborators don't need explicit /share grants on every
+// session). The fourth copy (fileApiPreamble) DIDN'T have the
+// carve-out, so labxnow could see + attach via the helper-using
+// paths but got 403 on the file-API — exactly the @kkrazy
+// re-dispatch of bug-47.
+//
+// The carve-out maps to 'owner' tier to preserve the pre-r3
+// behaviour of isOwnerOrAdmin returning true for these users (so
+// they keep write access where they had it). Explicit rec.admins
+// entries are also 'owner', so no double-grant edge case.
+//
+// To revoke the carve-out, delete the `GLOBAL_OWNER_USERS` check
+// inside this function — that's the one place it lives now.
+const GLOBAL_OWNER_USERS = new Set(['labxnow', 'kkrazy', 'ryan-blues']);
+
+function resolveAccessTier(sessionId, user) {
+  if (!user) return null;
   const rec = getSessionRecord(sessionId);
-  if (!rec || !user) return false;
-  if (rec.user === user) return true;
-  if (Array.isArray(rec.admins) && rec.admins.includes(user)) return true;
-  return Array.isArray(rec.viewers) && rec.viewers.includes(user);
+  if (!rec) return null;
+  // Explicit ACL first — owner / admin / viewer entries take precedence.
+  if (rec.user === user) return 'owner';
+  if (Array.isArray(rec.admins) && rec.admins.includes(user)) return 'owner';
+  if (Array.isArray(rec.viewers) && rec.viewers.includes(user)) return 'viewer';
+  // Global carve-out (full owner tier — matches pre-r3 isOwnerOrAdmin
+  // behaviour for these users).
+  if (GLOBAL_OWNER_USERS.has(String(user).toLowerCase())) return 'owner';
+  return null;
+}
+
+function isOwnerAdminOrViewer(sessionId, user) {
+  // bug-47 r3: delegate to resolveAccessTier so the access rules stay
+  // in ONE place. Pre-r3 this had its own inline copy of the rules +
+  // the global carve-out — duplication that drifted out of sync with
+  // fileApiPreamble.
+  return resolveAccessTier(sessionId, user) !== null;
 }
 
 function addViewerToSession(sessionId, user) {
@@ -593,12 +631,13 @@ async function listSessions(forUser) {
   // it lets a shared session show up in the recipient's sidebar.
   const filtered = forUser
     ? all.filter((r) => {
-        if (forUser && (forUser.toLowerCase() === 'labxnow' || forUser.toLowerCase() === 'kkrazy' || forUser.toLowerCase() === 'ryan-blues')) return true; // Global admin sees all sessions
-        const u = forUser.toLowerCase();
-        if (r.user && r.user.toLowerCase() === u) return true;
-        if (Array.isArray(r.admins) && r.admins.some(a => a.toLowerCase() === u)) return true;
-        if (Array.isArray(r.viewers) && r.viewers.some(v => v.toLowerCase() === u)) return true;
-        return false;
+        // bug-47 r3: delegate to resolveAccessTier so the carve-out +
+        // the rec.user/admins/viewers ladder live in one place. The
+        // pre-r3 filter hand-rolled lowercase comparisons; the shared
+        // helper takes the strict-equality path the explicit ACL
+        // uses, plus the lowercased carve-out check. Sidebar
+        // visibility matches every other access tier downstream.
+        return resolveAccessTier(r.id, forUser) !== null;
       })
     : all;
   return Promise.all(filtered.map(async (r) => {
@@ -1219,6 +1258,10 @@ Object.assign(module.exports, {
   // fr-87: per-session viewer delegation (read-only counterpart of admin)
   getSessionViewers,
   isOwnerAdminOrViewer,
+  // bug-47 r3: tier-aware version of isOwnerAdminOrViewer — returns
+  // 'owner' | 'viewer' | null. Used by fileApiPreamble in index.js so
+  // the access rules live in ONE place.
+  resolveAccessTier,
   addViewerToSession,
   removeViewerFromSession,
   // fr-86: soft-reset support for /clear new (keeps rec.chat, nulls sdkSessionId)
