@@ -98,16 +98,30 @@ t('web/public/index.html declares a Test button next to each of the 4 admin key 
   }
 });
 
-t('web/public/index.html test buttons sit inside #admin-config-form (not stranded elsewhere)', () => {
+t('fr-91 r3: Test buttons sit inside #config-admin-env-form (the live admin section in the Config modal)', () => {
+  // r3 moved buttons from #admin-config-form (orphaned standalone
+  // pane, deleted) to #config-admin-env-form (the live admin section
+  // inside the Config modal, gated by the /api/admin/config 200 probe
+  // so only admins see it).
   const html = _read('web/public/index.html');
-  const formStart = html.indexOf('id="admin-config-form"');
-  assert.ok(formStart > -1);
+  const formStart = html.indexOf('id="config-admin-env-form"');
+  assert.ok(formStart > -1, 'index.html must declare <form id="config-admin-env-form"> (the live admin section).');
   const formEnd = html.indexOf('</form>', formStart);
   const formBody = html.slice(formStart, formEnd);
   for (const which of ['anthropic', 'gemini', 'openai', 'critic']) {
     assert.ok(new RegExp(`btn-test-${which}`).test(formBody),
-      `btn-test-${which} must live inside the #admin-config-form so it's part of the same Config modal section as the input it tests (fr-91).`);
+      `btn-test-${which} must live inside #config-admin-env-form (not the deleted #admin-config-form) — fr-91 r3.`);
   }
+});
+
+t('fr-91 r3: orphaned #admin-wrap is gone, and the legacy #admin-config-form is gone with it', () => {
+  const html = _read('web/public/index.html');
+  // Only allow appearances in comments — strip those before checking.
+  const stripped = html.replace(/<!--[\s\S]*?-->/g, '');
+  assert.ok(!/id\s*=\s*['"]admin-wrap['"]/.test(stripped),
+    'index.html must NOT declare id="admin-wrap" anymore — fr-91 r3 deleted the orphaned standalone admin pane per "one admin UI, role-based sections".');
+  assert.ok(!/id\s*=\s*['"]admin-config-form['"]/.test(stripped),
+    'index.html must NOT declare id="admin-config-form" anymore — fr-91 r3 deleted the orphaned form (it lived inside #admin-wrap).');
 });
 
 // ── client: JS click handlers ──

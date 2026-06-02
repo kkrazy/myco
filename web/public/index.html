@@ -35,17 +35,19 @@
         <h1>&lt;/myco&gt;</h1>
         <button id="btn-collapse" title="Collapse">‹</button>
         <button id="btn-spawn" title="New session">+</button>
-        <!-- fr-87 r4: gear icon is THE single Config affordance. Pre-r4
-             there were TWO icons: #btn-admin (gear) opened the
-             standalone #admin-wrap pane, and #btn-config (user-cog,
-             added by bug-44) opened the Config modal. Per user request
-             the gear is the sole entry — its click goes to the Config
-             modal (which carries the unified PATs + admin merge
-             post-fr-87 r2), and it's now visible to any authenticated
-             user, not just admins. The user-cog (#btn-config) was
-             removed in the same round. The standalone #admin-wrap pane
-             is intentionally orphaned (no UI entry); markup remains
-             for a future cleanup pass. -->
+        <!-- fr-87 r4 + fr-91 r3: gear icon is THE single Config
+             affordance, opening the Config modal. Pre-r4 there were
+             TWO icons: #btn-admin (gear) opened the standalone
+             #admin-wrap pane, and #btn-config (user-cog, added by
+             bug-44) opened the Config modal. fr-87 r4 made the gear
+             the sole entry and orphaned the standalone pane.
+             fr-91 r3 (per user: "one admin UI for all users but
+             display different section based on user role") DELETED
+             the orphaned #admin-wrap entirely. All admin/env config
+             now lives in the Config modal's #config-admin-env-form
+             section, gated by the existing /api/admin/config 200
+             probe so non-admins see only the user-facing sections. -->
+
         <button id="btn-admin" title="Config" hidden aria-label="Config">
           <svg class="sidebar-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
@@ -335,133 +337,6 @@
           <div class="artifact-empty">No test plans yet. Click <strong>Refresh</strong> to extract them from the latest session activity.</div>
         </div>
       </div>
-      <div id="admin-wrap" class="artifact-main-view" hidden>
-        <div class="artifact-header">
-          <span class="artifact-title">⚙️ Admin Settings</span>
-        </div>
-        <div class="artifact-body" id="adminpane">
-          <div class="admin-grid">
-            
-            <!-- API Keys Section -->
-            <section class="admin-section">
-              <h2 class="admin-section-title">System API Credentials</h2>
-              <p class="admin-section-desc">Manage environment keys. Changing these hot-reloads them in-memory and persists them to your <code>.env</code> file.</p>
-              
-              <form id="admin-config-form" autocomplete="off" onsubmit="return false;">
-                
-                <!-- fr-91: each admin API key field gets a Test
-                     button that probes the live API + an inline
-                     result span (#test-status-<which>) that the
-                     button-click handler in app.js fills with
-                     ✓ Valid (model X reachable) or ✗ <error>.
-                     Inline-warning policy: Save proceeds regardless
-                     of probe outcome (user may be mid-rotation). -->
-                <div class="form-group">
-                  <label for="input-anthropic-key">Claude API Key (ANTHROPIC_API_KEY)</label>
-                  <div class="input-with-reveal">
-                    <input type="password" id="input-anthropic-key" placeholder="Enter Anthropic API key" autocomplete="new-password" />
-                    <button type="button" class="btn-reveal-pwd" title="Toggle visibility">👁️</button>
-                  </div>
-                  <!-- fr-91 r2: Test button moved OUTSIDE .input-with-reveal.
-                       Pre-r2 the button sat inside the flex container next to
-                       the input, but `.form-group input { width: 100% }` (~line
-                       620 of styles.css) made the input claim all the flex
-                       space and pushed the button off-screen to the right. -->
-                  <button type="button" id="btn-test-anthropic" class="btn-test-key" title="Probe Anthropic API">Test</button>
-                  <span id="test-status-anthropic" class="test-key-status"></span>
-                </div>
-
-                <div class="form-group">
-                  <label for="input-gemini-key">Gemini API Key (GEMINI_API_KEY)</label>
-                  <div class="input-with-reveal">
-                    <input type="password" id="input-gemini-key" placeholder="Enter Gemini API key" autocomplete="new-password" />
-                    <button type="button" class="btn-reveal-pwd" title="Toggle visibility">👁️</button>
-                  </div>
-                  <button type="button" id="btn-test-gemini" class="btn-test-key" title="Probe Gemini API">Test</button>
-                  <span id="test-status-gemini" class="test-key-status"></span>
-                </div>
-
-                <div class="form-group">
-                  <label for="input-openai-key">OpenAI API Key (OPENAI_API_KEY)</label>
-                  <div class="input-with-reveal">
-                    <input type="password" id="input-openai-key" placeholder="Enter OpenAI API key" autocomplete="new-password" />
-                    <button type="button" class="btn-reveal-pwd" title="Toggle visibility">👁️</button>
-                  </div>
-                  <button type="button" id="btn-test-openai" class="btn-test-key" title="Probe OpenAI API">Test</button>
-                  <span id="test-status-openai" class="test-key-status"></span>
-                </div>
-
-                <div class="form-group">
-                  <label for="input-critic-endpoint">Custom Critic Endpoint (CUSTOM_CRITIC_ENDPOINT)</label>
-                  <input type="text" id="input-critic-endpoint" placeholder="e.g. http://localhost:11434/v1" />
-                </div>
-
-                <div class="form-group">
-                  <label for="input-critic-key">Custom Critic API Key (CUSTOM_CRITIC_KEY)</label>
-                  <div class="input-with-reveal">
-                    <input type="password" id="input-critic-key" placeholder="Enter Custom Critic key" autocomplete="new-password" />
-                    <button type="button" class="btn-reveal-pwd" title="Toggle visibility">👁️</button>
-                  </div>
-                  <button type="button" id="btn-test-critic" class="btn-test-key" title="Probe Custom Critic endpoint">Test</button>
-                  <span id="test-status-critic" class="test-key-status"></span>
-                </div>
-
-                <div class="form-group">
-                  <label for="input-critic-model">Custom Critic Model (CUSTOM_CRITIC_MODEL)</label>
-                  <input type="text" id="input-critic-model" placeholder="e.g. llama3" />
-                </div>
-
-                <h3 class="admin-section-subtitle" style="margin-top: 24px; margin-bottom: 16px; font-size: .95rem; font-weight: 600; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 6px; letter-spacing: 0.05em;">ENTERPRISE PROXY SETTINGS</h3>
-
-                <div class="form-group">
-                  <label for="input-http-proxy">HTTP Proxy URL (HTTP_PROXY)</label>
-                  <input type="text" id="input-http-proxy" placeholder="e.g. http://10.0.0.1:8080 or http://user:pass@proxy.example.com:8080" />
-                </div>
-
-                <div class="form-group">
-                  <label for="input-https-proxy">HTTPS Proxy URL (HTTPS_PROXY)</label>
-                  <input type="text" id="input-https-proxy" placeholder="e.g. http://user:pass@proxy.example.com:8080" />
-                </div>
-
-                <div class="form-group">
-                  <label for="input-no-proxy">No Proxy Hosts (NO_PROXY)</label>
-                  <input type="text" id="input-no-proxy" placeholder="e.g. 127.0.0.1,localhost,local,.local" />
-                </div>
-
-                <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 16px; margin-bottom: 16px;">
-                  <input type="checkbox" id="input-tls-insecure" value="1" style="width: auto; margin: 0; cursor: pointer;" />
-                  <label for="input-tls-insecure" style="margin: 0; cursor: pointer; font-weight: 500; font-size: 0.85rem; color: var(--text-muted);">Enable TLS Insecure Mode (disables Node + Git SSL checks)</label>
-                </div>
-
-                <div class="form-actions">
-                  <button type="button" id="btn-save-config" class="btn-primary">Save Changes</button>
-                  <span id="config-status" class="status-msg"></span>
-                </div>
-              </form>
-            </section>
-
-            <!-- Whitelisted Users Section -->
-            <section class="admin-section">
-              <h2 class="admin-section-title">GitHub User Whitelist</h2>
-              <p class="admin-section-desc">Manage users authorized to access the system. Changes are committed to <code>allowed-github-users.txt</code> instantly.</p>
-              
-              <div class="whitelist-input-group">
-                <input type="text" id="input-whitelist-user" placeholder="Enter GitHub username" />
-                <button type="button" id="btn-add-whitelist" class="btn-secondary">Add User</button>
-              </div>
-              <span id="whitelist-status" class="status-msg"></span>
-
-              <div class="whitelist-chips-container">
-                <div class="chips-title">Whitelisted Users</div>
-                <div id="whitelist-chips" class="whitelist-chips">
-                  <!-- Dynamic chips added here -->
-                </div>
-              </div>
-            </section>
-
-          </div>
-        </div>
-      </div>
       <div id="files-wrap" hidden>
         <div id="files-tree-pane">
           <header id="files-header">
@@ -663,20 +538,33 @@
 
         <h4>Server env config</h4>
         <form id="config-admin-env-form" autocomplete="off" onsubmit="return false;">
+          <!-- fr-91 r3: Test buttons sit as block-level siblings of the
+               input inside .config-admin-field. Clicking probes the
+               respective live API and renders the result in the
+               .test-key-status span below. The 4 buttons use stable ids
+               (btn-test-anthropic/gemini/openai/critic); _bindApiKeyTestButtons
+               in app.js wires their click handlers when the admin
+               section opens. -->
           <div class="config-admin-field">
             <label for="config-admin-anthropic-key">ANTHROPIC_API_KEY</label>
             <input type="password" id="config-admin-anthropic-key"
                    placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-anthropic" class="btn-test-key" title="Probe Anthropic API">Test</button>
+            <span id="test-status-anthropic" class="test-key-status"></span>
           </div>
           <div class="config-admin-field">
             <label for="config-admin-gemini-key">GEMINI_API_KEY</label>
             <input type="password" id="config-admin-gemini-key"
                    placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-gemini" class="btn-test-key" title="Probe Gemini API">Test</button>
+            <span id="test-status-gemini" class="test-key-status"></span>
           </div>
           <div class="config-admin-field">
             <label for="config-admin-openai-key">OPENAI_API_KEY</label>
             <input type="password" id="config-admin-openai-key"
                    placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-openai" class="btn-test-key" title="Probe OpenAI API">Test</button>
+            <span id="test-status-openai" class="test-key-status"></span>
           </div>
           <div class="config-admin-field">
             <label for="config-admin-critic-endpoint">CUSTOM_CRITIC_ENDPOINT</label>
@@ -687,6 +575,8 @@
             <label for="config-admin-critic-key">CUSTOM_CRITIC_KEY</label>
             <input type="password" id="config-admin-critic-key"
                    placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-critic" class="btn-test-key" title="Probe Custom Critic endpoint">Test</button>
+            <span id="test-status-critic" class="test-key-status"></span>
           </div>
           <div class="config-admin-field">
             <label for="config-admin-critic-model">CUSTOM_CRITIC_MODEL</label>

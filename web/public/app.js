@@ -1014,6 +1014,9 @@ async function _refreshConfigAdmin() {
     const addBtn = document.getElementById('config-admin-allowlist-add');
     if (addBtn) addBtn.addEventListener('click', _addConfigAdminAllowlist);
   }
+  // fr-91 r3: bind the API key Test buttons every time the admin
+  // section opens (idempotent via dataset.fr91Bound).
+  _bindApiKeyTestButtons();
   // Load the allowlist into its list container.
   await _refreshConfigAdminAllowlist();
 }
@@ -12546,162 +12549,13 @@ function bindAdminUi() {
     openConfigModal();
   });
 
-  // Wire password visibility toggles
-  document.querySelectorAll('.btn-reveal-pwd').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const input = btn.previousElementSibling;
-      if (!input) return;
-      if (input.type === 'password') {
-        input.type = 'text';
-        btn.textContent = '🙈';
-      } else {
-        input.type = 'password';
-        btn.textContent = '👁️';
-      }
-    });
-  });
-
-  // Wire save button
-  const btnSave = document.getElementById('btn-save-config');
-  if (btnSave) {
-    btnSave.addEventListener('click', () => {
-      saveAdminConfig();
-    });
-  }
-
-  // Wire add whitelist button
-  const btnAddWhitelist = document.getElementById('btn-add-whitelist');
-  const inputWhitelist = document.getElementById('input-whitelist-user');
-  if (btnAddWhitelist && inputWhitelist) {
-    btnAddWhitelist.addEventListener('click', () => {
-      addWhitelistUser(inputWhitelist.value);
-    });
-    inputWhitelist.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addWhitelistUser(inputWhitelist.value);
-      }
-    });
-  }
+  // fr-91 r3: removed orphaned wirings (password reveal toggles,
+  // btn-save-config, btn-add-whitelist, input-whitelist-user) — all
+  // pointed at #admin-wrap elements deleted in fr-91 r3. The Config
+  // modal's #config-admin-env-form has its own save handler wired
+  // in _populateConfigAdminEnv().
 }
 
-function toggleAdminPane() {
-  const wrap = document.getElementById('admin-wrap');
-  if (!wrap) return;
-
-  const btnAdmin = document.getElementById('btn-admin');
-
-  if (!wrap.hidden) {
-    // Hide it
-    wrap.hidden = true;
-    btnAdmin?.classList.remove('active');
-    // Restore files view if it was active before, or just back to chat layout
-    if (state.artifactView.prev === 'files') showFilesView();
-    _updateMainPaneLayout();
-  } else {
-    // Show it
-    const filesWrap = document.getElementById('files-wrap');
-    if (filesWrap && !filesWrap.hidden) state.artifactView.prev = 'files';
-
-    _hideMainPaneSiblings('admin-wrap');
-    wrap.hidden = false;
-    btnAdmin?.classList.add('active');
-
-    if (window.innerWidth > 900) setChatPane(true);
-    _updateMainPaneLayout();
-
-    // Fetch config and whitelist data
-    loadAdminConfig();
-    loadWhitelist();
-  }
-}
-
-async function loadAdminConfig() {
-  const statusEl = document.getElementById('config-status');
-  if (statusEl) {
-    statusEl.className = 'status-msg';
-    statusEl.textContent = 'Loading credentials...';
-  }
-
-  try {
-    const res = await authedFetch('/api/admin/config');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    
-    if (data && data.config) {
-      document.getElementById('input-anthropic-key').value = data.config.ANTHROPIC_API_KEY || '';
-      document.getElementById('input-gemini-key').value = data.config.GEMINI_API_KEY || '';
-      document.getElementById('input-openai-key').value = data.config.OPENAI_API_KEY || '';
-      document.getElementById('input-critic-endpoint').value = data.config.CUSTOM_CRITIC_ENDPOINT || '';
-      document.getElementById('input-critic-key').value = data.config.CUSTOM_CRITIC_KEY || '';
-      document.getElementById('input-critic-model').value = data.config.CUSTOM_CRITIC_MODEL || '';
-      document.getElementById('input-http-proxy').value = data.config.HTTP_PROXY || '';
-      document.getElementById('input-https-proxy').value = data.config.HTTPS_PROXY || '';
-      document.getElementById('input-no-proxy').value = data.config.NO_PROXY || '';
-      document.getElementById('input-tls-insecure').checked = data.config.MYCO_ENTERPRISE_TLS_INSECURE === '1';
-    }
-
-    if (statusEl) statusEl.textContent = '';
-    // fr-91: bind the Test buttons every time the Config modal
-    // loads. Idempotent via the dataset.fr91Bound guard inside
-    // _bindApiKeyTestButtons.
-    _bindApiKeyTestButtons();
-  } catch (err) {
-    if (statusEl) {
-      statusEl.className = 'status-msg error';
-      statusEl.textContent = `Error loading credentials: ${err.message}`;
-    }
-  }
-}
-
-async function saveAdminConfig() {
-  const statusEl = document.getElementById('config-status');
-  if (statusEl) {
-    statusEl.className = 'status-msg';
-    statusEl.textContent = 'Saving...';
-  }
-
-  const payload = {
-    ANTHROPIC_API_KEY: document.getElementById('input-anthropic-key').value,
-    GEMINI_API_KEY: document.getElementById('input-gemini-key').value,
-    OPENAI_API_KEY: document.getElementById('input-openai-key').value,
-    CUSTOM_CRITIC_ENDPOINT: document.getElementById('input-critic-endpoint').value,
-    CUSTOM_CRITIC_KEY: document.getElementById('input-critic-key').value,
-    CUSTOM_CRITIC_MODEL: document.getElementById('input-critic-model').value,
-    HTTP_PROXY: document.getElementById('input-http-proxy').value,
-    HTTPS_PROXY: document.getElementById('input-https-proxy').value,
-    NO_PROXY: document.getElementById('input-no-proxy').value,
-    MYCO_ENTERPRISE_TLS_INSECURE: document.getElementById('input-tls-insecure').checked ? '1' : '0',
-  };
-
-  try {
-    const res = await authedFetch('/api/admin/config', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    
-    if (statusEl) {
-      statusEl.className = 'status-msg success';
-      statusEl.textContent = 'Configuration saved and hot-reloaded successfully!';
-      setTimeout(() => {
-        if (statusEl.textContent.includes('successfully')) statusEl.textContent = '';
-      }, 4000);
-    }
-
-    // Refresh inputs to show masked values if we replaced keys
-    await loadAdminConfig();
-  } catch (err) {
-    if (statusEl) {
-      statusEl.className = 'status-msg error';
-      statusEl.textContent = `Failed to save configuration: ${err.message}`;
-    }
-  }
-}
 
 // fr-91: probe an admin API key against the live provider so the
 // user can verify validity BEFORE Save → before real traffic hits
@@ -12714,11 +12568,14 @@ async function saveAdminConfig() {
 // template literal) so a static-grep regression test can lock the
 // id contract — the four buttons in index.html must keep these
 // exact ids so the binder + click handler resolve cleanly.
+// fr-91 r3: input ids switched from input-*-key (orphaned
+// #admin-wrap pane, now deleted) to config-admin-*-key (the live
+// #config-admin-env-form inside the Config modal).
 const FR91_INPUT_IDS = {
-  anthropic: 'input-anthropic-key',
-  gemini:    'input-gemini-key',
-  openai:    'input-openai-key',
-  critic:    'input-critic-key',
+  anthropic: 'config-admin-anthropic-key',
+  gemini:    'config-admin-gemini-key',
+  openai:    'config-admin-openai-key',
+  critic:    'config-admin-critic-key',
 };
 const FR91_BTN_IDS = {
   anthropic: 'btn-test-anthropic',
@@ -12743,12 +12600,13 @@ async function _runApiKeyTest(which) {
   if (!input || !statusEl) return;
 
   const key = (input.value || '').trim();
-  // Custom Critic also reads the endpoint + model fields.
+  // Custom Critic also reads the endpoint + model fields. fr-91 r3:
+  // ids switched to the live #config-admin-env-form scheme.
   const endpoint = which === 'critic'
-    ? (document.getElementById('input-critic-endpoint') || { value: '' }).value.trim()
+    ? (document.getElementById('config-admin-critic-endpoint') || { value: '' }).value.trim()
     : undefined;
   const model = which === 'critic'
-    ? (document.getElementById('input-critic-model') || { value: '' }).value.trim()
+    ? (document.getElementById('config-admin-critic-model') || { value: '' }).value.trim()
     : undefined;
 
   statusEl.textContent = 'Testing…';

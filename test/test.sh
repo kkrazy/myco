@@ -2627,7 +2627,7 @@ test_chat_window() {
   # in app.js so a future restyle can't drift the id contract.
   # Inline warning policy: probe result rendered next to each field,
   # Save proceeds regardless of outcome.
-  node_test_result test/fr-91-admin-key-test.test.js "test/fr-91-admin-key-test.test.js (8 cases)"
+  node_test_result test/fr-91-admin-key-test.test.js "test/fr-91-admin-key-test.test.js (9 cases)"
   # fr-88 (composer-collapse — note: distinct from the older fr-88(r)
   # blocking-modal feature that lives in app.js around line 1764+):
   # the four .composer-btn action buttons (Stop / Mic / Draw / Send)
