@@ -2610,6 +2610,23 @@ test_chat_window() {
   # reconsider POST). Static-grep guards lock the helper definition
   # + each callsite wrapping its URL + the bug-47 marker comment.
   node_test_result test/bug-47-guest-files-share-token.test.js "test/bug-47-guest-files-share-token.test.js (6 cases)"
+  # bug-48: SDK `system` events with task-lifecycle subtypes
+  # (task_started / task_progress / task_notification) were falling
+  # through to the unknown_event passthrough on the client, which
+  # short-circuits with a console.warn — leaving the user with no
+  # visible status for things like "Deploy 533fbfe to mycodev". Per
+  # @kkrazy's plan-item comment, the fix routes them through the
+  # existing chrome batch (not standalone rows) "to ensure ui
+  # cleaness". Server: agent-session.js _handleEvent promotes the 3
+  # documented subtypes to type 'system_event' BEFORE the
+  # unknown_event fallback (future SDK system subtypes still surface
+  # via unknown_event, visible to devs). Client: 'system_event'
+  # added to AGENT_CHROME_TYPES so it folds into the chrome batch,
+  # plus _chromeEventLine + _chromeShortLabel branches render the
+  # description / subtype / status. Static-grep guards lock the
+  # server emission + 3-subtype coverage + ordering vs. unknown_event,
+  # and the 3 client touch-points + bug-48 marker.
+  node_test_result test/bug-48-system-event-chrome-batch.test.js "test/bug-48-system-event-chrome-batch.test.js (7 cases)"
   # critic-gemini-calibration (2026-06-02): triggered by Gemini
   # returning 404 on the deprecated gemini-1.5-pro model name during
   # a bug-46 run-dispatch critique. Three calibrations land together:

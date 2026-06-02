@@ -5703,6 +5703,14 @@ const AGENT_CHROME_TYPES = new Set([
   // appends the same content as the "final answer"). The cost +
   // token usage is still visible when the batch row expands.
   'turn_result',
+  // bug-48: SDK `system` task-lifecycle messages (task_started /
+  // task_progress / task_notification) are promoted server-side to
+  // type 'system_event' (see agent-session.js _handleEvent). Folding
+  // them into chrome — per @kkrazy's directive ("part of chrome
+  // batch to ensure ui cleaness") — keeps a deploy / tool sequence
+  // collapsed under the "▸ N events" badge instead of stamping a
+  // standalone row per progress tick.
+  'system_event',
 ]);
 
 // Unified live indicator: every agent activity (tool_use, tool_result,
@@ -6377,6 +6385,21 @@ function _chromeEventLine(ev, ts) {
       kind = _agentToolIcon(ev.name) + ' ' + ev.name;
       summary = _agentToolSummary(ev.name, ev.input).slice(0, 120);
     }
+  } else if (ev.type === 'system_event') {
+    // bug-48: SDK task-lifecycle messages, promoted server-side from
+    // raw `system` events. The subtype carries the lifecycle phase
+    // (task_started / task_progress / task_notification) and
+    // ev.description carries the human-readable summary
+    // ("Deploy 533fbfe to mycodev", "Copy archive to mycodev", …).
+    // ev.status is set on task_notification (e.g. 'completed').
+    const sub = ev.subtype || 'system';
+    const icon = sub === 'task_started' ? '▶'
+               : sub === 'task_progress' ? '·'
+               : sub === 'task_notification' ? '✓'
+               : '∙';
+    kind = `${icon} ${sub}`;
+    const statusBit = ev.status ? ` · ${ev.status}` : '';
+    summary = (String(ev.description || '').slice(0, 110) + statusBit).slice(0, 120);
   } else {
     summary = JSON.stringify(ev).slice(0, 120);
   }
@@ -6995,6 +7018,16 @@ function _chromeShortLabel(ev) {
     const icon = _agentToolIcon(ev.name);
     const summary = _agentToolSummary(ev.name, ev.input).slice(0, 60);
     return `${icon} ${ev.name}${summary ? ' · ' + summary : ''}`;
+  }
+  if (ev.type === 'system_event') {
+    // bug-48: surface the SDK task-lifecycle phase + description in
+    // the live status strip and collapsed batch head, so the user
+    // sees "task_progress · Deploy 533fbfe to mycodev" instead of a
+    // silent gap while the agent is mid-deploy.
+    const sub = ev.subtype || 'system';
+    const desc = String(ev.description || '').slice(0, 60);
+    const statusBit = ev.status ? ' · ' + ev.status : '';
+    return sub + (desc ? ' · ' + desc : '') + statusBit;
   }
   return ev.type || 'event';
 }

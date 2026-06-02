@@ -924,6 +924,36 @@ class AgentSession extends EventEmitter {
       this._emit({ type: 'rate_limit', raw: m });
       return;
     }
+    // bug-48: SDK `system` messages with task-lifecycle subtypes
+    // (task_started / task_progress / task_notification) carry a
+    // human-readable description + tool_use_id + task_id that the
+    // client can fold into the chrome batch. Pre-bug-48 they fell
+    // through to the unknown_event passthrough below — the client
+    // short-circuited there with a console.warn, leaving the user
+    // with no visible status for things like "Deploy 533fbfe to
+    // mycodev" → "Copy archive to mycodev" → "completed".
+    //
+    // Promotion is narrowly scoped to the 3 documented subtypes so
+    // future SDK system subtypes still surface via unknown_event
+    // (= visible-to-devs warning). Per @kkrazy's plan-item comment:
+    // "Should try to handle all event type to inform user the status,
+    // but should make it as part of chrome batch to ensure ui cleaness."
+    // — system_event is added to AGENT_CHROME_TYPES on the client.
+    if (m.type === 'system' &&
+        (m.subtype === 'task_started' ||
+         m.subtype === 'task_progress' ||
+         m.subtype === 'task_notification')) {
+      this._emit({
+        type: 'system_event',
+        subtype: m.subtype,
+        taskId: m.task_id,
+        toolUseId: m.tool_use_id,
+        description: m.description,
+        status: m.status,
+        raw: m,
+      });
+      return;
+    }
     // Unknown event types — passthrough so phase 2+ can decide what to do.
     this._emit({ type: 'unknown_event', raw_type: m.type, raw: m });
   }
