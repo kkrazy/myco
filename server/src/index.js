@@ -783,7 +783,7 @@ app.delete('/sessions/:id', requireAuth, (req, res) => {
 //
 // Root is recomputed per request via resolveCwd(rec.cwd, rec.user) so a
 // stale rec.absCwd from a workspace move can't leak FS access.
-function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' */) {
+function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' | 'authed' */) {
   const id = req.params.id;
   const rec = getSessionRecord(id);
   if (!rec) { res.status(404).json({ error: 'unknown session' }); return null; }
@@ -791,6 +791,32 @@ function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' */) {
   // Compute access level. requireAuth middleware (used on owner-only
   // routes) sets req.user; for viewer routes we resolve here.
   if (!req.user) req.user = userFromRequest(req);
+
+  // bug-46: 'authed' tier — any signed-in user passes, no
+  // owner/admin/viewer/share-token check. This is the carve-out
+  // from fr-87 (private-by-default) for endpoints that are
+  // intentionally collaborative across users — currently just
+  // /artifact/vote, which the voters[] schema +
+  // AUTO_EXECUTE_VOTE_THRESHOLD = 2 quorum design explicitly
+  // supports as cross-user. Auth is still required (401 if not
+  // signed in) so anonymous request can't drive-by vote. Worst
+  // case: a signed-in user who knows a session id can vote on
+  // its plan items — vote is idempotent + threshold quorum is
+  // small so abuse surface is bounded. Critically, the 'authed'
+  // tier MUST NOT be used for endpoints that read/write session
+  // state beyond the voters[] array (e.g. chat, queue mutations,
+  // file API, run dispatch) — those stay on 'owner' or 'viewer'.
+  if (requiredAccess === 'authed') {
+    if (!req.user && isAuthRequired()) {
+      res.status(401).json({ error: 'unauthorized' });
+      return null;
+    }
+    let root;
+    try { root = resolveCwd(rec.cwd, rec.user); }
+    catch { res.status(500).json({ error: 'stale session record' }); return null; }
+    return { id, rec, root, access: 'authed' };
+  }
+
   let access = null;
   if (!isAuthRequired()) {
     access = 'owner';                                    // single-user mode
@@ -805,6 +831,7 @@ function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' */) {
     //   owner / admin → 'owner' tier (admin inherits write surface per
     //     fr-39, so files/accept, files/reject, etc. accept admins).
     //   viewer        → 'viewer' tier (read-only).
+    //   authed        → bug-46 carve-out, handled above.
     //   other         → null (try share token next).
     if (rec.user === req.user) {
       access = 'owner';

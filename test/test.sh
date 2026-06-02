@@ -2584,6 +2584,34 @@ test_chat_window() {
   # buildIdentity logic (4 cases) + auth.profileByLogin export +
   # agent-session.js static-grep guards for the env-injection wiring.
   node_test_result test/fr-26-git-author-identity.test.js "test/fr-26-git-author-identity.test.js (10 cases)"
+  # bug-46: /artifact/vote returned 403 for any authenticated user
+  # who wasn't the session owner / admin / explicit viewer (fr-87
+  # private-by-default gate). But the voters[] schema +
+  # AUTO_EXECUTE_VOTE_THRESHOLD = 2 quorum design explicitly
+  # supports cross-user voting as the collaborative-prioritisation
+  # signal. Fix: new 'authed' tier in fileApiPreamble (server/src/
+  # index.js) that requires auth but bypasses owner/admin/viewer/
+  # share-token checks. /artifact/vote switched to that tier; all
+  # other session endpoints stay on 'owner' or 'viewer'. Locks the
+  # tier choice on the route, the existence of the 'authed' branch
+  # in fileApiPreamble, and the bug-46 marker comments in both
+  # files.
+  node_test_result test/bug-46-vote-cross-user.test.js "test/bug-46-vote-cross-user.test.js (5 cases)"
+  # critic-gemini-calibration (2026-06-02): triggered by Gemini
+  # returning 404 on the deprecated gemini-1.5-pro model name during
+  # a bug-46 run-dispatch critique. Three calibrations land together:
+  # (a) model bumps to gemini-2.5-flash (1.5 family is retired);
+  # (b) explicit sampling overrides Gemini's chat-tuned defaults
+  # (temperature 1.0 → 0.2, topP 0.95 → 0.8, maxOutputTokens 8192 →
+  # 1024) — adversarial code review wants determinism + concise
+  # verdicts, not creative chat; (c) system prompt carries an
+  # explicit "INSUFFICIENT INFORMATION:" opt-out so broad-instruction
+  # critics admit uncertainty instead of confabulating verdicts when
+  # they can't tell from the diff alone. Locks the model id outside
+  # the 1.5 family, sampling values within sensible review caps, the
+  # opt-out clause in the prompt, and the exported `name` field
+  # syncing with the actual CRITIC_MODEL.
+  node_test_result test/critic-gemini-calibration.test.js "test/critic-gemini-calibration.test.js (9 cases)"
   # fr-88 (composer-collapse — note: distinct from the older fr-88(r)
   # blocking-modal feature that lives in app.js around line 1764+):
   # the four .composer-btn action buttons (Stop / Mic / Draw / Send)

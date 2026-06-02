@@ -616,8 +616,21 @@ function register(app, deps) {
     return { fired: true, queued: true, kicked: result.kicked };
   }
 
+  // bug-46: voting on plan items is cross-user by design — every
+  // item carries a `voters` array and AUTO_EXECUTE_VOTE_THRESHOLD
+  // (2) auto-dispatches when a SECOND distinct user upvotes.
+  // Pre-bug-46 this endpoint used fileApiPreamble('viewer'), which
+  // rejected any authenticated user who wasn't the session owner /
+  // admin / explicit viewer — making the cross-user quorum impossible
+  // for anyone not pre-added to rec.viewers[]. bug-46 changes the
+  // tier to 'authed', a new carve-out (see index.js fileApiPreamble)
+  // that accepts ANY signed-in user. Auth is still required so a
+  // drive-by anonymous request still 401s. Worst-case abuse:
+  // signed-in user with a session id can vote on plan items —
+  // bounded by the idempotent toggle (one vote per user) and small
+  // quorum threshold.
   app.post('/sessions/:id/artifact/vote', (req, res) => {
-    const ctx = fileApiPreamble(req, res, 'viewer');
+    const ctx = fileApiPreamble(req, res, 'authed');
     if (!ctx) return;
     const type = String(req.query.type || '');
     const itemId = String(req.query.itemId || '');
@@ -649,8 +662,15 @@ function register(app, deps) {
     });
   });
 
+  // bug-46 follow-up: comments on plan items are cross-user by the
+  // same collaborative design as voting. User: "the comment function
+  // should allow anyone logged in to add." Same single-line carve-
+  // out as the vote endpoint above — 'authed' tier requires auth
+  // but bypasses fr-87's owner/admin/viewer gate. Anti-abuse: comments
+  // are append-only text; per-user rate limits can be added later
+  // if drive-by spam materialises.
   app.post('/sessions/:id/artifact/comment', (req, res) => {
-    const ctx = fileApiPreamble(req, res, 'viewer');
+    const ctx = fileApiPreamble(req, res, 'authed');
     if (!ctx) return;
     const type = String(req.query.type || '');
     const itemId = String(req.query.itemId || '');

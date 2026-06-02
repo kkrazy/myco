@@ -4073,7 +4073,28 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "9c9ef42931e1",
+          "user": "claude",
+          "text": "✓ success · 296.1s · $31.0741 · 29↓/15967↑\n\nfr-88 ready. Working tree:\n\n```\n?? test/fr-88-composer-collapse-on-input.test.js\n M web/public/app.js          ← +1 input listener + toggle in bindChatUi\n M web/public/styles.css      ← +1 rule under .composer.composer-has-content\n M test/test.sh               ← wire fr-88 (7 cases)\n M _myco_/plan.json           ← fr-88 run stamped completed\n```\n\n**Test results:** fr-88 7/7 green. Adjacent suites stayed green: bug-45 (26/26), bug-43 (5/5), fr-87 r4 (7/7).\n\n**Behaviour after deploy:** the four composer-row buttons (Stop / Mic / Draw / Send) collapse to icon-only the moment the textarea has non-whitespace content. Backspace to empty → labels return. The Critic dropdown is untouched. `title` + `aria-label` survive the collapse so hover tooltips + screen readers still announce each button.\n…",
+          "ts": "2026-06-01T01:13:46.182Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-01T01:08:49.705Z"
+          }
+        },
+        {
+          "id": "5484ef041ddc",
+          "user": "claude",
+          "text": "✓ success · 14.3s · $35.9263 · 7↓/678↑\n\n**Both fr-88 r2 deploys GREEN.** Critic collapse live everywhere:\n\n| Target | URL | Build stamp | `.composer-critic-select` refs | 36 px clamp |\n|---|---|---|---|---|\n| Prod | `https://myco.labxnow.ai/` | `2026-06-01T01:24:59Z` | 8 ✓ | 1 ✓ |\n| Canary | `https://opti.labxnow.ai/` | `2026-06-01T01:25:08Z` | 8 ✓ | 1 ✓ |\n\nBoth serving `faee0b7`. Logs clean.\n\n**Composer behaviour after r2:** start typing → all five action-row elements shrink to icon-only at the same instant:\n- Stop / Mic / Draw / Send (`.composer-btn` family): label + Esc kbd hidden, SVG icon stays\n- Critic select dropdown: clamps to 36 px, only ⚖️ + native arrow visible; clicking still opens the full option list\n\nBackspace to empty → everything restores.\n\n**Session run-list closeout:**\n- fr-87 r4 (single Config icon) ✓\n- fr…",
+          "ts": "2026-06-01T01:26:08.654Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-01T01:08:49.680Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the chat composer buttons should shrink to icon only as soon as i start typing to leave more space for text content",
@@ -4082,12 +4103,93 @@
       "description": "**Problem:** Composer action buttons occupy horizontal space needed for the text input once the user begins typing.\n**Expected:** As soon as input is non-empty, buttons shrink to icon-only, freeing room for text content.\n**Actual:** Buttons retain their full label+icon width regardless of input state, crowding the typed message.",
       "runs": [
         {
+          "status": "success",
+          "ts": "2026-06-01T01:13:46.182Z",
+          "startedAt": "2026-06-01T01:08:49.705Z",
+          "summary": "296.1s · 29→15967 tok",
+          "result": "fr-88 ready. Working tree:\n\n```\n?? test/fr-88-composer-collapse-on-input.test.js\n M web/public/app.js          ← +1 input listener + toggle in bindChatUi\n M web/public/styles.css      ← +1 rule under .composer.composer-has-content\n M test/test.sh               ← wire fr-88 (7 cases)\n M _myco_/plan.json           ← fr-88 run stamped completed\n```\n\n**Test results:** fr-88 7/7 green. Adjacent suites stayed green: bug-45 (26/26), bug-43 (5/5), fr-87 r4 (7/7).\n\n**Behaviour after deploy:** the four composer-row buttons (Stop / Mic / Draw / Send) collapse to icon-only the moment the textarea has non-whitespace content. Backspace to empty → labels return. The Critic dropdown is untouched. `title` + `aria-label` survive the collapse so hover tooltips + screen readers still announce each button.\n\n**Naming note for the record:** there's a pre-existing `fr-88(r)` feature in app.js for a blocking connection-overlay modal — totally unrelated. The marker test for this fr-88 is anchored ±1500 chars around `composer-has-content` so a future restyle can't confuse them.\n\nAwaiting `commit + push + deploy` direction."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-01T01:26:08.654Z",
+          "startedAt": "2026-06-01T01:08:49.680Z",
+          "summary": "14.3s · 7→678 tok",
+          "result": "**Both fr-88 r2 deploys GREEN.** Critic collapse live everywhere:\n\n| Target | URL | Build stamp | `.composer-critic-select` refs | 36 px clamp |\n|---|---|---|---|---|\n| Prod | `https://myco.labxnow.ai/` | `2026-06-01T01:24:59Z` | 8 ✓ | 1 ✓ |\n| Canary | `https://opti.labxnow.ai/` | `2026-06-01T01:25:08Z` | 8 ✓ | 1 ✓ |\n\nBoth serving `faee0b7`. Logs clean.\n\n**Composer behaviour after r2:** start typing → all five action-row elements shrink to icon-only at the same instant:\n- Stop / Mic / Draw / Send (`.composer-btn` family): label + Esc kbd hidden, SVG icon stays\n- Critic select dropdown: clamps to 36 px, only ⚖️ + native arrow visible; clicking still opens the full option list\n\nBackspace to empty → everything restores.\n\n**Session run-list closeout:**\n- fr-87 r4 (single Config icon) ✓\n- fr-26 (git author identity) ✓\n- bug-45 r1–r7 (mobile HUD evolution: type scale, tap target, timeline wrap, short labels, queue chrome, Stop label/clock strip, pill family, square, deterministic equal heights) ✓\n- fr-88 r1 (4 .composer-btn collapse to icon-only) ✓\n- fr-88 r2 (Critic select collapses too) ✓\n\nStanding by."
+        }
+      ]
+    },
+    {
+      "id": "fr-89",
+      "text": "Add self-growing critic.md to persist effective critic rules and anti-patterns",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-01T23:38:55.322Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "d0f90e259e54",
+          "user": "kkrazy",
+          "text": "The critix.md file should have a myco default and replicate to all myco managed projects when a new project is added to myco",
+          "ts": "2026-06-01T23:42:47.851Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "add a critic.md and automatically save the most effective critic rules such as anti-patterns to it. Its sulposes to be a md grow as we use based on the real results of the system",
+        "rewritten": true
+      },
+      "description": "**Problem:** There is no persistent store for the critic rules that actually prove effective during real runs, so learnings are lost between sessions.\n**Expected:** A `critic.md` file that auto-accumulates the most effective critic rules (e.g. anti-patterns) and grows organically based on real system results.\n**Actual:** No `critic.md` exists; effective rules and anti-patterns are not captured or reused.\n**Context:** Markdown file intended to grow over time, driven by observed outcomes of the system."
+    },
+    {
+      "id": "fr-90",
+      "text": "Track critic accuracy by domain and route plans to best-performing model",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-01T23:41:10.644Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "f26597981b34",
+          "user": "kkrazy",
+          "text": "At the begining rotate the critic across all available models in a round robin manner until a good profiling is available for targeted dispatch",
+          "ts": "2026-06-01T23:45:18.229Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "keep a list of critics and record the critic results that have been right or wrong. Use the record to identify what model is good at what domain  and dispath a plan to the most capable model in that domain",
+        "rewritten": true
+      },
+      "description": "**Problem:** Plans are dispatched without regard to which critic/model is historically reliable in the relevant domain, leading to suboptimal routing.\n**Expected:** Maintain a registry of critics with per-domain right/wrong records, and dispatch each plan to the model with the strongest track record in that domain.\n**Actual:** No critic results are persisted and no domain-aware model selection exists; dispatch is uninformed by past correctness.\n**Context:** Requires (1) a critic list, (2) a results log capturing right/wrong outcomes tagged by domain, and (3) a dispatcher that queries the log to pick the most capable model per domain."
+    },
+    {
+      "id": "bug-46",
+      "text": "Upvote on plan items returns 403 Forbidden from /artifact/vote endpoint",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-01T23:59:37.520Z",
+      "addedBy": "labxnow",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "upvote is not working with the following error: app.js?v=2026-06-01T23%3A11%3A40Z:95  POST https://mycobeta.labxnow.ai/sessions/myco-kkrazy-f80476dd/artifact/vote?type=plan&itemId=bug-7 403 (Forbidden)",
+        "rewritten": true
+      },
+      "description": "**Problem:** Users cannot upvote plan items — the vote request is rejected by the server.\n**Expected:** `POST /sessions/:sessionId/artifact/vote?type=plan&itemId=...` succeeds and records the upvote.\n**Actual:** Request returns `403 (Forbidden)`, so the upvote never registers.\n**Context:** Repro at `app.js?v=2026-06-01T23:11:40Z:95`, session `myco-kkrazy-f80476dd`, item `bug-7`, host `mycobeta.labxnow.ai`.",
+      "runs": [
+        {
           "status": "completed",
-          "ts": "2026-06-01T01:15:00.000Z",
-          "summary": "Implementation: bindChatUi() in web/public/app.js adds a `_syncComposerHasContent` listener on the textarea's `input` event that toggles `.composer-has-content` on #chat-form based on `input.value.trim().length > 0`. The CSS rule in web/public/styles.css (next to .composer-btn-label base rule) collapses `.composer-btn-label` AND `.composer-btn-kbd` (Esc hint) to `display: none` when the class is set — slot fully collapses so the textarea gains real width. The four affected .composer-btn elements (Stop / Mic / Draw / Send) keep their `title` + `aria-label` attrs so hover tooltips + screen readers still announce each action when only the icon shows. Whitespace-only input doesn't trigger the collapse. Out of scope (anti-bloat §3): the <select id='composer-critic-select'> is not a `.composer-btn` and is intentionally untouched — bug-43 already caps it on mobile, and changing select dropdowns would be a different concern. Naming note: there's a pre-existing fr-88(r) feature in app.js + styles.css about a blocking connection-overlay modal — unrelated to this composer-collapse work. Both share the same plan-item id `fr-88` by coincidence; the new marker comments + the regression test's ±1500-char proximity check around `composer-has-content` disambiguate. Tests: test/fr-88-composer-collapse-on-input.test.js (7 cases) wired into test/test.sh. Locks markup invariants (every .composer-btn carries .composer-btn-label + title + aria-label), the CSS rule, the JS toggle, and the input-event wiring. Adjacent suites stayed green: bug-45 (26/26), bug-43 (5/5), fr-87 r4 (7/7). Not yet committed/pushed — awaiting user direction."
+          "ts": "2026-06-02T00:30:00.000Z",
+          "summary": "Root cause: `/artifact/vote` (server/src/artifacts.js:619) called `fileApiPreamble(req, res, 'viewer')` — the fr-87 (private-by-default) helper at server/src/index.js:786 that rejects authenticated users who aren't owner / in rec.admins[] / in rec.viewers[] / holding a valid share token. Cross-user voting was structurally impossible despite the voters[] schema + AUTO_EXECUTE_VOTE_THRESHOLD=2 quorum design explicitly supporting it. Fix: added a third `'authed'` requiredAccess tier to fileApiPreamble that bypasses the owner/admin/viewer/share-token chain — auth still required (401 for anonymous), no session-access check. /artifact/vote AND /artifact/comment both switched to that tier (user follow-up: 'the comment function should allow anyone logged in to add'). Every other session endpoint (chat, queue mutations including resume/cancel/clear, file API, run dispatch) stays on `'owner'` or `'viewer'` per fr-87. Marker comments in both files explicitly name bug-46 and warn that 'authed' is the single carve-out — not a general loosening. Tests: test/bug-46-vote-cross-user.test.js (5 cases) wired into test/test.sh — covers vote + comment endpoints + fileApiPreamble 'authed' branch + bug-46 markers. Separately landed: critic-gemini-calibration round (server/src/critics/gemini.js + server/src/critique.js) — Gemini was returning 404 on the deprecated gemini-1.5-pro model. Bumped to gemini-2.5-flash, added explicit sampling (temp 0.2, topP 0.8, maxOutputTokens 1024) overriding Gemini's chat-tuned defaults, added 'INSUFFICIENT INFORMATION:' opt-out to the system prompt so critics admit uncertainty instead of rubber-stamping. test/critic-gemini-calibration.test.js (9 cases) locks the calibration. Resume button 403 (separate user report earlier) is intentionally owner-only at the server (`isOwnerOrAdmin` check in artifacts.js:937) — the bug is that the client renders the button without checking owner status; that needs a separate UI fix round (hide button for non-owners) which I asked for direction on and haven't started."
         }
       ]
     }
   ],
-  "updatedAt": "2026-06-01T01:15:00.000Z"
+  "updatedAt": "2026-06-02T00:30:00.000Z"
 }
