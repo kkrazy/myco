@@ -4141,6 +4141,36 @@
           "user": "labxnow",
           "text": "Research and intialize the critic.md with some good default best practice",
           "ts": "2026-06-02T14:49:21.667Z"
+        },
+        {
+          "id": "5623b930462a",
+          "user": "claude",
+          "text": "✓ success · 689.0s · $23.1336 · 32↓/24940↑\n\n**fr-89 Phase 1 implemented + tested.** Awaiting full test.sh background completion.\n\n**What shipped:**\n\n- **NEW** `server/templates/critic.md` — researched myco-shipped default with 4 sections:\n  - Core review principles (anchor on task, severity, citations, no invented context, match user's ask)\n  - Anti-patterns to flag (swallowed errors, speculative APIs, hard deletes, weakened tests, regex-on-SDK-events, magic numbers, duplicated state, mismatched comments)\n  - Things NOT to flag (calibration — trivial CSS, trail markers, plan.json edits, adjacent unrelated code, legit dead-code removal)\n  - Project-specific lessons (empty section to grow into)\n\n- **MODIFIED** `server/src/critique.js`:\n  - `_loadProjectCriticRules(absCwd)` reads `<project>/_myco_/critic.md`\n  - On first run for a p…",
+          "ts": "2026-06-02T15:01:06.245Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T14:49:37.170Z"
+          }
+        },
+        {
+          "id": "485088056f68",
+          "user": "claude",
+          "text": "✓ success · 6.9s · $23.5016 · 6↓/132↑\n\nFull `test.sh` exit code 0 — same environmental pattern (static checks all green, parallel-runner hits the BusyBox `grep -P` limitation that only affects this sandbox). All directly-affected suites green individually (fr-89: 8/8, critic-gemini-calibration: 9/9, bug-46: 5/5).\n\nReady for commit / push / deploy on your signal.",
+          "ts": "2026-06-02T15:01:13.167Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T14:49:37.137Z"
+          }
+        },
+        {
+          "id": "c01a82fcc27a",
+          "user": "claude",
+          "text": "✓ success · 14.0s · $26.6113 · 6↓/358↑\n\n**Mycodev deploy ✓** — `97a9eb3` live (container `a945fffaeae8`, build `2026-06-02T15:19:21Z`, HTTP 200).\n\n**fr-89 Phase 1 now active on mycodev:** the next `▶ Run` critique you trigger from any project on mycodev will:\n1. Look for `_myco_/critic.md` in that project\n2. If missing, auto-seed it from the shipped `server/templates/critic.md` (per @kkrazy's \"replicate to all projects\" comment)\n3. Append the file's content to the critic's system prompt under a clearly-labelled section\n\nTo test it on a different project: just hit `▶ Run` on any plan item there with the critic enabled — the seeded `_myco_/critic.md` will appear in the next git status as a brand-new file.\n\nTo customize: hand-edit the project's `_myco_/critic.md` and commit. The template's `## Project-specific lessons` section i…",
+          "ts": "2026-06-02T15:20:41.638Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T14:49:37.137Z"
+          }
         }
       ],
       "meta": {
@@ -4151,9 +4181,25 @@
       "description": "**Problem:** There is no persistent store for the critic rules that actually prove effective during real runs, so learnings are lost between sessions.\n**Expected:** A `critic.md` file that auto-accumulates the most effective critic rules (e.g. anti-patterns) and grows organically based on real system results.\n**Actual:** No `critic.md` exists; effective rules and anti-patterns are not captured or reused.\n**Context:** Markdown file intended to grow over time, driven by observed outcomes of the system.",
       "runs": [
         {
-          "status": "completed",
-          "ts": "2026-06-02T15:00:00.000Z",
-          "summary": "Phase 1 shipped (auto-growth deferred to a future dispatch — confirmed via AskUserQuestion since the dispatch admitted multiple architectural interpretations re: where the file lives, how it grows, how it's injected, and how it replicates to new projects). Scope confirmed via Q1=C (project _myco_/critic.md + myco-shipped default template) and Q2=A (manual edits for now). Implementation: (1) NEW server/templates/critic.md — a researched myco-shipped default with four sections: Core review principles (anchor on task text, distinguish severity, cite diff lines, no invented context, match user's explicit ask), Anti-patterns to flag (broad try/catch swallowing errors, new public API without callers/tests/auth, hard deletes against a shared store, weakened tests in the same diff as code, regex on SDK-structured events per CLAUDE.md §Code Style §2, magic numbers, duplicated cross-cutting state per CLAUDE.md §1, mismatched comments + code), Things NOT to flag (calibration to reduce false positives — missing tests for trivial CSS edits, bug-number trail markers, plan.json edits, adjacent unrelated code, legitimate dead-code removal, clean renames), Project-specific lessons (empty section the project grows over time). (2) server/src/critique.js gets a _loadProjectCriticRules(absCwd) helper that reads <project>/_myco_/critic.md; if missing, copies from server/templates/critic.md (the seed step — addresses @kkrazy's 'myco default replicate to all projects' comment). Helper wraps the load+seed in try/catch so a missing/unreadable file degrades gracefully (critique still runs, just without the project rules). Result is appended to the base systemPrompt under a clearly-labelled 'Project-specific critic rules (from _myco_/critic.md)' header that explicitly says 'These extend, but never override, the above instructions'. (3) THIS project bootstrapped with cp server/templates/critic.md _myco_/critic.md so existing runs immediately benefit. (4) _myco_/README.md updated to document the new file. Regression test: test/fr-89-critic-md.test.js (8 cases) locks the template + section headers + critique.js read/seed/inject path + graceful-fallback try/catch + the bootstrapped project file + a fr-89 marker comment. Wired into test/test.sh next to close-icon.test.js. Auto-growth (Phase 2) deferred — needs its own design pass on the PROPOSED-RULE vs end-of-turn-distillation trade-off and an effectiveness signal (probably the user's Accept/Discard verdict on the critique result). Not yet committed/pushed/deployed — awaiting user direction."
+          "status": "success",
+          "ts": "2026-06-02T15:01:06.245Z",
+          "startedAt": "2026-06-02T14:49:37.170Z",
+          "summary": "689.0s · 32→24940 tok",
+          "result": "**fr-89 Phase 1 implemented + tested.** Awaiting full test.sh background completion.\n\n**What shipped:**\n\n- **NEW** `server/templates/critic.md` — researched myco-shipped default with 4 sections:\n  - Core review principles (anchor on task, severity, citations, no invented context, match user's ask)\n  - Anti-patterns to flag (swallowed errors, speculative APIs, hard deletes, weakened tests, regex-on-SDK-events, magic numbers, duplicated state, mismatched comments)\n  - Things NOT to flag (calibration — trivial CSS, trail markers, plan.json edits, adjacent unrelated code, legit dead-code removal)\n  - Project-specific lessons (empty section to grow into)\n\n- **MODIFIED** `server/src/critique.js`:\n  - `_loadProjectCriticRules(absCwd)` reads `<project>/_myco_/critic.md`\n  - On first run for a project (file missing), copies from `server/templates/critic.md` — addresses @kkrazy's \"replicate to all projects\" comment\n  - Try/catch ensures the critique still runs if the file is missing/unreadable\n  - Loaded content appended to systemPrompt under a clearly-labelled \"extends but never overrides\" header\n\n- **BOOTSTRAPPED** this project's `_myco_/critic.md` from the template + documented in `_myco_/README.md`\n\n- **TEST** `test/fr-89-critic-md.test.js` (8/8 green) wired into `test/test.sh`\n\n**Deferred (Phase 2)**: auto-growth — needs its own design pass on PROPOSED-RULE blocks vs end-of-turn distillation, and an effectiveness signal (likely user's Accept/Discard verdict).\n\nReady for commit / push / deploy on your signal."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-02T15:01:13.167Z",
+          "startedAt": "2026-06-02T14:49:37.137Z",
+          "summary": "6.9s · 6→132 tok",
+          "result": "Full `test.sh` exit code 0 — same environmental pattern (static checks all green, parallel-runner hits the BusyBox `grep -P` limitation that only affects this sandbox). All directly-affected suites green individually (fr-89: 8/8, critic-gemini-calibration: 9/9, bug-46: 5/5).\n\nReady for commit / push / deploy on your signal."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-02T15:20:41.638Z",
+          "startedAt": "2026-06-02T14:49:37.137Z",
+          "summary": "14.0s · 6→358 tok",
+          "result": "**Mycodev deploy ✓** — `97a9eb3` live (container `a945fffaeae8`, build `2026-06-02T15:19:21Z`, HTTP 200).\n\n**fr-89 Phase 1 now active on mycodev:** the next `▶ Run` critique you trigger from any project on mycodev will:\n1. Look for `_myco_/critic.md` in that project\n2. If missing, auto-seed it from the shipped `server/templates/critic.md` (per @kkrazy's \"replicate to all projects\" comment)\n3. Append the file's content to the critic's system prompt under a clearly-labelled section\n\nTo test it on a different project: just hit `▶ Run` on any plan item there with the critic enabled — the seeded `_myco_/critic.md` will appear in the next git status as a brand-new file.\n\nTo customize: hand-edit the project's `_myco_/critic.md` and commit. The template's `## Project-specific lessons` section is the natural growth area.\n\nPhase 2 (auto-growth from runs) is deferred to a future dispatch as agreed."
         }
       ]
     },
@@ -4451,7 +4497,24 @@
         "rewritten": true
       },
       "description": "**Problem:** Users can't transfer content from memory into the composer's drawing pad, breaking the expected paste flow.\n**Expected:** Paste action in the composer's drawing pad accepts content from memory.\n**Actual:** Paste from memory into the drawing pad is unsupported."
+    },
+    {
+      "id": "fr-94",
+      "text": "Designate one main project per session workspace for _myco_ storage",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-02T23:01:13.031Z",
+      "addedBy": "labxnow",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "Each session workspace can have multiple projects, but only one should be the main project, it should save all myco memory in the main-project/_myco_ folder including the plan.json. Should have one main project when a session is created, either via a clone or a new local. This should be part of the session addition process",
+        "rewritten": true
+      },
+      "description": "**Problem:** Session workspaces support multiple projects but lack a designated main project to anchor myco memory storage.\n**Expected:** Every session has exactly one main project (set during session creation via clone or new local), and all myco memory — including `plan.json` — is persisted under `main-project/_myco_/`.\n**Actual:** No main project is assigned, so there is no canonical location for `_myco_` memory or `plan.json`.\n**Context:** Main-project selection must be wired into the session addition flow."
     }
   ],
-  "updatedAt": "2026-06-02T14:42:30.471Z"
+  "updatedAt": "2026-06-02T23:01:19.607Z"
 }
