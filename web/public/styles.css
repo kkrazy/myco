@@ -1509,10 +1509,14 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     max-width: 100%;
     height: auto;
   }
-  /* Composer card sits at 4px lateral margin to maximize textarea
-     width on narrow phones. Composer-actions column stays just
-     wide enough for the 80px buttons. */
-  #chat-form.composer { margin-left: 4px; margin-right: 4px; }
+  /* composer side-spacing (mobile): 12px lateral margin so the
+     composer card visibly floats away from the screen edges on
+     phones — matches the 16px desktop value scaled for narrower
+     viewports. Pre-fix this was 4px and the card felt edge-to-edge.
+     Composer-actions column still has room for the 80px buttons at
+     the 375px-screen lower bound (375 - 24 lateral = 351px for the
+     textarea + actions cluster). */
+  #chat-form.composer { margin-left: 12px; margin-right: 12px; }
 
   /* Composer buttons bump to 44px tall on mobile (Apple HIG finger
      target). Composer is taller naturally because the actions row
@@ -3629,7 +3633,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-top: 1px solid transparent;
   position: relative;
   flex: 0 0 auto;
-  margin: 4px 8px calc(4px + var(--safe-bottom));
+  /* composer side-spacing: 16px horizontal margin so the composer
+     card visibly floats away from the chat pane's left + right
+     edges (user-reported "should have space on the left and right
+     hand side"). Pre-fix this was 8px and looked edge-to-edge. */
+  margin: 4px 16px calc(4px + var(--safe-bottom));
   background: var(--surface-2, #1a1f2a);
   border-radius: 12px;
   box-shadow: 0 0 0 1px var(--border, rgba(255, 255, 255, .08));

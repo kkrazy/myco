@@ -2710,6 +2710,14 @@ test_chat_window() {
   # around `composer-has-content` so the unrelated older fr-88(r)
   # comments can't satisfy it by accident.
   node_test_result test/fr-88-composer-collapse-on-input.test.js "test/fr-88-composer-collapse-on-input.test.js (30 cases)"
+  # composer side-spacing: user reported "the composer field should
+  # have space on the left and right hand side" — pre-fix the
+  # #chat-form.composer card sat at 8px lateral margin on desktop /
+  # 4px on mobile, looking edge-to-edge against the chat pane. Fix
+  # bumps the values to 16px desktop / 12px mobile. Locks the
+  # minimum horizontal margin on both rules + a marker comment near
+  # both so a future restyle can't silently revert.
+  node_test_result test/composer-side-spacing.test.js "test/composer-side-spacing.test.js (3 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/
