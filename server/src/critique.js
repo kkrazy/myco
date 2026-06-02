@@ -3,6 +3,14 @@ const path = require('path');
 const sessionsMod = require('./sessions');
 const { getCritic } = require('./critics');
 const runQueue = require('./runQueue');
+// fr-94 Phase 1: delegate _myco_/ path resolution to the shared
+// helper in artifacts.js. The helper honors rec.mainProject (the
+// explicit project root set at session creation) and falls back
+// to auto-detection. Pre-fr-94 this file hand-rolled
+// `path.join(absCwd, '_myco_', 'critic.md')` which always wrote to
+// session-root — wrong on sessions whose actual project lives in
+// a subdirectory.
+const { resolveMycoDir } = require('./artifacts');
 
 // fr-89: load the project's _myco_/critic.md so its content can be
 // appended to the critic's system prompt. On the first critique run
@@ -16,8 +24,19 @@ const runQueue = require('./runQueue');
 // Returns the file's content as a string, or '' if the load failed
 // (the critique still runs, just without the project-specific rules
 // — graceful degradation).
-function _loadProjectCriticRules(absCwd) {
-  const rulesPath = path.join(absCwd, '_myco_', 'critic.md');
+function _loadProjectCriticRules(rec) {
+  // fr-94 Phase 1: resolveMycoDir(rec) honors rec.mainProject (the
+  // designated project root for this session) or falls back to the
+  // legacy auto-detect (look for .git/ in absCwd or one subdir
+  // deep). Pre-fr-94 this hand-rolled `path.join(absCwd, '_myco_',
+  // ...)` and always wrote to session-root — wrong on sessions
+  // whose actual project lives in a subdirectory.
+  const mycoDir = resolveMycoDir(rec);
+  if (!mycoDir) {
+    console.warn('[fr-89] no project root resolvable for this session — skipping critic.md');
+    return '';
+  }
+  const rulesPath = path.join(mycoDir, 'critic.md');
   try {
     if (!fs.existsSync(rulesPath)) {
       const templatePath = path.join(__dirname, '..', 'templates', 'critic.md');
@@ -80,10 +99,11 @@ If you disagree, write a clear, concise markdown list of issues/bugs and suggest
   // is seeded from the myco default template on first run for a
   // project; project-owned thereafter (user edits don't get clobbered
   // on subsequent runs).
-  let absCwd;
-  try { absCwd = sessionsMod.resolveCwd(rec.cwd, rec.user); }
-  catch (err) { absCwd = null; console.error(`[fr-89] resolveCwd failed: ${err.message}`); }
-  const projectCriticRules = absCwd ? _loadProjectCriticRules(absCwd) : '';
+  // fr-94 Phase 1: _loadProjectCriticRules now takes the full `rec`
+  // so it can call resolveMycoDir(rec) — that helper honors
+  // rec.mainProject (the designated project root for this session)
+  // or falls back to legacy auto-detect.
+  const projectCriticRules = rec ? _loadProjectCriticRules(rec) : '';
   const systemPrompt = projectCriticRules
     ? `${basePrompt}\n\n=== Project-specific critic rules (from _myco_/critic.md) ===\nThese extend, but never override, the above instructions.\n\n${projectCriticRules}`
     : basePrompt;

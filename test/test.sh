@@ -2705,6 +2705,28 @@ test_chat_window() {
   #    project's _myco_/critic.md exists with template content, and
   #    a fr-89 marker comment is present.
   node_test_result test/fr-89-critic-md.test.js "test/fr-89-critic-md.test.js (8 cases)"
+  # fr-94 Phase 1: designate one main project per session workspace
+  # for _myco_/ storage. Phase 1 (auto-detect migration of existing
+  # sessions deferred to a future dispatch — per AskUserQuestion):
+  #  · rec.mainProject field on the session record; resolveMycoDir
+  #    (artifacts.js) honors it before falling back to legacy auto-
+  #    detect.
+  #  · resolveMycoDir + findProjectRoot + MYCO_DIR promoted to public
+  #    exports so the three stragglers (agent-session.js,
+  #    critique.js, index.js diagrams) delegate to the helper instead
+  #    of hand-rolling `path.join(absCwd, '_myco_', ...)` — closes
+  #    the dual-_myco_ drift where events.jsonl/critic.md/diagrams
+  #    were going to session-root while plan.json went to the project
+  #    subdir.
+  #  · spawnSession grows opts.gitCloneUrl + opts.mainProjectName.
+  #    URL → clone into <absCwd>/<inferred-name>; plain text → mkdir
+  #    <absCwd>/<sanitized-name>. rec.mainProject is set + spawnAgent
+  #    cwd is anchored at the subdir so process.cwd() matches the
+  #    project, not the session-root wrapper.
+  #  · Spawn modal grows a single "Main project" input + app.js
+  #    sniffs URL vs name and forwards as gitCloneUrl / mainProjectName.
+  #    This session migrated by hand: rec.mainProject = 'myco'.
+  node_test_result test/fr-94-main-project.test.js "test/fr-94-main-project.test.js (13 cases — incl. r1 critique-response guards)"
   # critic-gemini-calibration (2026-06-02): triggered by Gemini
   # returning 404 on the deprecated gemini-1.5-pro model name during
   # a bug-46 run-dispatch critique. Three calibrations land together:

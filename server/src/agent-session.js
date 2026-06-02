@@ -193,7 +193,25 @@ class AgentSession extends EventEmitter {
     // tool calls / claude assistant_text from a prior session
     // process survive container restart + the 5min keepalive reap.
     this.buffer = [];
-    this._eventsFile = path.join(this.cwd, '_myco_', 'events.jsonl');
+    // fr-94 Phase 1: resolve _myco_/ via the shared helper so the
+    // events.jsonl path honors rec.mainProject (the explicit project
+    // root set at session creation) or falls back to legacy auto-
+    // detect for pre-fr-94 sessions. Pre-fr-94 this hand-rolled
+    // `path.join(this.cwd, '_myco_', ...)` and always wrote to
+    // session-root — wrong on sessions whose actual project lives
+    // in a subdirectory. Lookup is best-effort: if the rec isn't
+    // available yet (e.g. spawn-time race) or resolves to null, fall
+    // back to session-root so events still persist somewhere.
+    let _mycoDir = null;
+    try {
+      const sessionsMod = require('./sessions');
+      const { resolveMycoDir } = require('./artifacts');
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      if (rec) _mycoDir = resolveMycoDir(rec);
+    } catch (err) {
+      console.error(`[fr-94] AgentSession could not resolve mycoDir for ${sessionId}: ${err.message}`);
+    }
+    this._eventsFile = path.join(_mycoDir || path.join(this.cwd, '_myco_'), 'events.jsonl');
     this._eventAppendsSinceTrim = 0;
     this._hydrateBufferFromDisk();
 

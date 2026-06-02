@@ -46,6 +46,12 @@ const crypto = require('crypto');
 // WS attach + chat plumbing layer.
 const { attachWebSocket, attachViewerWebSocket, getSession: getPtySession, handleChatMessage } = require('./attach');
 const artifactsRoutes = require('./artifacts');
+// fr-94 Phase 1: resolveMycoDir(rec) is the single source of truth
+// for "where _myco_/ lives for this session" — honors rec.mainProject
+// (the designated project root set at session creation) or falls
+// back to auto-detect. Used here for the diagram routes that
+// otherwise hand-rolled `path.join(root, '_myco_', 'diagrams', …)`.
+const { resolveMycoDir: _resolveMycoDir } = require('./artifacts');
 const {
   isAuthRequired, userFromRequest, userFromToken,
   profileFromToken, listUsernames,
@@ -545,6 +551,13 @@ app.post('/sessions', requireAuth, async (req, res) => {
       // Default unset → 'pty'. Pass {"mode":"agent"} in the POST body to spawn
       // an SDK session. PTY sessions remain the default until phase 8 flips it.
       mode: req.body.mode === 'agent' ? 'agent' : undefined,
+      // fr-94 Phase 1: forward the spawn-modal mainProject field
+      // (single input — Git clone URL OR new project name). The server
+      // sniffs the value: URL-shaped → git clone; plain name → mkdir.
+      // Backward compat: pre-fr-94 clients omit the field; spawnSession
+      // falls through to legacy auto-detect.
+      gitCloneUrl: typeof req.body.gitCloneUrl === 'string' ? req.body.gitCloneUrl : undefined,
+      mainProjectName: typeof req.body.mainProjectName === 'string' ? req.body.mainProjectName : undefined,
     });
     res.json({ session_id: id, cwd, mode });
   } catch (err) {
@@ -1114,7 +1127,14 @@ app.post('/sessions/:id/diagrams', async (req, res) => {
   if (v.error) return res.status(400).json({ error: v.error });
   const fs = require('fs/promises');
   const path = require('path');
-  const dir = path.join(ctx.root, '_myco_', 'diagrams');
+  // fr-94 Phase 1: route diagrams to <mainProject>/_myco_/diagrams.
+  // resolveMycoDir honors rec.mainProject (or auto-detects). Fall
+  // back to <session-root>/_myco_/diagrams if the helper can't
+  // resolve a project root — keeps the save path working for
+  // legacy sessions with no detectable project.
+  const dir = _resolveMycoDir(ctx.rec)
+    ? path.join(_resolveMycoDir(ctx.rec), 'diagrams')
+    : path.join(ctx.root, '_myco_', 'diagrams');
   try { await fs.mkdir(dir, { recursive: true }); }
   catch (e) { return res.status(500).json({ error: `mkdir failed: ${e.message}` }); }
   const filename = _newDiagramFilename();
@@ -1153,7 +1173,13 @@ app.get('/sessions/:id/diagrams/:filename', async (req, res) => {
     return res.status(400).json({ error: 'bad filename shape' });
   }
   const path = require('path');
-  const abs = path.join(root, '_myco_', 'diagrams', filename);
+  // fr-94 Phase 1: serve diagrams from <mainProject>/_myco_/diagrams
+  // (resolveMycoDir honors rec.mainProject) with legacy session-root
+  // fallback so old diagrams that were stored pre-fr-94 still serve.
+  const mycoDir = _resolveMycoDir(rec);
+  const abs = mycoDir
+    ? path.join(mycoDir, 'diagrams', filename)
+    : path.join(root, '_myco_', 'diagrams', filename);
   res.setHeader('Content-Type', 'image/svg+xml');
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.sendFile(abs, (err) => {

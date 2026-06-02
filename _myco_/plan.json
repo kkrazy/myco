@@ -3305,7 +3305,7 @@
       "id": "fr-77",
       "text": "**Problem:** File explorer makes it hard to see which files have changed and quickly open a diff view.\n**Expected:** Directory pane split into two sections, with the bottom section listing all changed files and supporting click-to-open diff view.\n**Actual:** Single directory section with no dedicated changed-files list or diff entry point.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-25T13:20:17.262Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3379,12 +3379,19 @@
       "id": "fr-79",
       "text": "**Problem:** No at-a-glance history of recently shipped fr/td/bug/ad hoc work.\n**Expected:** Timeline view in the top right listing implemented fr/td/bug/ad hoc items, automatically grouped by feature.\n**Actual:** No timeline surface exists; history is not visible or grouped.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-26T00:28:42.172Z",
       "addedBy": "kkrazy",
       "source": "user",
       "voters": [],
-      "comments": [],
+      "comments": [
+        {
+          "id": "e90939febcbd",
+          "user": "labxnow",
+          "text": "Use git history instead. Close",
+          "ts": "2026-06-02T23:18:43.984Z"
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "Add a timeline view on the top rigbt, with history of what fr/td/bug/ad hoc feature was implemented, with automatic grouping by feature",
@@ -3395,7 +3402,7 @@
       "id": "fr-80",
       "text": "**Problem:** No in-chat shortcut exists to file feature requests, bugs, or tech-debt items against `github.com/kkrazy/myco` from another myco context.\n**Expected:** Slash commands `/fr @myco`, `/bug @myco`, and `/td @myco` rewrite the user's note into a proper issue, submit it to `github.com/kkrazy/myco`, and return a link for the user to review/update.\n**Actual:** Users must manually format and file issues on GitHub; no `@myco` mention handler routes feature/bug/tech-debt intents.\n**Context:** Three command variants (`/fr`, `/bug`, `/td`) share the same submit-and-link flow, differing only in issue type/label.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-26T01:45:38.219Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3476,7 +3483,7 @@
       "id": "fr-82",
       "text": "**Problem:** No way to switch between accounts backed by different PATs, blocking users who work across GitHub, Gitee, or other git-compatible repos.\n**Expected:** A \"switch account\" action that selects among stored PATs (GitHub, Gitee, git-compatible) and authenticates as the chosen identity.\n**Actual:** Only a single PAT/account is supported; switching requires manually replacing credentials.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-26T02:08:18.930Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3501,7 +3508,7 @@
       "id": "fr-83",
       "text": "**Problem:** When the sidebar is minimized, the \"back to home\" icon overlaps with the file explorer \"<\" icon.\n**Expected:** \"back to home\" icon sits in a location that doesn't collide with the file explorer \"<\" icon in the minimized sidebar state.\n**Actual:** The two icons render on top of each other, making both hard to target.\n**Context:** Only occurs in the minimized sidebar state.",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-26T07:56:29.402Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3526,7 +3533,7 @@
       "id": "fr-84",
       "text": "Add embedded diagram drawing tool launched from chat field icon",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-27T03:25:38.429Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3604,6 +3611,12 @@
             "kind": "run-summary",
             "runStartedAt": "2026-05-27T23:29:50.365Z"
           }
+        },
+        {
+          "id": "40ed8c1a93b8",
+          "user": "labxnow",
+          "text": "add copy button to the popover to copy the selected text. Keep the selected text visually selected for better ux.",
+          "ts": "2026-06-02T23:15:19.285Z"
         }
       ],
       "meta": {
@@ -3626,6 +3639,11 @@
           "startedAt": "2026-05-27T23:29:50.365Z",
           "summary": "236.0s · 18→7168 tok",
           "result": "**fr-85 r7 landed** on `main` (`e180099`). No deploy per rule.\n\nSummary:\n- `server/src/attach.js` clarify branch wraps `message.text` → `[clarify — please answer concisely in 1-3 short sentences] <user-text>`. LLM-facing only; user never sees it (clarify rows filtered from chat, popover preview shows selected text not question).\n- New test guard `test/fr-85-r4-clarify-server-routing.test.js` r7 — red pre-fix, green after.\n- 9/9 server-routing + 27/27 popover + **101/101** sweep green.\n- fr-85 closeout comment appended in `_myco_/plan.json`.\n\nSay **\"deploy\"** to ship."
+        },
+        {
+          "status": "running",
+          "ts": "2026-06-02T23:22:53.672Z",
+          "summary": null
         }
       ]
     },
@@ -3874,7 +3892,7 @@
       "id": "fr-87",
       "text": "Allow regular users to access config page with user-scoped settings only",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-31T09:20:32.885Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -4066,7 +4084,7 @@
       "id": "fr-88",
       "text": "Collapse chat composer buttons to icon-only when user starts typing",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-06-01T01:01:15.361Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -4344,7 +4362,7 @@
       "id": "fr-91",
       "text": "Add test key on API key to verify functionality",
       "layer": "Feature",
-      "done": false,
+      "done": true,
       "addedAt": "2026-06-02T00:16:02.075Z",
       "addedBy": "labxnow",
       "source": "user",
@@ -4472,14 +4490,23 @@
       "addedAt": "2026-06-02T14:22:59.791Z",
       "addedBy": "labxnow",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "labxnow"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "swipe up and down should simulate a up or down arrow and bring up the composer history on mobile for better ux",
         "rewritten": true
       },
-      "description": "**Problem:** Mobile users can't access composer history because there's no arrow-key equivalent on touch devices.\n**Expected:** Swipe up/down on the composer simulates up/down arrow presses, surfacing previous/next history entries.\n**Actual:** Composer history is effectively unreachable on mobile — no gesture is wired to the history navigation.\n**Context:** Mobile UX only; should mirror the existing desktop arrow-key behavior on the composer input."
+      "description": "**Problem:** Mobile users can't access composer history because there's no arrow-key equivalent on touch devices.\n**Expected:** Swipe up/down on the composer simulates up/down arrow presses, surfacing previous/next history entries.\n**Actual:** Composer history is effectively unreachable on mobile — no gesture is wired to the history navigation.\n**Context:** Mobile UX only; should mirror the existing desktop arrow-key behavior on the composer input.",
+      "runs": [
+        {
+          "status": "running",
+          "ts": "2026-06-02T23:20:08.019Z",
+          "summary": null
+        }
+      ]
     },
     {
       "id": "fr-93",
@@ -4506,15 +4533,92 @@
       "addedAt": "2026-06-02T23:01:13.031Z",
       "addedBy": "labxnow",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "labxnow"
+      ],
+      "comments": [
+        {
+          "id": "ef91da6561e0",
+          "user": "claude",
+          "text": "✓ success · 731.5s · $24.2274 · 63↓/39051↑\n\n**fr-94 Phase 1 implemented + tested locally.** Awaiting full test.sh background completion.\n\n**What shipped (per the numbered plan)**:\n\n1. ✅ **artifacts.js**: `findProjectRoot` extended to honor `rec.mainProject` first (legacy auto-detect = fallback). `resolveMycoDir` + `findProjectRoot` + `MYCO_DIR` promoted to public exports.\n2. ✅ **3 stragglers refactored**: `critique.js`, `agent-session.js`, `index.js` (diagrams routes) all delegate to `resolveMycoDir(rec)` instead of hand-rolling `path.join(absCwd, '_myco_', ...)`. Each has a graceful session-root fallback.\n3. ✅ **spawnSession**: new `_spawnViaGitClone` + `_spawnViaNewDir` helpers; persists `rec.mainProject`; anchors agent's `cwd` at the project subdir.\n4. ✅ **POST /sessions**: forwards `gitCloneUrl` + `mainProjectName` from spawn…",
+          "ts": "2026-06-02T23:19:29.326Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T23:07:15.331Z"
+          }
+        },
+        {
+          "id": "7448256abab6",
+          "user": "claude",
+          "text": "✓ success · 4.1s · $24.6430 · 6↓/106↑\n\nFull test.sh exit code 0 — same environmental pattern (static checks all green, parallel-runner hits the BusyBox `grep -P` limitation that's sandbox-only). All directly-affected suites pass individually.\n\nfr-94 Phase 1 fully ready for commit / push / deploy on your signal.",
+          "ts": "2026-06-02T23:19:45.417Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T23:07:15.303Z"
+          }
+        },
+        {
+          "id": "827b3571c884",
+          "user": "claude",
+          "text": "✓ success · 134.3s · $28.6313 · 14↓/8705↑\n\n**fr-94 r1 critique response — both concerns addressed locally:**\n\n1. ✅ **artifacts.js**: `findProjectRoot` now `console.warn`s + `return null` when `rec.mainProject` is set but the directory doesn't exist (instead of silently falling through to auto-detect). Test added.\n2. ✅ **sessions.js**: `_spawnViaGitClone` now passes `timeout: 120_000` (2 min) to `spawnSync`. ETIMEDOUT branch creates the empty dir + logs the timeout. Test added.\n\nTest envelope grew from 11 → 13 cases. fr-94 commit `97a9eb3` is still pending on this session — these r1 fixes will fold into the same commit when you say \"commit\" (or as a separate r1 commit, your call).\n\n**Outstanding from before the critique:** you also dispatched `fr-92` (mobile swipe → arrow-key history). I paused on it to handle the critique. Want …",
+          "ts": "2026-06-02T23:22:22.447Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T23:20:08.238Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "Each session workspace can have multiple projects, but only one should be the main project, it should save all myco memory in the main-project/_myco_ folder including the plan.json. Should have one main project when a session is created, either via a clone or a new local. This should be part of the session addition process",
         "rewritten": true
       },
-      "description": "**Problem:** Session workspaces support multiple projects but lack a designated main project to anchor myco memory storage.\n**Expected:** Every session has exactly one main project (set during session creation via clone or new local), and all myco memory — including `plan.json` — is persisted under `main-project/_myco_/`.\n**Actual:** No main project is assigned, so there is no canonical location for `_myco_` memory or `plan.json`.\n**Context:** Main-project selection must be wired into the session addition flow."
+      "description": "**Problem:** Session workspaces support multiple projects but lack a designated main project to anchor myco memory storage.\n**Expected:** Every session has exactly one main project (set during session creation via clone or new local), and all myco memory — including `plan.json` — is persisted under `main-project/_myco_/`.\n**Actual:** No main project is assigned, so there is no canonical location for `_myco_` memory or `plan.json`.\n**Context:** Main-project selection must be wired into the session addition flow.",
+      "runs": [
+        {
+          "status": "completed",
+          "ts": "2026-06-02T15:30:00.000Z",
+          "summary": "Phase 1 shipped (auto-detect migration of existing sessions deferred per AskUserQuestion). Scope confirmed via Q1=Phase 1 plumbing + spawn-modal field, Q2=Git clone URL OR new project name in the modal. Pleasant discovery: artifacts.js ALREADY had findProjectRoot(rec) + resolveMycoDir(rec) helpers that auto-detect a project subdir via `.git/` presence — that's why plan.json correctly lived in myco/_myco_/ all along while events.jsonl + critic.md + diagrams were going to session-root (the bug fr-94 calls out). Fix paths: (1) artifacts.js — extended findProjectRoot to honor rec.mainProject FIRST (explicit override beats auto-detect) and promoted resolveMycoDir + findProjectRoot + MYCO_DIR from __test: namespace to top-level public exports so other server modules can import them. (2) Refactored the three stragglers: agent-session.js (events.jsonl path), critique.js (fr-89's critic.md load+seed), index.js (diagram save + serve routes) — all now call resolveMycoDir(rec) instead of hand-rolling path.join(absCwd, '_myco_', ...). Each has a graceful fallback to legacy session-root path if the helper returns null (so the seed/save still works for sessions with no project). (3) sessions.js spawnSession grows opts.gitCloneUrl + opts.mainProjectName with two new helpers _spawnViaGitClone (runs `git clone --quiet` into <absCwd>/<inferred-name>) and _spawnViaNewDir (mkdir <absCwd>/<sanitized-name>). When either is set, rec.mainProject is persisted on the record + spawnAgent's cwd is anchored at the project subdir (so process.cwd() and CLAUDE.md and all SDK tool calls land in the actual project, not the session-root wrapper). (4) POST /sessions in index.js forwards req.body.gitCloneUrl + req.body.mainProjectName to spawnSession. (5) Spawn modal grew a single 'Main project (optional — git URL or new folder name)' input; app.js doSpawn() sniffs the value (URL-shaped via regex on https?://, git@, ssh://, or owner/repo shorthand → gitCloneUrl; plain text → mainProjectName) and forwards in the POST body. (6) Migrated THIS session by hand: rec.mainProject = 'myco' (the actual project subdir under /wks/kkrazy/myco-kkrazy-f80476dd/) so subsequent _myco_/ writes from agent-session/critique/diagrams stop dropping at session-root. Regression test: test/fr-94-main-project.test.js (11 cases) locks the public exports, findProjectRoot mainProject honor, each straggler's import, spawnSession + helper functions, POST /sessions route forwarding, spawn modal HTML + JS sniff, and a fr-94 marker comment in ≥3 of the touched files. Wired into test/test.sh after fr-89. Auto-detect migration for legacy sessions (scan for git repos under absCwd, prompt on multi-match) deferred to a future dispatch. Not yet committed/pushed/deployed — awaiting user direction."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-02T23:19:29.326Z",
+          "startedAt": "2026-06-02T23:07:15.331Z",
+          "summary": "731.5s · 63→39051 tok",
+          "result": "**fr-94 Phase 1 implemented + tested locally.** Awaiting full test.sh background completion.\n\n**What shipped (per the numbered plan)**:\n\n1. ✅ **artifacts.js**: `findProjectRoot` extended to honor `rec.mainProject` first (legacy auto-detect = fallback). `resolveMycoDir` + `findProjectRoot` + `MYCO_DIR` promoted to public exports.\n2. ✅ **3 stragglers refactored**: `critique.js`, `agent-session.js`, `index.js` (diagrams routes) all delegate to `resolveMycoDir(rec)` instead of hand-rolling `path.join(absCwd, '_myco_', ...)`. Each has a graceful session-root fallback.\n3. ✅ **spawnSession**: new `_spawnViaGitClone` + `_spawnViaNewDir` helpers; persists `rec.mainProject`; anchors agent's `cwd` at the project subdir.\n4. ✅ **POST /sessions**: forwards `gitCloneUrl` + `mainProjectName` from spawn modal payload.\n5. ✅ **Spawn modal**: new \"Main project (optional — git URL or new folder name)\" input; `doSpawn()` sniffs URL-vs-name and forwards correctly.\n6. ✅ **This session migrated**: `rec.mainProject = 'myco'` in sessions.json so subsequent `_myco_/` writes anchor to `myco/_myco_/`.\n7. ✅ **Test** `test/fr-94-main-project.test.js` (11/11 green) wired into `test/test.sh`.\n\n**Phase 2 deferred**: auto-detect migration for existing sessions (scan for git repos, prompt on multi-match).\n\nReady for commit / push / deploy on your signal."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-02T23:19:45.417Z",
+          "startedAt": "2026-06-02T23:07:15.303Z",
+          "summary": "4.1s · 6→106 tok",
+          "result": "Full test.sh exit code 0 — same environmental pattern (static checks all green, parallel-runner hits the BusyBox `grep -P` limitation that's sandbox-only). All directly-affected suites pass individually.\n\nfr-94 Phase 1 fully ready for commit / push / deploy on your signal."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-02T23:22:22.447Z",
+          "startedAt": "2026-06-02T23:20:08.238Z",
+          "summary": "134.3s · 14→8705 tok",
+          "result": "**fr-94 r1 critique response — both concerns addressed locally:**\n\n1. ✅ **artifacts.js**: `findProjectRoot` now `console.warn`s + `return null` when `rec.mainProject` is set but the directory doesn't exist (instead of silently falling through to auto-detect). Test added.\n2. ✅ **sessions.js**: `_spawnViaGitClone` now passes `timeout: 120_000` (2 min) to `spawnSync`. ETIMEDOUT branch creates the empty dir + logs the timeout. Test added.\n\nTest envelope grew from 11 → 13 cases. fr-94 commit `97a9eb3` is still pending on this session — these r1 fixes will fold into the same commit when you say \"commit\" (or as a separate r1 commit, your call).\n\n**Outstanding from before the critique:** you also dispatched `fr-92` (mobile swipe → arrow-key history). I paused on it to handle the critique. Want me to:\n\n- **Resume fr-92** now (mobile swipe wiring is small)\n- **Commit/push fr-94 + r1 fixes first**, then fr-92\n- **Other priority**"
+        },
+        {
+          "status": "running",
+          "ts": "2026-06-02T23:22:53.910Z",
+          "summary": null
+        }
+      ]
+    },
+    {
+      "id": "bug-50",
+      "text": "critic message is not display in full",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-02T23:23:12.342Z",
+      "addedBy": "labxnow",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-06-02T23:01:19.607Z"
+  "updatedAt": "2026-06-02T23:23:12.342Z"
 }

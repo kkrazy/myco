@@ -2798,11 +2798,27 @@ async function doSpawn() {
   // lets the server pick its default.
   const ptyCheckbox = document.getElementById('spawn-mode-pty');
   const mode = ptyCheckbox && ptyCheckbox.checked ? 'pty' : undefined;
+  // fr-94 Phase 1: read the main-project field. The server sniffs the
+  // value: URL-shaped (https://, git@, ssh://, owner/repo) → forwarded
+  // as gitCloneUrl; plain text → forwarded as mainProjectName. Empty
+  // → neither sent → server falls through to legacy auto-detect at
+  // _myco_/ access time. Sniff client-side too so the payload is
+  // typed correctly and the server doesn't have to second-guess.
+  const mainProjectRaw = (document.getElementById('spawn-main-project')?.value || '').trim();
+  let gitCloneUrl, mainProjectName;
+  if (mainProjectRaw) {
+    if (/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(mainProjectRaw) ||
+        /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(mainProjectRaw)) {
+      gitCloneUrl = mainProjectRaw;
+    } else {
+      mainProjectName = mainProjectRaw;
+    }
+  }
   try {
     const res = await authedFetch('/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, cols, rows, mode }),
+      body: JSON.stringify({ cwd, cols, rows, mode, gitCloneUrl, mainProjectName }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);

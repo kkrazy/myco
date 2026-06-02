@@ -680,6 +680,74 @@ async function listSessions(forUser) {
   }));
 }
 
+// fr-94 Phase 1: derive a project-dir name from a git URL. Handles
+// `https://github.com/owner/repo(.git)?`, `git@host:owner/repo(.git)?`,
+// and `owner/repo` shorthand. Returns just the repo name (last
+// path segment, `.git` stripped). Falls back to 'project' if the
+// URL doesn't parse cleanly.
+function _projectNameFromGitUrl(url) {
+  const m = String(url || '').match(/[^\/:]+?(?:\.git)?$/);
+  const name = m ? m[0].replace(/\.git$/, '').trim() : '';
+  // Sanitize to a safe directory name — no path separators, no
+  // hidden-dir prefix.
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, '');
+  return safe || 'project';
+}
+
+// fr-94 Phase 1: clone <gitUrl> into <absCwd>/<inferred-name>/. The
+// clone runs synchronously (spawnSync) so the directory is ready
+// before injectBestPracticesIntoClaudeMd + spawnAgent fire. On clone
+// failure the directory is still created (so the agent can attach)
+// and a warning is logged — the user can re-clone or rebuild later.
+// Returns the project name on success or '' if the URL was empty.
+//
+// Phase 1 r1 (critique response): added an explicit timeout so a
+// stalled clone (network issue, hung credential prompt, huge repo)
+// can't pin the /sessions POST forever. SPAWN_TIMEOUT_MS is generous
+// enough for normal repos but short enough that the failure path
+// (mkdir empty dir, return name) runs in bounded time. A real Phase 2
+// async-clone flow (returns sessionId immediately, streams clone
+// progress) is the longer-term fix; this is the minimum guard
+// against an OS-level hang in the meantime.
+const _GIT_CLONE_TIMEOUT_MS = 120_000; // 2 minutes — gentle ceiling
+function _spawnViaGitClone(absCwd, gitUrl) {
+  const projectName = _projectNameFromGitUrl(gitUrl);
+  const projectAbs = path.join(absCwd, projectName);
+  if (fs.existsSync(projectAbs)) {
+    console.warn(`[fr-94] skipping git clone for ${gitUrl} — ${projectName}/ already exists`);
+    return projectName;
+  }
+  try {
+    const { spawnSync } = require('child_process');
+    const r = spawnSync('git', ['clone', '--quiet', gitUrl, projectAbs], {
+      stdio: 'inherit',
+      timeout: _GIT_CLONE_TIMEOUT_MS,
+    });
+    if (r.error && r.error.code === 'ETIMEDOUT') {
+      console.error(`[fr-94] git clone of ${gitUrl} timed out after ${_GIT_CLONE_TIMEOUT_MS}ms. Creating empty dir as fallback.`);
+      try { fs.mkdirSync(projectAbs, { recursive: true }); } catch {}
+    } else if (r.status !== 0) {
+      console.error(`[fr-94] git clone of ${gitUrl} into ${projectAbs} failed (status=${r.status}). Creating empty dir as fallback.`);
+      try { fs.mkdirSync(projectAbs, { recursive: true }); } catch {}
+    }
+  } catch (err) {
+    console.error(`[fr-94] git clone of ${gitUrl} threw: ${err.message}`);
+    try { fs.mkdirSync(projectAbs, { recursive: true }); } catch {}
+  }
+  return projectName;
+}
+
+// fr-94 Phase 1: create a fresh empty project subdirectory named
+// <name>. The name is sanitized to a safe slug. Returns the slug.
+function _spawnViaNewDir(absCwd, rawName) {
+  const safe = String(rawName || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  if (!safe) return '';
+  const projectAbs = path.join(absCwd, safe);
+  try { fs.mkdirSync(projectAbs, { recursive: true }); }
+  catch (err) { console.error(`[fr-94] mkdir ${projectAbs} failed: ${err.message}`); }
+  return safe;
+}
+
 async function spawnSession(rawCwd, user = 'default', opts = {}) {
   const safeUser = (user || 'default').replace(/[^a-zA-Z0-9_-]/g, '');
   const id = `myco-${safeUser}-${shortId()}`;
@@ -711,7 +779,25 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   }
   const mode = 'agent';
 
+  // fr-94 Phase 1: opts.gitCloneUrl OR opts.mainProjectName designates
+  // the session's "main project" — the subdirectory under absCwd that
+  // owns _myco_/ (plan.json, critic.md, events.jsonl, diagrams, …).
+  // The spawn modal collects this in a single text field; the server
+  // treats it as a URL if it starts with `https://`, `git@`, etc., or
+  // looks like a `owner/repo` shorthand, otherwise as a new directory
+  // name. mainProject is stored on the session record and
+  // resolveMycoDir(rec) in artifacts.js uses it as the project root.
+  // If neither is provided, mainProject stays empty and the legacy
+  // auto-detect path applies (find first subdir with .git/).
+  let mainProject = '';
+  if (typeof opts.gitCloneUrl === 'string' && opts.gitCloneUrl.trim()) {
+    mainProject = _spawnViaGitClone(absCwd, opts.gitCloneUrl.trim());
+  } else if (typeof opts.mainProjectName === 'string' && opts.mainProjectName.trim()) {
+    mainProject = _spawnViaNewDir(absCwd, opts.mainProjectName.trim());
+  }
+
   const record = { id, user, cwd: toRel(absCwd, user), absCwd, label, claudeSessionId: null, createdAt, mode };
+  if (mainProject) record.mainProject = mainProject;
   putSession(record);
 
   // Inject the myco best-practices template into the project's CLAUDE.md
@@ -719,12 +805,22 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   // project instructions. Idempotent — uses a sentinel pair so repeat
   // spawns don't duplicate, and a hand-edited section keeps the user's
   // local changes (we never rewrite an existing sentinel block).
-  injectBestPracticesIntoClaudeMd(absCwd);
+  // fr-94: when mainProject is set, the CLAUDE.md lives at
+  // <absCwd>/<mainProject>/CLAUDE.md (the project root); otherwise at
+  // session-root <absCwd>/CLAUDE.md (legacy).
+  const claudeMdRoot = mainProject ? path.join(absCwd, mainProject) : absCwd;
+  injectBestPracticesIntoClaudeMd(claudeMdRoot);
 
   const { spawnAgent } = require('./agent-session');
   // fr-26: pass session owner so AgentSession can resolve GitHub
   // identity → GIT_AUTHOR_* / GIT_COMMITTER_* env for the SDK.
-  const session = spawnAgent(id, { cwd: absCwd, cols, rows, user });
+  // fr-94 Phase 1: when mainProject is set, the agent runs IN that
+  // project subdir so tools like Edit/Read/Bash + claude's
+  // process.cwd() all anchor to the actual project, not the
+  // session root wrapper. claudeMdRoot computed above mirrors the
+  // same choice.
+  const agentCwd = mainProject ? path.join(absCwd, mainProject) : absCwd;
+  const session = spawnAgent(id, { cwd: agentCwd, cols, rows, user });
   ptyMod._registerExternalSession(id, session);
   return { id, cwd: record.cwd, mode };
 }

@@ -161,6 +161,29 @@ const NESTED_SCAN_SKIP = new Set([
 // with, so writing _myco_/ would be meaningless.
 function findProjectRoot(rec) {
   if (!rec || !rec.absCwd) return null;
+  // fr-94 Phase 1: rec.mainProject (explicit designated main project)
+  // takes precedence over auto-detection. Set at session creation via
+  // the spawn modal's "Git clone URL OR new project name" field. When
+  // present and the directory exists, it's the canonical project root
+  // for this session — period. Auto-detection is the LEGACY fallback
+  // for sessions spawned before fr-94 landed.
+  if (rec.mainProject && typeof rec.mainProject === 'string' && rec.mainProject.trim()) {
+    const candidate = path.join(rec.absCwd, rec.mainProject.trim());
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {}
+    // fr-94 Phase 1 r1 (critique response): if rec.mainProject is set
+    // but the directory doesn't exist, RETURN NULL (skip the artifact
+    // mirror) instead of silently falling through to auto-detect.
+    // Pre-r1 behavior silently routed _myco_/ to whatever auto-detect
+    // picked next — which on a multi-repo workspace could land
+    // plan.json/critic.md/events.jsonl in a completely different
+    // project than the user explicitly designated, causing
+    // hard-to-debug ghost writes. Logging here is loud enough that a
+    // hand-edited stale mainProject surfaces quickly.
+    console.warn(`[fr-94] rec.mainProject="${rec.mainProject}" but ${candidate} does not exist — artifact mirror skipped for ${rec.id || '?'} (fix: delete or correct rec.mainProject in /data/sessions.json)`);
+    return null;
+  }
   // Direct hit: session.absCwd is itself a checkout.
   try {
     if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory()) return rec.absCwd;
@@ -1015,6 +1038,17 @@ module.exports = {
   AUTO_EXECUTE_VOTE_THRESHOLD,
   buildArtifactRunText,
   buildArtifactQuorumText,
+  // fr-94 Phase 1: resolveMycoDir + findProjectRoot promoted to public
+  // exports so OTHER server modules (agent-session.js, critique.js,
+  // index.js) stop hand-rolling `path.join(absCwd, '_myco_', …)` —
+  // they all delegate to the single source of truth here. Without
+  // this, every consumer had its own concept of "where _myco_/ lives"
+  // and they drifted (e.g. agent-session wrote events.jsonl to
+  // session-root while artifacts wrote plan.json to the project
+  // subdir — exactly the inconsistency fr-94 fixes).
+  MYCO_DIR,
+  resolveMycoDir,
+  findProjectRoot,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

@@ -459,6 +459,17 @@
       <label>Display name (optional)
         <input id="spawn-cwd" type="text" placeholder="e.g. 'rust experiment' (the actual folder is auto-named after the session id)" autocomplete="off" maxlength="80" title="Friendly label shown in the sessions list. The session always runs in /wks/<you>/<session-id>/." />
       </label>
+      <!-- fr-94 Phase 1: main-project field. A single text input that
+           the server sniffs: URL-shaped (https://, git@, etc.) →
+           git clone into a subdir named after the repo; plain text →
+           mkdir a fresh empty subdir with that name. Empty → no main
+           project, _myco_/ falls back to legacy auto-detect at runtime.
+           The value drives rec.mainProject which resolveMycoDir(rec)
+           reads to anchor every _myco_/ access (plan.json, critic.md,
+           events.jsonl, diagrams). -->
+      <label>Main project (optional — git URL or new folder name)
+        <input id="spawn-main-project" type="text" placeholder="e.g. https://github.com/owner/repo OR 'my-rust-app'" autocomplete="off" maxlength="200" title="Sets the session's main project. URL → git clone. Plain text → new empty folder. Both anchor _myco_/ (plan, critic rules, diagrams) at <main-project>/_myco_/." />
+      </label>
       <div id="spawn-suggestions"></div>
       <!-- Phase 9 retired the PTY driver toggle. Every new session is
            agent-mode (Claude Agent SDK). The legacy checkbox is gone
