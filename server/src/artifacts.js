@@ -212,6 +212,62 @@ function resolveMycoDir(rec) {
   return path.join(projectRoot, MYCO_DIR);
 }
 
+// fr-94 Phase 2: lazy migration helper. For sessions spawned before
+// fr-94 Phase 1 landed (no rec.mainProject set), run the same
+// subdir-scan that findProjectRoot does, and if there's EXACTLY ONE
+// candidate `.git/`-marked subdirectory, cache it on rec.mainProject
+// + persist via the caller's saveStore callback. Migration is
+// best-effort:
+//   - no candidates → leave rec.mainProject unset (legacy auto-
+//     detect picks the session root if it's a repo, else null —
+//     same as before).
+//   - exactly one candidate → set rec.mainProject = candidate.
+//     Subsequent resolveMycoDir calls skip the scan + use the
+//     explicit override path through findProjectRoot's Phase 1
+//     branch.
+//   - multiple candidates → log a warning, leave rec.mainProject
+//     unset. The legacy auto-detect path picks the alphabetically-
+//     first one each time, same as before; the warning gives the
+//     user a heads-up that they should set rec.mainProject
+//     explicitly (the future Phase 3 spawn-modal-style action will
+//     surface this in the UI).
+// Returns true iff the migration set a new value.
+function migrateMainProjectIfNeeded(rec, saveStoreFn) {
+  if (!rec || !rec.absCwd) return false;
+  if (rec.mainProject && String(rec.mainProject).trim()) return false;
+  // Session itself IS the project? Don't migrate — findProjectRoot
+  // already returns absCwd for this case; setting mainProject would
+  // be a no-op (Phase 1 r1 checks `if (rec.mainProject && trim())`,
+  // and the empty string fails the truthy check anyway).
+  try {
+    if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory()) return false;
+  } catch {}
+  // Subdir scan — same filter as findProjectRoot.
+  let candidates = [];
+  try {
+    candidates = fs.readdirSync(rec.absCwd, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !NESTED_SCAN_SKIP.has(d.name))
+      .map((d) => d.name)
+      .filter((name) => {
+        try { return fs.statSync(path.join(rec.absCwd, name, '.git')).isDirectory(); }
+        catch { return false; }
+      })
+      .sort();
+  } catch {}
+  if (candidates.length === 0) return false;
+  if (candidates.length > 1) {
+    console.warn(`[fr-94 Phase 2] ${rec.id || '?'}: multiple project candidates under ${rec.absCwd} (${candidates.join(', ')}) — leaving rec.mainProject unset; legacy auto-detect will pick "${candidates[0]}" each time. Set rec.mainProject explicitly to silence this warning.`);
+    return false;
+  }
+  rec.mainProject = candidates[0];
+  console.log(`[fr-94 Phase 2] ${rec.id || '?'}: auto-migrated rec.mainProject = "${candidates[0]}" (sole .git/-marked subdir under ${rec.absCwd}).`);
+  if (typeof saveStoreFn === 'function') {
+    try { saveStoreFn(); }
+    catch (err) { console.error(`[fr-94 Phase 2] saveStore after migrate failed: ${err && err.message ? err.message : err}`); }
+  }
+  return true;
+}
+
 function mycoDirPath(rec) {
   return resolveMycoDir(rec);
 }
@@ -1049,6 +1105,11 @@ module.exports = {
   MYCO_DIR,
   resolveMycoDir,
   findProjectRoot,
+  // fr-94 Phase 2: lazy migration for legacy sessions spawned
+  // before fr-94 Phase 1 landed. Called from attach.js
+  // _attachAgentWebSocket once per WS connect; idempotent (no-op
+  // when rec.mainProject is already set).
+  migrateMainProjectIfNeeded,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.

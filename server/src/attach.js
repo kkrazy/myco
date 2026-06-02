@@ -1081,6 +1081,22 @@ function _shipChatHistory(ws, sessionId, maxBytes, phase, afterSeq) {
 function _attachAgentWebSocket(session, ws, opts = {}) {
   const user = opts.user || null;
   const sessionId = session.sessionId;
+  // fr-94 Phase 2: lazy migration for legacy sessions. If this
+  // session was spawned BEFORE fr-94 Phase 1 (no rec.mainProject
+  // set) and there's an unambiguous project subdir, set
+  // rec.mainProject + persist now. Subsequent _myco_/ resolutions
+  // hit the explicit-override branch in findProjectRoot instead
+  // of re-scanning the workspace dir each call. Best-effort: any
+  // error is logged + swallowed; the attach flow continues.
+  try {
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    if (rec) {
+      const { migrateMainProjectIfNeeded } = require('./artifacts');
+      migrateMainProjectIfNeeded(rec, () => sessionsMod.saveStore());
+    }
+  } catch (err) {
+    console.error(`[fr-94 Phase 2] migrate attempt failed for ${sessionId}: ${err && err.message ? err.message : err}`);
+  }
   // 2026-05-17 round 5: catch-up mode. If the client (typically a
   // reconnecting tab) passed ?afterSeq=N, ship only events + chat
   // rows with seq strictly greater than N. Skips byte budgets

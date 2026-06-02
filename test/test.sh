@@ -2727,6 +2727,22 @@ test_chat_window() {
   #    sniffs URL vs name and forwards as gitCloneUrl / mainProjectName.
   #    This session migrated by hand: rec.mainProject = 'myco'.
   node_test_result test/fr-94-main-project.test.js "test/fr-94-main-project.test.js (13 cases — incl. r1 critique-response guards)"
+  # fr-94 Phase 2: lazy migration for legacy sessions that were
+  # spawned BEFORE fr-94 Phase 1 landed (no rec.mainProject set).
+  # migrateMainProjectIfNeeded(rec, saveStoreFn) is called once per
+  # WS attach from _attachAgentWebSocket in attach.js. It's
+  # idempotent (no-op when mainProject is already set), conservative
+  # (no-op when session-root itself is a `.git/`-marked repo —
+  # findProjectRoot's legacy path already returns absCwd there), and
+  # safe on multi-repo workspaces (logs a warning + leaves unset
+  # instead of silently picking one repo over another — same
+  # silent-picking failure mode Phase 1 r1 fixed for the explicit
+  # case). When exactly ONE subdir contains `.git/`, sets
+  # rec.mainProject = that name + persists via saveStoreFn. Locks
+  # the helper definition + public export + no-op corners + scan
+  # filter + multi-candidate warn + persistence + attach.js wiring
+  # + fr-94 Phase 2 marker comment.
+  node_test_result test/fr-94-phase-2-migrate.test.js "test/fr-94-phase-2-migrate.test.js (9 cases)"
   # fr-81 r1: @kkrazy reported the remote /fr /bug /td flow shipped
   # short captures verbatim to GitHub — the word-count threshold that
   # made sense for local plan items (quick captures stay quick) was

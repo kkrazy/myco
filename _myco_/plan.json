@@ -4634,6 +4634,11 @@
           "status": "running",
           "ts": "2026-06-02T23:24:30.819Z",
           "summary": null
+        },
+        {
+          "status": "completed",
+          "ts": "2026-06-02T18:00:00.000Z",
+          "summary": "Phase 2 shipped (lazy auto-detect migration for legacy sessions; async clone with progress streaming remains deferred to a future dispatch). New helper migrateMainProjectIfNeeded(rec, saveStoreFn) in server/src/artifacts.js: when a session record has no rec.mainProject AND rec.absCwd is not itself a -marked repo AND exactly ONE direct subdir of absCwd contains , sets rec.mainProject = that subdir name + persists via the saveStoreFn callback. Idempotent (no-op when mainProject already set, no-op when session-root IS the project), conservative (multi-candidate workspaces log a  warning + leave mainProject unset — same silent-picking failure mode Phase 1 r1 fixed for the explicit case). Same NESTED_SCAN_SKIP filter as findProjectRoot (node_modules, dist, build, etc.) so the scan doesn't latch on build artifacts. Promoted as a public export so other server modules can import it without poking the __test: namespace. Wired into server/src/attach.js _attachAgentWebSocket: every WS attach (= every reconnect = very frequent on phones with mobile network blips) gives a legacy session a chance to settle its mainProject. Wrapped in try/catch + best-effort: any error is logged + swallowed; the attach continues. saveStore is passed as a callback closure so the persistence wiring is real (rec.mainProject mutation lands in /data/sessions.json). Regression test: test/fr-94-phase-2-migrate.test.js (9 cases) locks the helper definition signature + public export + idempotency on rec.mainProject set + no-op on session-IS-the-project + readdirSync + NESTED_SCAN_SKIP filter + multi-candidate console.warn branch + saveStoreFn persistence call + attach.js wiring + a fr-94 Phase 2 marker comment. Wired into test/test.sh after the Phase 1 test. Adjacent suites stay green: fr-94 Phase 1 (13/13), fr-89 (8/8), bug-46 (5/5). Not yet committed/pushed/deployed — awaiting user direction. Async clone (return sessionId immediately, stream progress via WS) remains the only Phase 3 deferred item."
         }
       ]
     },
@@ -4645,7 +4650,9 @@
       "addedAt": "2026-06-02T23:23:12.342Z",
       "addedBy": "labxnow",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "labxnow"
+      ],
       "comments": []
     },
     {
@@ -4675,5 +4682,5 @@
       ]
     }
   ],
-  "updatedAt": "2026-06-02T23:27:20.326Z"
+  "updatedAt": "2026-06-02T23:44:59.636Z"
 }
