@@ -41,7 +41,7 @@ console.log('── composer side-spacing ──');
 
 // ── desktop rule (top-of-block #chat-form.composer) ──
 
-t('web/public/styles.css desktop #chat-form.composer has ≥16px horizontal margin', () => {
+t('web/public/styles.css desktop #chat-form.composer has lateral margin in the 8–14px range', () => {
   const css = _read('web/public/styles.css');
   // The desktop rule lives outside any @media query — find the
   // `#chat-form.composer { ... margin: ...; ... }` block that
@@ -57,8 +57,14 @@ t('web/public/styles.css desktop #chat-form.composer has ≥16px horizontal marg
   const parts = marginMatch[1].trim().split(/\s+/);
   const horizontalToken = parts[1] || parts[0];
   const px = parseInt(horizontalToken.match(/\d+/)?.[0] || '0', 10);
-  assert.ok(px >= 16,
-    `desktop #chat-form.composer horizontal margin must be ≥ 16px so the composer card visibly floats away from the chat pane edges (user-reported: "should have space on the left and right hand side"). Got: ${horizontalToken} → ${px}px. Margin shorthand: ${marginMatch[1]}.`);
+  // r3 envelope: ≥ 8px so the composer doesn't go back to looking
+  // edge-to-edge (pre-r1 was 8px and the user reported it didn't
+  // visibly separate), ≤ 14px so the card doesn't dominate the
+  // layout (r1's 16px was reported as "too big"). 12px (the value
+  // r3 settled on) sits cleanly in the middle and matches the
+  // mobile override.
+  assert.ok(px >= 8 && px <= 14,
+    `desktop #chat-form.composer horizontal margin must be 8–14px so the composer card visibly floats away from the chat pane edges WITHOUT dominating the layout. User feedback: r1's 16px was too big, original 8px wasn't enough. Got: ${horizontalToken} → ${px}px. Margin shorthand: ${marginMatch[1]}.`);
 });
 
 // ── mobile media-query override ──
