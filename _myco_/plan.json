@@ -4665,7 +4665,14 @@
         "originalText": "leave enough space for hud display in mobile mode so that the plan item id doesnt wrap as the time ticker grows.",
         "rewritten": true
       },
-      "description": "**Problem:** In mobile mode, the HUD doesn't reserve enough space for the time ticker, causing the plan item ID to wrap as the ticker widens.\n**Expected:** HUD layout reserves sufficient width for the growing time ticker so the plan item ID stays on a single line.\n**Actual:** As the time ticker grows, it squeezes the plan item ID and forces it to wrap."
+      "description": "**Problem:** In mobile mode, the HUD doesn't reserve enough space for the time ticker, causing the plan item ID to wrap as the ticker widens.\n**Expected:** HUD layout reserves sufficient width for the growing time ticker so the plan item ID stays on a single line.\n**Actual:** As the time ticker grows, it squeezes the plan item ID and forces it to wrap.",
+      "runs": [
+        {
+          "status": "completed",
+          "ts": "2026-06-02T17:15:00.000Z",
+          "summary": "Root cause: the HUD row uses flex with justify-content: space-between. Inside, .hud-task-title-wrap (also flex) holds .hud-task-id + .hud-task-text, while .hud-task-status holds #hud-duration-text + the Stop button. As #hud-duration-text grew from '1s' to '12345s', the right-side .hud-task-status widened and the left-side .hud-task-title-wrap squeezed its children. .hud-task-text was already protected by `white-space: nowrap + overflow: hidden + text-overflow: ellipsis + max-width: calc(100vw - 140px)` (the mobile override from bug-45), but the .hud-task-id chip had NO protection — once the ticker hit 3-4 digits on a 375px-wide phone, the chip wrapped to a second line. Fix is surgical: added `flex-shrink: 0` + `white-space: nowrap` to .hud-task-id so the chip keeps its natural width and never breaks lines. The squeeze still hits .hud-task-text first (designed to truncate); the ID badge stays intact. Both desktop and mobile inherit the new behavior since the base .hud-task-id rule sits outside the @media (max-width: 600px) block — universally the right thing for a chip badge. Regression test: test/bug-51-hud-id-no-wrap.test.js (3 cases) — asserts .hud-task-id declares flex-shrink: 0, declares white-space: nowrap, and a bug-51 marker comment exists near the rule. Wired into test/test.sh after fr-81 r1. Adjacent suites stay green: bug-45-mobile-hud-layout (26/26), bug-39-action-row-uniform-height (5/5). Not yet committed/pushed/deployed — awaiting user direction."
+        }
+      ]
     }
   ],
   "updatedAt": "2026-06-02T23:27:20.326Z"

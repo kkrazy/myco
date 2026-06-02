@@ -2738,6 +2738,20 @@ test_chat_window() {
   # local-branch shouldRewrite still uses the threshold, and a fr-81
   # marker exists.
   node_test_result test/fr-81-r1-always-rewrite-remote.test.js "test/fr-81-r1-always-rewrite-remote.test.js (3 cases)"
+  # bug-51: user-reported "in mobile mode, the HUD doesn't reserve
+  # enough space for the time ticker, causing the plan item ID to
+  # wrap as the ticker widens." Root cause: .hud-task-id is a flex
+  # child of .hud-task-title-wrap (also flex); as #hud-duration-text
+  # grew from "1s" to "12345s" the .hud-task-status side widened and
+  # the title-wrap squeezed its children. .hud-task-text was protected
+  # by nowrap + ellipsis + max-width but the ID badge had no
+  # protection — it wrapped to a second line on mobile widths once
+  # the ticker exceeded 3-4 digits. Fix: add flex-shrink: 0 +
+  # white-space: nowrap to .hud-task-id so the chip keeps its
+  # natural width and never breaks lines. Squeeze still hits
+  # .hud-task-text first (designed to truncate); the ID stays
+  # intact.
+  node_test_result test/bug-51-hud-id-no-wrap.test.js "test/bug-51-hud-id-no-wrap.test.js (3 cases)"
   # critic-gemini-calibration (2026-06-02): triggered by Gemini
   # returning 404 on the deprecated gemini-1.5-pro model name during
   # a bug-46 run-dispatch critique. Three calibrations land together:

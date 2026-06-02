@@ -8432,6 +8432,19 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
      20px outer). Mirrors the .timeline-step + .hud-stop-btn
      line-height below — all three render the same height. */
   line-height: 14px;
+  /* bug-51: as the time ticker on the right (#hud-duration-text)
+     grows from "1s" to "12345s", the .hud-task-status side widens
+     and the .hud-task-title-wrap flex container squeezes its
+     children. .hud-task-text already truncates with ellipsis +
+     max-width, but the ID badge had no protection — it wrapped to
+     a second line on mobile widths once the ticker exceeded 3-4
+     digits. flex-shrink: 0 keeps the chip at its natural width;
+     white-space: nowrap prevents the chip's own text from breaking
+     even when the parent gives it less room than its content
+     wants. The squeeze still hits .hud-task-text first (designed
+     to truncate); the ID stays intact. */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .hud-task-text {
