@@ -34,44 +34,55 @@ function _read(rel) {
 
 console.log('── bug-50: critic message displays in full ──');
 
-t('web/public/styles.css: .verdict-critique max-height is no longer the original 180px cap', () => {
-  const css = _read('web/public/styles.css');
-  // Locate the .verdict-critique rule body.
+// bug-50 r1: the original fix (180px → 60vh + overflow-y: auto) was
+// a half-measure. The user re-dispatched bug-50 with the same
+// verbatim complaint — "critic message is not display in full" —
+// because 60vh + overflow-y: auto STILL produced a scrollbar inside
+// a clipped frame. The user's words are "display in full", i.e. no
+// inner clip at all. The verdict-pane sits inside the chat-pane
+// flow which scrolls naturally, so the inner cap was redundant.
+//
+// r1 contract: `.verdict-critique` has NO max-height (or
+// max-height: none) AND NO inner overflow-y. The chat pane's
+// natural scroll handles the rare extreme-length case.
+
+// Strip CSS comments BEFORE scanning so the explanatory bug-50 r1
+// comment (which describes the OLD max-height: 60vh + overflow-y:
+// auto declarations as part of the design rationale) doesn't trip
+// the property-absence asserts below.
+function _stripCssComments(s) { return s.replace(/\/\*[\s\S]*?\*\//g, ''); }
+
+t('web/public/styles.css: .verdict-critique has NO max-height cap (r1 — the 60vh fix still clipped; r1 lets the message flow at natural height)', () => {
+  const css = _stripCssComments(_read('web/public/styles.css'));
   const re = /\.verdict-critique\s*\{[^}]*\}/;
   const block = (css.match(re) || [''])[0];
-  assert.ok(block, '.verdict-critique rule must exist (anchor for the max-height scan).');
-  // The cap must be greater than the pre-fix 180px. Accept any
-  // viewport-relative value (vh) OR a px value greater than 180.
-  // The user's complaint won't recur as long as the cap is well
-  // above the line-count of a typical critique.
+  assert.ok(block, '.verdict-critique rule must exist.');
   const mhMatch = block.match(/max-height\s*:\s*([^;]+);/);
-  assert.ok(mhMatch, '.verdict-critique must declare a max-height (bug-50 fix uses a generous viewport-relative value; pre-fix used 180px).');
-  const value = mhMatch[1].trim();
-  // Reject the regressing pre-fix value verbatim.
-  assert.ok(!/^180\s*px$/i.test(value),
-    `.verdict-critique max-height must NOT be the pre-fix 180px cap (user-reported "critic message is not display in full"). Got: ${value}`);
-  // Accept any vh value, vmax, vmin, percentage > 50%, OR px value > 400.
-  const isVh = /vh\b/.test(value);
-  const isVmax = /vmax\b/.test(value);
-  const isPercent = /(\d+)\s*%/.test(value);
-  const px = parseInt((value.match(/(\d+)\s*px/) || [])[1] || '0', 10);
-  const generous = isVh || isVmax || isPercent || px > 400;
-  assert.ok(generous,
-    `.verdict-critique max-height must be a generous value (e.g. 60vh, 70%, or 600px+) so the full critic message fits without scrolling on typical screens. Got: ${value}`);
+  if (mhMatch) {
+    // If the property is present, it must be `none` (explicit
+    // "no cap") rather than any positive value.
+    const value = mhMatch[1].trim();
+    assert.ok(/^none\b/i.test(value),
+      `.verdict-critique must NOT carry a positive max-height (r1 — the original 60vh fix still clipped; the message must flow at natural height). Got: ${value}`);
+  }
+  // Either no declaration at all, or `max-height: none`. Both
+  // satisfy the r1 contract.
 });
 
-t('web/public/styles.css: .verdict-critique keeps overflow-y: auto as a safety net', () => {
-  const css = _read('web/public/styles.css');
+t('web/public/styles.css: .verdict-critique has NO inner overflow-y: auto (r1 — chat-pane scroll handles it naturally)', () => {
+  const css = _stripCssComments(_read('web/public/styles.css'));
   const re = /\.verdict-critique\s*\{[^}]*\}/;
   const block = (css.match(re) || [''])[0];
-  assert.ok(/overflow-y\s*:\s*auto\b/.test(block),
-    '.verdict-critique must keep overflow-y: auto as a safety net for the rare extreme-length critique (giant bullet lists with code blocks). Removing it entirely would let an enormous critique push the discard/accept buttons off-screen.');
+  assert.ok(!/overflow-y\s*:\s*auto\b/.test(block),
+    '.verdict-critique must NOT declare overflow-y: auto (r1 — the inner scrollbar is exactly what the user is complaining about). The chat-pane already scrolls; let it.');
+  assert.ok(!/overflow-y\s*:\s*scroll\b/.test(block),
+    '.verdict-critique must NOT declare overflow-y: scroll either (r1).');
 });
 
-t('a comment naming bug-50 explains the max-height bump', () => {
+t('a comment naming "bug-50 r1" explains why the max-height + overflow were REMOVED (not just bumped)', () => {
   const css = _read('web/public/styles.css');
-  assert.ok(/bug-50/.test(css),
-    'a comment naming bug-50 must appear near the .verdict-critique rule so a future restyle understands why the cap is 60vh rather than the original 180px.');
+  assert.ok(/bug-50 r1/.test(css),
+    'a comment naming "bug-50 r1" must appear near the .verdict-critique rule so a future restyle understands the cap was DELIBERATELY removed (not forgotten) — the user re-dispatched after the original 60vh fix because it still clipped.');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

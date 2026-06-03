@@ -8779,17 +8779,25 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .verdict-critique {
   font-size: 12px;
   color: #c9d1d9;
-  /* bug-50 (user-reported "critic message is not display in full"):
-     was max-height: 180px which capped the visible critique at ~10
-     lines on desktop — long Gemini verdicts (with multiple flagged
-     issues + diff-line citations) ended up scroll-trapped inside a
-     tiny window, forcing the user to drag a thin scrollbar instead
-     of reading the verdict at a glance. Bumped to 60vh so most
-     critiques fit on screen on both desktop and mobile; overflow-y:
-     auto stays as a safety net for the rare extreme case (giant
-     bullet lists with code blocks). */
-  max-height: 60vh;
-  overflow-y: auto;
+  /* bug-50 (original): was max-height: 180px which capped the
+     visible critique at ~10 lines on desktop — long Gemini verdicts
+     (with multiple flagged issues + diff-line citations) ended up
+     scroll-trapped inside a tiny window. The original fix bumped
+     the cap to 60vh + kept overflow-y: auto "as a safety net."
+     bug-50 r1 (user re-dispatched bug-50 with the same verbatim
+     complaint — "critic message is not display in full"): 60vh +
+     overflow-y: auto STILL clipped the message inside a smaller
+     window that produced a scrollbar. The user's words are "in
+     full" — i.e. no inner clip at all. The verdict-pane lives
+     inside the chat-pane flow (NOT a fixed overlay — see the
+     .chat-composer-verdict-panel rule above for the parent
+     positioning), and the chat-pane already scrolls naturally.
+     So the inner cap is redundant. Removing both max-height + the
+     overflow-y prop lets the message flow at natural height; the
+     parent scroll handles the rare extreme-length case. The
+     .verdict-actions buttons sit below in the same panel — they
+     stay at the bottom of the critique block, reachable via the
+     parent scroll. */
   background: rgba(0, 0, 0, 0.2);
   padding: 10px;
   border-radius: 6px;
