@@ -2815,6 +2815,21 @@ test_chat_window() {
   # local-branch shouldRewrite still uses the threshold, and a fr-81
   # marker exists.
   node_test_result test/fr-81-r1-always-rewrite-remote.test.js "test/fr-81-r1-always-rewrite-remote.test.js (3 cases)"
+  # fr-81 Phase B.1: auto-promote a freshly-filed remote issue into a
+  # local plan item carrying meta.remoteUrl. The user-confirmed
+  # promotion model — every successful /feature or /fr @target call
+  # also writes a local row tagged source='auto-promote' with the
+  # remote URL stamped in meta. This creates the dedup anchor that
+  # Phase B.2 (dedup at render), B.3 (close-detection mirror), and
+  # B.4 (write-back-on-close) will key against. Idempotent: a second
+  # call for the same remoteUrl returns the existing row. Both
+  # callsites (handleRemoteIssue, handleIssue) wrap the helper in
+  # try/catch so a promote failure cannot break the user-facing
+  # "filed" reply. Locks: helper defined, meta.remoteUrl set on the
+  # new item, idempotency find() short-circuit, source='auto-promote'
+  # tag, _persistPlanArtifact persistence path, both callsites + the
+  # try/catch best-effort policy.
+  node_test_result test/fr-81-phase-b1-auto-promote.test.js "test/fr-81-phase-b1-auto-promote.test.js (9 cases)"
   # fr-81 Phase A: the actual ingest direction. Phase 1 only handled
   # outbound (/feature, /bug write issues upstream). The user-reported
   # gap (Gemini's critique on the previous fr-94 Phase 3 diff: "this

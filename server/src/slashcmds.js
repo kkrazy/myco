@@ -540,6 +540,56 @@ function _sanitizePlanRewrite(raw) {
   return unfenced;
 }
 
+// fr-81 Phase B.1: auto-promote a freshly-filed remote issue into a
+// local plan item carrying meta.remoteUrl. This is the dedup anchor
+// that fr-81 Phase A's remote-issues render will key against later
+// — without an explicit link on the local item, the Plan view has
+// no way to know that a remote issue and a local item are "the
+// same thing". Used by both filing paths:
+//   · handleIssue (/feature → repo-owner's remote)
+//   · handleRemoteIssue (/fr @target, /bug @target, /td @target)
+// Idempotent against duplicates: if a local item already has the
+// same meta.remoteUrl, returns it unchanged.
+//
+// Tagged source='auto-promote' so a future Plan-tab filter can
+// distinguish manually-typed `/fr` items from auto-promoted ones.
+// The text is the issue title (what the user typed) — the body
+// rewrite (Problem/Expected/Actual) lives upstream + the
+// remoteUrl link gets the user back to it.
+function _autoPromoteRemoteIssueToPlan(rec, sessionId, { layer, title, user, remoteUrl, remoteNumber, provider, owner, repo }) {
+  if (!rec || !sessionId || !remoteUrl) return null;
+  if (!rec.artifacts) rec.artifacts = {};
+  if (!rec.artifacts.plan || !Array.isArray(rec.artifacts.plan.items)) {
+    rec.artifacts.plan = { items: [], updatedAt: null };
+  }
+  // Idempotency guard — if a local item already points at this URL,
+  // don't add a second one.
+  const existing = rec.artifacts.plan.items.find((it) => it.meta && it.meta.remoteUrl === remoteUrl);
+  if (existing) return existing;
+  const crypto = require('crypto');
+  const item = {
+    id: _nextPlanItemId(rec.artifacts.plan.items, layer) || crypto.randomBytes(6).toString('hex'),
+    text: String(title || '').slice(0, 250),
+    layer,
+    done: false,
+    addedAt: new Date().toISOString(),
+    addedBy: user || 'unknown',
+    source: 'auto-promote',
+    voters: [],
+    comments: [],
+    meta: {
+      remoteUrl,
+      remoteNumber: remoteNumber || null,
+      remoteProvider: provider || null,
+      remoteOwner: owner || null,
+      remoteRepo: repo || null,
+    },
+  };
+  rec.artifacts.plan.items.push(item);
+  _persistPlanArtifact(rec, sessionId);
+  return item;
+}
+
 // Persist the plan artifact + mirror to _myco_/plan.json + emit
 // state-update — extracted from addPlanItem so /merge and (future)
 // /dedupe write through the same path.
@@ -1115,6 +1165,26 @@ async function handleRemoteIssue(ctx, layer, targetName, description, alias, sho
     ctx.reply(`(${label} error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
     return;
   }
+  // fr-81 Phase B.1: auto-promote the remote issue into a local plan
+  // item carrying meta.remoteUrl. Creates the dedup anchor that the
+  // Plan-view's remote-issues render will key against (Phase B.2:
+  // a remote issue with htmlUrl matching this local item's
+  // meta.remoteUrl gets folded into the local row rather than shown
+  // separately). Best-effort: a failure here logs but doesn't
+  // change the user-facing "filed" reply.
+  try {
+    const sessionId = ctx.sessionId;
+    const rec = sessionId ? sessionsMod.loadStore().sessions[sessionId] : null;
+    if (rec) {
+      _autoPromoteRemoteIssueToPlan(rec, sessionId, {
+        layer, title: description, user: ctx.user,
+        remoteUrl: result.url, remoteNumber: result.number,
+        provider: target.provider, owner: target.owner, repo: target.repo,
+      });
+    }
+  } catch (err) {
+    console.error(`[fr-81 Phase B.1] auto-promote failed for ${result.url}: ${err.message}`);
+  }
   ctx.reply(`✓ Filed ${layer.toLowerCase()} **#${result.number}** on ${target.owner}/${target.repo}${alias ? ' (alias `' + alias + '`)' : ''}: ${result.url}`);
 }
 
@@ -1168,6 +1238,25 @@ async function handleIssue(ctx, { kind, labels }) {
     const label = host.provider === 'gitee' ? 'Gitee' : 'GitHub';
     ctx.reply(`(${label} error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
     return;
+  }
+  // fr-81 Phase B.1: auto-promote into a local plan item carrying
+  // meta.remoteUrl (see _autoPromoteRemoteIssueToPlan). Layer is
+  // derived from kind: /feature → Feature, /bug → Bug, /td → Todo.
+  // Best-effort: failure logs but doesn't break the user-facing
+  // "filed" reply.
+  try {
+    const sessionId = ctx.sessionId;
+    const rec = sessionId ? sessionsMod.loadStore().sessions[sessionId] : null;
+    if (rec) {
+      const layer = kind === 'bug' ? 'Bug' : kind === 'td' ? 'Todo' : 'Feature';
+      _autoPromoteRemoteIssueToPlan(rec, sessionId, {
+        layer, title, user: ctx.user,
+        remoteUrl: result.url, remoteNumber: result.number,
+        provider: host.provider, owner: host.owner, repo: host.repo,
+      });
+    }
+  } catch (err) {
+    console.error(`[fr-81 Phase B.1] auto-promote failed for ${result.url}: ${err.message}`);
   }
   ctx.reply(`✓ Filed ${kind} request #${result.number} on ${host.owner}/${host.repo}: ${result.url}`);
 }
