@@ -2815,6 +2815,50 @@ test_chat_window() {
   # local-branch shouldRewrite still uses the threshold, and a fr-81
   # marker exists.
   node_test_result test/fr-81-r1-always-rewrite-remote.test.js "test/fr-81-r1-always-rewrite-remote.test.js (3 cases)"
+  # fr-81 Phase A: the actual ingest direction. Phase 1 only handled
+  # outbound (/feature, /bug write issues upstream). The user-reported
+  # gap (Gemini's critique on the previous fr-94 Phase 3 diff: "this
+  # is a prerequisite for the overall task of ingesting issues from
+  # remote repositories") is the inbound side — Plan view PULLS open
+  # GitHub / Gitee issues and renders them with a 🔗 indicator.
+  # Layers: git-hosts.fetchIssues (GH + Gitee, normalized rows, PR
+  # filter via isPullRequest flag), remote-issues.js cache
+  # (CACHE_TTL_MS = 5 min, stale-while-revalidate, MAX_ITEMS_PER_SESSION
+  # ceiling), GET /sessions/:id/remote-issues route (fileApiPreamble
+  # viewer-gated), and client _loadAndRenderRemoteIssues called from
+  # the three Plan render entry points (loadArtifact cached,
+  # loadArtifact HTTP, refreshArtifact). Phase B deferred: dedup vs
+  # locally-filed issues, close-detection mirror, write-back on
+  # close.
+  node_test_result test/fr-81-phase-a-remote-issues-ingest.test.js "test/fr-81-phase-a-remote-issues-ingest.test.js (16 cases — incl. r1 critique-response cache-flow tests + force-refresh wiring)"
+  # 2026-06-03 critic-infrastructure root-cause fixes (paired with
+  # fr-81 Phase A r1 above). Two false-positive critique loops bit
+  # this session repeatedly:
+  #   (1) CRITIC TRUNCATION — server/src/critics/gemini.js capped
+  #       maxOutputTokens at 1024. On >40k-char diffs the model's
+  #       preamble consumed the entire budget; the verdict line
+  #       (✓ AGREED / flagged-issues) was NEVER WRITTEN. The
+  #       run-summary surfaced the truncated preamble as if it were
+  #       flagged issues. Fix: raise to 8192 (env-overridable via
+  #       MYCO_CRITIC_MAX_TOKENS, floored at 4096 to prevent a
+  #       regression).
+  #   (2) DISPATCH-LABEL DRIFT — the critique gate fed
+  #       listChangedFiles(rec.absCwd) which returns ALL dirty
+  #       files. When a [run:plan#X] dispatch fired on an already-
+  #       done plan item while UNRELATED WIP sat in the working
+  #       tree, the critique attached the WIP to the wrong label
+  #       and Gemini reported a mismatch. Fix: _snapshotRunBaseline
+  #       captures dirty paths + HEAD when [run:…#id] arrives; the
+  #       critique-time filter excludes pre-existing WIP; an empty
+  #       filtered diff skips the Gemini call entirely.
+  # Locks: critics/gemini.js CRITIC_MAX_OUTPUT_TOKENS constant + 4096
+  # floor + MYCO_CRITIC_MAX_TOKENS env read; attach.js
+  # _snapshotRunBaseline using execFileSync (sync — chat hot path)
+  # for git rev-parse + git status --porcelain with timeouts;
+  # [run:…#id] handler attaches baselineDirty + baselineHead;
+  # critique gate .filter on changedInfo.entries; the "newEntries.
+  # length === 0 → Skipping critique" branch; a marker comment.
+  node_test_result test/critic-truncation-and-dispatch-drift.test.js "test/critic-truncation-and-dispatch-drift.test.js (8 cases)"
   # bug-51: user-reported "in mobile mode, the HUD doesn't reserve
   # enough space for the time ticker, causing the plan item ID to
   # wrap as the ticker widens." Root cause: .hud-task-id is a flex

@@ -8668,6 +8668,9 @@ async function loadArtifact(type) {
   );
   if (cachedHas) {
     renderArtifact(type, cached);
+    // fr-81 Phase A: refresh the remote-issues section after the plan
+    // body rebuild (the rebuild wipes #remote-issues-section).
+    if (type === 'plan') _loadAndRenderRemoteIssues(sid);
     return;
   }
   // Cache miss — fall back to HTTP. Happens on cold reload of an
@@ -8691,6 +8694,10 @@ async function loadArtifact(type) {
       }
       state.artifacts.byType[type] = artifact;
     }
+    // fr-81 Phase A: refresh the remote-issues section EVEN when the
+    // plan body had no local items (an empty plan + remote issues is a
+    // valid state — the section sits below the empty-state copy).
+    if (type === 'plan') _loadAndRenderRemoteIssues(sid);
   } catch {}
 }
 
@@ -8721,6 +8728,13 @@ async function refreshArtifact(type) {
     }
     const data = await res.json().catch(() => ({}));
     renderArtifact(type, data.artifact || data);
+    // fr-81 Phase A: refresh the remote-issues section. The refresh
+    // button passes force=true so the server skips the cache and
+    // re-hits the upstream API — without it the user clicks Refresh
+    // and sees the same stale list returned by stale-while-revalidate.
+    // (Phase A r1 critique response — the original commit's wiring
+    // dropped force on the floor; the helper signature now accepts it.)
+    if (type === 'plan') _loadAndRenderRemoteIssues(sid, { force: true });
     // Plan-only: render the merge-proposal callout above the items.
     // mergeProposals may be empty (no candidates) or absent (older
     // server build) — both are no-ops for the callout.
@@ -8847,6 +8861,88 @@ function _runButtonLabel(layer) {
     case 'Todo':    return 'Do';
     default:        return 'Run';
   }
+}
+
+// fr-81 Phase A: fetch + render open issues from the session project's
+// upstream remote (GitHub or Gitee) into a separate section at the
+// bottom of the Plan view. Lives in its own DOM container so it's
+// independent of renderArtifact's body.innerHTML rebuild for plan
+// items — the rebuild wipes everything in #artifact-body-plan, so we
+// re-call this from each of the plan-render entry points (loadArtifact
+// cache hit, loadArtifact HTTP fallback, refreshArtifact). Errors render
+// inline as a helpful hint (no token → "Sign in / /setpat"; no remote
+// → quiet skip). Phase B will add dedup vs locally-filed issues,
+// close-detection mirror, and Plan-view close → close-upstream.
+async function _loadAndRenderRemoteIssues(sid, opts = {}) {
+  if (!sid) return;
+  const body = document.getElementById('artifact-body-plan');
+  if (!body) return;
+  // Ensure the section exists at the END of the plan body.
+  let section = body.querySelector('#remote-issues-section');
+  if (!section) {
+    section = document.createElement('section');
+    section.id = 'remote-issues-section';
+    section.className = 'remote-issues-section';
+    body.appendChild(section);
+  }
+  section.innerHTML = '<div class="remote-issues-loading">⏳ Loading remote issues…</div>';
+  // fr-81 Phase A r1 (critique response): the refresh button path
+  // must actually force a fresh upstream fetch — without ?force=1 the
+  // server's stale-while-revalidate path returns the cached snapshot
+  // and only kicks a background refetch, so the user clicks Refresh
+  // and sees the SAME stale list. Explicit opts.force=true upgrades
+  // the request to the server's force-now path.
+  const force = !!(opts && opts.force);
+  let data;
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/remote-issues${force ? '?force=1' : ''}`);
+    if (!res || !res.ok) {
+      section.innerHTML = `<div class="remote-issues-empty">Remote issues unavailable (HTTP ${res ? res.status : '?'}).</div>`;
+      return;
+    }
+    data = await res.json();
+  } catch (err) {
+    section.innerHTML = `<div class="remote-issues-empty">Remote issues unavailable: ${escHtml(err.message || String(err))}</div>`;
+    return;
+  }
+  // Empty branches — render a hint, not a noisy banner.
+  if (data && data.error === 'no-remote') {
+    section.innerHTML = '';   // Quiet skip: project has no github/gitee remote.
+    return;
+  }
+  if (data && data.error === 'no-token') {
+    const providerLabel = data.provider === 'gitee' ? 'Gitee' : 'GitHub';
+    const setpatHint = data.provider === 'gitee'
+      ? `Run <code>/setpat &lt;token&gt;</code> from the chat — Gitee has no OAuth flow yet.`
+      : `Sign in via the top-right user chip, or <code>/setpat &lt;token&gt;</code>.`;
+    section.innerHTML = `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)}</h3>` +
+      `<div class="remote-issues-empty">No ${escHtml(providerLabel)} token on file for <code>${escHtml(data.owner + '/' + data.repo)}</code>. ${setpatHint}</div>`;
+    return;
+  }
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  const providerLabel = data && data.provider === 'gitee' ? 'Gitee' : 'GitHub';
+  const ownerRepo = data && data.owner && data.repo ? `${data.owner}/${data.repo}` : '';
+  if (!items.length) {
+    section.innerHTML = `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)} ${ownerRepo ? '<code>' + escHtml(ownerRepo) + '</code>' : ''} (0)</h3>` +
+      `<div class="remote-issues-empty">No open issues on the upstream remote.</div>`;
+    return;
+  }
+  const rows = items.map((it) => {
+    const labels = Array.isArray(it.labels) && it.labels.length
+      ? `<span class="remote-issue-labels">${it.labels.slice(0, 4).map((l) => '<span class="remote-issue-label">' + escHtml(l) + '</span>').join('')}</span>`
+      : '';
+    const author = it.author ? `<span class="remote-issue-author">${escHtml(it.author)}</span>` : '';
+    return `<li class="remote-issue-row" data-number="${it.number}">` +
+      `<a class="remote-issue-link" href="${escHtml(it.htmlUrl || '#')}" target="_blank" rel="noopener noreferrer">` +
+        `<span class="remote-issue-num">#${it.number}</span>` +
+        `<span class="remote-issue-title">${escHtml(it.title || '(untitled)')}</span>` +
+      `</a>` +
+      labels + author +
+    `</li>`;
+  }).join('');
+  section.innerHTML =
+    `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)} ${ownerRepo ? '<code>' + escHtml(ownerRepo) + '</code>' : ''} (${items.length})</h3>` +
+    `<ul class="remote-issues-list">${rows}</ul>`;
 }
 
 function renderArtifact(type, artifact) {

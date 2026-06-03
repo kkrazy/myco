@@ -220,10 +220,148 @@ async function fetchUser(opts) {
   throw new Error(`unknown provider: ${opts && opts.provider}`);
 }
 
+// ── fetchIssues (fr-81: Plan view ingest) ───────────────────────────────────
+//
+// Reads the open + (optionally) closed issues for {provider, owner, repo} and
+// returns a normalized array so the Plan view can render GitHub + Gitee
+// issues side-by-side without knowing which host they came from.
+//
+// Normalized shape (one row):
+//   { provider, number, title, body, htmlUrl, state, author,
+//     createdAt, updatedAt, labels: [string], isPullRequest }
+//
+// Pagination: requests `per_page` items per page. Loops up to `maxPages`
+// (default 5 = 500 issues for github/per_page=100). Stops early when a
+// page returns fewer than `per_page` rows.
+//
+// State: 'open' (default), 'closed', or 'all'. Maps to each provider's
+// query semantics.
+//
+// Test seam: pass `httpsJson` to inject a fake fetcher (same pattern as
+// createIssue + fetchUser).
+
+const _DEFAULT_ISSUES_PER_PAGE = 100;
+const _DEFAULT_ISSUES_MAX_PAGES = 5;
+
+async function _fetchIssuesGithub({ token, owner, repo, state, perPage, maxPages }, httpsJson) {
+  const fetcher = httpsJson || _httpsJson;
+  const per = Math.max(1, Math.min(100, perPage || _DEFAULT_ISSUES_PER_PAGE));
+  const cap = Math.max(1, Math.min(20, maxPages || _DEFAULT_ISSUES_MAX_PAGES));
+  const items = [];
+  let lastStatus = 0;
+  for (let page = 1; page <= cap; page++) {
+    const result = await fetcher({
+      hostname: 'api.github.com',
+      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=${encodeURIComponent(state || 'open')}&per_page=${per}&page=${page}`,
+      method: 'GET',
+      headers: {
+        'Authorization': `token ${token}`,
+        'User-Agent': 'myco/1.0',
+        'Accept': 'application/vnd.github+json',
+      },
+    });
+    lastStatus = result.status;
+    if (result.status < 200 || result.status >= 300) {
+      return { items, status: result.status, error: result.body && (result.body.message || result.body.error) };
+    }
+    const rows = Array.isArray(result.body) ? result.body : [];
+    for (const r of rows) {
+      items.push({
+        provider: 'github',
+        number: r.number,
+        // 250-char truncation matches what createIssue uses for the
+        // outbound path (line ~107) and GitHub's UI cap (~256 in
+        // practice). Defensive against a pathological 50k-char title
+        // dragging down the Plan view's render. Real titles never
+        // exceed ~200.
+        title: String(r.title || '').slice(0, 250),
+        body: String(r.body || ''),
+        htmlUrl: r.html_url,
+        state: r.state,
+        author: (r.user && r.user.login) || '',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        labels: Array.isArray(r.labels) ? r.labels.map((l) => (typeof l === 'string' ? l : l && l.name)).filter(Boolean) : [],
+        // GitHub's /issues endpoint returns PRs too — flag them so the
+        // Plan view can hide / badge them differently.
+        isPullRequest: !!r.pull_request,
+      });
+    }
+    if (rows.length < per) break;
+  }
+  return { items, status: lastStatus };
+}
+
+async function _fetchIssuesGitee({ token, owner, repo, state, perPage, maxPages }, httpsJson) {
+  const fetcher = httpsJson || _httpsJson;
+  const per = Math.max(1, Math.min(100, perPage || _DEFAULT_ISSUES_PER_PAGE));
+  const cap = Math.max(1, Math.min(20, maxPages || _DEFAULT_ISSUES_MAX_PAGES));
+  const items = [];
+  let lastStatus = 0;
+  // Gitee state values: 'open' | 'progressing' | 'closed' | 'rejected' | 'all'.
+  // Map 'open' to 'open,progressing' so we don't miss work-in-progress
+  // issues; map 'closed' to 'closed,rejected' for the same reason.
+  const giteeState = state === 'closed' ? 'closed,rejected'
+                    : state === 'all' ? 'all'
+                    : 'open,progressing';
+  // Gitee's API convention puts `access_token` in the URL query rather
+  // than an Authorization header — same pattern as the existing
+  // _fetchUserGitee. The token is therefore visible in proxy logs /
+  // browser history if anyone catches an outbound request, which is a
+  // known concession to Gitee's API design (no header-auth alternative
+  // for v5 GET endpoints). We mitigate by (a) only making these calls
+  // server-side over HTTPS, (b) the token never crosses the WS to the
+  // browser, and (c) token storage is mode-0600 in /data/git-tokens.json.
+  // No new exposure vs. the pre-fr-81 surface.
+  for (let page = 1; page <= cap; page++) {
+    const result = await fetcher({
+      hostname: 'gitee.com',
+      path: `/api/v5/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?access_token=${encodeURIComponent(token)}&state=${encodeURIComponent(giteeState)}&per_page=${per}&page=${page}`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'myco/1.0',
+        'Accept': 'application/json',
+      },
+    });
+    lastStatus = result.status;
+    if (result.status < 200 || result.status >= 300) {
+      return { items, status: result.status, error: result.body && (result.body.message || result.body.error) };
+    }
+    const rows = Array.isArray(result.body) ? result.body : [];
+    for (const r of rows) {
+      items.push({
+        provider: 'gitee',
+        number: r.number,
+        title: String(r.title || '').slice(0, 250),
+        body: String(r.body || ''),
+        htmlUrl: r.html_url,
+        state: r.state,
+        author: (r.user && r.user.login) || '',
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        labels: Array.isArray(r.labels) ? r.labels.map((l) => (typeof l === 'string' ? l : l && l.name)).filter(Boolean) : [],
+        // Gitee has no PR-in-issues conflation (issues + PRs are
+        // separate APIs), so this is always false here.
+        isPullRequest: false,
+      });
+    }
+    if (rows.length < per) break;
+  }
+  return { items, status: lastStatus };
+}
+
+async function fetchIssues(opts) {
+  const provider = String(opts && opts.provider || '').toLowerCase();
+  if (provider === 'github') return _fetchIssuesGithub(opts, opts.httpsJson);
+  if (provider === 'gitee') return _fetchIssuesGitee(opts, opts.httpsJson);
+  return { items: [], status: 0, error: `unknown provider: ${opts && opts.provider}` };
+}
+
 module.exports = {
   detectHost,
   createIssue,
   fetchUser,
+  fetchIssues,
   KNOWN_PROVIDERS,
   // Token-store passthrough so callers can do everything through one require.
   getToken: gitTokens.getToken,

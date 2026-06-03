@@ -3471,6 +3471,16 @@
           "user": "kkrazy",
           "text": "the issue creation works now, but it's not rewriting it to proper format before submitting the issue",
           "ts": "2026-05-26T03:25:11.700Z"
+        },
+        {
+          "id": "69b3987b904f",
+          "user": "claude",
+          "text": "✓ success · 620.5s · $11.2262 · 39↓/15797↑\n\n✅ All shipped + verified live on mycodev:\n\n| Layer | Change |\n|---|---|\n| **HTML** | `spawn-main-project <input required>`, label now reads `Main project (required — git URL or new folder name)` |\n| **Client JS** | `doSpawn()` shows inline `\"Main project is required — paste a git clone URL or type a new folder name.\"` and aborts before the POST when empty |\n| **Server** | `POST /sessions` returns `400 { error: \"Main project is required …\" }` before `spawnSession` is called (defense in depth) |\n\n**Push:** `origin/main` advanced `0b7a844` → `96b9cf7`.\n**Deploy:** mycodev container swapped (`97ac15c4ed1c` → `a7ff275d3f23`, build `2026-06-03T00:53:35Z`). Served HTML contains the new \"Main project (required\" label.\n\n**Test coverage:** `test/fr-94-phase-3-r1-main-project-required.test.js` (5 …",
+          "ts": "2026-06-03T00:54:51.145Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-02T23:24:30.541Z"
+          }
         }
       ],
       "meta": {
@@ -3488,6 +3498,18 @@
           "status": "completed",
           "ts": "2026-06-02T17:00:00.000Z",
           "summary": "r1 (@kkrazy comment: 'the issue creation works now, but it's not rewriting it to proper format before submitting the issue'). Root cause: the remote-target branch in handleAddPlanItem (slashcmds.js ~line 363) was computing shouldRewrite via the same threshold expression as local plan items: `forceRewrite || wordCount > PLAN_ITEM_REWRITE_WORD_THRESHOLD`. The threshold (8 words) made sense for local quick captures — `/td auth flow broken` stays quick because it's just a local memo — but for remote issues the trade-off flips: a short remote capture still goes to a public bug tracker where Problem/Expected/Actual shape is always worth the extra rewrite call. fr-80 r5 had already added the rewrite path but gated it behind the same threshold; @kkrazy's r1 report surfaces that short captures (≤8 words, no `!`) were still landing raw on GitHub. Fix: in the remote branch ONLY, `shouldRewrite = true` unconditionally. The local-plan-item branch a few lines below keeps the threshold so local quick captures stay quick (verified by the fr-81 r1 test's second case + the existing fr-80 r5 test updated to reflect the new contract). Regression test: test/fr-81-r1-always-rewrite-remote.test.js (3 cases) — locks the remote-branch shouldRewrite is `= true` (not the threshold expression), the LOCAL-branch shouldRewrite still uses the threshold (didn't regress quick captures), and a fr-81 marker comment exists. Wired into test/test.sh after fr-94. The existing fr-80 r5 test (test/fr-80-remote-issue-routing.test.js) was updated to match the new contract: its 'must compute shouldRewrite (forceRewrite || wordCount > threshold)' assertion became 'must compute shouldRewrite = true' for the remote branch (now passes 19/19 instead of 18/19). Not yet committed/pushed/deployed — awaiting user direction."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T00:54:51.145Z",
+          "startedAt": "2026-06-02T23:24:30.541Z",
+          "summary": "620.5s · 39→15797 tok",
+          "result": "✅ All shipped + verified live on mycodev:\n\n| Layer | Change |\n|---|---|\n| **HTML** | `spawn-main-project <input required>`, label now reads `Main project (required — git URL or new folder name)` |\n| **Client JS** | `doSpawn()` shows inline `\"Main project is required — paste a git clone URL or type a new folder name.\"` and aborts before the POST when empty |\n| **Server** | `POST /sessions` returns `400 { error: \"Main project is required …\" }` before `spawnSession` is called (defense in depth) |\n\n**Push:** `origin/main` advanced `0b7a844` → `96b9cf7`.\n**Deploy:** mycodev container swapped (`97ac15c4ed1c` → `a7ff275d3f23`, build `2026-06-03T00:53:35Z`). Served HTML contains the new \"Main project (required\" label.\n\n**Test coverage:** `test/fr-94-phase-3-r1-main-project-required.test.js` (5 cases, all green) locks the HTML `required` attr, the \"required\" label wording (with negative assertion against accidental revert to \"optional\"), the client-side empty guard firing before the POST, the server 400 firing before `spawnSession`, and a marker comment in ≥2 of the touched files. Wired into `test/test.sh` after Phase 3.\n\nTry it on mycodev now — open the spawn modal with the field empty and either browser-native validation (from `required`) or the inline doSpawn error will block submission."
+        },
+        {
+          "status": "running",
+          "ts": "2026-06-03T00:54:56.717Z",
+          "summary": null
         }
       ]
     },
@@ -4760,7 +4782,24 @@
         "rewritten": true
       },
       "description": "**Problem:** The HUD status indicator does not reflect what the agent is actually doing, making progress unreadable.\n**Expected:** Status transitions to match the active phase (e.g. editing code, running tests) in real time.\n**Actual:** Status sits on \"analyze\" most of the time while edits are being applied and tests are running, and only occasionally flickers between \"analyze\", \"code\", and \"test\"."
+    },
+    {
+      "id": "td-33",
+      "text": "Run critic at each stage (analyze, code, verify), not only at the end",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-06-03T00:57:44.609Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "critic should kick in at each stage, including the analyze, code and verify, not just the last one after everything is finished",
+        "rewritten": true
+      },
+      "description": "**Problem:** Critic only runs once after the full pipeline finishes, so bad analyze/code/verify outputs propagate downstream before any feedback.\n**Expected:** Critic kicks in at each stage — analyze, code, and verify — gating progression on its review.\n**Actual:** Critic runs only as a final pass after everything is finished."
     }
   ],
-  "updatedAt": "2026-06-03T00:38:14.227Z"
+  "updatedAt": "2026-06-03T00:57:51.061Z"
 }

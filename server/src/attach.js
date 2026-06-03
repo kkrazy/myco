@@ -121,6 +121,46 @@ function getSession(sessionId) {
   return sessions.get(sessionId) || null;
 }
 
+// Dispatch-label-drift fix (2026-06-03): capture the set of dirty
+// paths + the HEAD SHA at the moment a `[run:plan#X]` dispatch
+// starts. The critique gate (turn_result success path) uses the
+// dirty-paths set to filter out pre-existing WIP — only changes
+// made by THIS run reach Gemini.
+//
+// Why a fresh git invocation here rather than reusing
+// listChangedFiles in files.js: listChangedFiles returns rich
+// metadata (per-file diff stats) which is more than we need + is
+// async. The snapshot is on the hot path of every chat message, so
+// keep it synchronous + minimal. execFileSync with a 2s timeout
+// bounds the worst case; failures fall through to an empty baseline
+// (so the critique sees the full WIP — same as pre-fix behavior,
+// no regression).
+function _snapshotRunBaseline(absCwd) {
+  const { execFileSync } = require('child_process');
+  const dirtyPaths = new Set();
+  let head = null;
+  try {
+    head = execFileSync('git', ['-C', absCwd, 'rev-parse', 'HEAD'], { timeout: 2000, encoding: 'utf8' }).trim();
+  } catch {}
+  try {
+    const porcelain = execFileSync('git', ['-C', absCwd, 'status', '--porcelain'], { timeout: 2000, encoding: 'utf8' });
+    // Each line is "XY <path>" where XY is a 2-char status. For rename
+    // entries "R  src -> dst" we capture both src and dst.
+    for (const line of porcelain.split('\n')) {
+      const stripped = line.slice(3).trim();    // drop the "XY " prefix
+      if (!stripped) continue;
+      const arrow = stripped.indexOf(' -> ');
+      if (arrow >= 0) {
+        dirtyPaths.add(stripped.slice(0, arrow));
+        dirtyPaths.add(stripped.slice(arrow + 4));
+      } else {
+        dirtyPaths.add(stripped);
+      }
+    }
+  } catch {}
+  return { dirtyPaths, head };
+}
+
 // Register a session object (currently always AgentSession from
 // server/src/agent-session.js). Lets the WS attach + state-update + chat
 // plumbing find it via the module-local `sessions` map and wires the
@@ -209,21 +249,38 @@ function _registerExternalSession(sessionId, session) {
               const { listChangedFiles, readDiff } = require('./files');
               const changedInfo = await listChangedFiles(rec.absCwd);
               if (changedInfo && Array.isArray(changedInfo.entries) && changedInfo.entries.length > 0) {
-                let fullDiff = '';
-                for (const entry of changedInfo.entries) {
-                  const d = await readDiff(rec.absCwd, entry.path);
-                  if (d && d.diff) {
-                    fullDiff += `\n--- File: ${entry.path} ---\n${d.diff}\n`;
+                // Dispatch-label-drift fix (2026-06-03): filter the
+                // changed-file list to exclude paths that were ALREADY
+                // dirty at run-start. Only files this run actually
+                // changed reach the critique. Without this filter, a
+                // dispatch on an already-done plan item (e.g.
+                // /run bug-51 when bug-51 is shipped) would feed
+                // whatever WIP happens to sit in the working tree to
+                // Gemini under the wrong label, producing fake
+                // "Gemini flagged issues" notices.
+                const baselineDirty = (active && active.baselineDirty instanceof Set) ? active.baselineDirty : new Set();
+                const newEntries = changedInfo.entries.filter((e) => !baselineDirty.has(e.path));
+                if (newEntries.length === 0) {
+                  console.log(`[critique-gate] Plan item ${active.itemId} produced no run-attributable changes ` +
+                    `(${changedInfo.entries.length} dirty paths were all baseline WIP; baselineHead=${active && active.baselineHead || 'unknown'}). ` +
+                    `Skipping critique — there's nothing this run produced for Gemini to review.`);
+                } else {
+                  let fullDiff = '';
+                  for (const entry of newEntries) {
+                    const d = await readDiff(rec.absCwd, entry.path);
+                    if (d && d.diff) {
+                      fullDiff += `\n--- File: ${entry.path} ---\n${d.diff}\n`;
+                    }
                   }
-                }
-                if (fullDiff.trim()) {
-                  console.log(`[critique-gate] Plan item ${active.itemId} completed. Invoking Gemini Critique...`);
-                  const planArtifact = rec.artifacts && rec.artifacts.plan;
-                  const item = planArtifact && Array.isArray(planArtifact.items) && planArtifact.items.find(it => it.id === active.itemId);
-                  if (item) {
-                    const { triggerGeminiCritique } = require('./critique');
-                    await triggerGeminiCritique(sessionId, session, item, fullDiff, ev.result || '');
-                    return;                       // critique took over queue advancement
+                  if (fullDiff.trim()) {
+                    console.log(`[critique-gate] Plan item ${active.itemId} completed (${newEntries.length} run-attributable files, ${changedInfo.entries.length - newEntries.length} baseline-WIP excluded). Invoking Gemini Critique...`);
+                    const planArtifact = rec.artifacts && rec.artifacts.plan;
+                    const item = planArtifact && Array.isArray(planArtifact.items) && planArtifact.items.find(it => it.id === active.itemId);
+                    if (item) {
+                      const { triggerGeminiCritique } = require('./critique');
+                      await triggerGeminiCritique(sessionId, session, item, fullDiff, ev.result || '');
+                      return;                       // critique took over queue advancement
+                    }
                   }
                 }
               }
@@ -1589,10 +1646,26 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   // matched plan item via _attachPlanRunOutcome.
   const runMatch = text.match(/\[run:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
   if (runMatch && user !== ASSISTANT_USER) {
+    // Dispatch-label-drift fix (2026-06-03): snapshot HEAD + the
+    // currently-dirty paths BEFORE the run begins. At critique time
+    // (turn_result success path below), the critique diff is
+    // filtered to EXCLUDE files that were already dirty here — only
+    // changes made BY this run reach Gemini. Without this, an
+    // unrelated WIP working tree (e.g. uncommitted fr-81 Phase A)
+    // got attached to a dispatch on a totally different plan item
+    // (e.g. bug-51 which was already shipped), producing a fake
+    // "Gemini flagged issues" critique that was actually flagging
+    // the unrelated WIP. The user reported this three times in one
+    // session — the snapshot model makes the critique semantically
+    // honest: it only ever reviews what THIS run touched.
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    const baseline = rec && rec.absCwd ? _snapshotRunBaseline(rec.absCwd) : { dirtyPaths: new Set(), head: null };
     session._activeRunItem = {
       type: 'plan',                            // td/fr/bug all live in plan.json today
       itemId: runMatch[2],
       startedAt: new Date().toISOString(),
+      baselineDirty: baseline.dirtyPaths,      // Set of path strings dirty at run-start
+      baselineHead: baseline.head,             // SHA at run-start (informational; logged on critique skip)
     };
     _stampPlanItemStatus(sessionId, runMatch[2], 'running', null);
   }

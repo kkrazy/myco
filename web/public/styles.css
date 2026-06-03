@@ -2219,6 +2219,91 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   text-align: center;
   padding: 24px 8px;
 }
+
+/* fr-81 Phase A: remote-issues section at the bottom of the Plan
+   view. Visually separated from local plan items by a border-top +
+   muted background so the user reads it as "this is the upstream
+   GitHub/Gitee surface, not your local plan". */
+.remote-issues-section {
+  margin-top: 24px;
+  padding: 12px 0 8px;
+  border-top: 1px solid var(--border);
+}
+.remote-issues-title {
+  font-size: .9rem;
+  font-weight: 600;
+  margin: 0 8px 8px;
+  color: var(--text);
+}
+.remote-issues-title code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .85em;
+  background: var(--surface);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.remote-issues-empty,
+.remote-issues-loading {
+  color: var(--muted);
+  font-size: .85rem;
+  padding: 8px 12px;
+}
+.remote-issues-empty code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .85em;
+}
+.remote-issues-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.remote-issue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.remote-issue-row:last-child { border-bottom: none; }
+.remote-issue-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text);
+  text-decoration: none;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.remote-issue-link:hover { text-decoration: underline; }
+.remote-issue-num {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .8rem;
+}
+.remote-issue-title {
+  font-size: .9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-issue-labels {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.remote-issue-label {
+  font-size: .7rem;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.remote-issue-author {
+  font-size: .75rem;
+  color: var(--muted);
+}
 .artifact-empty code {
   font-family: ui-monospace, SFMono-Regular, monospace;
   background: var(--surface-2);

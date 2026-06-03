@@ -1383,6 +1383,34 @@ app.get('/sessions/:id/chat/history', (req, res) => {
   res.json({ messages: window, total, hasMore });
 });
 
+// fr-81 Phase A: ingest open GitHub / Gitee issues for the session's
+// project remote into the Plan view. Auth-gated like the other plan-
+// view routes (viewer-tier — read-only). Stale-while-revalidate: the
+// first call after a cold cache blocks on the fetch; subsequent calls
+// within 5 min return cached + kick a background refresh. ?force=1
+// blocks on a fresh fetch.
+app.get('/sessions/:id/remote-issues', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const remoteIssues = require('./remote-issues');
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const rec = sessionsMod.getSessionRecord(ctx.id);
+    const result = await remoteIssues.getForSession(rec, { force, user: req.user });
+    res.json({
+      items: result.items || [],
+      fetchedAt: result.fetchedAt || 0,
+      provider: result.provider || null,
+      owner: result.owner || null,
+      repo: result.repo || null,
+      error: result.error || null,
+      stale: !!result.stale,
+    });
+  } catch (err) {
+    res.status(500).json({ error: redact(err.message) });
+  }
+});
+
 // Plan / Arch / Test artifact routes — see server/src/artifacts.js for the
 // route bodies. They need fileApiPreamble (defined above) plus the
 // chat-dispatch hooks; passing them in keeps artifacts.js decoupled from
