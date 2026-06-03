@@ -694,47 +694,158 @@ function _projectNameFromGitUrl(url) {
   return safe || 'project';
 }
 
-// fr-94 Phase 1: clone <gitUrl> into <absCwd>/<inferred-name>/. The
-// clone runs synchronously (spawnSync) so the directory is ready
-// before injectBestPracticesIntoClaudeMd + spawnAgent fire. On clone
-// failure the directory is still created (so the agent can attach)
-// and a warning is logged — the user can re-clone or rebuild later.
-// Returns the project name on success or '' if the URL was empty.
+// fr-94 Phase 3: kick off an asynchronous `git clone --progress` into
+// <absCwd>/<inferred-name>/ and return the inferred project name
+// IMMEDIATELY so spawnSession can finish + the HTTP /sessions POST
+// can respond without waiting for the clone. Clone progress + the
+// final success/failure verdict stream into the session's chat pane
+// via appendChatMessage (persisted to rec.chat) AND a live session-
+// bus emit('chat', msg) (so any WS that's already attached renders
+// the line without a refresh).
 //
-// Phase 1 r1 (critique response): added an explicit timeout so a
-// stalled clone (network issue, hung credential prompt, huge repo)
-// can't pin the /sessions POST forever. SPAWN_TIMEOUT_MS is generous
-// enough for normal repos but short enough that the failure path
-// (mkdir empty dir, return name) runs in bounded time. A real Phase 2
-// async-clone flow (returns sessionId immediately, streams clone
-// progress) is the longer-term fix; this is the minimum guard
-// against an OS-level hang in the meantime.
-const _GIT_CLONE_TIMEOUT_MS = 120_000; // 2 minutes — gentle ceiling
-function _spawnViaGitClone(absCwd, gitUrl) {
+// Why async: Phase 1's spawnSync pinned the /sessions POST for the
+// duration of the clone — gentle on tiny repos, terrible UX on
+// anything bigger (mobile users sat staring at a hung spawn modal
+// while a 200MB monorepo cloned over a flaky network). Phase 1 r1
+// added a 2-min timeout to bound the worst case, but the user-
+// reported gap was "the modal blocks at all" — Phase 3 is the real
+// fix.
+//
+// Pre-create the empty project dir so:
+//   · `git clone <url> <empty-dir>` works (git permits an existing
+//     empty target).
+//   · findProjectRoot(rec)'s explicit-override branch (rec.mainProject
+//     set) doesn't trip on a missing directory while the clone is in
+//     flight. Plan-item writes (_myco_/plan.json) land at the project
+//     dir from the first iteration onward; no race.
+//
+// The agent's process.cwd() stays at the session-root wrapper (NOT
+// the project subdir) for the gitCloneUrl branch — reanchoring the
+// SDK's cwd mid-iteration is out of scope. The user can `cd
+// <projectName>` once the chat message reports clone success.
+//
+// Caller contract: spawnSession sets rec.cloneState='pending' +
+// rec.cloneUrl=<url> BEFORE this helper kicks off (so a chat-pane
+// observer sees the field before the first progress line lands).
+function _kickoffGitCloneAsync(sessionId, absCwd, gitUrl) {
   const projectName = _projectNameFromGitUrl(gitUrl);
   const projectAbs = path.join(absCwd, projectName);
-  if (fs.existsSync(projectAbs)) {
-    console.warn(`[fr-94] skipping git clone for ${gitUrl} — ${projectName}/ already exists`);
-    return projectName;
-  }
-  try {
-    const { spawnSync } = require('child_process');
-    const r = spawnSync('git', ['clone', '--quiet', gitUrl, projectAbs], {
-      stdio: 'inherit',
-      timeout: _GIT_CLONE_TIMEOUT_MS,
-    });
-    if (r.error && r.error.code === 'ETIMEDOUT') {
-      console.error(`[fr-94] git clone of ${gitUrl} timed out after ${_GIT_CLONE_TIMEOUT_MS}ms. Creating empty dir as fallback.`);
-      try { fs.mkdirSync(projectAbs, { recursive: true }); } catch {}
-    } else if (r.status !== 0) {
-      console.error(`[fr-94] git clone of ${gitUrl} into ${projectAbs} failed (status=${r.status}). Creating empty dir as fallback.`);
-      try { fs.mkdirSync(projectAbs, { recursive: true }); } catch {}
-    }
-  } catch (err) {
-    console.error(`[fr-94] git clone of ${gitUrl} threw: ${err.message}`);
-    try { fs.mkdirSync(projectAbs, { recursive: true }); } catch {}
-  }
+  // Pre-create empty dir so findProjectRoot's exists() check passes
+  // while the clone is still in flight. `git clone <url> <empty-dir>`
+  // works fine.
+  try { fs.mkdirSync(projectAbs, { recursive: true }); }
+  catch (err) { console.error(`[fr-94 Phase 3] mkdir ${projectAbs} failed: ${err.message}`); }
+  // Defer the actual spawn one tick so the caller can finish
+  // putSession + spawnAgent + _registerExternalSession FIRST. That
+  // way the live-emit path (_emitCloneMsg → attachMod.getSession)
+  // finds the registered session for the very first progress line.
+  setImmediate(() => _runGitCloneInBackground(sessionId, projectAbs, gitUrl));
   return projectName;
+}
+
+// Background driver for _kickoffGitCloneAsync. Spawns the clone,
+// throttles stderr lines into chat-pane progress rows, and posts a
+// final ✓/✗ verdict that mutates rec.cloneState.
+function _runGitCloneInBackground(sessionId, projectAbs, gitUrl) {
+  const { spawn } = require('child_process');
+  const startedAt = Date.now();
+  _emitCloneMsg(sessionId, `⏳ git clone ${gitUrl} → ${path.basename(projectAbs)}/ …`, 'fr-94/clone-start');
+  let child;
+  try {
+    child = spawn('git', ['clone', '--progress', gitUrl, projectAbs], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    _markCloneFailed(sessionId, `✗ git clone could not start: ${err.message}`);
+    return;
+  }
+  // git's --progress writes to stderr (one carriage-return-terminated
+  // line per progress tick). Throttle to one chat row per ~500ms so
+  // a fast clone doesn't flood the chat pane with 50 "Receiving
+  // objects" updates.
+  let stderrBuf = '';
+  let lastEmit = 0;
+  child.stderr.on('data', (chunk) => {
+    stderrBuf += chunk.toString('utf8');
+    const parts = stderrBuf.split(/[\r\n]+/);
+    stderrBuf = parts.pop() || '';
+    for (const ln of parts) {
+      const line = ln.trim();
+      if (!line) continue;
+      const now = Date.now();
+      if (now - lastEmit < 500) continue;
+      lastEmit = now;
+      _emitCloneMsg(sessionId, `⏳ ${line}`, 'fr-94/clone-progress');
+    }
+  });
+  // Hard SIGTERM after 10 min — same intent as Phase 1 r1's
+  // synchronous-clone timeout, just enforced via process.kill since
+  // the async spawn() has no built-in timeout option. Generous
+  // because the user is no longer being blocked by it.
+  const CLONE_HARD_TIMEOUT_MS = 600_000;
+  const killer = setTimeout(() => {
+    try { child.kill('SIGTERM'); } catch {}
+  }, CLONE_HARD_TIMEOUT_MS);
+  child.on('exit', (code, signal) => {
+    clearTimeout(killer);
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    if (code === 0) {
+      const store = loadStore();
+      const rec = store.sessions[sessionId];
+      if (rec) { rec.cloneState = 'success'; saveStore(); }
+      // Now that the project tree exists, inject the myco best-
+      // practices block into the project's CLAUDE.md (skipped in
+      // spawnSession because the dir had to stay empty for git
+      // clone). Best-effort: a clone that landed without a CLAUDE.md
+      // is fine; the inject is idempotent so a re-spawn would catch
+      // it later anyway.
+      try { injectBestPracticesIntoClaudeMd(projectAbs); }
+      catch (err) { console.error(`[fr-94 Phase 3] post-clone CLAUDE.md inject failed for ${sessionId}: ${err.message}`); }
+      _emitCloneMsg(sessionId, `✓ Cloned ${gitUrl} in ${elapsed}s. cd ${path.basename(projectAbs)} to anchor work in the project.`, 'fr-94/clone-success');
+    } else {
+      _markCloneFailed(sessionId, `✗ git clone failed (exit ${code}${signal ? `, signal ${signal}` : ''}) after ${elapsed}s. Project dir is empty.`);
+    }
+  });
+  child.on('error', (err) => {
+    clearTimeout(killer);
+    _markCloneFailed(sessionId, `✗ git clone error: ${err.message}`);
+  });
+}
+
+// Final-state helper for the clone-failure path. Sets
+// rec.cloneState='failed' + posts the error to chat. The pre-created
+// project dir is left in place (empty) so resolveMycoDir still
+// resolves _myco_/ correctly for plan.json / critic.md / events.jsonl.
+function _markCloneFailed(sessionId, text) {
+  const store = loadStore();
+  const rec = store.sessions[sessionId];
+  if (rec) { rec.cloneState = 'failed'; saveStore(); }
+  _emitCloneMsg(sessionId, text, 'fr-94/clone-error');
+}
+
+// Persist a clone-state chat row + broadcast it live to any attached
+// WS clients via the live session bus. Dual-path because:
+//   · appendChatMessage persists to rec.chat → a fresh attach sees
+//     the row in chat-history (catches up users who weren't watching).
+//   · The attach module's session-bus emit reaches already-attached
+//     viewers without waiting for a reattach.
+function _emitCloneMsg(sessionId, text, kind) {
+  const msg = {
+    user: 'system',
+    text,
+    ts: new Date().toISOString(),
+    meta: { kind },
+  };
+  try { appendChatMessage(sessionId, msg); } catch {}
+  // Live broadcast — lazy require to avoid the sessions⇄attach
+  // module circular at module-load time.
+  try {
+    const attachMod = require('./attach');
+    const live = typeof attachMod.getSession === 'function' ? attachMod.getSession(sessionId) : null;
+    if (live && typeof live.emit === 'function') {
+      live.emit('chat', msg);
+    }
+  } catch {}
 }
 
 // fr-94 Phase 1: create a fresh empty project subdirectory named
@@ -789,15 +900,29 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   // resolveMycoDir(rec) in artifacts.js uses it as the project root.
   // If neither is provided, mainProject stays empty and the legacy
   // auto-detect path applies (find first subdir with .git/).
+  //
+  // fr-94 Phase 3: the gitCloneUrl branch no longer blocks the spawn
+  // — _kickoffGitCloneAsync pre-creates the empty project dir,
+  // returns the inferred project name immediately, and runs the clone
+  // in the background. Progress + the final ✓/✗ verdict stream into
+  // rec.chat (and live to attached WS clients). rec.cloneState
+  // tracks {'pending'|'success'|'failed'}; rec.cloneUrl preserves the
+  // URL for diagnostics + a future "retry clone" UX.
   let mainProject = '';
+  let cloneState = null;
+  let cloneUrl = null;
   if (typeof opts.gitCloneUrl === 'string' && opts.gitCloneUrl.trim()) {
-    mainProject = _spawnViaGitClone(absCwd, opts.gitCloneUrl.trim());
+    cloneUrl = opts.gitCloneUrl.trim();
+    mainProject = _kickoffGitCloneAsync(id, absCwd, cloneUrl);
+    cloneState = 'pending';
   } else if (typeof opts.mainProjectName === 'string' && opts.mainProjectName.trim()) {
     mainProject = _spawnViaNewDir(absCwd, opts.mainProjectName.trim());
   }
 
   const record = { id, user, cwd: toRel(absCwd, user), absCwd, label, claudeSessionId: null, createdAt, mode };
   if (mainProject) record.mainProject = mainProject;
+  if (cloneState) record.cloneState = cloneState;
+  if (cloneUrl) record.cloneUrl = cloneUrl;
   putSession(record);
 
   // Inject the myco best-practices template into the project's CLAUDE.md
@@ -808,8 +933,17 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   // fr-94: when mainProject is set, the CLAUDE.md lives at
   // <absCwd>/<mainProject>/CLAUDE.md (the project root); otherwise at
   // session-root <absCwd>/CLAUDE.md (legacy).
+  // fr-94 Phase 3: for the gitCloneUrl branch the project dir is
+  // pre-created EMPTY and the clone is in flight. Injecting CLAUDE.md
+  // here would make the dir non-empty and `git clone <url> <dir>`
+  // would fail with "destination not empty". Skip the pre-spawn
+  // inject for the clone-pending case; _runGitCloneInBackground
+  // injects CLAUDE.md AFTER the clone completes (next iteration's
+  // SDK options.cwd read picks it up).
   const claudeMdRoot = mainProject ? path.join(absCwd, mainProject) : absCwd;
-  injectBestPracticesIntoClaudeMd(claudeMdRoot);
+  if (cloneState !== 'pending') {
+    injectBestPracticesIntoClaudeMd(claudeMdRoot);
+  }
 
   const { spawnAgent } = require('./agent-session');
   // fr-26: pass session owner so AgentSession can resolve GitHub

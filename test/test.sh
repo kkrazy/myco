@@ -2743,6 +2743,27 @@ test_chat_window() {
   # filter + multi-candidate warn + persistence + attach.js wiring
   # + fr-94 Phase 2 marker comment.
   node_test_result test/fr-94-phase-2-migrate.test.js "test/fr-94-phase-2-migrate.test.js (9 cases)"
+  # fr-94 Phase 3: the gitCloneUrl branch of spawnSession no longer
+  # blocks on a sync clone — _kickoffGitCloneAsync pre-creates the
+  # empty project dir, returns the inferred project name immediately,
+  # and a setImmediate-deferred _runGitCloneInBackground runs the
+  # actual `git clone --progress` via child_process.spawn. stderr
+  # lines (where --progress writes) are throttled (~500ms) and piped
+  # through _emitCloneMsg, which dual-pipes via appendChatMessage
+  # (persists to rec.chat for fresh-attach catch-up) AND attachMod
+  # .getSession(id).emit('chat', msg) (live broadcast to already-
+  # attached WS clients). rec.cloneState ∈ {pending, success, failed}
+  # tracks state; rec.cloneUrl preserves the URL for diagnostics. The
+  # CLAUDE.md inject is deferred until clone success — pre-clone the
+  # project dir must stay empty or git clone fails on "destination
+  # not empty". Locks: _kickoffGitCloneAsync defined + setImmediate
+  # deferral + non-async signature, _runGitCloneInBackground using
+  # child_process.spawn (not spawnSync) with --progress, stderr→
+  # appendChatMessage routing, _emitCloneMsg dual-pipe semantics,
+  # rec.cloneState='pending' + rec.cloneUrl on the gitCloneUrl
+  # branch, CLAUDE.md inject guarded by cloneState + re-called on
+  # success, and a "fr-94 Phase 3" marker comment.
+  node_test_result test/fr-94-phase-3-async-clone.test.js "test/fr-94-phase-3-async-clone.test.js (7 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

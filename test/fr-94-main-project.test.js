@@ -121,10 +121,16 @@ t('server/src/sessions.js: spawnSession handles opts.gitCloneUrl + opts.mainProj
     'spawnSession body must compute + persist rec.mainProject (fr-94 Phase 1).');
 });
 
-t('server/src/sessions.js: helper functions _spawnViaGitClone + _spawnViaNewDir defined', () => {
+t('server/src/sessions.js: helper functions _kickoffGitCloneAsync + _spawnViaNewDir defined', () => {
   const src = _read('server/src/sessions.js');
-  assert.ok(/function\s+_spawnViaGitClone\s*\(/.test(src),
-    '_spawnViaGitClone helper must be defined (fr-94 Phase 1 — runs git clone into the inferred project subdir).');
+  // fr-94 Phase 3 renamed _spawnViaGitClone (blocking spawnSync) to
+  // _kickoffGitCloneAsync (returns immediately + clone runs in the
+  // background). The Phase 3 test file locks the async contract;
+  // this case just confirms the helper still exists alongside the
+  // still-sync _spawnViaNewDir (new-local-dir path is fast enough
+  // not to need async).
+  assert.ok(/function\s+_kickoffGitCloneAsync\s*\(/.test(src),
+    '_kickoffGitCloneAsync helper must be defined (fr-94 Phase 3 — non-blocking git clone into the inferred project subdir).');
   assert.ok(/function\s+_spawnViaNewDir\s*\(/.test(src),
     '_spawnViaNewDir helper must be defined (fr-94 Phase 1 — mkdir for plain-name path).');
 });
@@ -187,20 +193,25 @@ t('artifacts.js r1: findProjectRoot returns null + logs warning when rec.mainPro
     'findProjectRoot must `return null` after the mainProject-missing console.warn (r1 — block silent fall-through to auto-detect).');
 });
 
-t('sessions.js r1: _spawnViaGitClone has an explicit timeout so a stalled clone cannot pin the /sessions POST', () => {
+t('sessions.js r1 → Phase 3 supersession: gitCloneUrl branch no longer pins the /sessions POST (Phase 3 made the clone async, so the spawnSync timeout guard is moot)', () => {
+  // Phase 1 r1 guarded against a hung sync clone via a spawnSync
+  // timeout. Phase 3 removed sync clone entirely — the gitCloneUrl
+  // branch in spawnSession calls _kickoffGitCloneAsync which returns
+  // immediately and runs the clone in the background. The Phase 3
+  // contract is locked in test/fr-94-phase-3-async-clone.test.js;
+  // this case just verifies spawnSession's gitCloneUrl branch
+  // doesn't ever block on a sync clone again.
   const src = _read('server/src/sessions.js');
-  const at = src.search(/function\s+_spawnViaGitClone\s*\(/);
-  assert.ok(at > -1, '_spawnViaGitClone must exist.');
-  const body = src.slice(at, at + 2000);
-  // The spawnSync options object must include `timeout:` so a stuck
-  // network/credential prompt can't hang the spawn endpoint forever.
-  assert.ok(/timeout\s*:/.test(body),
-    '_spawnViaGitClone must pass a `timeout:` option to spawnSync so a stalled git clone cannot hang the /sessions POST forever (r1 critique response).');
-  // The timeout constant must be reasonable — at least 30s (long enough
-  // for normal repos), and not absent / set to 0 (which means no
-  // timeout in Node's spawnSync semantics).
-  const timeoutMatch = body.match(/timeout\s*:\s*([\w_]+|\d+)/);
-  assert.ok(timeoutMatch, 'must extract the timeout value for sanity check.');
+  const at = src.search(/async\s+function\s+spawnSession\s*\(/);
+  assert.ok(at > -1, 'spawnSession must exist.');
+  const body = src.slice(at, at + 6000);
+  // The branch dispatching on opts.gitCloneUrl must NOT call any
+  // spawnSync-shaped helper. The async helper is the only allowed
+  // dispatcher.
+  assert.ok(!/spawnSync/.test(body),
+    'spawnSession must not call spawnSync anywhere in its body (fr-94 Phase 3 — async clone replaces the sync path that the r1 timeout was guarding).');
+  assert.ok(/_kickoffGitCloneAsync\s*\(/.test(body),
+    'spawnSession must dispatch the gitCloneUrl branch through _kickoffGitCloneAsync (fr-94 Phase 3 — non-blocking).');
 });
 
 // ── marker comment ──
