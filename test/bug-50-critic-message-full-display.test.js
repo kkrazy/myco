@@ -46,11 +46,69 @@ console.log('── bug-50: critic message displays in full ──');
 // max-height: none) AND NO inner overflow-y. The chat pane's
 // natural scroll handles the rare extreme-length case.
 
-// Strip CSS comments BEFORE scanning so the explanatory bug-50 r1
-// comment (which describes the OLD max-height: 60vh + overflow-y:
-// auto declarations as part of the design rationale) doesn't trip
-// the property-absence asserts below.
+// Strip CSS comments BEFORE scanning so the explanatory bug-50 r1+r2
+// comments (which describe the OLD max-height + overflow-y rules as
+// part of the design rationale) don't trip the property-absence
+// asserts below.
 function _stripCssComments(s) { return s.replace(/\/\*[\s\S]*?\*\//g, ''); }
+
+// ── r2: the OUTER .chat-composer-verdict-panel is now a modal overlay ──
+
+t('web/public/styles.css r2: .chat-composer-verdict-panel is a fixed-position centered modal (not inline)', () => {
+  const css = _stripCssComments(_read('web/public/styles.css'));
+  const re = /\.chat-composer-verdict-panel\s*\{[^}]*\}/;
+  const block = (css.match(re) || [''])[0];
+  assert.ok(block, '.chat-composer-verdict-panel rule must exist.');
+  assert.ok(/position\s*:\s*fixed/.test(block),
+    '.chat-composer-verdict-panel must be position: fixed (r2 — modal overlay so the chatpane\'s overflow:hidden no longer clips the critique\'s bottom).');
+  assert.ok(/inset\s*:\s*0/.test(block) || (/top\s*:\s*0/.test(block) && /left\s*:\s*0/.test(block)),
+    '.chat-composer-verdict-panel must span the viewport (inset: 0 or equivalent) so the backdrop covers the whole chat.');
+  assert.ok(/z-index/.test(block),
+    '.chat-composer-verdict-panel must have a z-index so it floats above the chat pane.');
+});
+
+t('web/public/styles.css r2: .verdict-panel-content child holds the visual card + has max-height + internal scroll for truly enormous critiques', () => {
+  const css = _stripCssComments(_read('web/public/styles.css'));
+  const re = /\.verdict-panel-content\s*\{[^}]*\}|\.chat-composer-verdict-panel\s*>\s*\.verdict-panel-content\s*\{[^}]*\}/;
+  const block = (css.match(re) || [''])[0];
+  assert.ok(block, '.verdict-panel-content rule must exist (r2 — wrapper for the inner card).');
+  assert.ok(/max-height\s*:\s*(\d+vh|90vh)/.test(block),
+    '.verdict-panel-content must declare a max-height so an enormous critique can scroll INSIDE the modal rather than overflow the viewport (r2 — typical case fits in 90vh).');
+  assert.ok(/overflow-y\s*:\s*auto/.test(block),
+    '.verdict-panel-content must declare overflow-y: auto so a truly enormous critique scrolls inside the modal.');
+});
+
+t('web/public/app.js r2: _renderVerdictPanel wraps the contents in .verdict-panel-content + wires Esc/backdrop dismissal for error+intermediate verdicts', () => {
+  const app = _read('web/public/app.js');
+  const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
+  assert.ok(at > -1);
+  const body = app.slice(at, at + 9000);
+  assert.ok(/verdict-panel-content/.test(body),
+    '_renderVerdictPanel must wrap the rendered contents in a .verdict-panel-content child div (r2 — modal layout).');
+  // Esc key handler + click-on-backdrop must exist for the safe-
+  // dismiss paths (error + intermediate critiques have nothing
+  // mutable to gate).
+  assert.ok(/Escape/.test(body),
+    '_renderVerdictPanel must handle the Escape key for safe-dismissable verdict types (error + intermediate) so the user can close the modal with the keyboard (r2).');
+  // Backdrop click-target check: a `if (e.target === panel)` pattern
+  // is the standard "click landed on outer wrapper, not inner card".
+  assert.ok(/e\.target\s*===\s*panel|target\s*===\s*panel/.test(body),
+    '_renderVerdictPanel must dismiss when click.target === panel (the backdrop) — clicks on the inner content stay no-op (r2).');
+});
+
+t('web/public/app.js r2: final critiques (Discard / Fix / Accept) do NOT auto-dismiss on Esc/backdrop — guards user against accidentally losing the verdict', () => {
+  const app = _read('web/public/app.js');
+  const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
+  const body = app.slice(at, at + 9000);
+  // The Esc handler + backdrop click must be gated by safeToDismissByBackdrop.
+  // Look for the gate.
+  assert.ok(/safeToDismissByBackdrop/.test(body),
+    '_renderVerdictPanel must gate the Esc + backdrop dismiss on a safeToDismissByBackdrop flag so final critiques (Discard / Fix / Accept) can\'t be dismissed without an explicit user choice (r2).');
+  // And that flag must be `isError || isIntermediate` — final
+  // critiques have hasDisagreement state to preserve.
+  assert.ok(/safeToDismissByBackdrop\s*=\s*isError\s*\|\|\s*isIntermediate/.test(body),
+    'safeToDismissByBackdrop must equal `isError || isIntermediate` so final critiques (the agree/disagree path) require an explicit Discard/Fix/Accept click — they can\'t be lost via Esc/backdrop (r2).');
+});
 
 t('web/public/styles.css: .verdict-critique has NO max-height cap (r1 — the 60vh fix still clipped; r1 lets the message flow at natural height)', () => {
   const css = _stripCssComments(_read('web/public/styles.css'));

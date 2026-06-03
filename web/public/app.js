@@ -7547,19 +7547,55 @@ function _renderVerdictPanel() {
       `<textarea id="verdict-user-prompt-input" class="verdict-user-prompt-input" placeholder="e.g. did you check the case where the user is offline? did you consider rate limits on the retry button?" rows="2" maxlength="2048"></textarea>` +
     `</div>`;
 
+  // bug-50 r2: wrap the contents in .verdict-panel-content so the
+  // OUTER .chat-composer-verdict-panel becomes a backdrop wrapper +
+  // clicks on the backdrop (not the content) can dismiss. The
+  // content itself takes the visual styling (rounded card, scroll
+  // when the message is huge).
   panel.innerHTML = `
-    <div class="verdict-header">
-      <div class="verdict-title ${titleClass}">
-        ${isError ? '⚠️' : (isAgreed ? '✓' : '⚠️')} ${titleText}
+    <div class="verdict-panel-content">
+      <div class="verdict-header">
+        <div class="verdict-title ${titleClass}">
+          ${isError ? '⚠️' : (isAgreed ? '✓' : '⚠️')} ${titleText}
+        </div>
+        <div style="font-size:11px;color:#8b949e;font-family:monospace;">${escHtml(review.itemId)}${intermediateBadge}</div>
       </div>
-      <div style="font-size:11px;color:#8b949e;font-family:monospace;">${escHtml(review.itemId)}${intermediateBadge}</div>
-    </div>
-    <div class="verdict-critique">${formattedCritique}</div>
-    ${userPromptHtml}
-    <div class="verdict-actions">
-      ${actionsHtml}
+      <div class="verdict-critique">${formattedCritique}</div>
+      ${userPromptHtml}
+      <div class="verdict-actions">
+        ${actionsHtml}
+      </div>
     </div>
   `;
+
+  // bug-50 r2: backdrop click dismisses ONLY when there's a safe
+  // dismiss path (error or intermediate critiques — both have a
+  // Dismiss action that's a no-op for state). For final critiques
+  // (Discard / Fix / Accept), click-on-backdrop is a no-op so the
+  // user can't accidentally lose the verdict without choosing a
+  // path. Same applies to the Esc key.
+  const safeToDismissByBackdrop = isError || isIntermediate;
+  const dismissPanel = () => {
+    state.awaitingVerdict = false;
+    state.critiqueReview = null;
+    _renderVerdictPanel();
+  };
+  if (safeToDismissByBackdrop) {
+    panel.addEventListener('click', (e) => {
+      // Only dismiss when the click landed on the panel itself
+      // (the backdrop), NOT on the inner content card or its children.
+      if (e.target === panel) dismissPanel();
+    });
+    // Esc key handler — registered ONCE per render so it's torn down
+    // when the panel re-renders or hides.
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', escHandler);
+        dismissPanel();
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+  }
 
   const btnDiscard = panel.querySelector('.verdict-btn-discard');
   const btnFix = panel.querySelector('.verdict-btn-fix');

@@ -8733,18 +8733,72 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   }
 }
 
-/* Verdict Overlay Panel in Chat Compose */
+/* Verdict Overlay Panel — bug-50 r2: modal layout.
+   r0 + r1 history:
+     · r0 (bug-50 original) — pane was inline with `.verdict-critique`
+       capped at max-height: 180px + overflow-y: auto. Inner scrollbar
+       in a tiny window. User: "not display in full."
+     · r1 — removed the inner cap. Critique flowed at natural height,
+       BUT the parent `#chatpane` has `overflow: hidden` so when the
+       pane's natural height exceeded available space (tall critique
+       + textarea + 3 buttons), the BOTTOM of the pane (incl. the
+       action buttons) got CLIPPED INVISIBLY. User: "not display in
+       full" — again.
+     · r2 (this commit) — user picked "modal overlay" via
+       AskUserQuestion. The pane becomes a fixed-position centered
+       modal that covers the chat with the full critique + textarea +
+       buttons visible. If the critique is enormous (>viewport), the
+       MODAL itself scrolls — but the user sees the whole pane in one
+       view. Escape via Esc key OR click-on-backdrop dismisses (when
+       the verdict is non-blocking) — see _renderVerdictPanel for the
+       handler wiring. */
 .chat-composer-verdict-panel {
+  /* Fixed-position modal centered in the viewport. */
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  /* Backdrop is a pseudo-element + the pane itself sits on top. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 5vw;
+  /* The backdrop click target — clicking the OUTER area (not the
+     inner panel) dismisses via the JS handler. The panel itself sits
+     in a child <div>; pointer events on the wrapper trigger dismiss. */
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: fadeIn 0.18s ease-out;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* Inner content sits inside this wrapper. The critique pane CONTENT
+   lives in a .verdict-panel-content child so click-on-backdrop can
+   distinguish backdrop from content. */
+.chat-composer-verdict-panel > .verdict-panel-content {
   background: hsla(240, 10%, 8%, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 16px;
-  margin: 12px 14px 4px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
-  animation: slideUp 0.25s ease-out;
+  gap: 14px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+  width: 100%;
+  max-width: 960px;
+  max-height: 90vh;
+  /* INTERNAL scroll only when the critique is truly enormous (the
+     normal case fits in 90vh). The inner .verdict-critique is still
+     UNCAPPED — content drives height. r1's "no inner clip on the
+     critique text" contract stays in effect. */
+  overflow-y: auto;
+  animation: modalRise 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes modalRise {
+  from { opacity: 0; transform: translateY(20px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes slideUp {
