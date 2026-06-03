@@ -2800,19 +2800,28 @@ async function doSpawn() {
   const mode = ptyCheckbox && ptyCheckbox.checked ? 'pty' : undefined;
   // fr-94 Phase 1: read the main-project field. The server sniffs the
   // value: URL-shaped (https://, git@, ssh://, owner/repo) → forwarded
-  // as gitCloneUrl; plain text → forwarded as mainProjectName. Empty
-  // → neither sent → server falls through to legacy auto-detect at
-  // _myco_/ access time. Sniff client-side too so the payload is
-  // typed correctly and the server doesn't have to second-guess.
+  // as gitCloneUrl; plain text → forwarded as mainProjectName. Sniff
+  // client-side too so the payload is typed correctly and the server
+  // doesn't have to second-guess.
+  //
+  // fr-94 Phase 3 r1: the main-project field is REQUIRED. Empty →
+  // show an inline error and abort the spawn (the server also rejects
+  // a missing field as a defense-in-depth 400, but the client guard
+  // gives faster feedback). Legacy sessions with no rec.mainProject
+  // keep working via Phase 2's lazy auto-migration; the required-
+  // field gate applies only to NEW spawns through this modal.
   const mainProjectRaw = (document.getElementById('spawn-main-project')?.value || '').trim();
+  if (!mainProjectRaw) {
+    errEl.textContent = 'Main project is required — paste a git clone URL or type a new folder name.';
+    errEl.hidden = false;
+    return;
+  }
   let gitCloneUrl, mainProjectName;
-  if (mainProjectRaw) {
-    if (/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(mainProjectRaw) ||
-        /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(mainProjectRaw)) {
-      gitCloneUrl = mainProjectRaw;
-    } else {
-      mainProjectName = mainProjectRaw;
-    }
+  if (/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(mainProjectRaw) ||
+      /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(mainProjectRaw)) {
+    gitCloneUrl = mainProjectRaw;
+  } else {
+    mainProjectName = mainProjectRaw;
   }
   try {
     const res = await authedFetch('/sessions', {

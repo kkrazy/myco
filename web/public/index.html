@@ -467,8 +467,14 @@
            The value drives rec.mainProject which resolveMycoDir(rec)
            reads to anchor every _myco_/ access (plan.json, critic.md,
            events.jsonl, diagrams). -->
-      <label>Main project (optional — git URL or new folder name)
-        <input id="spawn-main-project" type="text" placeholder="e.g. https://github.com/owner/repo OR 'my-rust-app'" autocomplete="off" maxlength="200" title="Sets the session's main project. URL → git clone. Plain text → new empty folder. Both anchor _myco_/ (plan, critic rules, diagrams) at <main-project>/_myco_/." />
+      <!-- fr-94 Phase 3 r1: main project is REQUIRED. Every new
+           session must designate one main project up front so
+           _myco_/ has a canonical home from the first event. Legacy
+           sessions with no rec.mainProject keep working via Phase 2's
+           lazy auto-migration; the required-field gate applies only
+           to NEW spawns. -->
+      <label>Main project (required — git URL or new folder name)
+        <input id="spawn-main-project" type="text" required placeholder="e.g. https://github.com/owner/repo OR 'my-rust-app'" autocomplete="off" maxlength="200" title="Sets the session's main project. URL → git clone. Plain text → new empty folder. Both anchor _myco_/ (plan, critic rules, diagrams) at <main-project>/_myco_/. Required field — every new session must designate one main project." />
       </label>
       <div id="spawn-suggestions"></div>
       <!-- Phase 9 retired the PTY driver toggle. Every new session is

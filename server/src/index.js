@@ -544,6 +544,18 @@ function redact(msg) {
 
 app.post('/sessions', requireAuth, async (req, res) => {
   try {
+    // fr-94 Phase 3 r1: main project is REQUIRED. Reject with a 400
+    // when neither gitCloneUrl nor mainProjectName is provided —
+    // every new session must designate a main project so _myco_/
+    // has a canonical home from the first event. Defense in depth
+    // against a stale client that doesn't enforce the field; the
+    // spawn modal also blocks empty submissions client-side.
+    const gitCloneUrl = typeof req.body.gitCloneUrl === 'string' ? req.body.gitCloneUrl.trim() : '';
+    const mainProjectName = typeof req.body.mainProjectName === 'string' ? req.body.mainProjectName.trim() : '';
+    if (!gitCloneUrl && !mainProjectName) {
+      res.status(400).json({ error: 'Main project is required — provide a gitCloneUrl or mainProjectName.' });
+      return;
+    }
     const { id, cwd, mode } = await spawnSession(req.body.cwd, req.user, {
       cols: req.body.cols,
       rows: req.body.rows,
@@ -554,10 +566,8 @@ app.post('/sessions', requireAuth, async (req, res) => {
       // fr-94 Phase 1: forward the spawn-modal mainProject field
       // (single input — Git clone URL OR new project name). The server
       // sniffs the value: URL-shaped → git clone; plain name → mkdir.
-      // Backward compat: pre-fr-94 clients omit the field; spawnSession
-      // falls through to legacy auto-detect.
-      gitCloneUrl: typeof req.body.gitCloneUrl === 'string' ? req.body.gitCloneUrl : undefined,
-      mainProjectName: typeof req.body.mainProjectName === 'string' ? req.body.mainProjectName : undefined,
+      gitCloneUrl: gitCloneUrl || undefined,
+      mainProjectName: mainProjectName || undefined,
     });
     res.json({ session_id: id, cwd, mode });
   } catch (err) {

@@ -2764,6 +2764,20 @@ test_chat_window() {
   # branch, CLAUDE.md inject guarded by cloneState + re-called on
   # success, and a "fr-94 Phase 3" marker comment.
   node_test_result test/fr-94-phase-3-async-clone.test.js "test/fr-94-phase-3-async-clone.test.js (7 cases)"
+  # fr-94 Phase 3 r1: user-reported "the main project shouldn't be
+  # optional". The spawn-modal field is now REQUIRED — every NEW
+  # session must designate one main project up front so _myco_/
+  # (plan.json, critic.md, events.jsonl, diagrams) has a canonical
+  # home from the first event. Legacy sessions with no rec.mainProject
+  # keep working via Phase 2's lazy auto-migration; the required-
+  # field gate applies only to NEW spawns. Three layers locked: the
+  # HTML <input> carries `required` + the <label> says "required"
+  # (not "optional"), doSpawn() short-circuits empty before the POST
+  # with an inline error, and POST /sessions returns 400 when neither
+  # gitCloneUrl nor mainProjectName is provided (defense in depth
+  # against a stale client). The guard fires BEFORE spawnSession is
+  # called — no half-spawned sessions on validation failure.
+  node_test_result test/fr-94-phase-3-r1-main-project-required.test.js "test/fr-94-phase-3-r1-main-project-required.test.js (5 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in
