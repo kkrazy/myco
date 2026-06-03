@@ -106,6 +106,14 @@ const state = {
   // indicator when this has entries so long-running tools (Agent,
   // Monitor, etc.) don't look like the session has hung.
   openToolCalls: [],
+  // bug-53 (HUD analyze stuck): sticky phase tracker for the HUD's
+  // active-step chip. Updated by the tool-progress handler when an
+  // Edit/Write/MultiEdit or Bash opens. Cleared on turn_start so a
+  // new turn starts back in 'Analyze'. Without this, the HUD chip
+  // reverted to 'Analyze' every time a tool call completed (between
+  // calls) — and most of the wall-clock time IS between calls, so
+  // the user saw "Analyze" except for brief flickers.
+  lastToolPhase: null,
   // Running totals across this session's lifetime (since the page
   // opened). Updated on each turn_result. Surfaced as the token-meter
   // chip near the chat input — context-window fill + cumulative cost.
@@ -6029,6 +6037,16 @@ function _appendAgentEvent(ev) {
     try { console.warn('[unknown_event]', ev.raw_type || '(no raw_type)', ev.raw); } catch {}
     return;
   }
+  // bug-53: reset the HUD's sticky tool-phase tracker when a new turn
+  // starts. Without this, a stale 'verify' or 'code' phase from the
+  // previous turn would leak into the start of the new one — the new
+  // turn would show e.g. 'Verify' from the moment it dispatched
+  // (before claude has done anything) until the first new Edit/Bash
+  // overrides it. Cleaner to start every turn in 'Analyze'.
+  if (ev && ev.type === 'turn_start') {
+    state.lastToolPhase = null;
+    _updateTaskHUD();
+  }
   // fr-94: instant Changed-files refresh hook. When the agent finishes
   // a file-mutating tool call (Edit / Write / MultiEdit) or any Bash
   // call (which often runs git/touch/mv/etc.), kick a force-reload
@@ -7206,7 +7224,29 @@ function _applyStateUpdate(msg) {
   }
   if (msg.kind === 'tool-progress') {
     state.openToolCalls = Array.isArray(msg.open) ? msg.open : [];
+    // bug-53 (HUD analyze stuck — dispatch-mislabeled-as-bug-52):
+    // remember the most recent tool phase so the HUD chip stays
+    // sticky between tool calls. Without this, the HUD was reading
+    // ONLY state.openToolCalls (in-flight calls) and falling back to
+    // 'Analyze' in every gap between calls — which is most of the
+    // time. User saw "Analyze" except for occasional flickers to
+    // 'Code' or 'Verify' as tools opened/closed. The new sticky
+    // phase carries 'code'/'verify' between calls until claude
+    // genuinely switches phase or a new turn starts (turn_start
+    // handler resets it).
+    for (const tc of state.openToolCalls) {
+      if (!tc || !tc.name) continue;
+      if (tc.name === 'Bash') state.lastToolPhase = 'verify';
+      else if (tc.name === 'Edit' || tc.name === 'Write' || tc.name === 'MultiEdit') {
+        // Don't downgrade verify → code if Bash already established
+        // verify-phase this turn. Once we're in verify (running
+        // tests), further edits are typically test-fix edits — we
+        // stay in 'verify' until the next user turn.
+        if (state.lastToolPhase !== 'verify') state.lastToolPhase = 'code';
+      }
+    }
     _renderClaudeTyping();   // strip reuses the existing typing-indicator render path
+    _updateTaskHUD();         // bug-53: re-render so the active-phase chip reflects the new tool state immediately
     return;
   }
   if (msg.kind === 'chat-clear') {
@@ -7368,6 +7408,7 @@ function _getHUDActiveStep() {
     return 'Critic';
   }
   const openCalls = state.openToolCalls || [];
+  // Active tools take precedence — what claude is doing RIGHT NOW.
   if (openCalls.some(tc => tc.name === 'Bash') || (state.claudeStatusLine && state.claudeStatusLine.includes('Bash'))) {
     return 'Verify';
   }
@@ -7375,6 +7416,14 @@ function _getHUDActiveStep() {
       (state.claudeStatusLine && (state.claudeStatusLine.includes('Edit') || state.claudeStatusLine.includes('Write') || state.claudeStatusLine.includes('MultiEdit')))) {
     return 'Code';
   }
+  // bug-53: sticky fallback to the most recent tool phase observed in
+  // this turn. Without this, the HUD reverted to 'Analyze' every
+  // time a tool call completed — the user reported "sits on 'analyze'
+  // most of the time" because most of the wall-clock time is between
+  // tool calls. The sticky phase is cleared on turn_start so the next
+  // turn starts fresh in 'Analyze'.
+  if (state.lastToolPhase === 'verify') return 'Verify';
+  if (state.lastToolPhase === 'code') return 'Code';
   return 'Analyze';
 }
 

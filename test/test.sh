@@ -2941,6 +2941,25 @@ test_chat_window() {
   # textarea + placeholder hint, retry handler reading textarea +
   # JSON Content-Type + body field, CSS for the three classes.
   node_test_result test/bug-52-critic-reasoning-and-user-prompt.test.js "test/bug-52-critic-reasoning-and-user-prompt.test.js (9 cases)"
+  # bug-53: HUD active-step chip was stuck on "Analyze" most of the
+  # time, only flickering between analyze/code/test. User-reported
+  # under the bug-52 dispatch label (dispatch-label-drift) but it's
+  # a NEW issue separate from the shipped bug-52. Two-part root
+  # cause: (1) _getHUDActiveStep read only state.openToolCalls
+  # (tools IN-FLIGHT now), defaulting to 'Analyze' between calls —
+  # which is most of the wall-clock time. (2) The tool-progress WS
+  # handler didn't call _updateTaskHUD so the chip didn't re-render
+  # on tool transitions, only on unrelated state-updates. Fix:
+  # state.lastToolPhase sticky tracker (set by tool-progress when
+  # Edit/Write/MultiEdit or Bash opens; reset on turn_start), the
+  # tool-progress handler now calls _updateTaskHUD, and
+  # _getHUDActiveStep falls back to state.lastToolPhase BEFORE
+  # defaulting to 'Analyze'. Locks: state init, tool-progress
+  # handler verify/code assignment + _updateTaskHUD call,
+  # _getHUDActiveStep lastToolPhase checks ordered BEFORE the final
+  # return 'Analyze', turn_start reset in _appendAgentEvent, and a
+  # bug-53 marker comment.
+  node_test_result test/bug-53-hud-stuck-on-analyze.test.js "test/bug-53-hud-stuck-on-analyze.test.js (6 cases)"
   # fr-81 Phase A: the actual ingest direction. Phase 1 only handled
   # outbound (/feature, /bug write issues upstream). The user-reported
   # gap (Gemini's critique on the previous fr-94 Phase 3 diff: "this
