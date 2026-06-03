@@ -9000,9 +9000,18 @@ async function _loadAndRenderRemoteIssues(sid, opts = {}) {
   const items = Array.isArray(data && data.items) ? data.items : [];
   const providerLabel = data && data.provider === 'gitee' ? 'Gitee' : 'GitHub';
   const ownerRepo = data && data.owner && data.repo ? `${data.owner}/${data.repo}` : '';
+  // fr-81 Phase B.2: surface the dedup pass in the section header.
+  // "(N linked)" means N remote issues were folded into local plan
+  // items above (matched by meta.remoteUrl) rather than shown twice.
+  const linkedSuffix = (data && data.linkedCount > 0)
+    ? ` <span class="remote-issues-linked">(${data.linkedCount} linked above)</span>`
+    : '';
   if (!items.length) {
-    section.innerHTML = `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)} ${ownerRepo ? '<code>' + escHtml(ownerRepo) + '</code>' : ''} (0)</h3>` +
-      `<div class="remote-issues-empty">No open issues on the upstream remote.</div>`;
+    const reason = (data && data.linkedCount > 0)
+      ? `All ${data.linkedCount} open remote issue${data.linkedCount === 1 ? '' : 's'} are already linked to local plan items above.`
+      : 'No open issues on the upstream remote.';
+    section.innerHTML = `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)} ${ownerRepo ? '<code>' + escHtml(ownerRepo) + '</code>' : ''} (0)${linkedSuffix}</h3>` +
+      `<div class="remote-issues-empty">${escHtml(reason)}</div>`;
     return;
   }
   const rows = items.map((it) => {
@@ -9019,7 +9028,7 @@ async function _loadAndRenderRemoteIssues(sid, opts = {}) {
     `</li>`;
   }).join('');
   section.innerHTML =
-    `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)} ${ownerRepo ? '<code>' + escHtml(ownerRepo) + '</code>' : ''} (${items.length})</h3>` +
+    `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)} ${ownerRepo ? '<code>' + escHtml(ownerRepo) + '</code>' : ''} (${items.length})${linkedSuffix}</h3>` +
     `<ul class="remote-issues-list">${rows}</ul>`;
 }
 
@@ -9203,6 +9212,16 @@ function renderArtifact(type, artifact) {
     const idChip = it.id
       ? `<code class="artifact-item-id" data-deep-link-id="${escHtml(it.id)}" role="button" tabindex="0" title="Click to copy a deep link to this item">${escHtml(it.id)}</code>`
       : '';
+    // fr-81 Phase B.2: 🔗 chip on local plan items that carry
+    // meta.remoteUrl (set by Phase B.1's auto-promote on /feature
+    // and /fr @target). Click opens the upstream issue in a new
+    // tab. This is the visible half of dedup — instead of seeing
+    // the issue twice (once locally + once in the Remote section
+    // below), the user sees one row with a quick link to upstream.
+    const remoteUrl = it.meta && typeof it.meta.remoteUrl === 'string' ? it.meta.remoteUrl : '';
+    const remoteChip = remoteUrl
+      ? `<a class="artifact-item-remote" href="${escHtml(remoteUrl)}" target="_blank" rel="noopener noreferrer" title="Open the linked remote issue on ${escHtml(it.meta && it.meta.remoteProvider === 'gitee' ? 'Gitee' : 'GitHub')}: ${escHtml(remoteUrl)}">🔗</a>`
+      : '';
     // Creator line: small muted "filed by @user · <ts>" rendered on
     // its own row BELOW the body text. Doesn\'t compete with the body
     // for horizontal space in the flex top row. Hover-title carries
@@ -9349,7 +9368,7 @@ function renderArtifact(type, artifact) {
     const liId = it.id ? `id="artifact-item-${escHtml(it.id)}"` : '';
     return `<li class="${cls}" ${liId} data-id="${escHtml(it.id)}">
       <div class="artifact-item-row">
-        <div class="artifact-item-meta">${statusChip}${idChip}</div>
+        <div class="artifact-item-meta">${statusChip}${idChip}${remoteChip}</div>
         <div class="${_planItemTextClass(it)}">${renderMd(it.text || '')}</div>
         ${_planItemTextExpandToggle(it)}
         ${_planItemDescriptionHtml(it)}

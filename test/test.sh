@@ -2830,6 +2830,63 @@ test_chat_window() {
   # tag, _persistPlanArtifact persistence path, both callsites + the
   # try/catch best-effort policy.
   node_test_result test/fr-81-phase-b1-auto-promote.test.js "test/fr-81-phase-b1-auto-promote.test.js (9 cases)"
+  # fr-81 Phase B.2: dedup remote issues vs local plan items. Builds
+  # on Phase B.1's auto-promote anchor (meta.remoteUrl on every
+  # /feature + /fr @target local row). At Plan-view render time,
+  # remote-issues.getForSession scans rec.artifacts.plan.items for
+  # known remoteUrls + filters the upstream fetch to drop rows
+  # whose htmlUrl matches. The visible half: each local item that
+  # carries meta.remoteUrl renders a 🔗 chip (artifact-item-remote)
+  # linking to upstream; the Remote-issues section header shows
+  # "(N linked above)" so the user can see dedup happened. Locks:
+  # _collectLinkedRemoteUrls helper, getForSession dedup filter,
+  # dedupedCount + linkedCount on the cached entry, server route
+  # forwards both counts, client remoteChip + linked-suffix
+  # rendering, CSS for both, and the end-to-end behavior via the
+  # withPatchedGitHosts harness — input has 3 remotes + 2 local
+  # links → output has 1 remote + dedupedCount=2, plus a backward-
+  # compat no-op pass for pre-B.1 sessions.
+  node_test_result test/fr-81-phase-b2-dedup.test.js "test/fr-81-phase-b2-dedup.test.js (11 cases)"
+  # fr-81 Phase B.3: close-detection mirror. During the same
+  # remote-issues refresh as Phase A/B.2, ALSO fetch CLOSED upstream
+  # issues. For each closed remote whose URL matches a local plan
+  # item's meta.remoteUrl AND the local item isn't already done,
+  # flip done=true + stamp meta.closedRemotely=true +
+  # meta.closedRemotelyAt=<iso>. Persists via sessions.saveStore +
+  # broadcasts an artifact state-update on the live session bus so
+  # attached Plan views refresh without a reload. Guarded by
+  # `linkedUrls.size > 0` — no wasted closed-API call on pre-B.1
+  # sessions. Idempotency: already-done items aren't re-stamped on
+  # subsequent refreshes. Locks: _mirrorClosedRemoteIssues helper
+  # with state='closed' fetch, the done/closedRemotely/
+  # closedRemotelyAt mutations, the already-done short-circuit,
+  # saveStore + state-update broadcast, the linkedUrls guard, the
+  # mirroredClosedCount surface, and three end-to-end cases via
+  # withPatchedDeps that monkey-patch gitHosts + sessionsMod.saveStore.
+  node_test_result test/fr-81-phase-b3-close-mirror.test.js "test/fr-81-phase-b3-close-mirror.test.js (10 cases)"
+  # fr-81 Phase B.4: write-back on local close. Closes the Phase B
+  # loop. When the user marks a local plan item done (POST
+  # /sessions/:id/artifact/mark with done=1) AND the item carries
+  # meta.remoteUrl from Phase B.1's auto-promote, also send a PATCH
+  # state=closed to the upstream GitHub/Gitee issue. Four guards:
+  # (1) done flipped FALSE→TRUE (uncheck does NOT reopen upstream —
+  # out of scope); (2) item.meta.closedUpstreamAt already set
+  # (idempotency); (3) item.meta.closedRemotely (Phase B.3 mirror
+  # already closed it on behalf of upstream); (4) type === 'plan'
+  # only (test/arch items have no upstream). Best-effort: a
+  # closeIssue failure logs but doesn't block the HTTP response —
+  # local close already happened. On success, stamps
+  # meta.closedUpstreamAt + re-broadcasts the plan artifact so
+  # attached Plan views see the link badge update. Locks:
+  # gitHosts.closeIssue (GitHub PATCH + Gitee PATCH form-encoded
+  # with owner-in-path quirk same as createIssueGitee), exported
+  # from git-hosts.js, returns {ok, number, url} on 2xx + {error,
+  # status} otherwise, rejects missing required fields before the
+  # HTTP call, _fireRemoteCloseAsync extracted from the route for
+  # readability + test seam, route-level guards (beforeDone snap,
+  # !beforeDone && done, no-double-fire, type=plan), and helper-
+  # level "no token on file" skip with a log.
+  node_test_result test/fr-81-phase-b4-write-back.test.js "test/fr-81-phase-b4-write-back.test.js (12 cases)"
   # fr-81 Phase A: the actual ingest direction. Phase 1 only handled
   # outbound (/feature, /bug write issues upstream). The user-reported
   # gap (Gemini's critique on the previous fr-94 Phase 3 diff: "this

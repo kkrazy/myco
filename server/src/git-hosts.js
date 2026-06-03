@@ -357,9 +357,85 @@ async function fetchIssues(opts) {
   return { items: [], status: 0, error: `unknown provider: ${opts && opts.provider}` };
 }
 
+// ── closeIssue (fr-81 Phase B.4: write-back on local close) ─────────────────
+//
+// Closes an issue upstream. Used by the Plan-view close action when
+// the item carries meta.remoteUrl (set by Phase B.1's auto-promote).
+//
+// Returns { ok: true, number, url } on success, or { error, status }
+// on failure. Never throws — network errors come back through the
+// status-0 path same as fetchIssues.
+//
+// GitHub: PATCH /repos/{owner}/{repo}/issues/{number} with JSON body
+// `{state: "closed"}`. Token in Authorization header.
+// Gitee:  PATCH /api/v5/repos/{owner}/issues/{number} (note: owner
+// in path, NOT owner/repo — Gitee's own quirk for the issue-update
+// endpoint, same shape as _createIssueGitee). Body form-encoded
+// with access_token + state=closed + repo=<repo>.
+
+async function _closeIssueGithub({ token, owner, repo, number }, httpsJson) {
+  const fetcher = httpsJson || _httpsJson;
+  const r = await fetcher({
+    hostname: 'api.github.com',
+    path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(number)}`,
+    method: 'PATCH',
+    headers: {
+      'Authorization': `token ${token}`,
+      'User-Agent': 'myco/1.0',
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: { state: 'closed' },
+  });
+  if (r.status >= 200 && r.status < 300 && r.body && r.body.number) {
+    return { ok: true, number: r.body.number, url: r.body.html_url };
+  }
+  return {
+    error: (r.body && (r.body.message || r.body.error)) || `GitHub close API ${r.status}`,
+    status: r.status,
+  };
+}
+
+async function _closeIssueGitee({ token, owner, repo, number }, httpsJson) {
+  const fetcher = httpsJson || _httpsJson;
+  const form = new URLSearchParams();
+  form.set('access_token', token);
+  form.set('repo', repo);
+  form.set('state', 'closed');
+  const r = await fetcher({
+    hostname: 'gitee.com',
+    path: `/api/v5/repos/${encodeURIComponent(owner)}/issues/${encodeURIComponent(number)}`,
+    method: 'PATCH',
+    headers: {
+      'User-Agent': 'myco/1.0',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    },
+    body: form.toString(),
+  });
+  if (r.status >= 200 && r.status < 300 && r.body && r.body.number) {
+    return { ok: true, number: r.body.number, url: r.body.html_url };
+  }
+  return {
+    error: (r.body && (r.body.message || r.body.error)) || `Gitee close API ${r.status}`,
+    status: r.status,
+  };
+}
+
+async function closeIssue(opts) {
+  const provider = String(opts && opts.provider || '').toLowerCase();
+  if (!opts || !opts.token || !opts.owner || !opts.repo || !opts.number) {
+    return { error: 'closeIssue requires {provider, token, owner, repo, number}', status: 0 };
+  }
+  if (provider === 'github') return _closeIssueGithub(opts, opts.httpsJson);
+  if (provider === 'gitee') return _closeIssueGitee(opts, opts.httpsJson);
+  return { error: `unknown provider: ${opts.provider}`, status: 0 };
+}
+
 module.exports = {
   detectHost,
   createIssue,
+  closeIssue,
   fetchUser,
   fetchIssues,
   KNOWN_PROVIDERS,

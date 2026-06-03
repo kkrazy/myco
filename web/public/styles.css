@@ -2304,6 +2304,30 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   font-size: .75rem;
   color: var(--muted);
 }
+
+/* fr-81 Phase B.2: dedup affordances.
+   .artifact-item-remote — small 🔗 link chip on a local plan item that
+   was auto-promoted (B.1 set meta.remoteUrl). Sits in the same meta
+   row as the id chip.
+   .remote-issues-linked — muted "(N linked above)" suffix in the
+   Remote-issues section header so the user knows the dedup happened. */
+.artifact-item-remote {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: .9em;
+  line-height: 1;
+}
+.artifact-item-remote:hover {
+  color: var(--text);
+}
+.remote-issues-linked {
+  font-weight: normal;
+  color: var(--muted);
+  font-size: .85em;
+}
 .artifact-empty code {
   font-family: ui-monospace, SFMono-Regular, monospace;
   background: var(--surface-2);

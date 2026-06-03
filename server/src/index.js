@@ -1459,6 +1459,13 @@ app.get('/sessions/:id/remote-issues', async (req, res) => {
       repo: result.repo || null,
       error: result.error || null,
       stale: !!result.stale,
+      // fr-81 Phase B.2: how many upstream issues were filtered out
+      // because they already have a local plan-item with the same
+      // meta.remoteUrl, and the total count of locally-linked remote
+      // URLs. Used by the Plan-view client to render "(N linked)" in
+      // the section header so the dedup is visible.
+      dedupedCount: result.dedupedCount || 0,
+      linkedCount: result.linkedCount || 0,
     });
   } catch (err) {
     res.status(500).json({ error: redact(err.message) });

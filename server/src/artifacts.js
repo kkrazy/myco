@@ -667,11 +667,61 @@ function register(app, deps) {
 
     const item = findItem(ctx.rec, type, itemId);
     if (!item) return res.status(404).json({ error: 'no such item' });
+    const beforeDone = !!item.done;
     item.done = done;
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
     broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    // fr-81 Phase B.4: write-back on local close. When done flips
+    // FALSE → TRUE AND the item carries meta.remoteUrl (set by Phase
+    // B.1's auto-promote), also close the upstream issue. Skips:
+    //   · done flipping the other direction (uncheck) — out of scope.
+    //   · meta.closedUpstreamAt already set — idempotency.
+    //   · meta.closedRemotely — upstream is already closed (Phase B.3
+    //     mirror flipped us; no point trying to close it again).
+    // Best-effort: fire-and-forget. A failure logs but doesn't block
+    // the HTTP response — the local close already happened.
+    if (!beforeDone && done && type === 'plan'
+        && item.meta && item.meta.remoteUrl
+        && !item.meta.closedUpstreamAt && !item.meta.closedRemotely) {
+      const writeUser = user;
+      _fireRemoteCloseAsync(ctx.id, ctx.rec, type, item, writeUser);
+    }
     res.json({ ok: true, item });
   });
+
+  // fr-81 Phase B.4: fire-and-forget upstream close. Extracted so the
+  // /artifact/mark route stays readable + the test can monkey-patch
+  // gitHosts.closeIssue without touching the route handler.
+  function _fireRemoteCloseAsync(sessionId, rec, type, item, writeUser) {
+    const provider = item.meta.remoteProvider;
+    const owner = item.meta.remoteOwner;
+    const repo = item.meta.remoteRepo;
+    const number = item.meta.remoteNumber;
+    if (!provider || !owner || !repo || !number) {
+      console.log(`[fr-81 Phase B.4] skipping write-back for ${item.id}: meta missing provider/owner/repo/number (legacy auto-promote row?)`);
+      return;
+    }
+    const gitHosts = require('./git-hosts');
+    const token = typeof gitHosts.getToken === 'function'
+      ? gitHosts.getToken(writeUser, provider, owner, repo)
+      : null;
+    if (!token) {
+      console.log(`[fr-81 Phase B.4] skipping write-back for ${provider} ${owner}/${repo}#${number}: no token on file for @${writeUser}`);
+      return;
+    }
+    gitHosts.closeIssue({ provider, token, owner, repo, number }).then((result) => {
+      if (result && result.ok) {
+        item.meta.closedUpstreamAt = new Date().toISOString();
+        persistArtifact(rec, type, rec.artifacts[type]);
+        broadcastArtifact(sessionId, type, rec.artifacts[type]);
+        console.log(`[fr-81 Phase B.4] closed upstream ${provider} ${owner}/${repo}#${number}`);
+      } else {
+        console.error(`[fr-81 Phase B.4] write-back failed for ${provider} ${owner}/${repo}#${number}: ${(result && result.error) || 'unknown'}`);
+      }
+    }).catch((err) => {
+      console.error(`[fr-81 Phase B.4] write-back threw for ${provider} ${owner}/${repo}#${number}: ${err.message}`);
+    });
+  }
 
   // Toggle a vote on a Plan item; auto-dispatch the run if the per-item
   // voter set hits AUTO_EXECUTE_VOTE_THRESHOLD distinct users. Test items

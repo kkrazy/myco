@@ -31,6 +31,14 @@
 const gitHosts = require('./git-hosts');
 const { resolveMycoDir, findProjectRoot } = require('./artifacts');
 const path = require('path');
+// fr-81 Phase B.3: close-detection mirror needs to mutate + persist
+// rec.artifacts.plan + broadcast a state-update. Lazy-require to
+// avoid a sessions⇄remote-issues circular at module-load time.
+let _sessionsMod = null;
+function _sessions() {
+  if (!_sessionsMod) _sessionsMod = require('./sessions');
+  return _sessionsMod;
+}
 
 // 5-minute TTL — long enough that opening a session ~immediately
 // after a plan tab refresh re-uses the cache; short enough that a
@@ -150,16 +158,125 @@ async function _refreshNow(rec, { user }) {
   // Filter out PR rows from GitHub's /issues response so the Plan view
   // shows only true issues. (Gitee already returns issues-only.)
   const issuesOnly = items.filter((it) => !it.isPullRequest);
+  // fr-81 Phase B.2: dedup vs the local plan. After Phase B.1's auto-
+  // promote, every /feature + /fr @target also writes a local plan
+  // item carrying meta.remoteUrl=<the issue URL>. Here we use that
+  // anchor to filter out remote rows that already have a local
+  // representation — without this, the Plan view would show the same
+  // issue twice (once as a local plan-item, once in the Remote
+  // section below). dedupedCount is surfaced on the response so the
+  // client can log it / show a "(N linked)" hint without re-deriving
+  // the math.
+  const linkedUrls = _collectLinkedRemoteUrls(rec);
+  const deduped = linkedUrls.size > 0
+    ? issuesOnly.filter((it) => !linkedUrls.has(it.htmlUrl))
+    : issuesOnly;
+  // fr-81 Phase B.3: close-detection mirror. If any local plan items
+  // are linked to remote URLs (via Phase B.1's meta.remoteUrl) AND
+  // those upstream issues have since been closed, flip the local
+  // items to done. Best-effort: a closed-fetch failure logs but
+  // doesn't break the open-issues render path above.
+  let mirroredClosedCount = 0;
+  if (linkedUrls.size > 0) {
+    try {
+      mirroredClosedCount = await _mirrorClosedRemoteIssues({
+        sessionId, rec, provider, token, owner, repo,
+      });
+    } catch (err) {
+      console.error(`[fr-81 Phase B.3] close-mirror failed for ${sessionId}: ${err.message}`);
+    }
+  }
   const entry = {
     fetchedAt: _now(),
-    items: issuesOnly,
+    items: deduped,
     provider, owner, repo,
     error: result.error || null,
     status: result.status,
     refreshing: false,
+    dedupedCount: issuesOnly.length - deduped.length,
+    linkedCount: linkedUrls.size,
+    mirroredClosedCount,
   };
   _writeEntry(sessionId, entry);
   return { ...entry, stale: false };
+}
+
+// fr-81 Phase B.3: fetch CLOSED upstream issues for (provider, owner,
+// repo). For each closed issue whose htmlUrl matches a local plan
+// item's meta.remoteUrl AND the local item isn't already done, mark
+// the local item done + stamp meta.closedRemotely + closedRemotelyAt.
+// Persist + broadcast a state-update so attached chat panes refresh
+// the Plan view.
+//
+// Why a SEPARATE fetch from the open one: gitHosts.fetchIssues takes
+// `state` as a single value (we use 'open' or 'closed'). Doing two
+// fetches per refresh is cheap relative to the 5-min cache TTL and
+// keeps the code paths clean (open list pagination vs. closed
+// scanning have different semantics — closed can be MUCH larger
+// historically; we cap at the same MAX_ITEMS for safety but a
+// future optimisation could narrow the closed scan to a `since:`
+// timestamp from the most recent refresh).
+async function _mirrorClosedRemoteIssues({ sessionId, rec, provider, token, owner, repo }) {
+  let closedResult;
+  try {
+    closedResult = await gitHosts.fetchIssues({ provider, token, owner, repo, state: 'closed' });
+  } catch {
+    return 0;
+  }
+  if (!closedResult || !Array.isArray(closedResult.items)) return 0;
+  // Build URL → closed-issue map for O(1) lookup.
+  const closedByUrl = new Map();
+  for (const it of closedResult.items) {
+    if (it && it.htmlUrl) closedByUrl.set(it.htmlUrl, it);
+  }
+  if (closedByUrl.size === 0) return 0;
+  // Mirror in-place. The plan-item mutation is safe because Node is
+  // single-threaded and saveStore + state-update emit happen
+  // synchronously after this function returns.
+  let mirrored = 0;
+  const items = (rec.artifacts && rec.artifacts.plan && Array.isArray(rec.artifacts.plan.items))
+    ? rec.artifacts.plan.items : [];
+  for (const localItem of items) {
+    const url = localItem && localItem.meta && localItem.meta.remoteUrl;
+    if (!url) continue;
+    if (localItem.done) continue;
+    const closed = closedByUrl.get(url);
+    if (!closed) continue;
+    localItem.done = true;
+    if (!localItem.meta) localItem.meta = {};
+    localItem.meta.closedRemotely = true;
+    localItem.meta.closedRemotelyAt = new Date().toISOString();
+    mirrored++;
+  }
+  if (mirrored === 0) return 0;
+  // Persist + broadcast.
+  rec.artifacts.plan.updatedAt = new Date().toISOString();
+  try { _sessions().saveStore(); }
+  catch (err) { console.error(`[fr-81 Phase B.3] saveStore failed: ${err.message}`); }
+  try {
+    const attachMod = require('./attach');
+    const live = typeof attachMod.getSession === 'function' ? attachMod.getSession(sessionId) : null;
+    if (live && typeof live.emit === 'function') {
+      live.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: rec.artifacts.plan });
+    }
+  } catch {}
+  console.log(`[fr-81 Phase B.3] mirrored ${mirrored} closed remote issue(s) → done for ${sessionId}`);
+  return mirrored;
+}
+
+// fr-81 Phase B.2: build a Set of remote URLs that are already
+// represented as local plan items. Used by getForSession to skip
+// duplicate rendering in the Remote-issues section. Local items
+// without meta.remoteUrl (the manually-typed /fr /td /bug rows)
+// contribute nothing here — they're invisible to dedup.
+function _collectLinkedRemoteUrls(rec) {
+  const out = new Set();
+  if (!rec || !rec.artifacts || !rec.artifacts.plan || !Array.isArray(rec.artifacts.plan.items)) return out;
+  for (const it of rec.artifacts.plan.items) {
+    const url = it && it.meta && it.meta.remoteUrl;
+    if (typeof url === 'string' && url) out.add(url);
+  }
+  return out;
 }
 
 // Test hook: clear the cache so unit tests can run with a known state.
