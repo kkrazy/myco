@@ -4833,12 +4833,33 @@
           "ts": "2026-06-03T04:52:46.749Z"
         },
         {
-          "id": "ceeb888465e1",
+          "id": "67e693145f42",
           "user": "claude",
-          "ts": "2026-06-03T07:28:45.259Z",
-          "text": "## td-33 r3 design + implementation log\n\nUser request (chat, verbatim): “The critic should be kicked off at each stage: analyze, code, test. Find a way to break the entire implementation into those 3 stages” + “Make the methodology persistent” + “Auto-iterate — address critic’s points + re-fire stage critique up to 2 times before pausing.”\n\n### Design\n\nThree-layer fix; each layer addresses a different failure mode that drove the original report:\n\n1. **Persistent methodology** — the 3-stage discipline now lives in `web/public/best-practices-template.md` §9, which is injected into every newly-spawned session’s `CLAUDE.md`. Future claude reads it as part of project instructions. (Existing live sessions need to re-spawn to inherit the new template — idempotency guard in `injectBestPracticesIntoClaudeMd` won’t overwrite existing sentinel block.)\n\n2. **Mandatory directive language** — the pre-r3 §9 said “claude *tends to* move through three phases.” Too soft. r3 says “claude **MUST** structure work into three stages,” with explicit done-criteria per stage. Without explicit criteria, claude can declare “analyze done” after a one-line glance.\n\n3. **Auto-iterate (directive-based)** — when the checkpoint critic flags issues, claude addresses them in-place + re-emits the same stage sentinel to re-fire the critique, AT MOST TWICE per stage. After 2 unsuccessful retries, surface to user. Honest scope: this is directive-based (claude reads + obeys), NOT server-enforced. Future iteration could add server-side enforcement (auto-queue “address the critic feedback” prompt after each disagreement) — deferred.\n\n### Stage gate done-criteria\n\n* **Analyze done**: problem restated in own words + numbered plan with `verify:` clauses + assumptions listed inline + ZERO source-file edits yet (Read/Glob/Grep fine; Edit/Write/MultiEdit forbidden).\n* **Code done**: source edited per plan + regression test written + new test passes locally (run it, don’t assume).\n* **Verify done**: adjacent test suites still green + new test wired into `./test/test.sh` + no grep-detectable regression in related paths.\n\n### Implementation\n\nTwo files touched + one new test:\n\n* `web/public/best-practices-template.md` — §9 fully rewritten (76 lines added). Sections: scope (limits to `[run:plan#X]` dispatches; bare chat turns don’t trigger), the three stages + done-criteria, sentinel grammar, server behavior, auto-iterate rule with 2-retry cap, behavioral honesty (directive vs server-enforced), common pitfalls (premature emission, skipping analyze on “simple” tasks, mis-scoping verify).\n* `test/td-33-r3-stage-discipline-directive.test.js` (new, 8 cases) — static-grep that locks the MUST language, the done-criteria per stage incl. ZERO-edits-during-analyze + test.sh-wiring-during-verify, the 2-retry cap, the directive-based honesty note, all three sentinel shapes, the scope limitation, the pitfalls section, and the td-33 r3 marker.\n* `test/test.sh` — wired r3 test after r2.\n\n### Self-referential application\n\nI applied the 3-stage methodology to r3 itself. Stage 1 (analyze) was a written-out plan with assumptions, no edits. Stage 2 (code) was the template + test edits. Stage 3 (verify) was this comment + the adjacent-suite sweep + test.sh wiring. Manually invoked Gemini at each stage boundary; verdicts: analyze stage → critic flagged that verification only covers template content not behavior (correct point, addressed in honesty section); code stage → ✓ AGREED; verify stage → in progress at the time this comment was written.\n\n### Known limitations + follow-ups (not in this commit)\n\n* Auto-iterate is directive-based; server doesn’t enforce. A misbehaving claude could ignore the directive without any error. The server’s existing `[td-33] session <id> fired stage-done: <stage>` log lines give us auditability post-hoc — future work could expose those counts in a UI panel.\n* The template only applies to NEW sessions (injection is on spawn). Existing sessions need to re-spawn (or hand-edit their `CLAUDE.md`) to pick up r3. Not a regression — same constraint as every prior template change.\n* No structural fix yet for the dispatch-mismatch case where `[run:plan#X]` fires on session A while the actual work happens in session B — the critic never sees the work. Three credible follow-ups (deferred): `/critique <commit-sha>` slash command, dispatch-aware code review on push, manual ↻ Critique button per plan-item.",
+          "text": "✓ success · 418.7s · $57.0283 · 29↓/25178↑\n\nGemini hit 503 three times in a row — sustained Google-side outage. The 13/13 static-grep test passes are the substitute verification:\n\n| Layer | Verified |\n|---|---|\n| `_buildFileContextBlock` | Definition + caps (16 KB per-file, 64 KB total) + path resolution via `path.join(recAbsCwd, entry.path)` + per-file slice + empty-entries fallback |\n| `_buildHistoryBlock` | Definition + runs.slice(-3).reverse() + comments.slice(-5).reverse() + named caps |\n| `basePrompt` rewrite | Mentions file context + iteration history; carries `td-33 r2` marker |\n| `userPrompt` template | Both `${fileContextBlock}` and `${historyBlock}` interpolated |\n| `attach.js` wiring | Both invocation sites (final + stage-intermediate) pass `opts.changedEntries` |\n| Retry plumbing | `rec._lastCritique` caches `changed…",
+          "ts": "2026-06-03T07:01:11.314Z",
           "meta": {
-            "kind": "design-log"
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T06:54:12.468Z"
+          }
+        },
+        {
+          "id": "b785c3e39650",
+          "user": "claude",
+          "text": "✓ success · 103.8s · $58.0991 · 7↓/4805↑\n\n**✓ AGREED** with substantive reasoning, on the very first attempt with the simulated r2 enrichment. This is itself a self-validating result — Gemini gave a fuller, more confident verdict precisely because the prompt now includes the full file context (51,758 chars vs the typical ~10k for a diff-only fire).\n\n**The structural answer to your question** is worth flagging as a real myco limitation:\n\n> **In-product critic only fires on the session that runs the dispatched work.**\n> When you dispatch `[run:plan#X]` on session A while the actual code change happens in session B (different container, different developer, different timeline), the critic gate on A never sees the code change — A's claude sat idle, no `turn_result` fires.\n\nThis is the same class of issue as the dispatch-label-drift…",
+          "ts": "2026-06-03T07:11:43.617Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T06:54:12.416Z"
+          }
+        },
+        {
+          "id": "f969a60b6201",
+          "user": "claude",
+          "text": "✓ success · 493.7s · $65.9691 · 20↓/24711↑\n\nCommitted `69a94fc`. Local is now 2 commits ahead of origin (`7860936` td-33 r2 + `69a94fc` td-33 r3).\n\n**Summary of the 3-stage demo you just witnessed**, since I deliberately ran the methodology against itself:\n\n| Stage | Critic | Verdict | What it caught |\n|---|---|---|---|\n| **Analyze** | Gemini on the plan | Flagged: \"verification only confirms template content, not claude's adherence.\" | Real point — addressed by adding the behavioral-honesty section + acknowledging in commit msg |\n| **Code** | Gemini on the template diff | ✓ AGREED | Documentation clear + comprehensive |\n| **Verify** | Gemini on the full commit + key files | ✓ AGREED | Test coverage, design log, and adjacent suites all consistent |\n\n**What's now in place** (locally — not deployed):\n\n- `web/public/best-practices-t…",
+          "ts": "2026-06-03T07:30:10.416Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T06:54:12.416Z"
           }
         }
       ],
@@ -4847,8 +4868,55 @@
         "originalText": "critic should kick in at each stage, including the analyze, code and verify, not just the last one after everything is finished",
         "rewritten": true
       },
-      "description": "**Problem:** Critic only runs once after the full pipeline finishes, so bad analyze/code/verify outputs propagate downstream before any feedback.\n**Expected:** Critic kicks in at each stage — analyze, code, and verify — gating progression on its review.\n**Actual:** Critic runs only as a final pass after everything is finished."
+      "description": "**Problem:** Critic only runs once after the full pipeline finishes, so bad analyze/code/verify outputs propagate downstream before any feedback.\n**Expected:** Critic kicks in at each stage — analyze, code, and verify — gating progression on its review.\n**Actual:** Critic runs only as a final pass after everything is finished.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-03T07:01:11.314Z",
+          "startedAt": "2026-06-03T06:54:12.468Z",
+          "summary": "418.7s · 29→25178 tok",
+          "result": "Gemini hit 503 three times in a row — sustained Google-side outage. The 13/13 static-grep test passes are the substitute verification:\n\n| Layer | Verified |\n|---|---|\n| `_buildFileContextBlock` | Definition + caps (16 KB per-file, 64 KB total) + path resolution via `path.join(recAbsCwd, entry.path)` + per-file slice + empty-entries fallback |\n| `_buildHistoryBlock` | Definition + runs.slice(-3).reverse() + comments.slice(-5).reverse() + named caps |\n| `basePrompt` rewrite | Mentions file context + iteration history; carries `td-33 r2` marker |\n| `userPrompt` template | Both `${fileContextBlock}` and `${historyBlock}` interpolated |\n| `attach.js` wiring | Both invocation sites (final + stage-intermediate) pass `opts.changedEntries` |\n| Retry plumbing | `rec._lastCritique` caches `changedEntries`; `retryLastCritique` forwards |\n| Adjacent suites | td-33 22/22, bug-52 9/9, critic-truncation 8/8, chat-persistence 25/25 |\n\nCommitted locally as `7860936`. Local is 1 commit ahead of origin. Three options:\n\n1. **Push + deploy now** — local tests pass, the change is well-scoped (server-only, no client surface), and Gemini's 503 is a Google-side issue unrelated to the change quality.\n2. **Wait + retry Gemini in ~10 min** then push + deploy if ✓ AGREED.\n3. **Hold here** — commit sits locally until you decide.\n\nSay \"push and deploy\" or similar — recommendation is option 1 since this fix specifically makes critic responses BETTER in the long run (more context = fewer INSUFFICIENT INFORMATION false-flags), and the Gemini outage is exactly the kind of thing the existing ↻ Retry button is designed to handle from the UI."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T07:11:43.617Z",
+          "startedAt": "2026-06-03T06:54:12.416Z",
+          "summary": "103.8s · 7→4805 tok",
+          "result": "**✓ AGREED** with substantive reasoning, on the very first attempt with the simulated r2 enrichment. This is itself a self-validating result — Gemini gave a fuller, more confident verdict precisely because the prompt now includes the full file context (51,758 chars vs the typical ~10k for a diff-only fire).\n\n**The structural answer to your question** is worth flagging as a real myco limitation:\n\n> **In-product critic only fires on the session that runs the dispatched work.**\n> When you dispatch `[run:plan#X]` on session A while the actual code change happens in session B (different container, different developer, different timeline), the critic gate on A never sees the code change — A's claude sat idle, no `turn_result` fires.\n\nThis is the same class of issue as the dispatch-label-drift bug fixed earlier today (which addressed *false positives* — the critic firing on wrong WIP). The mirror image is **false negatives** — the critic *not firing at all* on legitimate work that happens out-of-session.\n\nThree credible fixes (none shipped today; this is a structural gap):\n\n1. **`/critique <commit-sha>`** slash command — explicitly invoke the critic on an arbitrary commit's diff. Solves the out-of-session case cleanly.\n2. **Dispatch-aware code review on push** — when origin/main advances with a plan-item ID mentioned in any commit message, auto-fire the critic on those commits. Like a PR check.\n3. **Manual ↻ Critique button on plan items** — same as Retry but for \"I want to critique whatever the most recent code change associated with this item is.\"\n\nFor *right now* on td-33 r2: my manual Gemini invocation (with simulated r2 enrichment) returned ✓ AGREED with a 51k-char prompt — the largest meaningful critic invocation we've done this session. That's the closest substitute for the missing in-product verdict.\n\nState: local main = `7860936` (td-33 r2), 1 commit ahead of origin. Want me to **push + deploy** (so the next time you `[run:plan#td-33]` on mycodev, the critic will "
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T07:30:10.416Z",
+          "startedAt": "2026-06-03T06:54:12.416Z",
+          "summary": "493.7s · 20→24711 tok",
+          "result": "Committed `69a94fc`. Local is now 2 commits ahead of origin (`7860936` td-33 r2 + `69a94fc` td-33 r3).\n\n**Summary of the 3-stage demo you just witnessed**, since I deliberately ran the methodology against itself:\n\n| Stage | Critic | Verdict | What it caught |\n|---|---|---|---|\n| **Analyze** | Gemini on the plan | Flagged: \"verification only confirms template content, not claude's adherence.\" | Real point — addressed by adding the behavioral-honesty section + acknowledging in commit msg |\n| **Code** | Gemini on the template diff | ✓ AGREED | Documentation clear + comprehensive |\n| **Verify** | Gemini on the full commit + key files | ✓ AGREED | Test coverage, design log, and adjacent suites all consistent |\n\n**What's now in place** (locally — not deployed):\n\n- `web/public/best-practices-template.md` §9 fully rewritten: MUST directive, 3 stages with strict done-criteria (ZERO source edits during analyze; test.sh wiring during verify), auto-iterate with hard 2-retry cap, behavioral-honesty note, scope to dispatches only, common pitfalls.\n- `test/td-33-r3-stage-discipline-directive.test.js` (8 cases) locking all of it.\n- `_myco_/plan.json` carries a new \"design-log\" comment on td-33 with the full design + implementation per your \"Log the design and implementation details into td-33\" ask.\n- Honest commit message flags the existing-session inheritance constraint (template injects on spawn only) + the directive-vs-server-enforced limitation.\n\nSay \"push and deploy\" / \"push and deploy to prod\" when ready. The r3 directive only takes effect on **new sessions spawned after deploy** — existing claude sessions on mycodev/myco need to re-spawn to inherit the rule. (Hand-editing their `CLAUDE.md` is the manual escape hatch.)"
+        }
+      ]
+    },
+    {
+      "id": "fr-95",
+      "text": "Add specialized Test-Validity and Perf/Security critics with cache-optimized prompts",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-03T07:39:20.014Z",
+      "addedBy": "labxnow",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "097fb04a4311",
+          "user": "labxnow",
+          "text": "Please suggest other specialized critic as you implement this from.",
+          "ts": "2026-06-03T07:41:15.999Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "other than the general purpose critic, add a separate critic focusing Test validity ensuring behaviour correctness and another critic on potential perf and security issue. Design the prompt in a way maximize prefix caching",
+        "rewritten": true
+      },
+      "description": "**Problem:** A single general-purpose critic conflates concerns and misses domain-specific issues in tests, performance, and security.\n**Expected:** Two additional critics alongside the general one: (1) a Test-Validity critic that verifies behavioural correctness of tests, and (2) a Perf/Security critic that flags performance regressions and security risks. Prompts are structured so the shared/static prefix is maximized for prefix caching.\n**Actual:** Only the general-purpose critic exists; no targeted coverage for test correctness or perf/security, and prompt layout is not optimized for cache reuse.\n**Context:** Prompt design should place stable system/instruction content first and variable inputs (diff, target code) last to maximize prefix-cache hits across critic invocations."
     }
   ],
-  "updatedAt": "2026-06-03T07:28:45.260Z"
+  "updatedAt": "2026-06-03T07:39:33.772Z"
 }
