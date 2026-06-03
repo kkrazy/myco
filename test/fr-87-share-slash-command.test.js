@@ -340,10 +340,26 @@ t('static guard: index.js fileApiPreamble checks rec.admins + rec.viewers (priva
   const fnStart = src.indexOf('function fileApiPreamble');
   assert.ok(fnStart > 0, 'fileApiPreamble must exist in index.js');
   const window = src.slice(fnStart, fnStart + 2500);
-  assert.ok(/rec\.admins/.test(window),
-    'fileApiPreamble must check rec.admins (admin tier passes as owner-level)');
-  assert.ok(/rec\.viewers/.test(window),
-    'fileApiPreamble must check rec.viewers (fr-87: private-by-default)');
+  // fr-95 follow-up: bug-47 r3 delegated the per-tier checks to
+  // sessions.resolveAccessTier (a single source of truth — pre-r3 the
+  // ladder was reimplemented inline AND in sessions.js, and they
+  // silently drifted, breaking the labxnow/kkrazy global carve-out on
+  // the file-API while leaving WS attach working). After r3,
+  // fileApiPreamble calls resolveAccessTier(id, req.user) and the
+  // helper does the rec.admins/rec.viewers check. The CONTRACT this
+  // test wants to lock is that those tiers are still considered; the
+  // delegate-call is now the right marker.
+  assert.ok(/resolveAccessTier\s*\(/.test(window),
+    'fileApiPreamble must delegate access resolution to resolveAccessTier(id, req.user) — the single source of truth that checks rec.admins + rec.viewers (bug-47 r3 contract).');
+  // Verify the delegate actually checks the tiers.
+  const sessionsSrc = _read('server/src/sessions.js');
+  const helperStart = sessionsSrc.indexOf('function resolveAccessTier');
+  assert.ok(helperStart > 0, 'resolveAccessTier must exist in sessions.js (post bug-47 r3).');
+  const helperWindow = sessionsSrc.slice(helperStart, helperStart + 2500);
+  assert.ok(/rec\.admins|admins/.test(helperWindow),
+    'resolveAccessTier must check rec.admins (admin tier passes as owner-level).');
+  assert.ok(/rec\.viewers|viewers/.test(helperWindow),
+    'resolveAccessTier must check rec.viewers (fr-87: private-by-default).');
 });
 
 t('static guard: WS attach rejects authenticated non-owner non-admin non-viewer (fr-87 tightening)', () => {

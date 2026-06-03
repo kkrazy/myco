@@ -102,7 +102,14 @@ t('artifacts.js: broadcastArtifact helper exists + called from each route', () =
   const routes = ['/artifact/refresh', '/artifact/run', '/artifact/mark', '/artifact/vote', '/artifact/comment', '/artifact/item'];
   for (const route of routes) {
     const escaped = route.replace(/\//g, '\\/');
-    const re = new RegExp(`app\\.(?:post|delete)\\('/sessions/:id${escaped}'[\\s\\S]+?broadcastArtifact\\(`);
+    // fr-95 follow-up: include `patch` — the /artifact/item route was
+    // migrated to app.patch(...) (see artifacts.js:930, fr-46 edit-item
+    // route). Pre-fix the regex only matched post|delete and the test
+    // flagged the patch route as missing the broadcastArtifact call
+    // even though it's plainly there at artifacts.js:956. The actual
+    // behavior contract (broadcastArtifact must fire on every mutation
+    // route) is unchanged; only the test's verb list was stale.
+    const re = new RegExp(`app\\.(?:post|patch|delete)\\('/sessions/:id${escaped}'[\\s\\S]+?broadcastArtifact\\(`);
     assert.ok(re.test(src), 'broadcastArtifact not called from ' + route + ' route');
   }
 });

@@ -160,10 +160,23 @@ t('app.js: ArrowDown past most recent restores chatHistoryDraft + exits browsing
 t('app.js: any non-arrow keystroke while browsing exits browsing mode', () => {
   // There should be a SECOND keydown listener that handles "exit browsing
   // on any non-arrow content keystroke."
-  const exitIdx = APP.search(/if\s*\(\s*state\.chatHistoryIdx\s*==\s*null\s*\)\s*return/);
-  assert.ok(exitIdx > -1,
-    'a non-arrow keydown listener must check state.chatHistoryIdx and bail when not browsing');
-  const win = APP.slice(exitIdx, exitIdx + 1500);
+  //
+  // fr-95 follow-up: the original anchor (the FIRST occurrence of
+  // `chatHistoryIdx == null` return) was ambiguous — the primary arrow
+  // handler ALSO uses that guard inside its ArrowDown branch (line
+  // ~8482). The slice from THAT match's location doesn't reach the
+  // Escape branch (which lives in the SECOND, non-arrow listener at
+  // line ~8557). Anchor on the distinctive non-arrow-listener comment
+  // instead, which is unambiguous + locally adjacent to the Escape
+  // handler. The contract this test locks (the non-arrow keydown
+  // listener exists + ignores arrows + handles Escape by clearing the
+  // input) is unchanged.
+  const commentAnchor = APP.search(/non-arrow keystroke while browsing exits browsing mode/);
+  assert.ok(commentAnchor > -1,
+    'a non-arrow keydown listener must exist (anchored by its docstring comment).');
+  const win = APP.slice(commentAnchor, commentAnchor + 1500);
+  assert.ok(/state\.chatHistoryIdx\s*==\s*null/.test(win),
+    'the non-arrow listener must check state.chatHistoryIdx and bail when not browsing');
   assert.ok(/ArrowUp|ArrowDown/.test(win),
     'the listener must ignore ArrowUp/ArrowDown (handled by the primary listener)');
   assert.ok(/Escape/.test(win),

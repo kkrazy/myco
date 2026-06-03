@@ -2803,7 +2803,7 @@ test_chat_window() {
   # max-height IS a generous viewport-relative or large-px value,
   # overflow-y: auto kept as safety net, and a bug-50 marker
   # comment exists near the rule.
-  node_test_result test/bug-50-critic-message-full-display.test.js "test/bug-50-critic-message-full-display.test.js (3 cases)"
+  node_test_result test/bug-50-critic-message-full-display.test.js "test/bug-50-critic-message-full-display.test.js (6 cases)"
   # fr-81 r1: @kkrazy reported the remote /fr /bug /td flow shipped
   # short captures verbatim to GitHub — the word-count threshold that
   # made sense for local plan items (quick captures stay quick) was
@@ -2967,6 +2967,25 @@ test_chat_window() {
   # honesty marker, all 3 sentinel shapes preserved, scope
   # limitation, pitfalls section, td-33 r3 marker comment.
   node_test_result test/td-33-r3-stage-discipline-directive.test.js "test/td-33-r3-stage-discipline-directive.test.js (8 cases)"
+  # fr-95: specialized Test-Validity + Perf/Security critics with
+  # cache-optimized prompt layout. Two new critic specialty modules
+  # under server/src/critics/specialties/ (general + test-validity +
+  # perf-security), an orthogonal axis from the model wrappers in
+  # critics/{gemini,codex,custom}.js. critique.js fans out the three
+  # specialties on FINAL critiques (each gets its own
+  # specialty.systemSuffix appended to a shared systemPromptPrefix —
+  # cache-friendly layout, stable prefix first / variable input
+  # last), runs general-only on INTERMEDIATE (stage-done) critiques
+  # to keep checkpoints cheap, concatenates verdicts under markdown
+  # section headers, and broadcasts a single critique-review WS
+  # frame with per-specialty {id, name, isError, isAgreed}. The
+  # GENERAL critic still gates the run queue; specialty verdicts
+  # are informational. Locks: 3 specialty modules with correct
+  # exports + domain content, registry exports FINAL/INTERMEDIATE
+  # lists in correct order, critique.js fan-out loop + cache-
+  # friendly prompt layout + general-gates-queue contract + single
+  # broadcast with specialties metadata.
+  node_test_result test/fr-95-specialty-critics.test.js "test/fr-95-specialty-critics.test.js (15 cases)"
   # bug-52: critic must explain its reasoning on ✓ AGREED + user can
   # ask the critic to look into something specific via a textarea on
   # the verdict pane. Consolidates three user-reported observations:
@@ -2992,6 +3011,51 @@ test_chat_window() {
   # textarea + placeholder hint, retry handler reading textarea +
   # JSON Content-Type + body field, CSS for the three classes.
   node_test_result test/bug-52-critic-reasoning-and-user-prompt.test.js "test/bug-52-critic-reasoning-and-user-prompt.test.js (9 cases)"
+  # bug-53 (critic-popover textarea has no clear submit affordance):
+  # user-reported "When i ask question in the critic popover, not
+  # sure which button to click, it's not clear how the question is
+  # handled." Pre-fix the textarea was wired only to ↻ Retry on
+  # error/intermediate states, and was DEAD UI on the final-verdict
+  # state (no Discard/Fix/Accept button routed to /critique/retry).
+  # Even on error/intermediate, "Retry" reads as "redo what just
+  # happened" not "send my question." Fix: 💬 Ask Critic button in
+  # the actions row on ALL 3 states, rendered FIRST so it visually
+  # belongs to the textarea above. Disabled when textarea is empty
+  # (live-toggled by `input` listener); enabled on non-whitespace
+  # content. Same /critique/retry endpoint as bug-52's textarea
+  # wiring — server-side userPrompt handling was already in place.
+  # Purple/lavender visual identity (matches verdict-intermediate-
+  # badge) distinguishes it from Claude's amber ⚡ Ask Claude to Fix
+  # button (which routes to Claude, not the critic). Locks: button
+  # HTML constant, label/icon, initial-disabled, first-position in
+  # all 3 branches, input listener + trim-length toggle, click
+  # handler POST to /critique/retry with userPrompt, in-flight label,
+  # failure reset + alert, CSS rules for base/disabled, purple ident.
+  node_test_result test/bug-53-ask-critic-button.test.js "test/bug-53-ask-critic-button.test.js (11 cases)"
+  # bug-55 (verdict pane is now truly modal): user-reported "the
+  # critic popover is not modal, click outside of it made the popover
+  # disappear and no way to bring it back again." Pre-fix (bug-50 r2)
+  # the backdrop-click + Esc were wired for `isError || isIntermediate`
+  # states as an escape hatch, but the explicit ✗ Dismiss button on
+  # those states already provided that path, and once outside-click
+  # fired, state.critiqueReview was wiped — verdict gone forever, no
+  # recovery. bug-55 removes the entire safeToDismissByBackdrop
+  # branch; dismissal is now ALWAYS explicit (✗ Dismiss / ↻ Retry /
+  # 💬 Ask Critic / ✗ Discard / ⚡ Ask Claude to Fix / ✓ Accept).
+  # This brings the verdict pane in line with the rest of the app's
+  # modal pattern (bug-31 + bug-41 already removed backdrop-dismiss
+  # from the perm modal for the same reason). Locks: no
+  # safeToDismissByBackdrop declaration / gate, no backdrop click
+  # handler that checks e.target===panel, no document.addEventListener
+  # for keydown Esc inside _renderVerdictPanel, no dead dismissPanel
+  # helper, modal CSS envelope preserved (position:fixed inset:0),
+  # exactly 4 state-wipe sites (one per explicit button), bug-55
+  # comment block explicitly notes the bug-50 r2 supersession.
+  node_test_result test/bug-55-verdict-pane-truly-modal.test.js "test/bug-55-verdict-pane-truly-modal.test.js (8 cases)"
+  # NOTE: the "bug-53" reference in the comment block below is a
+  # stale label from an older HUD-stuck issue (eventually shipped
+  # under a different plan-item number). It is NOT the same bug as
+  # the bug-53 directly above this note.
   # bug-53: HUD active-step chip was stuck on "Analyze" most of the
   # time, only flickering between analyze/code/test. User-reported
   # under the bug-52 dispatch label (dispatch-label-drift) but it's

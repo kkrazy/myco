@@ -93,9 +93,18 @@ t('server/src/critique.js appends the loaded rules to the system prompt', () => 
   const src = _read('server/src/critique.js');
   // The systemPrompt must concat the rules content. Anchor: the prompt
   // string and the rules variable name should both appear near each other
-  // — projectCriticRules + systemPrompt within a tight window.
-  const sysAt = src.search(/const\s+systemPrompt\s*=/);
-  assert.ok(sysAt > -1, 'systemPrompt must still be defined in critique.js (anchor for the injection-site scan).');
+  // — projectCriticRules + systemPrompt(Prefix) within a tight window.
+  //
+  // fr-95 follow-up: the variable was renamed `systemPrompt` →
+  // `systemPromptPrefix` when fr-95 split the system prompt into a
+  // STABLE PREFIX (this one — shared across specialties) and a
+  // per-specialty TAIL (specialty.systemSuffix). The contract this
+  // test locks (projectCriticRules IS appended to the prompt that
+  // gets sent to the critic) is unchanged; only the variable name
+  // moved. Accept either name so the anchor doesn't break on
+  // semantic renames that preserve the contract.
+  const sysAt = src.search(/const\s+systemPrompt(?:Prefix)?\s*=/);
+  assert.ok(sysAt > -1, 'systemPrompt or systemPromptPrefix must still be defined in critique.js (anchor for the injection-site scan).');
   const win = src.slice(sysAt, sysAt + 1500);
   // The systemPrompt expression must reference the rules — either via a
   // template-literal interpolation of the rules variable or via string

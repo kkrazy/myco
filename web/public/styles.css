@@ -8964,6 +8964,30 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(139, 148, 158, 0.25);
   border-color: #b1bac4;
 }
+/* bug-53: 💬 Ask Critic button. Purple/lavender to signal "routes to
+   the critic (Gemini)" and visually distinguish from Claude's amber
+   ⚡ Ask Claude to Fix button (which routes to Claude, not the
+   critic). Matches the same purple as .verdict-intermediate-badge so
+   the "critic surface" color identity is consistent across the
+   verdict pane. Disabled state grays out heavily — the button only
+   activates when the textarea has non-whitespace content. */
+.verdict-btn-ask {
+  background: rgba(192, 132, 252, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(192, 132, 252, 0.4);
+}
+.verdict-btn-ask:hover:not(:disabled) {
+  background: rgba(192, 132, 252, 0.3);
+  border-color: #c084fc;
+  box-shadow: 0 0 8px rgba(192, 132, 252, 0.25);
+}
+.verdict-btn-ask:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: rgba(139, 148, 158, 0.08);
+  color: #6e7681;
+  border-color: rgba(139, 148, 158, 0.25);
+}
 .verdict-title.error {
   color: #ffa657;
 }

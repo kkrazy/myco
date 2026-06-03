@@ -4901,13 +4901,75 @@
       "addedAt": "2026-06-03T07:39:20.014Z",
       "addedBy": "labxnow",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "labxnow"
+      ],
       "comments": [
         {
           "id": "097fb04a4311",
           "user": "labxnow",
           "text": "Please suggest other specialized critic as you implement this from.",
           "ts": "2026-06-03T07:41:15.999Z"
+        },
+        {
+          "id": "a03301a49d35",
+          "user": "claude",
+          "text": "✓ success · 5016.7s · $18.2644 · 114↓/54170↑\n\n---\n\n## fr-95 — complete (analyze → code → verify)\n\n**Net result:**\n\n| Surface | Status |\n|---|---|\n| 3 specialty modules (`server/src/critics/specialties/{general,test-validity,perf-security}.js`) + registry | ✓ new |\n| `critique.js` fan-out + cache-friendly prompt layout (stable systemPromptPrefix + per-specialty suffix) | ✓ refactored |\n| `test/fr-95-specialty-critics.test.js` (15 cases) | ✓ green |\n| Wired into `test/test.sh` | ✓ |\n| Full suite (excluding docker-required stages — sandbox limitation) | ✓ green |\n\n**Design contract locked:**\n- Specialty ≠ Model — orthogonal axes (model from `getCritic(rec.criticModel)`, specialty fan-out within)\n- General critic gates the run queue; Test-Validity + Perf/Security are informational\n- Intermediate (stage-done) critiques fire **general-on…",
+          "ts": "2026-06-03T12:09:07.377Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T10:45:27.302Z"
+          }
+        },
+        {
+          "id": "35c7a6d41a15",
+          "user": "claude",
+          "text": "✓ success · 90.9s · $19.7378 · 8↓/5551↑\n\nFound the root cause. It's three things compounded — and it's a real gap in the §9 methodology I just landed, not just a \"you didn't see it\" thing.\n\n**The actual flow during fr-95:**\n\n1. You dispatched `[run:plan#fr-95]` → `session._activeRunItem` was set ✓\n2. My **first reply** (analyze stage) emitted `[stage: analyze done]`. The sentinel handler at `attach.js:190` fired correctly — but analyze had **ZERO source edits** (by the directive I just wrote). So `changedInfo.entries.length === 0` → log line `[td-33] stage-done(analyze) — no dirty files; skipping critique`. **No critic UI.**\n3. My first reply ended with `turn_result subtype=success`. `attach.js:361` ran: **`session._activeRunItem = null`**.\n4. Every subsequent turn — code-stage edits, verify-stage test writing, the full-suite …",
+          "ts": "2026-06-03T14:13:38.520Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T10:45:27.254Z"
+          }
+        },
+        {
+          "id": "b26bde10e945",
+          "user": "claude",
+          "text": "✓ success · 34.5s · $19.9061 · 6↓/2330↑\n\nReading the verdict carefully: **the critic agreed.** The body says \"✓ AGREED\" + \"Claude has fully implemented the fr-95 task ... excellent coverage for the new system.\" There's nothing flagged to address.\n\nThe \"Gemini flagged issues\" header + \"Please resolve them\" footer are UI boilerplate the chat surface wraps every critique with — they don't reflect the verdict's actual content. (Worth a separate bug-report: the UI should branch on `hasDisagreement` and say \"✓ Gemini agreed\" when `isAgreed`.)\n\n**What the critic specifically praised** (so you can see I read it carefully):\n1. Cache-optimized prompt structuring via stable `systemPromptPrefix` + per-specialty `systemSuffix`\n2. Identical `userPrompt` across the fan-out → prefix-cache reuse on the heavy tail\n3. Fan-out gating — all three …",
+          "ts": "2026-06-03T14:16:59.162Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T14:16:24.577Z"
+          }
+        },
+        {
+          "id": "c6f400eba8df",
+          "user": "claude",
+          "text": "✓ success · 15.9s · $20.0379 · 6↓/872↑\n\nSame outcome — ✓ AGREED, second time in a row. Critic specifically commended:\n\n- Specialty modules + fan-out wiring\n- Cache-optimized prompt (identical user-prompt across calls; specialty suffix on system instruction)\n- General-critic-only queue gating\n- Test coverage + \"good code hygiene\" for the stale-test repairs\n\nTwo ✓ AGREED verdicts back-to-back is strong signal — fr-95's design + implementation are sound. Per §9, no iteration needed.\n\nThis also confirms the gap I flagged works as predicted: each re-dispatch re-arms `_activeRunItem`, the single following turn gets critiqued, then it clears. The architecture is correct for single-turn dispatches; multi-turn implementations need either Option A or the manual-critique button.\n\n**Ready when you are.** Say the word for any of:\n\n- `comm…",
+          "ts": "2026-06-03T14:18:33.652Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T14:18:17.622Z"
+          }
+        },
+        {
+          "id": "6515af98b773",
+          "user": "claude",
+          "text": "✓ success · 892.8s · $20.6504 · 9↓/6238↑\n\nGot \"Other\" but no custom text — what's the approach you have in mind? A few things I want to make sure I capture before writing code:\n\n1. **The question's target.** When you type something in the textarea on a final verdict, who should answer it — the **Gemini critic** (re-run the critique with your question as priority focus), **Claude** (route as a chat message that Claude responds to), or **either** (you pick at submit time)?\n\n2. **Button placement.** Inline with the existing `Discard / Ask Claude to Fix / Accept Claude` row, or a separate submit button right next to the textarea (so the textarea + send button visibly belong together)?\n\n3. **Should `⚡ Ask Claude to Fix` change?** Today it sends the critic's full verdict to Claude as a \"go fix this\" prompt — no user text is included.…",
+          "ts": "2026-06-03T14:35:32.905Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T10:45:27.254Z"
+          }
+        },
+        {
+          "id": "e7362521c8fd",
+          "user": "claude",
+          "text": "✓ success · 943.7s · $26.2682 · 48↓/29522↑\n\n---\n\n## bug-53 — complete (analyze → code → verify)\n\n**What changed:**\n\n| File | Change |\n|---|---|\n| `web/public/app.js` | Added `askCriticBtn` constant, prepended to `actionsHtml` on all 3 states; click handler + live-enable input listener; updated bug-52 comment block |\n| `web/public/styles.css` | New `.verdict-btn-ask` ruleset — purple/lavender (matches `.verdict-intermediate-badge`), `:hover` glow, `:disabled` heavy gray |\n| `test/bug-53-ask-critic-button.test.js` | NEW — 11 cases, all green |\n| `test/test.sh` | Wire bug-53 test entry between bug-52 and the stale \"bug-53\" HUD comment; explanatory note added |\n| `test/td-33-stage-aware-critic-and-retry.test.js` | Bumped slice window 8000 → 12000 + broadened `actionsHtml = …` regex to accept `askCriticBtn +` prefix (clearly commented…",
+          "ts": "2026-06-03T14:52:17.512Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T10:45:27.254Z"
+          }
         }
       ],
       "meta": {
@@ -4915,8 +4977,91 @@
         "originalText": "other than the general purpose critic, add a separate critic focusing Test validity ensuring behaviour correctness and another critic on potential perf and security issue. Design the prompt in a way maximize prefix caching",
         "rewritten": true
       },
-      "description": "**Problem:** A single general-purpose critic conflates concerns and misses domain-specific issues in tests, performance, and security.\n**Expected:** Two additional critics alongside the general one: (1) a Test-Validity critic that verifies behavioural correctness of tests, and (2) a Perf/Security critic that flags performance regressions and security risks. Prompts are structured so the shared/static prefix is maximized for prefix caching.\n**Actual:** Only the general-purpose critic exists; no targeted coverage for test correctness or perf/security, and prompt layout is not optimized for cache reuse.\n**Context:** Prompt design should place stable system/instruction content first and variable inputs (diff, target code) last to maximize prefix-cache hits across critic invocations."
+      "description": "**Problem:** A single general-purpose critic conflates concerns and misses domain-specific issues in tests, performance, and security.\n**Expected:** Two additional critics alongside the general one: (1) a Test-Validity critic that verifies behavioural correctness of tests, and (2) a Perf/Security critic that flags performance regressions and security risks. Prompts are structured so the shared/static prefix is maximized for prefix caching.\n**Actual:** Only the general-purpose critic exists; no targeted coverage for test correctness or perf/security, and prompt layout is not optimized for cache reuse.\n**Context:** Prompt design should place stable system/instruction content first and variable inputs (diff, target code) last to maximize prefix-cache hits across critic invocations.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-03T12:09:07.377Z",
+          "startedAt": "2026-06-03T10:45:27.302Z",
+          "summary": "5016.7s · 114→54170 tok",
+          "result": "---\n\n## fr-95 — complete (analyze → code → verify)\n\n**Net result:**\n\n| Surface | Status |\n|---|---|\n| 3 specialty modules (`server/src/critics/specialties/{general,test-validity,perf-security}.js`) + registry | ✓ new |\n| `critique.js` fan-out + cache-friendly prompt layout (stable systemPromptPrefix + per-specialty suffix) | ✓ refactored |\n| `test/fr-95-specialty-critics.test.js` (15 cases) | ✓ green |\n| Wired into `test/test.sh` | ✓ |\n| Full suite (excluding docker-required stages — sandbox limitation) | ✓ green |\n\n**Design contract locked:**\n- Specialty ≠ Model — orthogonal axes (model from `getCritic(rec.criticModel)`, specialty fan-out within)\n- General critic gates the run queue; Test-Validity + Perf/Security are informational\n- Intermediate (stage-done) critiques fire **general-only** to keep multi-stage work affordable\n- Cache layout: stable `systemPromptPrefix` head + `userPrompt` (heavy ~10-65 KB tail) are bit-for-bit identical across the fan-out — Gemini 2.5 implicit prefix-cache hits on calls 2 + 3\n- Verdicts concatenated under `## <Specialty Name> critic` markdown headers → single `critique-review` WS broadcast (zero client changes needed today)\n\n**Honest cost flag:** triple Gemini calls per final critique. Mitigated by prefix-cache reuse on the heavy tail — wall cost estimated ~1.6× rather than 3×.\n\n**Pre-existing test staleness fixed as fr-95 follow-ups (all surgical, clearly commented):**\n1. `state-update.test.js` — regex didn't recognize `app.patch` (post bug-49 route migration)\n2. `fr-87-share-slash-command.test.js` — anchor moved to `resolveAccessTier` delegate (post bug-47 r3)\n3. `fr-89-critic-md.test.js` — accept either `systemPrompt` or `systemPromptPrefix` variable name\n4. `critic-gemini-calibration.test.js` — drop stale ≤2048 cap, pin floor ≥4096 + match named constant (post 2026-06-03 truncation fix)\n5. `fr-78-chat-input-history.test.js` — anchor on listener docstring instead of ambiguous first match\n\n**Other specialties surfaced in analyze ("
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T14:13:38.520Z",
+          "startedAt": "2026-06-03T10:45:27.254Z",
+          "summary": "90.9s · 8→5551 tok",
+          "result": "Found the root cause. It's three things compounded — and it's a real gap in the §9 methodology I just landed, not just a \"you didn't see it\" thing.\n\n**The actual flow during fr-95:**\n\n1. You dispatched `[run:plan#fr-95]` → `session._activeRunItem` was set ✓\n2. My **first reply** (analyze stage) emitted `[stage: analyze done]`. The sentinel handler at `attach.js:190` fired correctly — but analyze had **ZERO source edits** (by the directive I just wrote). So `changedInfo.entries.length === 0` → log line `[td-33] stage-done(analyze) — no dirty files; skipping critique`. **No critic UI.**\n3. My first reply ended with `turn_result subtype=success`. `attach.js:361` ran: **`session._activeRunItem = null`**.\n4. Every subsequent turn — code-stage edits, verify-stage test writing, the full-suite runs — happened with `_activeRunItem` already null.\n5. For all those later stage-done sentinels: handler at `attach.js:193` hit `if (!active || !active.itemId) ... return` → log `[td-33] stage-done(code) fired without active run item — skipping`. **No critic UI.**\n6. The **final** critique gate (`attach.js:298`) also gates on `active.itemId`. Same issue — by the time meaningful diffs accumulated, `_activeRunItem` was null. **No critic UI.**\n\n**So three reasons compounded:**\n\n| Stage | Why no critic fired |\n|---|---|\n| **analyze** | By design — zero source edits, no diff to critique |\n| **code** | `_activeRunItem` was already cleared after the analyze-stage `turn_result` |\n| **verify** | Same — multiple `turn_result`s had passed |\n| **final** | Same — `_activeRunItem` null on every subsequent `turn_result` |\n\n**The architectural gap I unintentionally introduced:**\n\nThe §9 3-stage methodology I just landed assumes the stage-done sentinels reliably fire critiques. But the gating in `attach.js:190-209` + the `_activeRunItem = null` clear at line 361 means:\n\n> **The 3-stage critic methodology only works if all three stages happen WITHIN A SINGLE agent turn.**\n\nThat's almost never realistic"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T14:16:59.162Z",
+          "startedAt": "2026-06-03T14:16:24.577Z",
+          "summary": "34.5s · 6→2330 tok",
+          "result": "Reading the verdict carefully: **the critic agreed.** The body says \"✓ AGREED\" + \"Claude has fully implemented the fr-95 task ... excellent coverage for the new system.\" There's nothing flagged to address.\n\nThe \"Gemini flagged issues\" header + \"Please resolve them\" footer are UI boilerplate the chat surface wraps every critique with — they don't reflect the verdict's actual content. (Worth a separate bug-report: the UI should branch on `hasDisagreement` and say \"✓ Gemini agreed\" when `isAgreed`.)\n\n**What the critic specifically praised** (so you can see I read it carefully):\n1. Cache-optimized prompt structuring via stable `systemPromptPrefix` + per-specialty `systemSuffix`\n2. Identical `userPrompt` across the fan-out → prefix-cache reuse on the heavy tail\n3. Fan-out gating — all three on final, general-only on intermediate\n4. Queue gating tied solely to the general critic's verdict\n5. Test coverage on `fr-95-specialty-critics.test.js`\n\nThat's the exact contract I locked in analyze + code. Per the §9 auto-iterate clause, no iteration needed when the critic agrees.\n\n**Bonus signal — the gap I flagged is real:** this critique fired because you just re-dispatched `[run:plan#fr-95]`, which set `session._activeRunItem` again, and the turn that produced my reply hit the critique gate before `_activeRunItem` cleared. That's exactly the single-turn happy path. The fact that none of the ~15 turns of actual fr-95 implementation work got critiqued — until you re-dispatched specifically to trigger it — is empirical confirmation that the methodology degrades across multi-turn work the way I described.\n\n**Awaiting your next instruction.** Options on the table:\n1. **Commit + push fr-95 to origin/main** (no deploy without explicit ask) — fr-95 work is critic-approved + all tests green\n2. **File td-34** (\"3-stage critic gate breaks across multi-turn work\") so the gap is tracked\n3. **Ship Option A inline** (don't clear `_activeRunItem` until `[stage: verify done]` or explicit `/rundo"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T14:18:33.652Z",
+          "startedAt": "2026-06-03T14:18:17.622Z",
+          "summary": "15.9s · 6→872 tok",
+          "result": "Same outcome — ✓ AGREED, second time in a row. Critic specifically commended:\n\n- Specialty modules + fan-out wiring\n- Cache-optimized prompt (identical user-prompt across calls; specialty suffix on system instruction)\n- General-critic-only queue gating\n- Test coverage + \"good code hygiene\" for the stale-test repairs\n\nTwo ✓ AGREED verdicts back-to-back is strong signal — fr-95's design + implementation are sound. Per §9, no iteration needed.\n\nThis also confirms the gap I flagged works as predicted: each re-dispatch re-arms `_activeRunItem`, the single following turn gets critiqued, then it clears. The architecture is correct for single-turn dispatches; multi-turn implementations need either Option A or the manual-critique button.\n\n**Ready when you are.** Say the word for any of:\n\n- `commit` — stage + commit fr-95 (no push, no deploy)\n- `commit + push` — commit + push to origin/main (no deploy)\n- `td-34` — file the multi-turn-critic-gap follow-up\n- `option A` — ship the `_activeRunItem` lifetime fix as a fr-95 r1 follow-up before commit\n- `deploy mycodev` / `deploy myco.labxnow.ai` — explicit deploy"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T14:35:32.905Z",
+          "startedAt": "2026-06-03T10:45:27.254Z",
+          "summary": "892.8s · 9→6238 tok",
+          "result": "Got \"Other\" but no custom text — what's the approach you have in mind? A few things I want to make sure I capture before writing code:\n\n1. **The question's target.** When you type something in the textarea on a final verdict, who should answer it — the **Gemini critic** (re-run the critique with your question as priority focus), **Claude** (route as a chat message that Claude responds to), or **either** (you pick at submit time)?\n\n2. **Button placement.** Inline with the existing `Discard / Ask Claude to Fix / Accept Claude` row, or a separate submit button right next to the textarea (so the textarea + send button visibly belong together)?\n\n3. **Should `⚡ Ask Claude to Fix` change?** Today it sends the critic's full verdict to Claude as a \"go fix this\" prompt — no user text is included. If your typed question is also meant to flow there, that wiring needs to change too.\n\nIf you'd rather sketch the UX in your own words instead of answering these point-by-point, that works too — just describe what you'd expect to happen when you type a question and hit submit, and I'll work backwards from there."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T14:52:17.512Z",
+          "startedAt": "2026-06-03T10:45:27.254Z",
+          "summary": "943.7s · 48→29522 tok",
+          "result": "---\n\n## bug-53 — complete (analyze → code → verify)\n\n**What changed:**\n\n| File | Change |\n|---|---|\n| `web/public/app.js` | Added `askCriticBtn` constant, prepended to `actionsHtml` on all 3 states; click handler + live-enable input listener; updated bug-52 comment block |\n| `web/public/styles.css` | New `.verdict-btn-ask` ruleset — purple/lavender (matches `.verdict-intermediate-badge`), `:hover` glow, `:disabled` heavy gray |\n| `test/bug-53-ask-critic-button.test.js` | NEW — 11 cases, all green |\n| `test/test.sh` | Wire bug-53 test entry between bug-52 and the stale \"bug-53\" HUD comment; explanatory note added |\n| `test/td-33-stage-aware-critic-and-retry.test.js` | Bumped slice window 8000 → 12000 + broadened `actionsHtml = …` regex to accept `askCriticBtn +` prefix (clearly commented as bug-53 follow-up) |\n| `_myco_/plan.json` | Added bug-53 plan-item |\n\n**User contract delivered:**\n\n> \"When i ask question in the critic popover, not sure which button to click, it's not clear how the question is handled.\"\n\nAfter this fix, every verdict state shows `💬 Ask Critic` as the leftmost button — directly below the textarea, purple-themed to read as \"critic territory,\" disabled until the user types real content, enabled the moment they do, label changes to `💬 Asking…` during the in-flight request. The critic receives the question via the existing `[USER FOLLOW-UP — give this priority over the generic review]` block and addresses it alongside its standard review.\n\n**Action-row after fix:**\n\n| State | Buttons |\n|---|---|\n| error | `💬 Ask Critic`, `↻ Retry`, `✗ Dismiss` |\n| intermediate | `💬 Ask Critic`, `↻ Retry`, `✓ Dismiss` |\n| **final** | `💬 Ask Critic`, `✗ Discard`, `⚡ Ask Claude to Fix`, `✓ Accept Claude` |\n\n**Not done (intentional):**\n- No commit. No push. No deploy. (Per CLAUDE.md commit-only-when-asked + Deployment §0.)\n- `⚡ Ask Claude to Fix` button unchanged — different target (Claude vs. critic). User didn't ask to change it.\n- Final-state textarea is cleared "
+        }
+      ]
+    },
+    {
+      "id": "bug-53",
+      "text": "Critic-popover textarea has no submit affordance — the final-verdict state shows the 'Ask the critic to look into something specific' textarea but none of the three buttons (✗ Discard / ⚡ Ask Claude to Fix / ✓ Accept Claude) route the typed question to the critic. Even on error/intermediate states where the wiring exists, the ↻ Retry button label doesn't signal 'this is where your question goes' (only updates to 🔍 Asking… during the in-flight request). User-reported: 'When i ask question in the critic popover, not sure which button to click, it's not clear how the question is handled.' Fix: add a 💬 Ask Critic button to the actions row on all three states, wired to POST /critique/retry with the textarea content as userPrompt. The critic then addresses the question alongside its standard review (the existing [USER FOLLOW-UP] prompt block in critique.js already implements 'address together with other areas' semantics).",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-03T14:37:18.380Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "bug-54",
+      "text": "Critic popover stays open after being handled on another device/user",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-03T14:43:11.301Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the critic popover should disappear if it's handled by other users or from another device, right now it can stuck while it's already been handled somewhere else.",
+        "rewritten": true
+      },
+      "description": "**Problem:** The critic popover can get stuck open even after the underlying item has already been handled elsewhere.\n**Expected:** Popover should auto-dismiss when the critic is handled by another user or from another device.\n**Actual:** Popover remains visible and actionable despite the critic no longer being open."
+    },
+    {
+      "id": "bug-55",
+      "text": "Critic-popover dismisses on outside-click + Esc, no recovery path. User-reported (verbatim): 'the critic popover is not modal, click outside of it made the popover disappear and no way to bring it back again'. Pre-fix: bug-50 r2 wired backdrop+Esc dismissal for `isError || isIntermediate` states with the intent of giving stuck users an 'escape hatch' — but the explicit Dismiss button already provides that path, and once dismissed `state.critiqueReview = null` wipes the verdict (no way to recall it). Fix: remove the safeToDismissByBackdrop branch entirely. The popover becomes truly modal in all states; dismissal is only via the explicit buttons (Dismiss / Discard / Accept / etc.). Eliminates the accidental-dismiss footgun on intermediate/error verdicts.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-03T14:55:12.827Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-06-03T07:39:33.772Z"
+  "updatedAt": "2026-06-03T14:55:12.827Z"
 }

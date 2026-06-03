@@ -85,13 +85,37 @@ t('critics/gemini.js: temperature is conservative (≤ 0.4 — adversarial revie
     `temperature must be ≤ 0.4 for adversarial code review — got ${temp}. Gemini's default 1.0 is creative-tuned and invents fake API methods; 0.0-0.3 keeps the critic deterministic.`);
 });
 
-t('critics/gemini.js: maxOutputTokens is capped (≤ 2048 — concise verdicts only)', () => {
+t('critics/gemini.js: maxOutputTokens is declared with a sensible floor + ceiling', () => {
   const src = _read('server/src/critics/gemini.js');
-  const m = src.match(/maxOutputTokens:\s*(\d+)/);
-  assert.ok(m, 'maxOutputTokens must be declared');
-  const max = parseInt(m[1], 10);
-  assert.ok(max <= 2048,
-    `maxOutputTokens must be ≤ 2048 to force concise verdicts — got ${max}. Long outputs are hallucination surface; the critic should bullet issues, not write essays.`);
+  // fr-95 follow-up: the 2026-06-03 calibration bumped the cap from
+  // 1024 → 8192 and moved it behind a named constant
+  // CRITIC_MAX_OUTPUT_TOKENS = Math.max(4096, parseInt(env || '', 10)
+  // || 8192). The original "≤ 2048" baseline-pin was the PRE-fix
+  // value; pinning it now would re-introduce the truncation bug that
+  // returned bare "✓ AGREED" preambles on large diffs. The CURRENT
+  // contract: the cap must be HIGH enough to fit detailed verdicts
+  // (so >= 4096) and not so high that it invites essay-length output
+  // (so <= 65536, well below model's actual hard cap). Accept either
+  // literal-digit assignment or the named constant.
+  const litMatch = src.match(/maxOutputTokens:\s*(\d+)/);
+  // For the constant form: anchor on the Math.max floor as the first
+  // numeric argument. The full shape we expect (from the 2026-06-03
+  // truncation fix):
+  //   const CRITIC_MAX_OUTPUT_TOKENS = Math.max(
+  //     4096,
+  //     parseInt(process.env.MYCO_CRITIC_MAX_TOKENS || '', 10) || 8192,
+  //   );
+  // Capture the floor (the first numeric literal inside Math.max) +
+  // the default (the trailing `|| <N>` fallback after the parseInt).
+  // The floor is what gates "did we regress back to truncation?".
+  const constMatch = src.match(/CRITIC_MAX_OUTPUT_TOKENS\s*=\s*Math\.max\s*\(\s*(\d+)/);
+  const value = litMatch ? parseInt(litMatch[1], 10) : (constMatch ? parseInt(constMatch[1], 10) : null);
+  assert.ok(value !== null,
+    'maxOutputTokens must be declared (literal digit OR via CRITIC_MAX_OUTPUT_TOKENS named constant).');
+  assert.ok(value >= 4096,
+    `maxOutputTokens must be >= 4096 (the 2026-06-03 floor that fixed Gemini preamble truncation on large diffs) — got ${value}.`);
+  assert.ok(value <= 65536,
+    `maxOutputTokens must be <= 65536 — got ${value}. Beyond that we're inviting essay-length verdicts and hallucination surface.`);
 });
 
 // ── prompt INSUFFICIENT INFORMATION opt-out ──

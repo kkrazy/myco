@@ -2,6 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const sessionsMod = require('./sessions');
 const { getCritic } = require('./critics');
+// fr-95: specialty registry — orthogonal axis from the model registry
+// above. See critics/specialties/index.js for the fan-out order +
+// gating contract.
+const { FINAL_SPECIALTIES, INTERMEDIATE_SPECIALTIES } = require('./critics/specialties');
 const runQueue = require('./runQueue');
 
 // td-33 r2: context enrichment caps. User-reported (verbatim):
@@ -246,6 +250,16 @@ async function triggerGeminiCritique(sessionId, session, item, diff, claudeOutpu
   //   · The "✓ AGREED" sentinel stays exactly the same string —
   //     `isAgreed = critique.includes('✓ AGREED')` is the gate that
   //     decides whether the run-queue auto-advances.
+  //
+  // fr-95 cache-optimized layout. `basePrompt` is the STABLE PREFIX of
+  // the system instruction across all three specialties in a single
+  // fan-out — the bit that's identical for general / test-validity /
+  // perf-security. The per-specialty `systemSuffix` (~500 chars each)
+  // is appended at the TAIL of the system instruction, NOT
+  // interleaved with the heavy user-prompt body. The user prompt
+  // (file context + history + diff + claudeOutput + follow-up) is
+  // bit-for-bit identical across the fan-out, so Gemini 2.5's prefix
+  // cache hits the heavy ~10-65 KB tail on calls 2 and 3.
   const basePrompt = `You are an elite, independent QA and security auditor.
 Review the provided git diff against the user's original task.
 Compare Claude's changes to the original requirement.
@@ -265,7 +279,12 @@ If you agree with Claude's implementation, write "✓ AGREED" on the first line,
   // rec.mainProject (the designated project root for this session)
   // or falls back to legacy auto-detect.
   const projectCriticRules = rec ? _loadProjectCriticRules(rec) : '';
-  const systemPrompt = projectCriticRules
+  // fr-95: `systemPromptPrefix` is the stable head shared across every
+  // specialty in the fan-out. The variable specialty.systemSuffix gets
+  // appended per call below — the prefix stays bit-for-bit identical
+  // so prefix-caching at the model layer (Gemini 2.5 implicit) hits
+  // on calls 2 + 3 of the fan-out.
+  const systemPromptPrefix = projectCriticRules
     ? `${basePrompt}\n\n=== Project-specific critic rules (from _myco_/critic.md) ===\nThese extend, but never override, the above instructions.\n\n${projectCriticRules}`
     : basePrompt;
 
@@ -305,14 +324,49 @@ ${diff}
 ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
 
   const label = isIntermediate ? `intermediate-${stage}` : 'final';
-  console.log(`[critique] Invoking critic "${critic.name}" (${critic.id}) for item ${item.id} (${label}${isRetry ? ', retry' : ''})...`);
 
-  // Run the critique stateless completion
-  const critique = await critic.runCritique(userPrompt, systemPrompt);
-  const isError = _looksLikeCriticError(critique);
-  const isAgreed = !isError && critique.includes('✓ AGREED');
+  // fr-95: specialty fan-out. Intermediate critiques run general-only
+  // (cost containment — 3 stages × 3 specialties = 9 calls per plan
+  // item is too noisy at checkpoints). Final critiques fan out across
+  // all three specialties. The GENERAL specialty always runs first
+  // because its verdict gates the run queue — its isAgreed result
+  // decides whether the queue pauses (specialty critics are
+  // INFORMATIONAL by design).
+  const specialties = isIntermediate ? INTERMEDIATE_SPECIALTIES : FINAL_SPECIALTIES;
+  const sectionVerdicts = [];
+  let generalIsError = false;
+  let generalIsAgreed = false;
+  for (const specialty of specialties) {
+    const systemPromptForSpecialty = systemPromptPrefix + specialty.systemSuffix;
+    console.log(`[critique] Invoking critic "${critic.name}" (${critic.id}) — specialty=${specialty.id} for item ${item.id} (${label}${isRetry ? ', retry' : ''})...`);
+    const verdict = await critic.runCritique(userPrompt, systemPromptForSpecialty);
+    const specialtyIsError = _looksLikeCriticError(verdict);
+    const specialtyIsAgreed = !specialtyIsError && verdict.includes('✓ AGREED');
+    console.log(`[critique] "${critic.name}" specialty=${specialty.id} complete for ${item.id} (${label}). Agreement=${specialtyIsAgreed} isError=${specialtyIsError}`);
+    sectionVerdicts.push({ specialty, verdict, isError: specialtyIsError, isAgreed: specialtyIsAgreed });
+    if (specialty.id === 'general') {
+      generalIsError = specialtyIsError;
+      generalIsAgreed = specialtyIsAgreed;
+    }
+  }
 
-  console.log(`[critique] "${critic.name}" critique complete for ${item.id} (${label}). Agreement=${isAgreed} isError=${isError}`);
+  // Concatenate verdicts under section headers for the single broadcast.
+  // Single-specialty (intermediate) runs render flat — no header — so
+  // the pre-fr-95 verdict pane behavior is preserved at checkpoints.
+  let critique;
+  if (sectionVerdicts.length === 1) {
+    critique = sectionVerdicts[0].verdict;
+  } else {
+    critique = sectionVerdicts
+      .map(({ specialty, verdict }) => `## ${specialty.name} critic\n\n${verdict}`)
+      .join('\n\n---\n\n');
+  }
+
+  // Queue gating + error surface follows the GENERAL critic only. A
+  // perf-security flag is informational; a general-critic flag is the
+  // one that pauses the queue.
+  const isError = generalIsError;
+  const isAgreed = generalIsAgreed;
 
   // td-33 r1: pause the run queue NOW (only for non-error, non-
   // intermediate critiques). Error verdicts intentionally leave the
@@ -328,6 +382,9 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
   // lets the client render a [Checkpoint: <stage>] badge + skip the
   // run-queue-pause-banner. The diff is included so a future client
   // could expose "diff at checkpoint" if useful.
+  // fr-95: `specialties` carries per-specialty isAgreed/isError so a
+  // future client can render per-section badges; today's pane just
+  // displays the concatenated markdown body.
   session.emit('state-update', {
     kind: 'critique-review',
     itemId: item.id,
@@ -340,6 +397,12 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
     diff: diff,
     criticName: critic.name,
     criticId: critic.id,
+    specialties: sectionVerdicts.map(({ specialty, isError: e, isAgreed: a }) => ({
+      id: specialty.id,
+      name: specialty.name,
+      isError: e,
+      isAgreed: a,
+    })),
   });
 }
 

@@ -7670,6 +7670,24 @@ function _renderVerdictPanel() {
   //     queue isn't paused, so there's nothing to accept; user just
   //     dismisses the checkpoint).
   //   · Final (current behavior): Discard / Fix / Accept trio.
+  // bug-53: 💬 Ask Critic button is rendered FIRST in the actions row
+  // on EVERY state — error / intermediate / final. It's the obvious
+  // affordance for sending the textarea content to the critic (vs.
+  // the existing `↻ Retry` on error/intermediate which doubles for
+  // that but doesn't visually communicate "this is where my question
+  // goes"; final state previously had NO button at all that routed
+  // the textarea — the textarea was dead UI there).
+  //
+  // Disabled-when-empty state is the "type a question above to
+  // enable" affordance — the button visibly hints at the textarea's
+  // purpose even when no question is typed yet. Live-toggled by an
+  // input listener on the textarea (wired after innerHTML below).
+  //
+  // The button routes to the SAME endpoint as ↻ Retry
+  // (POST /critique/retry with { userPrompt }) — server-side
+  // userPrompt handling was already shipped in bug-52. Adding this
+  // button is pure UI plumbing; no server changes needed.
+  const askCriticBtn = `<button class="verdict-btn verdict-btn-ask" disabled title="Type a question above to enable — the critic re-fires and addresses your question alongside its standard review">💬 Ask Critic</button>`;
   let actionsHtml;
   if (isError) {
     // td-33 r1 (Gemini critique catch): on error give the user an
@@ -7679,13 +7697,16 @@ function _renderVerdictPanel() {
     // move on (queue isn't paused on error per the server-side
     // gate, so dismissing just clears the panel and they're back
     // to a clean state).
-    actionsHtml = `<button class="verdict-btn verdict-btn-retry" title="Re-fire the critique against the same diff (use this on Gemini 503 / network errors)">↻ Retry</button>` +
+    actionsHtml = askCriticBtn +
+      `<button class="verdict-btn verdict-btn-retry" title="Re-fire the critique against the same diff (use this on Gemini 503 / network errors)">↻ Retry</button>` +
       `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss the error panel and continue without a critic verdict (queue is not paused on critic errors)">✗ Dismiss</button>`;
   } else if (isIntermediate) {
-    actionsHtml = `<button class="verdict-btn verdict-btn-retry" title="Re-fire the checkpoint critique against the same diff">↻ Retry</button>` +
+    actionsHtml = askCriticBtn +
+      `<button class="verdict-btn verdict-btn-retry" title="Re-fire the checkpoint critique against the same diff">↻ Retry</button>` +
       `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss this checkpoint and continue waiting for the final critique">✓ Dismiss</button>`;
   } else {
-    actionsHtml = `<button class="verdict-btn verdict-btn-discard" title="Discard git changes and abort task">✗ Discard</button>` +
+    actionsHtml = askCriticBtn +
+      `<button class="verdict-btn verdict-btn-discard" title="Discard git changes and abort task">✗ Discard</button>` +
       `<button class="verdict-btn verdict-btn-fix" title="Ask Claude to fix issues flagged by Gemini">⚡ Ask Claude to Fix</button>` +
       `<button class="verdict-btn verdict-btn-accept" title="Accept Claude's changes and resume the run queue">✓ Accept Claude</button>`;
   }
@@ -7695,10 +7716,19 @@ function _renderVerdictPanel() {
 
   // bug-52: user-prompt textarea on the verdict pane. The user types
   // a follow-up concern (e.g. "did you check the offline case?") and
-  // clicks the Retry button (or 🔍 Re-ask) → the next critique is
-  // steered to address that specific question. Always present (not
-  // gated on a state flag) so the user can opt in any time without
-  // additional UI choreography. Empty textarea = standard retry.
+  // the next critique is steered to address that specific question.
+  // Always present (not gated on a state flag) so the user can opt
+  // in any time without additional UI choreography.
+  //
+  // bug-53 (UX clarification): the textarea now visibly belongs to
+  // the `💬 Ask Critic` button rendered FIRST in the actions row on
+  // every state — pre-bug-53 the textarea was wired to the existing
+  // `↻ Retry` button on error/intermediate states (functional but
+  // unclear: "Retry" reads as "redo what just happened," not "send
+  // my question"), and was DEAD UI on the final-verdict state since
+  // no Discard/Fix/Accept button routed to /critique/retry. User
+  // reported (verbatim): "not sure which button to click, it's not
+  // clear how the question is handled."
   const userPromptHtml =
     `<div class="verdict-user-prompt-wrap">` +
       `<label for="verdict-user-prompt-input" class="verdict-user-prompt-label">Ask the critic to look into something specific (optional):</label>` +
@@ -7726,34 +7756,30 @@ function _renderVerdictPanel() {
     </div>
   `;
 
-  // bug-50 r2: backdrop click dismisses ONLY when there's a safe
-  // dismiss path (error or intermediate critiques — both have a
-  // Dismiss action that's a no-op for state). For final critiques
-  // (Discard / Fix / Accept), click-on-backdrop is a no-op so the
-  // user can't accidentally lose the verdict without choosing a
-  // path. Same applies to the Esc key.
-  const safeToDismissByBackdrop = isError || isIntermediate;
-  const dismissPanel = () => {
-    state.awaitingVerdict = false;
-    state.critiqueReview = null;
-    _renderVerdictPanel();
-  };
-  if (safeToDismissByBackdrop) {
-    panel.addEventListener('click', (e) => {
-      // Only dismiss when the click landed on the panel itself
-      // (the backdrop), NOT on the inner content card or its children.
-      if (e.target === panel) dismissPanel();
-    });
-    // Esc key handler — registered ONCE per render so it's torn down
-    // when the panel re-renders or hides.
-    const escHandler = (e) => {
-      if (e.key === 'Escape') {
-        document.removeEventListener('keydown', escHandler);
-        dismissPanel();
-      }
-    };
-    document.addEventListener('keydown', escHandler);
-  }
+  // bug-55 SUPERSEDES bug-50 r2: the verdict pane is now TRULY modal.
+  // No outside-click dismiss. No Esc dismiss. The only way to close
+  // the popover is the explicit buttons inside it (✗ Dismiss /
+  // ↻ Retry / 💬 Ask Critic / ✗ Discard / ⚡ Ask Claude to Fix /
+  // ✓ Accept Claude — depending on state).
+  //
+  // User-reported (bug-55, verbatim):
+  //   "the critic popover is not modal, click outside of it made the
+  //    popover disappear and no way to bring it back again"
+  //
+  // Pre-fix (bug-50 r2): backdrop-click + Esc were wired for
+  // `isError || isIntermediate` states as an "escape hatch" for stuck
+  // users. But the explicit ✗ Dismiss button on those states ALREADY
+  // provides that path, and once outside-click fired, the verdict
+  // was wiped from state — gone forever, no recovery. The escape
+  // hatch became a footgun. bug-55 removes the entire
+  // safeToDismissByBackdrop branch; dismissal is now ALWAYS explicit.
+  //
+  // This brings the verdict pane in line with the rest of the app's
+  // modal pattern — bug-31 + bug-41 already removed backdrop-dismiss
+  // from the permission-prompt modal for the same reason
+  // (accidental-dismiss + no recovery path). bug-50 r2 was the
+  // outlier; bug-55 reconciles it.
+  // (Intentionally no listeners registered here — the pane is modal.)
 
   const btnDiscard = panel.querySelector('.verdict-btn-discard');
   const btnFix = panel.querySelector('.verdict-btn-fix');
@@ -7789,6 +7815,54 @@ function _renderVerdictPanel() {
         btnRetry.disabled = false;
         btnRetry.textContent = '↻ Retry';
         alert('Retry failed: ' + (err && err.message || err));
+      }
+    });
+  }
+  // bug-53: 💬 Ask Critic button — re-fires the critic with the
+  // textarea content as the priority focus question. Same endpoint as
+  // ↻ Retry (POST /critique/retry with { userPrompt }) — server-side
+  // userPrompt handling was already shipped in bug-52. The only
+  // difference vs. ↻ Retry is the labeling + the disabled-when-empty
+  // affordance, which together solve the bug-53 confusion ("not sure
+  // which button to click, it's not clear how the question is
+  // handled"). Final-verdict state has no ↻ Retry button at all, so
+  // 💬 Ask Critic is the SOLE consumer of the textarea there.
+  const btnAsk = panel.querySelector('.verdict-btn-ask');
+  const taAsk = panel.querySelector('#verdict-user-prompt-input');
+  if (btnAsk && taAsk) {
+    // Live-enable: disabled when textarea is empty (trimmed), enabled
+    // when non-empty. Toggled on every `input` event. Initial state
+    // is disabled (set via the inline `disabled` attribute in the
+    // actionsHtml template) — typing the first non-whitespace char
+    // enables it.
+    const syncAskBtnEnabled = () => {
+      btnAsk.disabled = taAsk.value.trim().length === 0;
+    };
+    taAsk.addEventListener('input', syncAskBtnEnabled);
+    syncAskBtnEnabled();   // run once in case the textarea was pre-populated
+    btnAsk.addEventListener('click', async () => {
+      const userPrompt = taAsk.value.trim();
+      if (!userPrompt) return;                       // shouldn't reach (button disabled), defensive
+      btnAsk.disabled = true;
+      btnAsk.textContent = '💬 Asking…';
+      try {
+        const res = await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/critique/retry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userPrompt }),
+        });
+        if (!res || !res.ok) {
+          const body = await (res ? res.json().catch(() => ({})) : Promise.resolve({}));
+          btnAsk.disabled = false;
+          btnAsk.textContent = '💬 Ask Critic';
+          alert('Ask Critic failed: ' + (body && body.error ? body.error : 'unknown error'));
+        }
+        // Success → next critique-review broadcast re-renders the
+        // panel; nothing else to do here.
+      } catch (err) {
+        btnAsk.disabled = false;
+        btnAsk.textContent = '💬 Ask Critic';
+        alert('Ask Critic failed: ' + (err && err.message || err));
       }
     });
   }

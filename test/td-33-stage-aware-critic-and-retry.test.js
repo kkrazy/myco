@@ -232,7 +232,7 @@ t('web/public/app.js: _renderVerdictPanel renders ↻ Retry on review.isError', 
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
   assert.ok(at > -1, '_renderVerdictPanel must exist.');
-  const body = app.slice(at, at + 8000);
+  const body = app.slice(at, at + 12000);
   assert.ok(/verdict-btn-retry/.test(body),
     '_renderVerdictPanel must render .verdict-btn-retry when review.isError (td-33 A).');
   assert.ok(/review\.isError/.test(body),
@@ -242,7 +242,7 @@ t('web/public/app.js: _renderVerdictPanel renders ↻ Retry on review.isError', 
 t('web/public/app.js: Retry click POSTs to /sessions/:id/critique/retry', () => {
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
-  const body = app.slice(at, at + 8000);
+  const body = app.slice(at, at + 12000);
   assert.ok(/\/sessions\/\$\{[^}]+\}\/critique\/retry/.test(body),
     'Retry click handler must POST to /sessions/:id/critique/retry (td-33 A wiring).');
   assert.ok(/method:\s*['"]POST['"]/.test(body),
@@ -252,7 +252,7 @@ t('web/public/app.js: Retry click POSTs to /sessions/:id/critique/retry', () => 
 t('web/public/app.js: _renderVerdictPanel renders [Checkpoint: <stage>] badge on review.isIntermediate', () => {
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
-  const body = app.slice(at, at + 8000);
+  const body = app.slice(at, at + 12000);
   assert.ok(/review\.isIntermediate/.test(body),
     '_renderVerdictPanel must branch on review.isIntermediate (td-33 B).');
   assert.ok(/verdict-intermediate-badge/.test(body),
@@ -289,13 +289,19 @@ t('server/src/critique.js r1: queue-pause runs AFTER the critic returns + skips 
 t('web/public/app.js r1: error path renders BOTH ↻ Retry AND ✗ Dismiss (no stuck-on-Retry state)', () => {
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
-  const body = app.slice(at, at + 8000);
+  const body = app.slice(at, at + 12000);
   // Anchor on the actionsHtml-assignment in the isError branch (the
   // other `if (isError) {` block earlier in the function just sets
   // titleText). Slice from `actionsHtml =` to the next `actionsHtml =`
   // (which is the next branch) so we exclusively read the error-path
   // assignment.
-  const actionsHtmlAssignments = [...body.matchAll(/actionsHtml\s*=\s*`/g)];
+  // bug-53 follow-up: the assignments now lead with the
+  // `askCriticBtn +` constant prefix instead of an inline backtick
+  // template (bug-53 added the 💬 Ask Critic button as the first
+  // item in every actionsHtml branch). The contract this test
+  // locks (error branch must include ↻ Retry + ✗ Dismiss) is
+  // unchanged; only the assignment prefix moved. Accept either form.
+  const actionsHtmlAssignments = [...body.matchAll(/actionsHtml\s*=\s*(?:`|askCriticBtn\s*\+)/g)];
   assert.ok(actionsHtmlAssignments.length >= 3,
     `expected 3 actionsHtml assignments (error / intermediate / final branches); got ${actionsHtmlAssignments.length}.`);
   // First assignment = error branch, second = intermediate, third = final.

@@ -78,36 +78,19 @@ t('web/public/styles.css r2: .verdict-panel-content child holds the visual card 
     '.verdict-panel-content must declare overflow-y: auto so a truly enormous critique scrolls inside the modal.');
 });
 
-t('web/public/app.js r2: _renderVerdictPanel wraps the contents in .verdict-panel-content + wires Esc/backdrop dismissal for error+intermediate verdicts', () => {
+t('web/public/app.js r2: _renderVerdictPanel wraps the contents in .verdict-panel-content (modal layout — bug-55 supersedes the Esc/backdrop wiring)', () => {
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
   assert.ok(at > -1);
-  const body = app.slice(at, at + 9000);
+  const body = app.slice(at, at + 12000);
   assert.ok(/verdict-panel-content/.test(body),
-    '_renderVerdictPanel must wrap the rendered contents in a .verdict-panel-content child div (r2 — modal layout).');
-  // Esc key handler + click-on-backdrop must exist for the safe-
-  // dismiss paths (error + intermediate critiques have nothing
-  // mutable to gate).
-  assert.ok(/Escape/.test(body),
-    '_renderVerdictPanel must handle the Escape key for safe-dismissable verdict types (error + intermediate) so the user can close the modal with the keyboard (r2).');
-  // Backdrop click-target check: a `if (e.target === panel)` pattern
-  // is the standard "click landed on outer wrapper, not inner card".
-  assert.ok(/e\.target\s*===\s*panel|target\s*===\s*panel/.test(body),
-    '_renderVerdictPanel must dismiss when click.target === panel (the backdrop) — clicks on the inner content stay no-op (r2).');
-});
-
-t('web/public/app.js r2: final critiques (Discard / Fix / Accept) do NOT auto-dismiss on Esc/backdrop — guards user against accidentally losing the verdict', () => {
-  const app = _read('web/public/app.js');
-  const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
-  const body = app.slice(at, at + 9000);
-  // The Esc handler + backdrop click must be gated by safeToDismissByBackdrop.
-  // Look for the gate.
-  assert.ok(/safeToDismissByBackdrop/.test(body),
-    '_renderVerdictPanel must gate the Esc + backdrop dismiss on a safeToDismissByBackdrop flag so final critiques (Discard / Fix / Accept) can\'t be dismissed without an explicit user choice (r2).');
-  // And that flag must be `isError || isIntermediate` — final
-  // critiques have hasDisagreement state to preserve.
-  assert.ok(/safeToDismissByBackdrop\s*=\s*isError\s*\|\|\s*isIntermediate/.test(body),
-    'safeToDismissByBackdrop must equal `isError || isIntermediate` so final critiques (the agree/disagree path) require an explicit Discard/Fix/Accept click — they can\'t be lost via Esc/backdrop (r2).');
+    '_renderVerdictPanel must wrap the rendered contents in a .verdict-panel-content child div (r2 — modal layout). bug-55 keeps this visual envelope; only the dismissal wiring changed.');
+  // bug-55 SUPERSEDES the prior Esc/backdrop assertions: the verdict
+  // pane is now truly modal — no outside-click dismiss, no Esc
+  // dismiss. The stronger contract lives in
+  // test/bug-55-verdict-pane-truly-modal.test.js, which asserts the
+  // ABSENCE of safeToDismissByBackdrop / panel-backdrop click /
+  // document-keydown Esc handlers in _renderVerdictPanel.
 });
 
 t('web/public/styles.css: .verdict-critique has NO max-height cap (r1 — the 60vh fix still clipped; r1 lets the message flow at natural height)', () => {
