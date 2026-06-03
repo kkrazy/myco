@@ -2604,7 +2604,7 @@
       "id": "bug-27",
       "text": "**Problem:** Switching sessions leaks the queue UI into other sessions.\n**Expected:** Each session's queue stays scoped to that session.\n**Actual:** After switching sessions, the queue from the previous session shows up on other sessions.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-21T23:09:07.607Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -2687,7 +2687,7 @@
       "id": "bug-29",
       "text": "**Problem:** Deleting a session doesn't refresh the plan view until another session is clicked.\n**Expected:** Deleting a session immediately clears both the chat pane and the plan view.\n**Actual:** Plan view remains stale after deletion until a session is clicked.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-22T07:46:44.710Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3361,7 +3361,7 @@
       "id": "bug-35",
       "text": "**Problem:** Plan view search field loses focus before the user finishes typing, breaking incremental filtering.\n**Expected:** Search field stays focused while filtering as the user types.\n**Actual:** Focus is dropped mid-typing, forcing the user to click back into the field.",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-25T13:54:52.181Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3697,7 +3697,7 @@
       "id": "bug-36",
       "text": "'Build' button only sends title, omits description and comments",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-27T08:35:55.878Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -3723,7 +3723,7 @@
       "id": "bug-37",
       "text": "Stop button stays active after session aborts with no ongoing activity",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-27T23:36:12.030Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -4831,6 +4831,15 @@
           "user": "kkrazy",
           "text": "should always make enough information is provided to the critic for full assessment",
           "ts": "2026-06-03T04:52:46.749Z"
+        },
+        {
+          "id": "ceeb888465e1",
+          "user": "claude",
+          "ts": "2026-06-03T07:28:45.259Z",
+          "text": "## td-33 r3 design + implementation log\n\nUser request (chat, verbatim): “The critic should be kicked off at each stage: analyze, code, test. Find a way to break the entire implementation into those 3 stages” + “Make the methodology persistent” + “Auto-iterate — address critic’s points + re-fire stage critique up to 2 times before pausing.”\n\n### Design\n\nThree-layer fix; each layer addresses a different failure mode that drove the original report:\n\n1. **Persistent methodology** — the 3-stage discipline now lives in `web/public/best-practices-template.md` §9, which is injected into every newly-spawned session’s `CLAUDE.md`. Future claude reads it as part of project instructions. (Existing live sessions need to re-spawn to inherit the new template — idempotency guard in `injectBestPracticesIntoClaudeMd` won’t overwrite existing sentinel block.)\n\n2. **Mandatory directive language** — the pre-r3 §9 said “claude *tends to* move through three phases.” Too soft. r3 says “claude **MUST** structure work into three stages,” with explicit done-criteria per stage. Without explicit criteria, claude can declare “analyze done” after a one-line glance.\n\n3. **Auto-iterate (directive-based)** — when the checkpoint critic flags issues, claude addresses them in-place + re-emits the same stage sentinel to re-fire the critique, AT MOST TWICE per stage. After 2 unsuccessful retries, surface to user. Honest scope: this is directive-based (claude reads + obeys), NOT server-enforced. Future iteration could add server-side enforcement (auto-queue “address the critic feedback” prompt after each disagreement) — deferred.\n\n### Stage gate done-criteria\n\n* **Analyze done**: problem restated in own words + numbered plan with `verify:` clauses + assumptions listed inline + ZERO source-file edits yet (Read/Glob/Grep fine; Edit/Write/MultiEdit forbidden).\n* **Code done**: source edited per plan + regression test written + new test passes locally (run it, don’t assume).\n* **Verify done**: adjacent test suites still green + new test wired into `./test/test.sh` + no grep-detectable regression in related paths.\n\n### Implementation\n\nTwo files touched + one new test:\n\n* `web/public/best-practices-template.md` — §9 fully rewritten (76 lines added). Sections: scope (limits to `[run:plan#X]` dispatches; bare chat turns don’t trigger), the three stages + done-criteria, sentinel grammar, server behavior, auto-iterate rule with 2-retry cap, behavioral honesty (directive vs server-enforced), common pitfalls (premature emission, skipping analyze on “simple” tasks, mis-scoping verify).\n* `test/td-33-r3-stage-discipline-directive.test.js` (new, 8 cases) — static-grep that locks the MUST language, the done-criteria per stage incl. ZERO-edits-during-analyze + test.sh-wiring-during-verify, the 2-retry cap, the directive-based honesty note, all three sentinel shapes, the scope limitation, the pitfalls section, and the td-33 r3 marker.\n* `test/test.sh` — wired r3 test after r2.\n\n### Self-referential application\n\nI applied the 3-stage methodology to r3 itself. Stage 1 (analyze) was a written-out plan with assumptions, no edits. Stage 2 (code) was the template + test edits. Stage 3 (verify) was this comment + the adjacent-suite sweep + test.sh wiring. Manually invoked Gemini at each stage boundary; verdicts: analyze stage → critic flagged that verification only covers template content not behavior (correct point, addressed in honesty section); code stage → ✓ AGREED; verify stage → in progress at the time this comment was written.\n\n### Known limitations + follow-ups (not in this commit)\n\n* Auto-iterate is directive-based; server doesn’t enforce. A misbehaving claude could ignore the directive without any error. The server’s existing `[td-33] session <id> fired stage-done: <stage>` log lines give us auditability post-hoc — future work could expose those counts in a UI panel.\n* The template only applies to NEW sessions (injection is on spawn). Existing sessions need to re-spawn (or hand-edit their `CLAUDE.md`) to pick up r3. Not a regression — same constraint as every prior template change.\n* No structural fix yet for the dispatch-mismatch case where `[run:plan#X]` fires on session A while the actual work happens in session B — the critic never sees the work. Three credible follow-ups (deferred): `/critique <commit-sha>` slash command, dispatch-aware code review on push, manual ↻ Critique button per plan-item.",
+          "meta": {
+            "kind": "design-log"
+          }
         }
       ],
       "meta": {
@@ -4841,5 +4850,5 @@
       "description": "**Problem:** Critic only runs once after the full pipeline finishes, so bad analyze/code/verify outputs propagate downstream before any feedback.\n**Expected:** Critic kicks in at each stage — analyze, code, and verify — gating progression on its review.\n**Actual:** Critic runs only as a final pass after everything is finished."
     }
   ],
-  "updatedAt": "2026-06-03T00:57:51.061Z"
+  "updatedAt": "2026-06-03T07:28:45.260Z"
 }

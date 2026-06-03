@@ -317,59 +317,124 @@ assumption shows up not just to the requester but to every collaborator
 attached to the session. These rules front-load the clarifying step so
 the autonomous portion runs on a confirmed, witnessed premise.
 
-## 9. Stage-aware critic — announce stage boundaries (td-33)
+## 9. Stage-aware critic — 3 stages, mandatory discipline (td-33 r3)
 
-When working through a plan-item dispatch, claude tends to move
-through three natural phases:
+When working through a `[run:plan#X]` dispatch, claude **MUST**
+structure work into three explicit stages, emit a stage-boundary
+sentinel at each transition, and gate progression on the
+checkpoint critic verdict.
 
-1. **analyze** — read the relevant code, understand the problem,
-   plan the fix.
-2. **code** — write the implementation (Edit / Write).
-3. **verify** — run tests, lint, type-check (Bash).
+**Scope.** This rule applies to plan-item dispatches (any chat
+message containing `[run:plan#<id>]`, including ▶ Run button
+clicks). It does NOT apply to bare conversational turns —
+clarifications, /td quick captures, etc. — where the work is too
+small to benefit from stage gating.
 
-The myco critic infrastructure used to run ONLY at the end of the
-turn, so a flawed analyze or a wrong-shaped code change would
-propagate all the way through verify before Gemini ever flagged it.
+### The three stages + their done-criteria
 
-**Emit a stage-boundary sentinel** in your assistant text at each
-transition so the critic can review checkpoints:
+1. **analyze** — DONE when ALL of:
+   - Problem restated in your own words (so the user can witness
+     you understood, not assumed).
+   - Numbered plan with explicit `verify:` clause per step (matches
+     §8 rule 5).
+   - Assumptions listed inline, before any source edits.
+   - **ZERO source-file edits yet.** Reading and grepping are fine;
+     Edit/Write/MultiEdit are NOT.
 
-- `[stage: analyze done]` — fire once you've finished the analyze
-  phase and are about to start writing code.
-- `[stage: code done]` — fire once the implementation is written,
-  before you start the verify phase.
-- `[stage: verify done]` — fire once the verification (tests, lints)
-  has passed and you're about to summarize.
+2. **code** — DONE when ALL of:
+   - Production source edited per the analyzed plan, no scope
+     creep beyond what was listed.
+   - Regression test written that would have caught the original
+     problem (matches §6).
+   - The new test passes locally (run it; don't just assume).
 
-**Format rules:**
+3. **verify** — DONE when ALL of:
+   - Adjacent test suites still green (the suites that touch the
+     files you edited).
+   - New test wired into `./test/test.sh` so future runs catch
+     the regression.
+   - No grep-detectable regression in related code paths.
 
-- Exactly the bracketed shape `[stage: <name> done]` — case-
-  insensitive, single-space inside, no extra words. The server
-  parser is strict by design so claude can't accidentally trigger
-  on prose like "I am done analyzing."
-- One sentinel per natural transition. Each stage fires AT MOST
-  ONCE per turn (extras are deduped server-side, no harm in
-  emitting twice).
-- The sentinel can sit on its own line OR mid-paragraph — both
-  parse. Putting it on its own line makes the chat-pane render
-  cleaner.
+### The sentinel grammar
 
-**What the server does on each sentinel:**
+Emit ONE sentinel at each transition, in this exact bracketed
+shape (case-insensitive, single-space inside, no extra words):
+
+- `[stage: analyze done]`
+- `[stage: code done]`
+- `[stage: verify done]`
+
+The server parser is strict by design so claude can't accidentally
+trigger on prose like "I am done analyzing." Each stage fires AT
+MOST ONCE per turn (extras are deduped server-side). The sentinel
+can sit on its own line or mid-paragraph.
+
+### What the server does on each sentinel
 
 - Snapshots the current diff (only files this run actually changed,
-  not pre-existing WIP).
+  not pre-existing WIP — the dispatch-drift filter from
+  `2026-06-03 critic-truncation-and-dispatch-drift` fix).
 - Fires the configured critic (Gemini by default) with a CHECKPOINT
-  prompt that says "this is mid-run, partial progress, flag obvious
-  issues only — INSUFFICIENT INFORMATION is allowed but don't use
-  it just because work isn't done."
-- Broadcasts the verdict to all attached clients with
-  `isIntermediate: true`.
-- **Does NOT pause the run queue.** Intermediate critiques are
-  advisory; only the end-of-turn critique gates queue advance.
+  prompt + td-33 r2 file-context enrichment.
+- Broadcasts the verdict with `isIntermediate: true` so the chat
+  pane shows a `[CHECKPOINT: <stage>]` badge.
+- **Does NOT pause the run queue** — intermediate critiques are
+  advisory.
 
-**You can still continue work after emitting a sentinel** — the
-critique runs in the background and surfaces to the user without
-blocking your next tool call.
+### Auto-iterate on critic disagreement (the new r3 rule)
+
+When the checkpoint critic flags issues (broadcast has
+`hasDisagreement: true` and `isError: false`), you DO NOT pause for
+user input on the first flag. Instead:
+
+1. **Address the critic's points in-place.** If analyze stage
+   flagged a missing assumption, list it. If code stage flagged a
+   missing test for an edge case, add it. Apply the smallest fix
+   that resolves the flagged issue.
+2. **Re-emit the same stage sentinel** to re-fire the critique.
+3. Repeat AT MOST TWICE per stage. After 2 unsuccessful retries
+   (still `hasDisagreement: true` after the third attempt), STOP
+   and surface to the user with a brief summary of what the critic
+   keeps flagging — let them decide whether the critic is right or
+   noisy.
+4. If the critic returns `INSUFFICIENT INFORMATION` (rare after
+   r2), include the requested context inline and re-fire ONCE.
+   If still INSUFFICIENT after that, surface to the user.
+
+**Why 2 retries, not unlimited.** Two iterations cover the common
+"missed an edge case → added it" → "missed another edge case →
+added it" cycle. Beyond 2, the critic is either chasing a moving
+target it can't resolve OR claude is mis-interpreting the critic's
+feedback — both cases benefit from a human in the loop.
+
+### Behavioral honesty
+
+The auto-iterate rule is **directive-based, not server-enforced**.
+The server fires the critic; *you*, claude, are responsible for
+reading the verdict, applying the fix, and re-emitting the
+sentinel. The server logs every stage-done sentinel + critique fire
+(`[td-33] session <id> fired stage-done: <stage>`) so adherence is
+auditable post-hoc.
+
+A future iteration may add server-side enforcement (e.g.
+auto-queue a synthetic "address the critic's feedback" prompt
+after each disagreement) — for now, discipline lives in this
+template.
+
+### Common pitfalls
+
+- **Skipping analyze when the task "seems simple."** The user has
+  flagged this multiple times. Even a one-line CSS fix benefits
+  from a 3-sentence "restate + plan + assumptions" because surprise
+  edge cases live in the deltas you DIDN'T plan for.
+- **Emitting `[stage: code done]` while still editing.** Don't
+  emit a stage sentinel until that stage is GENUINELY done per the
+  criteria above. Premature emission triggers a critique on
+  half-done work.
+- **Treating verify as "ran the tests once."** verify means: the
+  full adjacent-suite list, the test.sh wiring, and the regression
+  grep. Just running the new test in isolation is part of code,
+  not verify.
 
 ---
 

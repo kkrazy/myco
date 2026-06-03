@@ -2943,6 +2943,30 @@ test_chat_window() {
   # marker, cache + retry forwarding, both attach.js callsites pass
   # changedEntries, marker comment in both touched files.
   node_test_result test/td-33-r2-critic-context-enrichment.test.js "test/td-33-r2-critic-context-enrichment.test.js (13 cases)"
+  # td-33 r3: persistent 3-stage discipline directive in
+  # web/public/best-practices-template.md §9. User-requested in
+  # chat: "The critic should be kicked off at each stage: analyze,
+  # code, test. Find a way to break the entire implementation into
+  # those 3 stages" + "Make the methodology persistent" + "Auto-
+  # iterate — address critic's points + re-fire stage critique up
+  # to 2 times before pausing." r3 rewrites §9 with MUST directive
+  # language (was descriptive "tends to move through"), adds
+  # explicit done-criteria per stage (analyze: restated problem +
+  # numbered plan + assumptions + ZERO source edits; code: source +
+  # test + new test passes; verify: adjacent suites + test.sh
+  # wiring + grep regression check), adds an auto-iterate clause
+  # with a hard 2-retry cap, adds a behavioral-honesty note that
+  # the auto-iterate is directive-based (not server-enforced —
+  # server logs sentinels for post-hoc audit but doesn't auto-queue
+  # synthetic prompts), limits scope to [run:plan#X] dispatches
+  # (bare chat turns don't trigger stage critiques), and lists
+  # common pitfalls (premature emission, skipping analyze on
+  # "simple" tasks, mis-scoping verify). Locks: MUST directive,
+  # done-criteria per stage incl. ZERO-edits during analyze + test
+  # .sh wiring during verify, auto-iterate 2-cap, behavioral
+  # honesty marker, all 3 sentinel shapes preserved, scope
+  # limitation, pitfalls section, td-33 r3 marker comment.
+  node_test_result test/td-33-r3-stage-discipline-directive.test.js "test/td-33-r3-stage-discipline-directive.test.js (8 cases)"
   # bug-52: critic must explain its reasoning on ✓ AGREED + user can
   # ask the critic to look into something specific via a textarea on
   # the verdict pane. Consolidates three user-reported observations:
