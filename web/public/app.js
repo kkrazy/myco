@@ -4111,9 +4111,33 @@ function _openClarifyPopover() {
   // BEFORE that happens so we can wrap it on submit + use its
   // bounding rect for popover positioning.
   _clarifyAnchorRange = sel.getRangeAt(0).cloneRange();
-  _clarifyAnchorSpan = null;   // set on send when we surroundContents-wrap the range
+  _clarifyAnchorSpan = null;
   const selectedText = String(_clarifyAnchorRange.toString() || '').trim();
   if (!selectedText) { _closeClarifyPopover(); return; }
+  // fr-85 r8 (user-requested: "Keep the selected text visually
+  // selected for better ux"): wrap the range NOW (at open time)
+  // instead of waiting for send. The .chat-clarify-anchor class
+  // already has a dashed-underline + light-blue background that
+  // mimics a highlight — keeping it persistent makes the popover
+  // feel anchored to the text the user clicked. Without this, the
+  // popover's input takes focus and the browser collapses the
+  // selection visual, so the user loses the visual cue of what
+  // they're asking about.
+  //
+  // Tracks whether the wrap was applied PRE-send so we can unwrap
+  // on cancel (user closes without asking → revert to plain text;
+  // user sends → keep the highlight as the post-send anchor like
+  // r4-r7 always did).
+  try {
+    const span = document.createElement('span');
+    span.className = 'chat-clarify-anchor chat-clarify-anchor-pending';
+    _clarifyAnchorRange.surroundContents(span);
+    _clarifyAnchorSpan = span;
+  } catch {
+    /* Range spans element boundaries — skip the visual wrap. The
+       popover still works; the user just doesn't get the persistent
+       highlight in this rarer case. */
+  }
   // (Anchor bbox is read in _clarifyReposition — called at the end of
   // this function for initial placement + on scroll/resize after.)
   // Build the popover lazily — one per page lifetime; mounted on body.
@@ -4128,10 +4152,17 @@ function _openClarifyPopover() {
     // top, input + send + close share a row below. Preview no longer
     // truncated by a narrow CSS max-width; ellipsis kicks in only at
     // the full chat-window width.
+    // fr-85 r8 (user-requested): Copy button between input and send.
+    // Copies the SELECTED SPAN TEXT (not the popover question or
+    // preview) to the clipboard. Brief "✓" confirmation on success.
+    // Placed BEFORE Send so the visual flow reads
+    //   "preview | input | copy | send | close"
+    // — Copy is a side-action; Send is the primary action.
     pop.innerHTML = `
       <div class="chat-clarify-preview" title="Selected text"></div>
       <div class="chat-clarify-input-row">
         <input id="chat-clarify-input" type="text" placeholder="Ask about this…" autocomplete="off" />
+        <button id="chat-clarify-copy" type="button" title="Copy the selected text to the clipboard" aria-label="Copy selected text">📋</button>
         <button id="chat-clarify-send" type="button" title="Send (Enter)" aria-label="Send">→</button>
         <button id="chat-clarify-close" type="button" title="Cancel (Esc)" aria-label="Cancel">×</button>
       </div>
@@ -4139,6 +4170,7 @@ function _openClarifyPopover() {
     document.body.appendChild(pop);
     pop.querySelector('#chat-clarify-send').addEventListener('click', () => _sendClarify());
     pop.querySelector('#chat-clarify-close').addEventListener('click', () => _closeClarifyPopover());
+    pop.querySelector('#chat-clarify-copy').addEventListener('click', () => _copyClarifySelection());
     pop.querySelector('#chat-clarify-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); _sendClarify(); }
       else if (e.key === 'Escape') { e.preventDefault(); _closeClarifyPopover(); }
@@ -4183,6 +4215,64 @@ function _openClarifyPopover() {
   if (input) { input.value = ''; input.focus(); }
 }
 
+// fr-85 r8: copy the currently selected clarify span text to the
+// clipboard. Falls back to the saved range's toString() when the
+// span ref isn't set (cross-node selection case). Briefly swaps the
+// button label to "✓" for visual confirmation, then restores 📋.
+function _copyClarifySelection() {
+  const text = String(
+    (_clarifyAnchorSpan && _clarifyAnchorSpan.textContent) ||
+    (_clarifyAnchorRange && _clarifyAnchorRange.toString()) ||
+    '').trim();
+  if (!text) return;
+  const btn = document.getElementById('chat-clarify-copy');
+  const restore = (label, title) => {
+    if (!btn) return;
+    btn.textContent = label;
+    if (title) btn.title = title;
+  };
+  const finish = (ok) => {
+    if (!btn) return;
+    const prevLabel = '📋';
+    const prevTitle = 'Copy the selected text to the clipboard';
+    btn.textContent = ok ? '✓' : '✗';
+    btn.title = ok ? `Copied (${text.length} chars)` : 'Copy failed — try Ctrl+C on the selection';
+    setTimeout(() => restore(prevLabel, prevTitle), 1200);
+  };
+  // Use the modern Clipboard API when available; fall back to the
+  // deprecated execCommand path for older browsers / non-secure
+  // contexts where clipboard.writeText isn't allowed.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => finish(true), () => finish(false));
+    return;
+  }
+  // Fallback: temporary textarea + execCommand('copy').
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand && document.execCommand('copy');
+    document.body.removeChild(ta);
+    finish(!!ok);
+  } catch { finish(false); }
+}
+
+// fr-85 r8: unwrap a clarify anchor span back to its child text
+// nodes. Used when the user opened the popover then closed it
+// without sending — the open-time wrap should leave no trace.
+function _unwrapClarifyAnchor(span) {
+  if (!span || !span.parentNode) return;
+  const parent = span.parentNode;
+  while (span.firstChild) parent.insertBefore(span.firstChild, span);
+  parent.removeChild(span);
+  // Normalize so adjacent text nodes (split by surroundContents)
+  // re-merge into one — keeps the DOM clean for the next clarify.
+  try { parent.normalize(); } catch {}
+}
+
 function _closeClarifyPopover() {
   const pop = document.getElementById('chat-clarify-popover');
   if (pop) {
@@ -4193,6 +4283,16 @@ function _closeClarifyPopover() {
     // popover before the reply arrives) doesn't try to render.
     const reply = pop.querySelector('.chat-clarify-reply');
     if (reply) reply.remove();
+  }
+  // fr-85 r8: if the user opened the popover (wrap applied) but
+  // never sent a question (still has .chat-clarify-anchor-pending),
+  // UNWRAP — revert the highlighted span back to plain text so the
+  // chat looks as it did before. If the user sent (pending class
+  // removed by _sendClarify), keep the wrap as the persistent
+  // post-send anchor (r4-r7 behavior preserved).
+  if (_clarifyAnchorSpan && _clarifyAnchorSpan.classList && _clarifyAnchorSpan.classList.contains('chat-clarify-anchor-pending')) {
+    _unwrapClarifyAnchor(_clarifyAnchorSpan);
+    _clarifyAnchorSpan = null;
   }
   // r4: detach the scroll-follow listeners. Wired in _openClarifyPopover.
   // Named handler (_clarifyReposition) is the same reference so
@@ -4214,26 +4314,35 @@ function _sendClarify() {
   const pop = document.getElementById('chat-clarify-popover');
   const input = pop && pop.querySelector('#chat-clarify-input');
   const question = input ? String(input.value || '').trim() : '';
-  const selected = String(_clarifyAnchorRange.toString() || '').trim();
+  // fr-85 r8: when the open-time wrap is in place, reading the text
+  // from the span is more reliable than reading from the now-mutated
+  // Range. Fall back to the Range when no wrap happened (cross-node
+  // selection case).
+  const selected = String(
+    (_clarifyAnchorSpan && _clarifyAnchorSpan.textContent) ||
+    _clarifyAnchorRange.toString() || '').trim();
   if (!selected) { _closeClarifyPopover(); return; }
   if (!question) { return; }   // require a question; don't auto-close
-  // Wrap the selected range in <span class="chat-clarify-anchor"> so
-  // the user can scroll back and see what got clarified. Only works
-  // when the range starts + ends in the same text node; for cross-
-  // node selections (rare in chat prose) just skip the wrap — the
-  // message still gets sent fine.
-  try {
-    const span = document.createElement('span');
-    span.className = 'chat-clarify-anchor';
-    _clarifyAnchorRange.surroundContents(span);
-    // r4: keep a reference so _clarifyReposition can re-read the bbox
-    // on subsequent scrolls (the Range may get invalidated by the
-    // surroundContents mutation; the span is the durable anchor).
-    _clarifyAnchorSpan = span;
-  } catch {
-    /* range spans node boundaries — skip the visual marker, the
-       message itself still ships. Scroll-follow falls back to the
-       Range (still usable in most browsers post-mutation). */
+  // fr-85 r8: the range was already wrapped at popover-open time
+  // (see _openClarifyPopover). If _clarifyAnchorSpan is set, just
+  // graduate it from PRE-SEND ("pending") to POST-SEND by removing
+  // the .chat-clarify-anchor-pending class — the persistent visual
+  // is the same .chat-clarify-anchor underline. If the open-time
+  // wrap failed (cross-node selection), attempt the wrap here as a
+  // last-chance fallback (matches r4-r7 behavior).
+  if (_clarifyAnchorSpan && _clarifyAnchorSpan.isConnected) {
+    _clarifyAnchorSpan.classList.remove('chat-clarify-anchor-pending');
+  } else {
+    try {
+      const span = document.createElement('span');
+      span.className = 'chat-clarify-anchor';
+      _clarifyAnchorRange.surroundContents(span);
+      _clarifyAnchorSpan = span;
+    } catch {
+      /* range spans node boundaries — skip the visual marker, the
+         message itself still ships. Scroll-follow falls back to the
+         Range (still usable in most browsers post-mutation). */
+    }
   }
   // r4: ship via sendChatMessage with meta.kind='clarify' instead of
   // injecting into #chat-input + firing the chat-form submit. Reasons:

@@ -2960,6 +2960,30 @@ test_chat_window() {
   # return 'Analyze', turn_start reset in _appendAgentEvent, and a
   # bug-53 marker comment.
   node_test_result test/bug-53-hud-stuck-on-analyze.test.js "test/bug-53-hud-stuck-on-analyze.test.js (6 cases)"
+  # fr-85 r8 (user comment 2026-06-02T23:15:19 from @labxnow):
+  # "add copy button to the popover to copy the selected text. Keep
+  # the selected text visually selected for better ux." Two-part fix:
+  # (A) Copy button — new #chat-clarify-copy between input and Send,
+  # navigator.clipboard.writeText on the selected SPAN TEXT (not the
+  # popover question/preview), with execCommand fallback for non-
+  # secure contexts. Brief "✓" confirmation then restores 📋. (B)
+  # Keep selection visually — the open-time code now wraps the Range
+  # in <span class="chat-clarify-anchor chat-clarify-anchor-pending">
+  # AT POPOVER OPEN (was only at send before). The -pending class
+  # gets a stronger background that mimics native selection. On send
+  # → _sendClarify drops the -pending class (graduates to post-send
+  # anchor; r4-r7 behavior preserved). On cancel → _closeClarify
+  # Popover calls _unwrapClarifyAnchor to revert to plain text so no
+  # visual residue remains. Locks: button id + order (input → copy →
+  # send), _copyClarifySelection helper using navigator.clipboard +
+  # execCommand fallback + "✓" feedback, wired in the lazy-build
+  # path, open-time surroundContents using the -pending class,
+  # _sendClarify drops -pending, _closeClarifyPopover unwraps on
+  # cancel-without-send, _unwrapClarifyAnchor helper restores plain
+  # text, .chat-clarify-anchor-pending CSS with stronger alpha than
+  # the post-send anchor, #chat-clarify-copy CSS, and a marker
+  # comment.
+  node_test_result test/fr-85-r8-copy-and-keep-selection.test.js "test/fr-85-r8-copy-and-keep-selection.test.js (10 cases)"
   # fr-81 Phase A: the actual ingest direction. Phase 1 only handled
   # outbound (/feature, /bug write issues upstream). The user-reported
   # gap (Gemini's critique on the previous fr-94 Phase 3 diff: "this

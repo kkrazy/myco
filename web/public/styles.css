@@ -3439,6 +3439,18 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 2px;
   padding: 0 2px;
 }
+/* fr-85 r8: the pre-send variant (popover open, user hasn't asked
+   yet) gets a stronger highlight so it visually mimics the browser's
+   native selection. Without this, the user loses the visual cue of
+   what they're asking about once the popover's input takes focus
+   and collapses the document selection. On send, _sendClarify drops
+   the -pending class and the anchor reverts to the subtle post-send
+   look above. On cancel, _closeClarifyPopover unwraps the span
+   entirely so no visual residue remains. */
+.chat-msg .chat-text .chat-clarify-anchor.chat-clarify-anchor-pending {
+  background: rgba(80, 120, 200, .28);
+  border-bottom: 1px solid rgba(80, 120, 200, .8);
+}
 #chat-clarify-popover {
   position: absolute;
   z-index: 9500;
@@ -3524,6 +3536,17 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   color: #aac8ff;
 }
 #chat-clarify-popover #chat-clarify-send:hover { background: rgba(80, 120, 200, .4); }
+/* fr-85 r8: Copy button. Same visual frame as Send/Close but with a
+   muted color palette so it doesn't compete with Send (the primary
+   action). Brief "✓" confirmation state when the copy lands. */
+#chat-clarify-popover #chat-clarify-copy {
+  background: rgba(140, 160, 200, .12);
+  border-color: rgba(140, 160, 200, .35);
+  color: #b1bac4;
+}
+#chat-clarify-popover #chat-clarify-copy:hover {
+  background: rgba(140, 160, 200, .25);
+}
 #chat-clarify-popover #chat-clarify-input:disabled,
 #chat-clarify-popover #chat-clarify-send:disabled {
   opacity: .55;
