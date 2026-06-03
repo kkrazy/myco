@@ -219,9 +219,11 @@ function _registerExternalSession(sessionId, session) {
           && planArtifact.items.find((it) => it.id === active.itemId);
         if (!item) return;
         const { triggerGeminiCritique } = require('./critique');
+        // td-33 r2: pass newEntries through so intermediate critiques
+        // get the same file-context enrichment as final critiques.
         await triggerGeminiCritique(sessionId, session, item, fullDiff,
           (session._currentTurnAssistantText || '').slice(-2000),
-          { isIntermediate: true, stage });
+          { isIntermediate: true, stage, changedEntries: newEntries });
       } catch (err) {
         console.error(`[td-33] stage-done(${stage}) critique failed: ${err.message}`);
       }
@@ -334,7 +336,13 @@ function _registerExternalSession(sessionId, session) {
                     const item = planArtifact && Array.isArray(planArtifact.items) && planArtifact.items.find(it => it.id === active.itemId);
                     if (item) {
                       const { triggerGeminiCritique } = require('./critique');
-                      await triggerGeminiCritique(sessionId, session, item, fullDiff, ev.result || '');
+                      // td-33 r2 (context enrichment): pass the
+                      // changed entries through so the critic prompt
+                      // can include each file's full current content
+                      // — not just the diff hunks. User-asked: "should
+                      // always make enough information is provided to
+                      // the critic for full assessment."
+                      await triggerGeminiCritique(sessionId, session, item, fullDiff, ev.result || '', { changedEntries: newEntries });
                       return;                       // critique took over queue advancement
                     }
                   }

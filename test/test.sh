@@ -2916,6 +2916,33 @@ test_chat_window() {
   # styles.css verdict-btn-retry + verdict-intermediate-badge +
   # verdict-title.error, and template section naming td-33.
   node_test_result test/td-33-stage-aware-critic-and-retry.test.js "test/td-33-stage-aware-critic-and-retry.test.js (22 cases — incl. r1 Gemini-critique catch: queue-pause AFTER critic + Dismiss on error)"
+  # td-33 r2: critic context enrichment. User-comment from @kkrazy:
+  # "should always make enough information is provided to the critic
+  # for full assessment". Pre-r2, the prompt contained ONLY the diff
+  # hunks — surrounding file context + plan-item iteration history
+  # were invisible. The critic kept bailing with INSUFFICIENT
+  # INFORMATION on changes that would have been clear with full
+  # context. r2 adds two new prompt blocks. _buildFileContextBlock
+  # reads each changed file's FULL current content (16 KB per-file
+  # cap, 64 KB aggregate cap, truncation marker on overage; path
+  # resolution mirrors attach.js — fs.readFileSync(path.join(rec
+  # AbsCwd, entry.path))). Returns "" when no entries passed so
+  # intermediate critiques without the plumbing fall back to pre-r2
+  # behavior. _buildHistoryBlock surfaces last HISTORY_RUNS_MAX (3)
+  # runs + last HISTORY_COMMENTS_MAX (5) comments, most-recent-first,
+  # capped at HISTORY_BLOCK_MAX_CHARS (16 KB). basePrompt rewritten
+  # to acknowledge the new context inputs (no longer claims "you can
+  # ONLY see the diff"). attach.js passes opts.changedEntries at
+  # BOTH invocation sites (final + stage-intermediate). rec.
+  # _lastCritique caches changedEntries; retryLastCritique forwards.
+  # Locks: both helpers defined, named caps, file-context read via
+  # path.join(recAbsCwd, entry.path) + slice for per-file cap,
+  # empty-entries fallback, runs+comments enumeration with named
+  # caps via slice + reverse, ${fileContextBlock} + ${historyBlock}
+  # in the userPrompt template, basePrompt rewrite + td-33 r2
+  # marker, cache + retry forwarding, both attach.js callsites pass
+  # changedEntries, marker comment in both touched files.
+  node_test_result test/td-33-r2-critic-context-enrichment.test.js "test/td-33-r2-critic-context-enrichment.test.js (13 cases)"
   # bug-52: critic must explain its reasoning on ✓ AGREED + user can
   # ask the critic to look into something specific via a textarea on
   # the verdict pane. Consolidates three user-reported observations:
