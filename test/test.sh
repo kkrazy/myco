@@ -2757,6 +2757,18 @@ test_chat_window() {
   # repositioning, distance + time thresholds, multi-touch skip, and
   # a fr-92 marker comment.
   node_test_result test/fr-92-mobile-swipe-history.test.js "test/fr-92-mobile-swipe-history.test.js (7 cases)"
+  # bug-50: user-reported "critic message is not display in full".
+  # Root cause: .verdict-critique had max-height: 180px capping the
+  # visible critique to ~10 lines on desktop — long Gemini verdicts
+  # (multiple flagged issues + diff-line citations) ended up
+  # scroll-trapped inside a tiny window. Bumped max-height from
+  # 180px → 60vh so most critiques fit at a glance on both desktop
+  # and mobile. overflow-y: auto stays as a safety net for the rare
+  # extreme case. Locks: max-height is NOT the regressing 180px,
+  # max-height IS a generous viewport-relative or large-px value,
+  # overflow-y: auto kept as safety net, and a bug-50 marker
+  # comment exists near the rule.
+  node_test_result test/bug-50-critic-message-full-display.test.js "test/bug-50-critic-message-full-display.test.js (3 cases)"
   # fr-81 r1: @kkrazy reported the remote /fr /bug /td flow shipped
   # short captures verbatim to GitHub — the word-count threshold that
   # made sense for local plan items (quick captures stay quick) was

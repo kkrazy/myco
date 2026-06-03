@@ -8670,7 +8670,16 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .verdict-critique {
   font-size: 12px;
   color: #c9d1d9;
-  max-height: 180px;
+  /* bug-50 (user-reported "critic message is not display in full"):
+     was max-height: 180px which capped the visible critique at ~10
+     lines on desktop — long Gemini verdicts (with multiple flagged
+     issues + diff-line citations) ended up scroll-trapped inside a
+     tiny window, forcing the user to drag a thin scrollbar instead
+     of reading the verdict at a glance. Bumped to 60vh so most
+     critiques fit on screen on both desktop and mobile; overflow-y:
+     auto stays as a safety net for the rare extreme case (giant
+     bullet lists with code blocks). */
+  max-height: 60vh;
   overflow-y: auto;
   background: rgba(0, 0, 0, 0.2);
   padding: 10px;
