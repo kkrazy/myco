@@ -1,3 +1,57 @@
+// Boot-time .env loader (2026-06-03 fix: "why the critic is not
+// kicked off?"). The container's state dir (default /data, override
+// MYCO_STATE_DIR) holds a single .env file managed by the admin-
+// config UI for OAuth + API-key secrets. Until today, that file
+// was ONLY read by the admin UI's GET/POST handlers — the boot
+// path didn't load it, so on every container restart
+// process.env.GEMINI_API_KEY went back to undefined, the gemini
+// critic returned the literal "(Gemini API key missing…)" placeholder,
+// and every /run dispatch's critique broadcast was effectively dead.
+// The critic-truncation + dispatch-drift fixes earlier today were
+// real but cosmetic — without the API key reaching the process,
+// the critic was always going to return a placeholder string.
+//
+// Semantics: docker run -e KEY=val and the host environment WIN
+// over /data/.env (we never overwrite an already-set key). This
+// keeps the admin-UI editor as the source of truth for secrets
+// without breaking the ops escape hatch of setting a key on the
+// docker command line.
+//
+// Vanilla parser — no `dotenv` dep. Handles `KEY=value` lines with
+// optional surrounding quotes, `# comments`, blank lines. Anything
+// malformed is silently skipped (the admin UI writes well-formed
+// lines; a hand-edit typo shouldn't crash boot).
+(function _loadStateDirEnvAtBoot() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const stateDir = process.env.MYCO_STATE_DIR || path.join(require('os').homedir(), '.myco');
+    const envPath = path.join(stateDir, '.env');
+    if (!fs.existsSync(envPath)) return;
+    const raw = fs.readFileSync(envPath, 'utf8');
+    let loaded = 0;
+    for (const line of raw.split(/\r?\n/)) {
+      const stripped = line.trim();
+      if (!stripped || stripped.startsWith('#')) continue;
+      const eq = stripped.indexOf('=');
+      if (eq <= 0) continue;            // malformed (no key)
+      const key = stripped.slice(0, eq).trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;  // unsafe key shape
+      if (process.env[key] != null) continue;                // docker -e / host env wins
+      let value = stripped.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+      loaded++;
+    }
+    if (loaded > 0) console.log(`[boot] loaded ${loaded} env var(s) from ${envPath}`);
+  } catch (err) {
+    console.error(`[boot] .env loader failed: ${err && err.message ? err.message : err}`);
+  }
+})();
+
 // Map standard HTTP_PROXY / HTTPS_PROXY env vars to global-agent's expectation
 // before bootstrapping it so any node request automatically respects standard
 // proxy configurations out-of-the-box.

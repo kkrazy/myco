@@ -2874,6 +2874,29 @@ test_chat_window() {
   # critique gate .filter on changedInfo.entries; the "newEntries.
   # length === 0 → Skipping critique" branch; a marker comment.
   node_test_result test/critic-truncation-and-dispatch-drift.test.js "test/critic-truncation-and-dispatch-drift.test.js (8 cases)"
+  # 2026-06-03 critic-key-missing root-cause fix. User-reported:
+  # "why the critic is not kicked off?" Diagnosis (reproduced on live
+  # mycodev): the container's /data/.env held GEMINI_API_KEY but
+  # server/src/index.js had NO boot-time .env loader — only an
+  # admin-config UI POST handler. Every container restart wiped
+  # process.env back to whatever docker run -e set; GEMINI_API_KEY
+  # went undefined; gemini.runCritique returned the literal
+  # "(Gemini API key missing…)" placeholder; the critique-review
+  # broadcast went out with hasDisagreement=true and a malformed
+  # body. The truncation + dispatch-drift fixes shipped earlier
+  # today were real but moot — without the key reaching the
+  # process, no critic could ever succeed. Fix: vanilla parser
+  # IIFE at the very top of index.js, parses $MYCO_STATE_DIR/.env,
+  # populates process.env for unset keys (docker -e + host env still
+  # win — preserves the ops escape hatch). Locks: loader IIFE
+  # defined + ordered before global-agent/bootstrap, honors
+  # MYCO_STATE_DIR, explicit don't-overwrite gate using `!= null`
+  # (NOT `!process.env[key]` which would clobber empty-string
+  # sentinels), "[boot] loaded N env var(s)" log marker, and a
+  # runtime sub-process test that extracts the actual IIFE source
+  # from index.js + exercises parse + quote-strip + don't-overwrite
+  # against a temp .env.
+  node_test_result test/boot-env-loader.test.js "test/boot-env-loader.test.js (5 cases)"
   # bug-51: user-reported "in mobile mode, the HUD doesn't reserve
   # enough space for the time ticker, causing the plan item ID to
   # wrap as the ticker widens." Root cause: .hud-task-id is a flex
