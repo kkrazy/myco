@@ -7390,6 +7390,36 @@ function _applyStateUpdate(msg) {
     _updateTaskHUD();
     return;
   }
+  // bug-54: cross-device verdict-pane sync. Fires when ANOTHER device
+  // resolved the verdict by clicking ✗ Dismiss / ✗ Discard / ⚡ Ask
+  // Claude to Fix / ✓ Accept Claude. Clears our local pane so it
+  // doesn't stay stuck open after the verdict has been handled
+  // elsewhere. The originating device receives this broadcast too;
+  // the truthy-state guard makes that an idempotent no-op there.
+  if (msg.kind === 'critique-resolved') {
+    if (state.awaitingVerdict || state.critiqueReview) {
+      state.awaitingVerdict = false;
+      state.critiqueReview = null;
+      _renderVerdictPanel();
+      _updateTaskHUD();
+    }
+    return;
+  }
+  // fr-96: per-plan-item stage state machine broadcast. Updates the
+  // client's state.planItemStages map (used by the HUD to display
+  // "X awaiting accept on code stage"). A null stageState in the
+  // payload means the item was cleared (run done / discard / fresh
+  // not-yet-in-flight) — remove the entry.
+  if (msg.kind === 'plan-item-stage') {
+    if (!state.planItemStages) state.planItemStages = {};
+    if (msg.stageState) {
+      state.planItemStages[msg.itemId] = msg.stageState;
+    } else {
+      delete state.planItemStages[msg.itemId];
+    }
+    _updateTaskHUD();
+    return;
+  }
   if (msg.kind === 'critic-model-changed') {
     const select = document.getElementById('composer-critic-select');
     if (select) {
@@ -7513,6 +7543,29 @@ function _renderRunQueueStrip() {
 // _updateTaskHUD — they're compared by ===; a typo silently breaks
 // the .active class highlight without erroring.
 function _getHUDActiveStep() {
+  // fr-96: authoritative server-side stage state. When the per-plan-
+  // item stage state machine is tracking the current run, it
+  // OVERRIDES the heuristic-based fallback below (which inferred the
+  // stage from open tool calls). The state machine reflects the
+  // actual stage Claude declared via [stage: X done] sentinels +
+  // user accept/fix actions, so it's strictly more accurate.
+  const q = state.runQueue || null;
+  const running = q && Array.isArray(q.entries) && q.entries.find(e => e.status === 'running');
+  if (running && state.planItemStages && state.planItemStages[running.itemId]) {
+    const ss = state.planItemStages[running.itemId];
+    // awaiting_verdict / awaiting_accept → Critic chip lights up
+    // (the critic is either pending or showing a verdict the user
+    // is reviewing).
+    if (ss.status === 'awaiting_verdict' || ss.status === 'awaiting_accept') {
+      return 'Critic';
+    }
+    // in_progress → stage chip lights up.
+    if (ss.stage === 'analyze') return 'Analyze';
+    if (ss.stage === 'code') return 'Code';
+    if (ss.stage === 'verify') return 'Verify';
+  }
+  // Legacy path — no stageState (one-shot dispatch, never dispatched,
+  // or container restart before fr-96 wiring took effect).
   if (state.awaitingVerdict) {
     return 'Critic';
   }
@@ -7701,9 +7754,27 @@ function _renderVerdictPanel() {
       `<button class="verdict-btn verdict-btn-retry" title="Re-fire the critique against the same diff (use this on Gemini 503 / network errors)">↻ Retry</button>` +
       `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss the error panel and continue without a critic verdict (queue is not paused on critic errors)">✗ Dismiss</button>`;
   } else if (isIntermediate) {
+    // bug-56: intermediate (stage-checkpoint) verdict pane now
+    // carries ✓ Accept Stage + ⚡ Ask Claude to Fix Stage buttons
+    // (per the §9 3-stage methodology: each stage's verdict needs
+    // its own accept/fix paths, not just the final one). The button
+    // row order is left-to-right:
+    //   💬 Ask Critic — re-fire critic with a question (bug-53)
+    //   ↻ Retry — re-fire critic as-is
+    //   ✓ Accept Stage (NEW) — accept this stage, signal Claude to
+    //     advance to the next stage. Routes via a chat message
+    //     [stage-accept] that Claude reads as the advance signal.
+    //     Does NOT call /run/done — only the FINAL critique Accept
+    //     ends the run (bug-57).
+    //   ⚡ Ask Claude to Fix Stage (NEW) — send the critic's flagged
+    //     issues to Claude as a redo-this-stage prompt.
+    //   ✗ Dismiss — close the pane without a semantic decision
+    //     (user wants to decide later).
     actionsHtml = askCriticBtn +
       `<button class="verdict-btn verdict-btn-retry" title="Re-fire the checkpoint critique against the same diff">↻ Retry</button>` +
-      `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss this checkpoint and continue waiting for the final critique">✓ Dismiss</button>`;
+      `<button class="verdict-btn verdict-btn-accept-stage" title="Accept this stage's verdict and signal Claude to proceed to the next stage (analyze → code → verify)">✓ Accept Stage</button>` +
+      `<button class="verdict-btn verdict-btn-fix-stage" title="Send the critic's flagged issues to Claude as a redo-this-stage prompt">⚡ Ask Claude to Fix Stage</button>` +
+      `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss the checkpoint without a decision (decide later — pane will not auto-reopen)">✗ Dismiss</button>`;
   } else {
     actionsHtml = askCriticBtn +
       `<button class="verdict-btn verdict-btn-discard" title="Discard git changes and abort task">✗ Discard</button>` +
@@ -7866,6 +7937,47 @@ function _renderVerdictPanel() {
       }
     });
   }
+  // bug-54: cross-device verdict-pane sync. Fire-and-forget POST to
+  // /critique/resolve so all attached devices clear their verdict
+  // pane. Called by the 4 resolving buttons (Dismiss / Discard / Fix
+  // / Accept) AFTER they've done their primary action + cleared
+  // local state. ↻ Retry and 💬 Ask Critic don't call this — they
+  // re-fire the critique, which produces a new critique-review
+  // broadcast that naturally replaces the verdict on every device.
+  // The originating device also receives the broadcast; the
+  // client-side critique-resolved handler's truthy guard makes that
+  // idempotent.
+  const _broadcastCritiqueResolved = (reason) => {
+    authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/critique/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: review.itemId, reason }),
+    }).catch((err) => {
+      console.warn('[bug-54] critique-resolve broadcast failed:', err && err.message || err);
+    });
+  };
+
+  // bug-57: signal end-of-run to the server. Called by the verify-
+  // stage ✓ Accept handler + the ✗ Discard handler. Clears
+  // session._activeRunItem (which bug-57 changed to survive across
+  // multi-stage runs) + advances the queue. Idempotent — server
+  // checks itemId match against the current active item. The
+  // intermediate (analyze/code) ✓ Accept handlers do NOT call this —
+  // they signal "stage accepted, proceed to next stage," not "run
+  // complete." fr-96 will add proper per-stage transition handling
+  // that calls this only when the verify stage is the one being
+  // accepted; today the surface is: final-verdict Accept = verify
+  // accept, intermediate Dismiss = stage-accept-proceed.
+  const _broadcastRunDone = (reason) => {
+    authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/run/done`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: review.itemId, reason }),
+    }).catch((err) => {
+      console.warn('[bug-57] run/done broadcast failed:', err && err.message || err);
+    });
+  };
+
   const btnDismiss = panel.querySelector('.verdict-btn-dismiss');
   if (btnDismiss) {
     btnDismiss.addEventListener('click', () => {
@@ -7875,6 +7987,57 @@ function _renderVerdictPanel() {
       state.awaitingVerdict = false;
       state.critiqueReview = null;
       _renderVerdictPanel();
+      _broadcastCritiqueResolved('dismiss');
+    });
+  }
+  // bug-56: ✓ Accept Stage + ⚡ Ask Claude to Fix Stage — intermediate
+  // verdict pane buttons. Per the §9 3-stage methodology: each
+  // checkpoint needs explicit accept/fix paths, not just the final
+  // critique. Accept Stage signals Claude to advance to the next
+  // stage (analyze → code → verify); Fix Stage signals Claude to
+  // redo the current stage addressing the critic's flagged issues.
+  // Neither calls /run/done — the run is still active across stages
+  // (bug-57); only the FINAL critique Accept ends the run.
+  //
+  // Stage lookup: analyze → code → verify → null (verify is the last
+  // stage; its FINAL critique fires from turn_result, not from a
+  // stage-done sentinel, so the verify-stage Accept on the
+  // intermediate pane is mostly defensive — should rarely fire in
+  // practice since verify-stage-done sentinel is immediately
+  // followed by turn_result which replaces the verdict).
+  const _nextStage = (s) => ({ analyze: 'code', code: 'verify', verify: null }[s] || null);
+
+  const btnAcceptStage = panel.querySelector('.verdict-btn-accept-stage');
+  if (btnAcceptStage) {
+    btnAcceptStage.addEventListener('click', () => {
+      const cur = (review.stage || 'analyze').toLowerCase();
+      const next = _nextStage(cur);
+      const promptText = next
+        ? `[stage-accept] User accepted the ${cur} stage. Please proceed to the ${next} stage.`
+        : `[stage-accept] User accepted the ${cur} stage. The plan item is complete; the final critique will follow on turn_result.`;
+      state.awaitingVerdict = false;
+      state.critiqueReview = null;
+      _renderVerdictPanel();
+      _broadcastCritiqueResolved('accept-stage');
+      // Note: NOT calling _broadcastRunDone — intermediate accept
+      // does not end the run. Only the FINAL critique Accept calls
+      // /run/done (bug-57). The chat message is the explicit
+      // advance signal Claude reads on the next turn; fr-96 will
+      // formalize this into a server-side state-machine transition.
+      sendChatMessage(promptText);
+    });
+  }
+  const btnFixStage = panel.querySelector('.verdict-btn-fix-stage');
+  if (btnFixStage) {
+    btnFixStage.addEventListener('click', () => {
+      const cur = (review.stage || 'analyze').toLowerCase();
+      const promptText = `[stage-fix] Critic flagged issues in your ${cur} stage:\n\n${review.critique}\n\nPlease redo the ${cur} stage addressing these concerns. Re-emit \`[stage: ${cur} done]\` when finished so the critic can re-evaluate.`;
+      state.awaitingVerdict = false;
+      state.critiqueReview = null;
+      _renderVerdictPanel();
+      _broadcastCritiqueResolved('fix-stage');
+      // No /run/done — redoing a stage is "stay in the same run."
+      sendChatMessage(promptText);
     });
   }
   // Early-return for error + intermediate paths so the legacy
@@ -7894,11 +8057,17 @@ function _renderVerdictPanel() {
       }
       await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/queue/${encodeURIComponent(review.itemId)}`, { method: 'DELETE' });
       await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/queue/resume`, { method: 'POST' });
-      
+
       state.awaitingVerdict = false;
       state.critiqueReview = null;
       _renderVerdictPanel();
       _updateTaskHUD();
+      _broadcastCritiqueResolved('discard');
+      // bug-57: discard ABANDONS the run — clear _activeRunItem on
+      // the server too so multi-stage critique gating + future
+      // dispatches start clean. Idempotent: server checks itemId
+      // match and no-ops if the active item is something else.
+      _broadcastRunDone('discard');
     } catch (err) {
       console.error('Discard action failed:', err);
     }
@@ -7906,11 +8075,12 @@ function _renderVerdictPanel() {
 
   btnFix.addEventListener('click', () => {
     const promptText = `[run:plan#${review.itemId}] Gemini flagged issues with your implementation:\n\n${review.critique}\n\nPlease resolve them.`;
-    
+
     state.awaitingVerdict = false;
     state.critiqueReview = null;
     _renderVerdictPanel();
     _updateTaskHUD();
+    _broadcastCritiqueResolved('fix');
 
     authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/queue/resume`, { method: 'POST' }).then(() => {
       sendChatMessage(promptText);
@@ -7929,11 +8099,20 @@ function _renderVerdictPanel() {
           await _planChangedFilesAction('accept', paths);
         }
       }
-      
+
       state.awaitingVerdict = false;
       state.critiqueReview = null;
       _renderVerdictPanel();
       _updateTaskHUD();
+      _broadcastCritiqueResolved('accept');
+      // bug-57: this Accept handler renders only for FINAL critiques
+      // (the early-return at the top of _renderVerdictPanel's
+      // post-render block skips this block for isError/isIntermediate
+      // states). FINAL = verify-stage-done in the 3-stage methodology
+      // (the last stage's critique is the "final" one). So this
+      // accept ENDS the run: clear _activeRunItem + advance queue.
+      // Idempotent: server checks itemId match.
+      _broadcastRunDone('accept-verify');
 
       await authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/queue/resume`, { method: 'POST' });
     } catch (err) {
@@ -8034,6 +8213,16 @@ function _applyMenuStateUpdate(msg) {
 // when called from a state-update; called with no arg from
 // artifacts-init to refresh whatever's open.
 function _onArtifactsCacheUpdated(type) {
+  // fr-96: rebuild the per-plan-item stageState map from the artifact
+  // cache. stageState lives in item.meta.stageState (server-persisted
+  // in plan.json + shipped to client via artifacts-init / state-update
+  // kind:'artifact' frames). This derived view lets the HUD render
+  // "X awaiting accept on code stage" immediately on attach without
+  // a separate fetch — the data is already aboard. Subsequent
+  // transitions come in via the kind:'plan-item-stage' WS broadcast
+  // (which directly mutates state.planItemStages without going
+  // through this function).
+  _rebuildPlanItemStagesFromArtifacts();
   const active = state.artifactView && state.artifactView.active;
   // fr-6: a deep-link in the URL (e.g. `…/#fr-7`) needs the artifact
   // cache populated to figure out which tab the item lives in. The
@@ -8045,6 +8234,29 @@ function _onArtifactsCacheUpdated(type) {
   if (type && type !== active) return;
   // Re-run the existing loadArtifact path; it'll prefer the cache.
   loadArtifact(active).catch(() => {});
+}
+
+// fr-96: derive state.planItemStages from the cached plan items'
+// meta.stageState. Called from _onArtifactsCacheUpdated on every
+// artifact-cache mutation (artifacts-init + state-update kind:'artifact').
+// Updates the HUD if the active running item's stage state changed.
+function _rebuildPlanItemStagesFromArtifacts() {
+  const next = {};
+  const plan = state.artifacts && state.artifacts.byType && state.artifacts.byType.plan;
+  if (plan && Array.isArray(plan.items)) {
+    for (const item of plan.items) {
+      if (item && item.id && item.meta && item.meta.stageState) {
+        const ss = item.meta.stageState;
+        next[item.id] = {
+          stage: ss.stage,
+          status: ss.status,
+          updatedAt: ss.updatedAt,
+        };
+      }
+    }
+  }
+  state.planItemStages = next;
+  _updateTaskHUD();
 }
 
 // fr-6 deep-link plumbing — scroll-into-view + highlight a specific

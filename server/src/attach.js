@@ -194,6 +194,19 @@ function _registerExternalSession(sessionId, session) {
           console.log(`[td-33] stage-done(${stage}) fired without active run item — skipping`);
           return;
         }
+        // bug-57: mark that this run has emitted at least one stage
+        // sentinel. The turn_result handler reads this to decide
+        // whether to keep _activeRunItem alive across the next
+        // turn_result (multi-stage methodology) or clear it (legacy
+        // one-shot behavior). Without the flag, the eager clear on
+        // every turn_result would null out _activeRunItem after the
+        // analyze stage's turn ends, and stages 2 + 3 wouldn't fire
+        // critiques — exactly the gap bug-57 closes.
+        session._sawStageSentinelInRun = true;
+        // fr-96: stage-done → status awaiting_verdict transition.
+        // The critic is about to fire; once it broadcasts, the
+        // next transition will be → awaiting_accept (via critique.js).
+        _transitionStageState(sessionId, session, active.itemId, stage, 'awaiting_verdict');
         const rec = sessionsMod.getSessionRecord(sessionId);
         if (!rec || !rec.absCwd) return;
         const { listChangedFiles, readDiff } = require('./files');
@@ -358,7 +371,20 @@ function _registerExternalSession(sessionId, session) {
               console.error('[runQueue] auto-advance failed:', err.message);
             }
           })();
-          session._activeRunItem = null;
+          // bug-57: keep _activeRunItem alive across multi-stage runs.
+          // Only clear when the agent never emitted any [stage: X
+          // done] sentinel — that's the legacy one-shot case where
+          // a single turn_result completes the run. When stage
+          // sentinels were emitted, _activeRunItem must survive so
+          // the stage-done handler at line 192 can dispatch the
+          // intermediate critique for stages 2 + 3 (those stages
+          // happen in LATER turns, after this turn_result fires).
+          // The clear-on-verify-accept happens via the new
+          // POST /sessions/:id/run/done route (bug-57) — wired from
+          // the verdict pane's ✓ Accept / ✗ Discard handlers.
+          if (!session._sawStageSentinelInRun) {
+            session._activeRunItem = null;
+          }
           return;
         }
       } else {
@@ -1731,7 +1757,18 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
       baselineDirty: baseline.dirtyPaths,      // Set of path strings dirty at run-start
       baselineHead: baseline.head,             // SHA at run-start (informational; logged on critique skip)
     };
+    // bug-57: reset the stage-sentinel-seen flag at run start. The
+    // flag accumulates across the multi-turn run (analyze → code →
+    // verify) and gets reset only when a fresh [run:plan#X] dispatch
+    // overwrites _activeRunItem.
+    session._sawStageSentinelInRun = false;
     _stampPlanItemStatus(sessionId, runMatch[2], 'running', null);
+    // fr-96: initialize the per-plan-item stage state machine. The
+    // dispatch is the [*] → analyze.in_progress transition. Persists
+    // in plan.json via _initAndBroadcastStageState — survives container
+    // restarts so the HUD reflects "X awaiting accept on code stage"
+    // across attaches.
+    _initAndBroadcastStageState(sessionId, session, runMatch[2]);
   }
   sessionsMod.appendChatMessage(sessionId, message);
   session.emit('chat', message);
@@ -1945,6 +1982,120 @@ async function runAssistant(sessionId, session, lastMessage) {
   session.emit('chat', reply);
 }
 
+// fr-96: per-plan-item stage state machine helpers — wired into the
+// dispatch site, stage-done handler, critique gate (via critique.js's
+// resolveCritique extension), and clearActiveRunItem.
+//
+// Each helper:
+//   1. Locates the item in rec.artifacts.plan.items
+//   2. Calls the corresponding pure-function helper from stageState.js
+//   3. Persists via sessionsMod.saveStore()
+//   4. Broadcasts via _broadcastStageState
+// Defensive: if the item doesn't exist or isn't a plan item, no-op +
+// log. Race-safe — if the rec is in flux (e.g. user just cancelled
+// the queue entry), the helper returns gracefully.
+const stageStateMod = require('./stageState');
+
+function _findPlanItemInRec(rec, itemId) {
+  if (!rec || !rec.artifacts || !rec.artifacts.plan) return null;
+  const items = rec.artifacts.plan.items;
+  if (!Array.isArray(items)) return null;
+  return items.find((it) => it && it.id === itemId) || null;
+}
+
+function _broadcastStageState(sessionId, session, itemId, stageState) {
+  if (!session) return;
+  const payload = stageStateMod.toBroadcastPayload(itemId, stageState);
+  session.emit('state-update', { kind: 'plan-item-stage', ...payload });
+}
+
+function _initAndBroadcastStageState(sessionId, session, itemId) {
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  const item = _findPlanItemInRec(rec, itemId);
+  if (!item) {
+    console.log(`[fr-96] _initAndBroadcastStageState(${sessionId}, ${itemId}) — item not found in plan.json; no-op`);
+    return;
+  }
+  const ss = stageStateMod.initStageState(item);
+  sessionsMod.saveStore();
+  _broadcastStageState(sessionId, session, itemId, ss);
+}
+
+function _transitionStageState(sessionId, session, itemId, stage, status) {
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  const item = _findPlanItemInRec(rec, itemId);
+  if (!item) {
+    console.log(`[fr-96] _transitionStageState(${sessionId}, ${itemId}, ${stage}, ${status}) — item not found; no-op`);
+    return;
+  }
+  const ss = stageStateMod.applyTransition(item, stage, status);
+  if (!ss) {
+    console.log(`[fr-96] _transitionStageState(${sessionId}, ${itemId}, ${stage}, ${status}) — item has no stageState (race with clear?); no-op`);
+    return;
+  }
+  sessionsMod.saveStore();
+  _broadcastStageState(sessionId, session, itemId, ss);
+}
+
+function _clearAndBroadcastStageState(sessionId, session, itemId) {
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  const item = _findPlanItemInRec(rec, itemId);
+  if (!item) return;                            // already gone — no-op
+  const cleared = stageStateMod.clearStageState(item);
+  if (cleared) {
+    sessionsMod.saveStore();
+    _broadcastStageState(sessionId, session, itemId, null);
+  }
+}
+
+// bug-57: clear the active-run-item context + optionally advance the
+// run queue. Called by POST /sessions/:id/run/done (which the verdict
+// pane's ✓ Accept on verify-stage + ✗ Discard buttons fire). The
+// itemId match is idempotent — if the request is for a stale itemId
+// that no longer matches the current _activeRunItem (e.g. user
+// already dispatched something else), this is a no-op. The reason
+// string is logged for audit; not persisted.
+//
+// Why a helper: extracting the clear out of the inline turn_result
+// handler gives fr-96 a single point to attach the state-machine
+// transitions to (when verify-accept → mark plan-item.meta.stageState
+// = 'done', etc.). Today it's just the clear + advance; fr-96 will
+// extend.
+function clearActiveRunItem(sessionId, session, opts = {}) {
+  if (!session) return false;
+  const reqItemId = opts && opts.itemId;
+  const reason = (opts && typeof opts.reason === 'string') ? opts.reason : 'unknown';
+  const active = session._activeRunItem;
+  if (!active || !active.itemId) {
+    console.log(`[bug-57] clearActiveRunItem(${sessionId}, ${reqItemId}, ${reason}) — no active run item; no-op`);
+    return false;
+  }
+  if (reqItemId && reqItemId !== active.itemId) {
+    console.log(`[bug-57] clearActiveRunItem(${sessionId}, ${reqItemId}, ${reason}) — itemId mismatch (active=${active.itemId}); no-op`);
+    return false;
+  }
+  console.log(`[bug-57] clearActiveRunItem(${sessionId}, ${active.itemId}, ${reason}) — clearing + advancing queue`);
+  const finishedItemId = active.itemId;
+  session._activeRunItem = null;
+  session._sawStageSentinelInRun = false;
+  // fr-96: clear the stage-state machine. This is the
+  // awaiting_accept → [*] cleared transition for the verify stage
+  // (run done) OR the wherever-we-were → [*] cleared transition for
+  // discard. Broadcasts the cleared state so other devices clear
+  // their HUD display of "X awaiting accept on Y stage."
+  _clearAndBroadcastStageState(sessionId, session, finishedItemId);
+  // Advance the queue if this item was the head running entry. The
+  // turn_result handler used to fire this on every success; with
+  // bug-57 we defer it to /run/done so multi-stage runs don't
+  // prematurely advance to the next plan item.
+  try {
+    _advanceRunQueue(sessionId, session, finishedItemId, { subtype: 'success' });
+  } catch (err) {
+    console.error('[bug-57] _advanceRunQueue from clearActiveRunItem failed:', err.message);
+  }
+  return true;
+}
+
 module.exports = {
   getSession,
   killSession,
@@ -1963,6 +2114,17 @@ module.exports = {
   // time, so rec.admins changes don't reach in-flight viewer WSes
   // without a reconnect).
   _kickViewerByLogin,
+  // bug-57: clearActiveRunItem helper — exported for the
+  // POST /sessions/:id/run/done route in index.js.
+  clearActiveRunItem,
+  // fr-96: stage-state helpers exported for critique.js (which calls
+  // _transitionStageState after broadcasting critique-review + after
+  // resolving via Accept Stage / Fix Stage). Keeping the broadcast
+  // helper centralized in attach.js ensures one source of truth for
+  // the state-update emit shape.
+  _transitionStageState,
+  _clearAndBroadcastStageState,
+  _findPlanItemInRec,
   // Re-export menu helpers so callers that historically grabbed them off
   // ptyMod continue to find them.
   handleSessionMenu: menuMod.handleSessionMenu,

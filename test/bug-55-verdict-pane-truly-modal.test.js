@@ -111,22 +111,32 @@ t('styles.css: .chat-composer-verdict-panel still uses position:fixed inset:0 (m
 
 // ── 3. Explicit-button dismissal still works (state-wipe sites preserved) ──
 
-t('app.js: exactly 4 state.critiqueReview wipe sites (one per explicit button — Dismiss / Discard / Fix / Accept) — backdrop path removed', () => {
+t('app.js: exactly 7 state.critiqueReview wipe sites (4 final + 2 intermediate stage + 1 cross-device WS handler) — backdrop path removed', () => {
   const src = _read('web/public/app.js');
-  // After bug-55, the state-wipe sites are inside the four button
-  // click handlers, NOT inside a backdrop/Esc helper. Count them.
+  // After bug-55, the state-wipe sites are inside the explicit button
+  // click handlers, NOT inside a backdrop/Esc helper.
+  // Count provenance:
+  //   Pre-bug-55: 5 sites (1 in backdrop dismissPanel + 4 final buttons).
+  //   bug-55 fix: 4 sites (the 4 final buttons only — backdrop path gone).
+  //   bug-54 fix: 5 sites (4 final buttons + 1 critique-resolved WS handler).
+  //   bug-56 fix: 7 sites (+ 2 intermediate-state buttons:
+  //               ✓ Accept Stage and ⚡ Ask Claude to Fix Stage).
+  // The bug-55 contract (no backdrop/Esc dismissal) is still
+  // satisfied because none of the 7 sites belong to a backdrop click
+  // or Esc handler.
   const wipeSites = (src.match(/state\.critiqueReview\s*=\s*null/g) || []).length;
-  // Pre-fix: 5 sites (1 in backdrop dismissPanel + 4 buttons).
-  // Post-fix: 4 sites (the 4 buttons only).
-  assert.strictEqual(wipeSites, 4,
-    `expected exactly 4 state.critiqueReview = null sites after bug-55 (one per explicit button — Dismiss / Discard / Fix / Accept). Got ${wipeSites}. If higher, the backdrop path may have crept back in.`);
+  assert.strictEqual(wipeSites, 7,
+    `expected exactly 7 state.critiqueReview = null sites (4 final buttons + 2 intermediate stage buttons + 1 critique-resolved WS handler). Got ${wipeSites}. If higher, the backdrop path may have crept back in OR another sync surface was added without updating this guard.`);
 });
 
-t('app.js: exactly 4 state.awaitingVerdict = false sites — matching the 4 button-handler state wipes', () => {
+t('app.js: exactly 7 state.awaitingVerdict = false sites — matching the 7 critiqueReview wipes', () => {
   const src = _read('web/public/app.js');
   const awaitingSites = (src.match(/state\.awaitingVerdict\s*=\s*false/g) || []).length;
-  assert.strictEqual(awaitingSites, 4,
-    `expected exactly 4 state.awaitingVerdict = false sites after bug-55 (matching the 4 critiqueReview wipes). Got ${awaitingSites}.`);
+  // bug-56 follow-up: same count bump as critiqueReview — the
+  // intermediate Accept Stage + Fix Stage handlers clear both
+  // together.
+  assert.strictEqual(awaitingSites, 7,
+    `expected exactly 7 state.awaitingVerdict = false sites (4 final buttons + 2 intermediate stage buttons + 1 critique-resolved WS handler). Got ${awaitingSites}.`);
 });
 
 // ── 4. Marker comment + supersession note ──

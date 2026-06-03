@@ -317,12 +317,21 @@ assumption shows up not just to the requester but to every collaborator
 attached to the session. These rules front-load the clarifying step so
 the autonomous portion runs on a confirmed, witnessed premise.
 
-## 9. Stage-aware critic — 3 stages, mandatory discipline (td-33 r3)
+## 9. Stage-aware critic — 3 stages, user-driven progression (td-34)
+
+> td-34 SUPERSEDES td-33 r3's auto-iterate clause. Pre-td-34 the
+> directive said claude should auto-iterate up to 2x on critic
+> disagreement before pausing. Empirically that didn't deliver the
+> human-in-the-loop discipline the user wanted — claude barreled
+> through stages without giving the user a chance to review each
+> checkpoint. td-34 replaces it with the **explicit pause-and-
+> await-accept** flow (the 5-step loop below). The auto-iterate
+> language is gone; the human is in the loop on every stage.
 
 When working through a `[run:plan#X]` dispatch, claude **MUST**
 structure work into three explicit stages, emit a stage-boundary
-sentinel at each transition, and gate progression on the
-checkpoint critic verdict.
+sentinel at each transition, and **PAUSE for an explicit user
+accept signal before advancing to the next stage**.
 
 **Scope.** This rule applies to plan-item dispatches (any chat
 message containing `[run:plan#<id>]`, including ▶ Run button
@@ -375,54 +384,116 @@ can sit on its own line or mid-paragraph.
   not pre-existing WIP — the dispatch-drift filter from
   `2026-06-03 critic-truncation-and-dispatch-drift` fix).
 - Fires the configured critic (Gemini by default) with a CHECKPOINT
-  prompt + td-33 r2 file-context enrichment.
-- Broadcasts the verdict with `isIntermediate: true` so the chat
+  prompt + td-33 r2 file-context enrichment + fr-95 specialty
+  fan-out (General + Test-Validity + Perf/Security on final
+  critiques; general-only on intermediate).
+- Broadcasts the verdict with `isIntermediate: true` so the verdict
   pane shows a `[CHECKPOINT: <stage>]` badge.
+- **Transitions the per-plan-item state machine** (fr-96):
+  - `[stage: X done]` sentinel → `X.awaiting_verdict`
+  - critic verdict broadcast → `X.awaiting_accept`
+  - Persisted to `rec.artifacts.plan.items[].meta.stageState` —
+    survives container restarts so the HUD reflects the current
+    stage even after a reattach.
+  - Broadcast via `state-update kind:'plan-item-stage'` so every
+    attached device's HUD agrees on the current stage.
+- **Keeps `_activeRunItem` alive across stages** (bug-57) — the
+  pre-bug-57 eager clear on every `turn_result` meant only stage 1
+  got a critic; stages 2 + 3 fell silent. bug-57 tracks
+  `_sawStageSentinelInRun` so multi-stage runs survive turn_result
+  until verify-accept or explicit `/run/done`.
 - **Does NOT pause the run queue** — intermediate critiques are
-  advisory.
+  advisory; only the final critique (on verify-stage turn_result)
+  pauses the queue, and only `✓ Accept Claude` on that final
+  verdict ends the run.
 
-### Auto-iterate on critic disagreement (the new r3 rule)
+### User-driven progression — the 5-step loop (td-34)
 
-When the checkpoint critic flags issues (broadcast has
-`hasDisagreement: true` and `isError: false`), you DO NOT pause for
-user input on the first flag. Instead:
+Every stage runs through this loop. The user is in the loop at the
+critic step — claude does NOT auto-advance, does NOT auto-iterate.
 
-1. **Address the critic's points in-place.** If analyze stage
-   flagged a missing assumption, list it. If code stage flagged a
-   missing test for an edge case, add it. Apply the smallest fix
-   that resolves the flagged issue.
-2. **Re-emit the same stage sentinel** to re-fire the critique.
-3. Repeat AT MOST TWICE per stage. After 2 unsuccessful retries
-   (still `hasDisagreement: true` after the third attempt), STOP
-   and surface to the user with a brief summary of what the critic
-   keeps flagging — let them decide whether the critic is right or
-   noisy.
-4. If the critic returns `INSUFFICIENT INFORMATION` (rare after
-   r2), include the requested context inline and re-fire ONCE.
-   If still INSUFFICIENT after that, surface to the user.
+1. **stage** — work the current stage to its done-criteria above.
+   Emit the corresponding `[stage: X done]` sentinel exactly once.
+2. **stage critic** — the server fires the critic + broadcasts the
+   verdict to the **truly-modal verdict pane** (bug-55 — no
+   backdrop-click dismiss; the verdict can only be closed by an
+   explicit button). The state machine transitions to
+   `X.awaiting_accept`. Every attached device sees the same modal
+   (bug-54 — cross-device sync via `critique-resolved` broadcast).
+3. **next stage if accepted** — the user signals accept by:
+   - Clicking `✓ Accept Stage` on the intermediate verdict pane
+     (bug-56), OR
+   - Clicking `✓ Accept Claude` on the final verdict pane (verify
+     stage only — this also runs `/run/done` and advances the
+     queue), OR
+   - Replying with any accept-class phrase in chat: `accept`,
+     `accepted`, `yes`, `looks good`, `proceed`, `ship it`, `✓`,
+     or simply naming the next stage (`code stage`, `verify`).
 
-**Why 2 retries, not unlimited.** Two iterations cover the common
-"missed an edge case → added it" → "missed another edge case →
-added it" cycle. Beyond 2, the critic is either chasing a moving
-target it can't resolve OR claude is mis-interpreting the critic's
-feedback — both cases benefit from a human in the loop.
+   When the accept signal is received, claude advances to the next
+   stage immediately — NO additional `continue` / `proceed` keyword
+   needed beyond the accept signal itself.
+
+4. **rerun critic if follow-up question is provided** — the user
+   types into the verdict pane's textarea + clicks
+   `💬 Ask Critic` (bug-53). The critic re-fires with the typed
+   question as a priority focus inside the standard review (the
+   `[USER FOLLOW-UP — give this priority over the generic review]`
+   block in `critique.js`). The user can also type a chat-level
+   question without using the pane; claude treats it as a
+   follow-up directive and waits for the next critic verdict before
+   advancing.
+5. **rerun stage if asked to fix** — the user clicks
+   `⚡ Ask Claude to Fix Stage` on the intermediate pane (or
+   `⚡ Ask Claude to Fix` on the final pane). The state machine
+   transitions to `X.in_progress` (same stage) and claude redoes
+   the stage addressing the critic's flagged issues, then emits a
+   fresh `[stage: X done]` sentinel — looping back to step 2.
+
+**Silence ≠ accept.** If the user replies with anything that
+isn't a clear accept signal, claude stays paused. Ambiguous replies
+get a brief clarifying question, not an autonomous decision.
 
 ### Behavioral honesty
 
-The auto-iterate rule is **directive-based, not server-enforced**.
-The server fires the critic; *you*, claude, are responsible for
-reading the verdict, applying the fix, and re-emitting the
-sentinel. The server logs every stage-done sentinel + critique fire
-(`[td-33] session <id> fired stage-done: <stage>`) so adherence is
+Most of the methodology is now **server-backed** (fr-96 state
+machine + bug-57 lifetime fix + bug-54 broadcast + bug-55/56
+verdict pane). What's still directive-based:
+
+- **The PAUSE between stages.** The server tracks `awaiting_accept`
+  status, but it doesn't physically block claude from continuing
+  to write — claude is responsible for honoring the pause + waiting
+  for the user's accept signal. The 5-step loop above is the
+  contract you commit to.
+- **Recognizing accept signals.** "yes", "accept", "ship it", a
+  bare stage name like "code", or a click on `✓ Accept Stage` —
+  all qualify. Ambiguous replies don't qualify; surface a
+  clarifying question instead of guessing.
+- **Routing follow-up questions.** A typed question in the verdict
+  pane goes through the `💬 Ask Critic` button; a chat-level
+  question is routed by you reading intent (critic re-fire vs.
+  claude re-do).
+
+The server logs every stage-done sentinel + critique fire
+(`[td-33] session <id> fired stage-done: <stage>`) AND every state
+transition (`[fr-96] _transitionStageState(...)`) so adherence is
 auditable post-hoc.
 
-A future iteration may add server-side enforcement (e.g.
-auto-queue a synthetic "address the critic's feedback" prompt
-after each disagreement) — for now, discipline lives in this
-template.
+A future iteration may add server-side enforcement on the pause
+(e.g. block the agent's next `query()` while
+`status === 'awaiting_accept'`) — for now, the pause discipline
+lives in this template.
 
 ### Common pitfalls
 
+- **Auto-advancing through stages without explicit user accept**
+  (the discipline failure that motivated td-34). Empirically
+  observed in the very session that shipped fr-95 + bug-53 + bug-55
+  — claude emitted `[stage: analyze done]`, self-critiqued
+  internally, and barreled straight into code without giving the
+  user a chance to review the analyze plan. Always stop at the
+  sentinel. Always wait for an accept signal. Silence is not
+  acceptance.
 - **Skipping analyze when the task "seems simple."** The user has
   flagged this multiple times. Even a one-line CSS fix benefits
   from a 3-sentence "restate + plan + assumptions" because surprise
@@ -435,6 +506,10 @@ template.
   full adjacent-suite list, the test.sh wiring, and the regression
   grep. Just running the new test in isolation is part of code,
   not verify.
+- **Reading "no specific keyword needed" as "no signal needed."**
+  The user said they shouldn't have to type `continue` / `proceed`
+  / `code` as a separate keyword after an accept. They did NOT say
+  the accept signal itself is optional. Silence means wait.
 
 ---
 

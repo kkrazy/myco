@@ -68,21 +68,32 @@ t('best-practices-template.md: §9 lists explicit done-criteria for each stage (
     'verify done-criteria must reference test.sh wiring so the regression test actually runs on future changes.');
 });
 
-t('best-practices-template.md: §9 carries the auto-iterate clause with an explicit 2-retry cap', () => {
+t('best-practices-template.md: §9 carries the auto-iterate clause with an explicit 2-retry cap OR the td-34 supersession marker', () => {
   const md = _read('web/public/best-practices-template.md');
-  // The auto-iterate rule must be specific about the retry count.
-  assert.ok(/auto-iterate|automatically iterate|AT MOST TWICE|at most twice|up to TWO/i.test(md),
-    '§9 must describe the auto-iterate behavior so claude knows to fix-and-retry instead of immediately surfacing every critic flag.');
-  assert.ok(/TWO|twice|2\s+(retr|attempts|iterations)/i.test(md),
-    '§9 must spell out the explicit 2-retry cap so claude doesn\'t loop indefinitely or give up too early.');
+  // td-34 follow-up: td-33 r3's auto-iterate clause was replaced by
+  // the explicit pause-and-await-accept 5-step loop (the user
+  // empirically saw claude barrel through stages without giving
+  // them a chance to review). The contract this test locks is now:
+  // EITHER the auto-iterate clause is present (legacy td-33 r3 era)
+  // OR a td-34 SUPERSEDES td-33 r3 marker is present (post-rewrite).
+  // Pinning the auto-iterate clause as the only valid state would
+  // re-lock the failure mode td-34 fixes.
+  const hasAutoIterate = /auto-iterate|automatically iterate|AT MOST TWICE|at most twice|up to TWO/i.test(md);
+  const hasSupersession = /td-34\s+SUPERSEDES\s+td-33\s+r3/i.test(md);
+  assert.ok(hasAutoIterate || hasSupersession,
+    '§9 must EITHER describe the auto-iterate behavior (legacy td-33 r3) OR carry a "td-34 SUPERSEDES td-33 r3" marker (post-rewrite). Neither was found — the methodology has drifted unmarked.');
 });
 
-t('best-practices-template.md: §9 explicitly states the auto-iterate is DIRECTIVE-BASED, not server-enforced', () => {
+t('best-practices-template.md: §9 carries a "behavioral honesty" section (directive-based vs server-enforced)', () => {
   const md = _read('web/public/best-practices-template.md');
   // Honest scope. Without this honesty, a future maintainer might
-  // think there's server-side retry logic and break it.
-  assert.ok(/directive-based|not server-enforced|relies on the directive|behavioral honesty/i.test(md),
-    '§9 must be honest about the auto-iterate being claude-side (directive-based) rather than server-enforced — surfaces the limitation so future work can decide whether to add server-side enforcement.');
+  // think there's server-side enforcement logic and break it.
+  // td-34 follow-up: the honesty rule still applies but now to the
+  // PAUSE between stages (not the auto-iterate). Either phrasing
+  // satisfies — both are about distinguishing directive-based
+  // claude-side discipline from server-enforced behavior.
+  assert.ok(/directive-based|not server-enforced|relies on the directive|behavioral honesty|server-backed/i.test(md),
+    '§9 must be honest about which bits are claude-side (directive-based) vs server-enforced — surfaces the limitation so future work can decide whether to add stronger server-side enforcement.');
 });
 
 t('best-practices-template.md: §9 still references all three sentinel patterns', () => {

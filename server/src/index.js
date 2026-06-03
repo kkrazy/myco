@@ -1502,6 +1502,73 @@ app.post('/sessions/:id/critique/retry', async (req, res) => {
   }
 });
 
+// bug-54: cross-device verdict-pane sync. Called by the four resolving
+// buttons (✗ Dismiss / ✗ Discard / ⚡ Ask Claude to Fix / ✓ Accept
+// Claude) AFTER their primary action completes. Broadcasts
+// `state-update { kind: 'critique-resolved', itemId, reason }` so
+// every attached client clears its local verdict pane. The originating
+// device also receives the broadcast; the client-side guard makes
+// that an idempotent no-op. ↻ Retry and 💬 Ask Critic don't call
+// this — they re-fire the critique, which produces a new
+// `critique-review` broadcast that naturally replaces the verdict.
+// Auth: viewer-gated (same tier as /critique/retry — touching the
+// verdict surface is a per-device interaction, no privileged side
+// effects).
+app.post('/sessions/:id/critique/resolve', (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const critique = require('./critique');
+  const attachMod = require('./attach');
+  const session = attachMod.getSession && attachMod.getSession(ctx.id);
+  // If the session isn't live, the broadcast can't reach anyone — but
+  // the client-side state was already cleared locally before the POST.
+  // Return ok so the client's fire-and-forget doesn't log a 404.
+  if (!session) return res.json({ ok: true, broadcast: false });
+  const reason = (req.body && typeof req.body.reason === 'string') ? req.body.reason : 'unknown';
+  const itemId = (req.body && req.body.itemId) || null;
+  critique.resolveCritique(ctx.id, session, { itemId, reason });
+  res.json({ ok: true, broadcast: true });
+});
+
+// bug-57: end-of-run signal. Called by the verdict pane's ✓ Accept
+// (verify stage only) + ✗ Discard handlers. Clears session
+// ._activeRunItem (which the 3-stage methodology kept alive across
+// multiple turn_result events for stages 2 + 3 critic dispatch) and
+// advances the run queue to the next pending plan item. Idempotent
+// itemId check — if the active item no longer matches (e.g. the user
+// already dispatched something else), this is a no-op.
+//
+// Auth: viewer-gated (same tier as /critique/retry + /critique/resolve
+// — these are all per-device verdict-pane interactions, no privileged
+// side effects beyond what the pane already drives).
+//
+// This route is the COMPLEMENT to the pre-bug-57 eager clear that
+// fired on every turn_result. With bug-57 the clear only happens on:
+//   (a) this route (verify-accept / discard)
+//   (b) turn_result success when no stage sentinel was seen (legacy
+//       one-shot dispatch — preserved via _sawStageSentinelInRun
+//       flag in attach.js)
+//   (c) turn_result abort/fatal (existing behavior)
+//   (d) session interrupt recovery (existing behavior)
+app.post('/sessions/:id/run/done', (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const attachMod = require('./attach');
+  const session = attachMod.getSession && attachMod.getSession(ctx.id);
+  if (!session) return res.json({ ok: true, cleared: false, reason: 'no live session' });
+  const itemId = (req.body && req.body.itemId) || null;
+  const reason = (req.body && typeof req.body.reason === 'string') ? req.body.reason : 'unknown';
+  const cleared = attachMod.clearActiveRunItem(ctx.id, session, { itemId, reason });
+  res.json({ ok: true, cleared });
+});
+
+// fr-96: NOTE on the absence of a GET /plan-item/stage-states route.
+// An earlier design included one for fresh-attach catch-up, but the
+// client derives state.planItemStages from item.meta.stageState
+// already present in the artifacts-init frame (and refreshed via
+// state-update kind:'artifact' broadcasts). The GET would be dead
+// code today — added only if a future non-WS consumer needs it.
+
 // Plan / Arch / Test artifact routes — see server/src/artifacts.js for the
 // route bodies. They need fileApiPreamble (defined above) plus the
 // chat-dispatch hooks; passing them in keeps artifacts.js decoupled from

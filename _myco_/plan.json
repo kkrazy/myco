@@ -5042,14 +5042,53 @@
       "addedAt": "2026-06-03T14:43:11.301Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "c29e4d4499a3",
+          "user": "claude",
+          "text": "✓ success · 387.3s · $7.2912 · 30↓/23921↑\n\n**bug-54 current state (uncommitted, awaiting your accept):**\n\n| File | Change |\n|---|---|\n| `server/src/critique.js` | `resolveCritique` helper exported |\n| `server/src/index.js` | `POST /sessions/:id/critique/resolve` route, viewer-gated |\n| `web/public/app.js` | `critique-resolved` WS handler + `_broadcastCritiqueResolved` helper + 4 button calls |\n| `test/bug-54-cross-device-verdict-sync.test.js` | NEW — 9/9 cases green standalone |\n| `test/test.sh` | bug-54 entry wired |\n\n**bug-56 filed** for the intermediate Accept-button gap. Not starting work on it yet — also awaiting your accept on bug-54 first.\n\n**Pausing.** Awaiting your explicit accept on bug-54 (or instruction to address something).",
+          "ts": "2026-06-03T15:34:33.137Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T15:28:02.381Z"
+          }
+        },
+        {
+          "id": "b89a4ae77046",
+          "user": "claude",
+          "text": "✓ success · 486.2s · $9.3072 · 11↓/5521↑\n\nAll node test-files green. EXIT=1 only from docker-missing (confirmed-environmental).\n\n---\n\n## bug-54 — verify complete\n\n| Surface | Status |\n|---|---|\n| `test/bug-54-cross-device-verdict-sync.test.js` (9 cases) | ✓ |\n| `test/bug-55-...truly-modal.test.js` (8 cases — count guard updated 4→5 for the new WS handler) | ✓ |\n| All other critic/verdict tests | ✓ |\n| Full suite | green at the testable level |\n\n**Pausing.** bug-54 verify is complete on disk. Awaiting your next instruction — `commit + push + deploy mycodev` / `commit + push only` / start bug-56 (intermediate Accept button) / something else.",
+          "ts": "2026-06-03T15:47:25.551Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-03T15:28:02.325Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the critic popover should disappear if it's handled by other users or from another device, right now it can stuck while it's already been handled somewhere else.",
         "rewritten": true
       },
-      "description": "**Problem:** The critic popover can get stuck open even after the underlying item has already been handled elsewhere.\n**Expected:** Popover should auto-dismiss when the critic is handled by another user or from another device.\n**Actual:** Popover remains visible and actionable despite the critic no longer being open."
+      "description": "**Problem:** The critic popover can get stuck open even after the underlying item has already been handled elsewhere.\n**Expected:** Popover should auto-dismiss when the critic is handled by another user or from another device.\n**Actual:** Popover remains visible and actionable despite the critic no longer being open.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-03T15:34:33.137Z",
+          "startedAt": "2026-06-03T15:28:02.381Z",
+          "summary": "387.3s · 30→23921 tok",
+          "result": "**bug-54 current state (uncommitted, awaiting your accept):**\n\n| File | Change |\n|---|---|\n| `server/src/critique.js` | `resolveCritique` helper exported |\n| `server/src/index.js` | `POST /sessions/:id/critique/resolve` route, viewer-gated |\n| `web/public/app.js` | `critique-resolved` WS handler + `_broadcastCritiqueResolved` helper + 4 button calls |\n| `test/bug-54-cross-device-verdict-sync.test.js` | NEW — 9/9 cases green standalone |\n| `test/test.sh` | bug-54 entry wired |\n\n**bug-56 filed** for the intermediate Accept-button gap. Not starting work on it yet — also awaiting your accept on bug-54 first.\n\n**Pausing.** Awaiting your explicit accept on bug-54 (or instruction to address something)."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-03T15:47:25.551Z",
+          "startedAt": "2026-06-03T15:28:02.325Z",
+          "summary": "486.2s · 11→5521 tok",
+          "result": "All node test-files green. EXIT=1 only from docker-missing (confirmed-environmental).\n\n---\n\n## bug-54 — verify complete\n\n| Surface | Status |\n|---|---|\n| `test/bug-54-cross-device-verdict-sync.test.js` (9 cases) | ✓ |\n| `test/bug-55-...truly-modal.test.js` (8 cases — count guard updated 4→5 for the new WS handler) | ✓ |\n| All other critic/verdict tests | ✓ |\n| Full suite | green at the testable level |\n\n**Pausing.** bug-54 verify is complete on disk. Awaiting your next instruction — `commit + push + deploy mycodev` / `commit + push only` / start bug-56 (intermediate Accept button) / something else."
+        }
+      ]
     },
     {
       "id": "bug-55",
@@ -5061,7 +5100,51 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "bug-56",
+      "text": "Intermediate (stage-checkpoint) verdict pane is missing the ✓ Accept button. Today the intermediate state shows only ↻ Retry + ✓ Dismiss; user needs an explicit ✓ Accept affordance at each stage checkpoint so they can signal 'this checkpoint is good, proceed to next stage.' Without it, the auto-pause-await-accept methodology (§9 directive) has no per-stage accept path — dismiss is semantically wrong (means 'continue waiting for final critique'), retry is for re-firing the critic. Fix: add ✓ Accept Stage to the intermediate actions row. Click handler clears local state + fires critique-resolved broadcast (reason='accept-checkpoint'); cross-device sync via bug-54 wiring already in place. Related: bug-54 just shipped the broadcast surface this leverages.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-03T15:34:26.310Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "bug-57",
+      "text": "_activeRunItem cleared on first turn_result, breaking the 3-stage critic methodology. Pre-fix attach.js:361/381 sets session._activeRunItem = null on EVERY turn_result, but the §9 3-stage methodology has stages spanning multiple turns (analyze → user accept → code → user accept → verify). The stage-done handler at attach.js:193 short-circuits when _activeRunItem is null, so critic never fires on stages 2 + 3 — the user reported empirically: 'how come i didn't see critic kicked off during implement of fr-95'. Fix: don't clear _activeRunItem on turn_result. Instead clear it when (a) [stage: verify done] sentinel arrives + final critique broadcasts, OR (b) an explicit /rundone slash command fires, OR (c) the run-queue advances to a different plan item (covers Discard case). The runQueue advancement logic that depends on the current clear-on-turn_result needs revisiting too — today it advances after EVERY turn_result; with the fix it advances only after verify-stage-accept or fr-96 stage-machine transition. Foundational — bug-56 and fr-96 both depend on this.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-03T15:55:48.591Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-96",
+      "text": "Server-side per-plan-item stage state machine. Each plan item carries { stage: 'analyze'|'code'|'verify', status: 'in_progress'|'awaiting_verdict'|'awaiting_accept'|'asked_to_fix'|'accepted' }. Stage transitions: in_progress → awaiting_verdict on [stage: X done] sentinel; awaiting_verdict → awaiting_accept on critic verdict broadcast; awaiting_accept → (next stage in_progress | asked_to_fix | accepted) based on user action; asked_to_fix → in_progress (redo same stage). Item-complete when verify stage = accepted. HUD displays current stage + status. Persists in rec.artifacts.plan.items[].meta.stageState. Broadcasts state-update kind:'plan-item-stage' on transitions for cross-device sync. Depends on bug-57.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-03T15:55:48.591Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "td-34",
+      "text": "td-33 r4: update §9 directive in web/public/best-practices-template.md to codify the full stage state machine. Replace the current 'auto-iterate up to 2x' clause with the user's spec: 1) stage → 2) stage critic → 3) next stage IF ACCEPTED (no auto-advance, pause for explicit accept signal) → 4) rerun critic if follow-up question provided → 5) rerun stage if asked-to-fix (back to step 2 once stage result is provided). Three stages per plan item: analyze, code, verify. Accept signal: clicking ✓ Accept on verdict pane OR chat message expressing accept (accept/yes/looks good/✓/etc). Silence ≠ accept. Depends on bug-57 + bug-56 + fr-96 (the implementation that makes the directive deliverable).",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-06-03T15:55:48.591Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-06-03T14:55:12.827Z"
+  "updatedAt": "2026-06-03T15:55:48.591Z"
 }

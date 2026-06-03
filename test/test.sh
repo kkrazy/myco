@@ -3052,6 +3052,125 @@ test_chat_window() {
   # exactly 4 state-wipe sites (one per explicit button), bug-55
   # comment block explicitly notes the bug-50 r2 supersession.
   node_test_result test/bug-55-verdict-pane-truly-modal.test.js "test/bug-55-verdict-pane-truly-modal.test.js (8 cases)"
+  # bug-54 (critic popover stays open after being handled on another
+  # device/user): user-reported "Critic popover stays open after being
+  # handled on another device/user." Pre-fix the four resolving
+  # buttons (✗ Dismiss / ✗ Discard / ⚡ Ask Claude to Fix / ✓ Accept
+  # Claude) cleared LOCAL state only — other attached devices stayed
+  # showing a stale verdict pane. Discard/Fix/Accept did hit the
+  # server (queue/resume) but their broadcasts (runQueue/artifact)
+  # didn't carry a signal the client could interpret as "clear the
+  # pane." ✗ Dismiss didn't hit the server at all. Fix: new
+  # POST /sessions/:id/critique/resolve route emits state-update
+  # { kind: 'critique-resolved', itemId, reason }; client WS handler
+  # clears state.critiqueReview + awaitingVerdict on receipt
+  # (idempotent guard for the originating device's own broadcast).
+  # ↻ Retry and 💬 Ask Critic don't call resolve — they re-fire,
+  # which produces a fresh critique-review broadcast that naturally
+  # syncs. Locks: server helper + route + viewer-gate, client WS
+  # case + idempotent guard, single _broadcastCritiqueResolved
+  # helper called by exactly 4 buttons (Retry/Ask Critic deliberately
+  # excluded — verified by call-site count = 5: 1 decl + 4 calls).
+  node_test_result test/bug-54-cross-device-verdict-sync.test.js "test/bug-54-cross-device-verdict-sync.test.js (9 cases)"
+  # bug-57 (_activeRunItem cleared on first turn_result, breaking
+  # 3-stage critic methodology): user-observed empirically "how come i
+  # didn't see critic kicked off during implement of fr-95." Pre-fix
+  # attach.js:361/381 cleared session._activeRunItem on EVERY
+  # turn_result; the §9 directive's 3-stage methodology (analyze →
+  # accept → code → accept → verify → accept) spans multiple turns,
+  # so stages 2 + 3 fired without _activeRunItem set → stage-done
+  # handler bailed → no intermediate critique. Fix: track
+  # _sawStageSentinelInRun (true when stage-done fires; false on new
+  # [run:plan#X] dispatch); on turn_result success, conditionally
+  # clear only when no sentinel seen (legacy one-shot preserved).
+  # Add clearActiveRunItem helper + POST /sessions/:id/run/done route
+  # wired from verdict-pane's ✓ Accept (verify stage) + ✗ Discard via
+  # _broadcastRunDone client helper. Foundational for fr-96 (state
+  # machine) and bug-56 (intermediate Accept button). Locks: stage-
+  # sentinel tracking on both ends, success-path conditional clear,
+  # abort/fatal unconditional clear, helper signature + idempotent
+  # itemId guard + queue-advance, route + viewer auth, client helper
+  # called by exactly 2 buttons (discard + accept-verify), bug-57
+  # marker in all 3 touched files.
+  node_test_result test/bug-57-active-run-item-lifetime.test.js "test/bug-57-active-run-item-lifetime.test.js (12 cases)"
+  # bug-56 (intermediate verdict pane missing ✓ Accept Stage + ⚡ Ask
+  # Claude to Fix Stage buttons): with the §9 3-stage methodology
+  # (analyze → accept → code → accept → verify → accept) each
+  # checkpoint needs its own accept/fix paths, not just the final
+  # critique. Pre-fix the intermediate pane only had ↻ Retry + ✓
+  # Dismiss (+ 💬 Ask Critic from bug-53) — no way to signal "this
+  # stage is good, proceed to next" or "Claude, redo this stage."
+  # Fix: 2 new buttons on intermediate. Accept Stage sends Claude a
+  # [stage-accept] chat message with the next-stage hint via
+  # _nextStage helper ({analyze→code, code→verify, verify→null});
+  # broadcasts critique-resolved('accept-stage') for cross-device
+  # sync via bug-54 wiring. Fix Stage sends a [stage-fix] chat
+  # message including review.critique so Claude sees the specific
+  # issues. Neither calls _broadcastRunDone — only the FINAL critique
+  # Accept ends the run (bug-57). CSS: accept-stage = green family
+  # (matches verdict-btn-accept); fix-stage = lavender family
+  # (matches verdict-btn-fix). Locks: 2 buttons in HTML, labels with
+  # correct icons, both click handlers wired (sendChatMessage +
+  # broadcast), neither calls _broadcastRunDone, _nextStage helper
+  # encodes the 3-stage progression, CSS rules with correct color
+  # families, bug-56 marker in app.js + styles.css.
+  node_test_result test/bug-56-intermediate-accept-fix-stage-buttons.test.js "test/bug-56-intermediate-accept-fix-stage-buttons.test.js (11 cases)"
+  # fr-96 (server-side per-plan-item stage state machine): the §9
+  # 3-stage methodology (analyze → critic → user accept → code →
+  # critic → user accept → verify → critic → user accept) needed a
+  # PERSISTENT, OBSERVABLE state surface — pre-fr-96 the current
+  # stage of a multi-stage run was implicit in chat sentinels +
+  # _activeRunItem (bug-57). Fix: new server/src/stageState.js pure-
+  # function module (initStageState, applyTransition, clearStageState,
+  # nextStage, toBroadcastPayload) + attach.js helpers
+  # (_initAndBroadcastStageState, _transitionStageState,
+  # _clearAndBroadcastStageState) wired into 4 hook points: (1)
+  # [run:plan#X] dispatch initializes to analyze.in_progress; (2)
+  # [stage: X done] sentinel transitions to X.awaiting_verdict; (3)
+  # critique broadcast transitions to X.awaiting_accept; (4)
+  # clearActiveRunItem (run done / discard) clears the state.
+  # critique.js's resolveCritique extended to handle reason ===
+  # 'accept-stage' (advance via nextStage) + 'fix-stage' (redo same
+  # stage). Broadcast: state-update kind:'plan-item-stage' with
+  # { itemId, stageState: { stage, status, updatedAt } } —
+  # toBroadcastPayload strips history[]. Persisted in
+  # rec.artifacts.plan.items[].meta.stageState (survives container
+  # restart). Client: WS handler updates state.planItemStages;
+  # _rebuildPlanItemStagesFromArtifacts derives from artifact cache
+  # on attach (no separate fetch — meta.stageState ships with
+  # artifacts-init). _getHUDActiveStep prefers the authoritative
+  # server stage state over the heuristic fallback. Locks: pure-
+  # function unit tests on the state machine, all 4 hook wirings,
+  # critique.js resolve branches, client WS + HUD wiring, fr-96
+  # marker in all 4 touched files.
+  node_test_result test/fr-96-plan-item-stage-state-machine.test.js "test/fr-96-plan-item-stage-state-machine.test.js (23 cases)"
+  # td-34 (§9 directive rewrite — user-driven 5-step loop SUPERSEDES
+  # td-33 r3's auto-iterate clause): empirically observed in the
+  # same session that shipped fr-95 / bug-53 / bug-55 / bug-54 /
+  # bug-57 / bug-56 / fr-96 that the td-33 r3 auto-iterate language
+  # didn't deliver human-in-the-loop discipline — claude barreled
+  # through analyze → code → verify without giving the user a
+  # chance to review each checkpoint verdict. User-reported:
+  # "during the process it automatically moved to next stage before
+  # I accept the result of the check point verdict, it should
+  # pause until I accept". td-34 replaces the auto-iterate clause
+  # with the explicit pause-and-await-accept 5-step loop:
+  #   1. stage → 2. stage critic → 3. next stage if accepted →
+  #   4. rerun critic if follow-up question is provided →
+  #   5. rerun stage if asked to fix (back to step 2)
+  # Accept signal vocabulary defined: ✓ Accept Stage / ✓ Accept
+  # Claude button OR chat phrases (accept/yes/looks good/proceed/
+  # ship it/✓/bare stage name). Silence ≠ accept. The "no continue/
+  # proceed/code keyword needed" clarification is captured AND
+  # distinguished from "no signal needed" in the pitfalls. Cross-
+  # refs all related items (fr-95, bug-53, bug-54, bug-55, bug-56,
+  # bug-57, fr-96). 3 stages + done-criteria + sentinel grammar
+  # preserved from td-33 r3 (only the progression rule changed).
+  # Locks: td-34 supersession marker, 5-step loop enumeration,
+  # accept-signal vocabulary, silence-not-accept rule, follow-up /
+  # fix routing via buttons, cross-references, preserved stages,
+  # auto-iterate clause REMOVED.
+  node_test_result test/td-34-stage-directive-user-driven-progression.test.js "test/td-34-stage-directive-user-driven-progression.test.js (16 cases)"
   # NOTE: the "bug-53" reference in the comment block below is a
   # stale label from an older HUD-stuck issue (eventually shipped
   # under a different plan-item number). It is NOT the same bug as

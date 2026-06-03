@@ -404,6 +404,25 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
       isAgreed: a,
     })),
   });
+
+  // fr-96: critic verdict broadcast → awaiting_accept transition.
+  // Only fires on non-error verdicts (error keeps the previous
+  // status — the user hasn't seen a real verdict yet, so the state
+  // machine shouldn't advance). For intermediate critiques, the
+  // stage in opts.stage is the stage being reviewed. For final
+  // critiques, stage falls back to 'verify' since the final critique
+  // fires after [stage: verify done] (in the 3-stage methodology) or
+  // after a one-shot turn_result (legacy — no stageState exists, so
+  // applyTransition is a no-op anyway).
+  if (!isError) {
+    try {
+      const attachMod = require('./attach');
+      const transitionStage = stage || 'verify';
+      attachMod._transitionStageState(sessionId, session, item.id, transitionStage, 'awaiting_accept');
+    } catch (err) {
+      console.error(`[fr-96] critique broadcast → awaiting_accept failed: ${err.message}`);
+    }
+  }
 }
 
 // td-33 (A — retry support): re-fire the most recently cached
@@ -434,8 +453,81 @@ async function retryLastCritique(sessionId, session, opts = {}) {
   return true;
 }
 
+// bug-54: broadcast that the verdict pane has been resolved so every
+// device attached to this session clears its own copy of the pane.
+// Pre-fix the four "resolving" buttons (✗ Dismiss / ✗ Discard /
+// ⚡ Ask Claude to Fix / ✓ Accept Claude) cleared LOCAL state only —
+// other devices stayed showing a now-stale verdict pane until a
+// fresh critique-review broadcast landed (which might never happen
+// for a Dismiss or after a successful Accept). User-reported:
+//   "Critic popover stays open after being handled on another
+//    device/user"
+//
+// The broadcast carries the itemId + a short `reason` string for
+// audit/debug. No server-side persistent state changes — clients
+// simply clear their pane on receipt. The originating device also
+// receives its own broadcast; the client-side guard (only clear if
+// awaitingVerdict or critiqueReview is truthy) makes this an
+// idempotent no-op there.
+//
+// The ↻ Retry and 💬 Ask Critic buttons do NOT call this — they
+// RE-FIRE the critique, which produces a new `critique-review`
+// broadcast that naturally replaces the old verdict on every device.
+function resolveCritique(sessionId, session, opts = {}) {
+  if (!session) return false;
+  const reason = (opts && typeof opts.reason === 'string') ? opts.reason : 'unknown';
+  const itemId = (opts && opts.itemId) || null;
+  session.emit('state-update', {
+    kind: 'critique-resolved',
+    itemId,
+    reason,
+  });
+  // fr-96: button-driven stage-state transitions. The Accept Stage /
+  // Fix Stage buttons (intermediate verdict pane, bug-56) send a
+  // reason that drives the state machine forward. For the other
+  // reasons (dismiss/discard/fix/accept on final), the appropriate
+  // transitions fire elsewhere:
+  //   discard / accept (verify-stage final) → clearStageState fires
+  //     via clearActiveRunItem when /run/done route hits (bug-57).
+  //   dismiss → no state-machine change. The user wanted to close
+  //     the pane without a decision; state stays at awaiting_accept.
+  //   fix (final) → no state-machine change here either. The button
+  //     dispatches a re-prompt to Claude; the next [stage: X done]
+  //     sentinel will land the next transition.
+  if (itemId && (reason === 'accept-stage' || reason === 'fix-stage')) {
+    try {
+      const attachMod = require('./attach');
+      const stageStateMod = require('./stageState');
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      const item = attachMod._findPlanItemInRec(rec, itemId);
+      const cur = stageStateMod.getStageState(item);
+      if (!cur) {
+        // Race: item has no stageState (cleared by another path).
+        // No-op.
+      } else if (reason === 'accept-stage') {
+        // Advance to next stage. nextStage('verify') returns null;
+        // a verify-stage accept-stage button shouldn't normally
+        // fire (verify Accept routes through the final pane, not
+        // intermediate). Defensive: if next is null, no-op.
+        const next = stageStateMod.nextStage(cur.stage);
+        if (next) {
+          attachMod._transitionStageState(sessionId, session, itemId, next, 'in_progress');
+        }
+      } else {
+        // Fix Stage — redo current stage. Same stage, back to
+        // in_progress.
+        attachMod._transitionStageState(sessionId, session, itemId, cur.stage, 'in_progress');
+      }
+    } catch (err) {
+      console.error(`[fr-96] resolveCritique → stageState transition (${reason}) failed: ${err.message}`);
+    }
+  }
+  return true;
+}
+
 module.exports = {
   triggerGeminiCritique,
   retryLastCritique,
+  resolveCritique,
   _looksLikeCriticError,
 };

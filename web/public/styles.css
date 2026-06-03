@@ -8937,6 +8937,36 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   box-shadow: 0 0 8px rgba(248, 81, 73, 0.25);
 }
 
+/* bug-56: intermediate (stage-checkpoint) verdict pane buttons.
+   ✓ Accept Stage matches .verdict-btn-accept's green family (accept-
+   class action) — slightly less saturated to signal "stage accept"
+   vs the final ✓ Accept Claude's deeper commit. ⚡ Ask Claude to Fix
+   Stage matches the final ⚡ Ask Claude to Fix's lavender (claude-
+   directed action) so the row reads consistently across states. */
+.verdict-btn-accept-stage {
+  background: rgba(46, 160, 67, 0.12);
+  color: #7ee787;
+  border: 1px solid rgba(46, 160, 67, 0.35);
+}
+
+.verdict-btn-accept-stage:hover {
+  background: rgba(46, 160, 67, 0.25);
+  border-color: #7ee787;
+  box-shadow: 0 0 8px rgba(46, 160, 67, 0.2);
+}
+
+.verdict-btn-fix-stage {
+  background: rgba(192, 132, 252, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(192, 132, 252, 0.35);
+}
+
+.verdict-btn-fix-stage:hover {
+  background: rgba(192, 132, 252, 0.25);
+  border-color: #c084fc;
+  box-shadow: 0 0 8px rgba(192, 132, 252, 0.2);
+}
+
 /* td-33: Retry (orange/amber) for transient critic errors. Dismiss
    (muted) for intermediate-checkpoint dismissal. Title.error styling
    for the "Critic Error — Retry?" banner. Intermediate badge sits in
