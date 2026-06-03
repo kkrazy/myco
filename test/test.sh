@@ -303,8 +303,8 @@ test_npm_deps() {
 
 test_cache_busters() {
   local app_v css_v
-  app_v=$(grep -oP 'app\.js\?v=\K\d+' web/public/index.html)
-  css_v=$(grep -oP 'styles\.css\?v=\K\d+' web/public/index.html)
+  app_v=$(sed -nE 's/.*app\.js\?v=([0-9]+).*/\1/p' web/public/index.html | head -n 1)
+  css_v=$(sed -nE 's/.*styles\.css\?v=([0-9]+).*/\1/p' web/public/index.html | head -n 1)
   test -n "$app_v" && pass "app.js cache buster = v$app_v" || fail "app.js cache buster"
   test -n "$css_v" && pass "styles.css cache buster = v$css_v" || fail "styles.css cache buster"
 }

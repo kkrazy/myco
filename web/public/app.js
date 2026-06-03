@@ -5,6 +5,51 @@
 // optional-chain short-circuits safely without a runtime error.
 function refreshXtermAfterFontLoad(_term) { /* no-op: xterm retired */ }
 
+const _loadedResources = new Map();
+
+function loadScript(src) {
+  if (_loadedResources.has(src)) return _loadedResources.get(src);
+  const p = new Promise((resolve, reject) => {
+    // Check if script already exists in document
+    if (document.querySelector(`script[src="${src}"]`)) {
+      resolve();
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = (err) => {
+      _loadedResources.delete(src);
+      reject(err);
+    };
+    document.head.appendChild(s);
+  });
+  _loadedResources.set(src, p);
+  return p;
+}
+
+function loadStylesheet(href) {
+  if (_loadedResources.has(href)) return _loadedResources.get(href);
+  const p = new Promise((resolve, reject) => {
+    if (document.querySelector(`link[href="${href}"]`)) {
+      resolve();
+      return;
+    }
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = href;
+    l.onload = () => resolve();
+    l.onerror = (err) => {
+      _loadedResources.delete(href);
+      reject(err);
+    };
+    document.head.appendChild(l);
+  });
+  _loadedResources.set(href, p);
+  return p;
+}
+
+
 const state = {
   sessions: [],
   activeId: null,
@@ -549,8 +594,19 @@ function renderMd(text) {
 // temp div in a finally block — and as a belt-and-braces, sweep any
 // orphan d-prefixed nodes once per call.
 async function renderMermaidInContainer(container) {
-  if (typeof mermaid === 'undefined') return;
   const blocks = container.querySelectorAll('pre code.language-mermaid');
+  if (!blocks.length) return;
+  if (typeof mermaid === 'undefined') {
+    try {
+      await loadScript('/vendor/mermaid.min.js');
+      if (typeof mermaid !== 'undefined') {
+        mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+      }
+    } catch (err) {
+      console.warn('[mermaid] failed to lazy-load:', err);
+      return;
+    }
+  }
   for (const block of blocks) {
     const pre = block.parentElement;
     const id = 'mermaid-' + Math.random().toString(36).slice(2, 10);
@@ -855,6 +911,20 @@ async function init() {
     }
     if (target) openSession(target.id);
   }
+
+  // Load KaTeX (math rendering) asynchronously after page initialization to not block startup.
+  setTimeout(async () => {
+    try {
+      await Promise.all([
+        loadStylesheet('/vendor/katex.min.css'),
+        loadScript('/vendor/katex.min.js')
+      ]);
+      // Trigger a re-render of the chat pane once loaded so math displays.
+      renderChatPane();
+    } catch (err) {
+      console.warn('[katex] failed to lazy-load:', err);
+    }
+  }, 1000);
 
   document.getElementById('btn-spawn').addEventListener('click', openSpawnModal);
   document.getElementById('spawn-cancel').addEventListener('click', closeSpawnModal);
@@ -2739,11 +2809,19 @@ function _bindDiagramModal() {
   modal.addEventListener('click', (e) => { if (e.target.id === 'diagram-modal') closeDiagramModal(); });
 }
 
-function openDiagramModal() {
+async function openDiagramModal() {
   _bindDiagramModal();
   const modal = document.getElementById('diagram-modal');
   if (!modal) return;
   modal.hidden = false;
+
+  if (typeof window.rough === 'undefined') {
+    try {
+      await loadScript('/vendor/rough.umd.js');
+    } catch (err) {
+      console.warn('[rough] failed to lazy-load:', err);
+    }
+  }
   // Reset layer + state so each open starts fresh.
   const layer = document.getElementById('diagram-layer');
   if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
@@ -11325,10 +11403,19 @@ function _toggleFilesTreeCollapsed() {
 //   editOriginal — content at entry (for no-op short-circuit)
 //   cmView       — CM6 EditorView instance (so _saveFileEdit can read
 //                  the current doc, and _exitFileEditMode can destroy)
-function _enterFileEditMode() {
+async function _enterFileEditMode() {
   const v = state.files.viewing;
   if (!v || !v.content || v.binary) return;
   if (state.viewerMode) return;     // belt-and-braces: server enforces too
+
+  if (typeof window.MycoCM === 'undefined') {
+    try {
+      await loadScript('/vendor/codemirror.bundle.js');
+    } catch (err) {
+      console.warn('[codemirror] failed to lazy-load:', err);
+    }
+  }
+
   const body = document.getElementById('files-view-body');
   if (!body) return;
   v.editing = true;

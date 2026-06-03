@@ -23,10 +23,7 @@
   <title>myco</title>
   <link rel="stylesheet" href="styles.css?v=284" />
   <link rel="stylesheet" href="/vendor/github-dark.min.css" />
-  <!-- bug-39: vendored KaTeX (offline). renderMd pre-renders model math
-       to KaTeX HTML; this stylesheet + the woff2 fonts under /vendor/fonts
-       give it glyphs with no CDN at runtime. -->
-  <link rel="stylesheet" href="/vendor/katex.min.css" />
+  <!-- bug-39: vendored KaTeX (offline) loaded asynchronously in app.js to improve page-load speed -->
 </head>
 <body>
   <div id="app">
@@ -813,19 +810,13 @@
   </div>
   <script src="/vendor/marked/marked.umd.js"></script>
   <script src="/vendor/highlight.min.js"></script>
-  <script src="/vendor/mermaid.min.js"></script>
-  <!-- fr-50: CodeMirror 6 bundle for the in-app file editor.
-       Built from tools/codemirror-entry.mjs via `npm run build:editor`.
-       Exposes window.MycoCM with { createEditor, EditorView, ... }. -->
-  <script src="/vendor/codemirror.bundle.js"></script>
-  <!-- fr-84 r2: rough.js for the hand-drawn aesthetic in the diagram
-       modal. UMD bundle (~27 KB) — exposes window.rough with svg() /
-       canvas() / generator() factories. Drawing engine wraps it. -->
-  <script src="/vendor/rough.umd.js"></script>
-  <script>if (typeof mermaid !== 'undefined') mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
-  <!-- bug-39: KaTeX must load BEFORE app.js so the global `katex` exists
-       when renderMd's _extractMath calls katex.renderToString. -->
-  <script src="/vendor/katex.min.js"></script>
+  <template id="lazy-assets">
+    <link rel="stylesheet" href="/vendor/katex.min.css" />
+    <script src="/vendor/katex.min.js"></script>
+    <script src="/vendor/mermaid.min.js"></script>
+    <script src="/vendor/codemirror.bundle.js"></script>
+    <script src="/vendor/rough.umd.js"></script>
+  </template>
   <script src="app.js?v=261"></script>
 </body>
 </html>
