@@ -5144,7 +5144,114 @@
       "source": "user",
       "voters": [],
       "comments": []
+    },
+    {
+      "id": "bug-58",
+      "text": "Critic verdict modal overflows chat window width",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-04T01:26:32.817Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "756bdc2ff0ca",
+          "user": "claude",
+          "text": "✓ success · 108.3s · $6.3833 · 14↓/5641↑\n\n**Findings:**\n- `#composer-verdict-pane` is rendered inside `#chatpane` (index.html:167)\n- `#chatpane` is `position: absolute; inset: 0` (its own containing block)\n- Current `.chat-composer-verdict-panel` is `position: fixed; inset: 0` — covers the WHOLE viewport, which is why it extends beyond chat-window edges on wide screens with sidebar chrome\n- `.verdict-panel-content` has `max-width: 960px` + centered via flex; that caps the card but the BACKDROP is still viewport-wide\n\n**Locked design (minimum-surface CSS-only fix):**\n\n| Change | Reason |\n|---|---|\n| `.chat-composer-verdict-panel`: `position: fixed` → `position: absolute` | Scopes to nearest positioned ancestor (`#chatpane`), so the modal covers chat-pane bounds, not viewport |\n| `inset: 0` stays | Means \"fill the containing bloc…",
+          "ts": "2026-06-04T01:29:03.439Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-04T01:27:12.749Z"
+          }
+        },
+        {
+          "id": "aaf0d990fb5e",
+          "user": "kkrazy",
+          "text": "the analyze stage verdict didn't pause the process, it eventually get overriden by the final stage overall verdict popover.",
+          "ts": "2026-06-04T02:03:37.917Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the critic verdict modal spans outside of the chat window, it should have the same width as the chat window.",
+        "rewritten": true
+      },
+      "description": "**Problem:** The critic verdict modal renders wider than the chat window, breaking the layout.\n**Expected:** Modal width matches the chat window width.\n**Actual:** Modal spans outside the chat window bounds.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-04T01:29:03.439Z",
+          "startedAt": "2026-06-04T01:27:12.749Z",
+          "summary": "108.3s · 14→5641 tok",
+          "result": "**Findings:**\n- `#composer-verdict-pane` is rendered inside `#chatpane` (index.html:167)\n- `#chatpane` is `position: absolute; inset: 0` (its own containing block)\n- Current `.chat-composer-verdict-panel` is `position: fixed; inset: 0` — covers the WHOLE viewport, which is why it extends beyond chat-window edges on wide screens with sidebar chrome\n- `.verdict-panel-content` has `max-width: 960px` + centered via flex; that caps the card but the BACKDROP is still viewport-wide\n\n**Locked design (minimum-surface CSS-only fix):**\n\n| Change | Reason |\n|---|---|\n| `.chat-composer-verdict-panel`: `position: fixed` → `position: absolute` | Scopes to nearest positioned ancestor (`#chatpane`), so the modal covers chat-pane bounds, not viewport |\n| `inset: 0` stays | Means \"fill the containing block\" — i.e., fill the chat pane |\n| `padding: 5vh 5vw` → `padding: 20px` | viewport-relative padding becomes weird when the container is sub-viewport. Fixed-pixel padding is cleaner. |\n| `.verdict-panel-content`: `max-height: 90vh` → `max-height: calc(100% - 40px)` | Was viewport-relative; should be parent-relative now |\n| bug-58 provenance comments | Anchor for future restyles |\n\n**bug-55 contract preserved:**\n- Dismissal still only via explicit buttons (no backdrop click, no Esc)\n- The \"no accidental loss of verdict\" property holds — switching tabs doesn't dismiss; state.critiqueReview persists\n\n**What changes UX-wise:**\n- Modal now covers the chat pane only (correct per the user's spec)\n- Sidebars / tabs remain visible + clickable (user can switch to Plan tab if they want; verdict pane comes back when they return to chat)\n- Backdrop blur scoped to chat pane\n\n**Numbered code plan:**\n1. CSS: `position: fixed` → `position: absolute` on `.chat-composer-verdict-panel`. **verify:** grep matches.\n2. CSS: padding `5vh 5vw` → `20px`. **verify:** grep matches.\n3. CSS: content-card `max-height: 90vh` → `calc(100% - 40px)`. **verify:** grep matches.\n4. bug-58 marker comment. **verify:** grep.\n\n*"
+        }
+      ]
+    },
+    {
+      "id": "bug-59",
+      "text": "Submitting plan item while queue paused gives no feedback",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-04T02:00:54.763Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "submitting a plan item for execution while the queue is pause would not have any response, clicking on the queue resume would see it's added to the queue. we should be able to add items to the queue while it's pause with proper user response.",
+        "rewritten": true
+      },
+      "description": "**Problem:** Users get no response when submitting a plan item for execution while the queue is paused, leaving them unsure whether the action registered.\n**Expected:** Items can be added to a paused queue with clear user feedback confirming the enqueue.\n**Actual:** Submission appears to do nothing; the item only becomes visible after clicking resume, which reveals it was silently added."
+    },
+    {
+      "id": "bug-60",
+      "text": "Plan-item result append is too verbose; should be concise fix summary",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-04T02:04:26.857Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the plan item results appended to the plan items are too verbose, it should be just a concise summarization of how it's fixed.",
+        "rewritten": true
+      },
+      "description": "**Problem:** Result text appended to completed plan items is too long, cluttering the plan view.\n**Expected:** A concise one-line summary of how the item was fixed.\n**Actual:** Verbose multi-paragraph output is appended to each plan item."
+    },
+    {
+      "id": "bug-61",
+      "text": "Stage critic verdict doesn't actually pause the agent — subsequent stage sentinels overwrite the modal before the user can review. User-reported (verbatim): 'the analyze stage verdict didn't pause the process, it eventually get overriden by the final stage overall verdict popover.' Root cause: fr-96's state machine is OBSERVABLE (status transitions to awaiting_accept) but not ENFORCED. Nothing server-side stops claude from emitting the next [stage: X done] sentinel, and the client's critique-review WS handler replaces state.critiqueReview unconditionally on each broadcast. Fix: (1) server enforcement — when stageState.status === 'awaiting_accept' for the active run-item, the stage-done handler defers / drops subsequent sentinels until the user signals accept-stage / fix-stage; (2) client guard — if state.critiqueReview is already showing an unresolved intermediate verdict, do NOT replace it with a new critique-review broadcast (paired safety net for race conditions). This finally makes the §9 pause-and-await-accept methodology physically real instead of directive-only.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-04T02:22:10.887Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "td-35",
+      "text": "Reduce vertical gap between chat bubbles, esp. around chrome batch + myco reply",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-06-04T03:24:17.797Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "reduce the gap between bubbles, especially around the chrome batch and the reply from myco",
+        "rewritten": true
+      },
+      "description": "**Problem:** Spacing between consecutive chat bubbles feels too large, hurting visual flow.\n**Expected:** Tighter vertical gap between bubbles so grouped messages read as a single exchange.\n**Actual:** Excess whitespace between bubbles, most noticeable around the chrome batch and the reply from myco."
     }
   ],
-  "updatedAt": "2026-06-03T15:55:48.591Z"
+  "updatedAt": "2026-06-04T03:24:23.681Z"
 }

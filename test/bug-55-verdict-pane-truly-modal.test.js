@@ -97,16 +97,28 @@ t('app.js: the dismissPanel() helper that wiped state.critiqueReview from the ba
 
 // ── 2. Modal LAYOUT is preserved (bug-50 r2 visual envelope unchanged) ──
 
-t('styles.css: .chat-composer-verdict-panel still uses position:fixed inset:0 (modal overlay shape preserved from bug-50 r2)', () => {
+t('styles.css: .chat-composer-verdict-panel keeps the modal-overlay shape (position absolute|fixed + inset:0)', () => {
   const css = _read('web/public/styles.css');
   // Find the .chat-composer-verdict-panel rule.
   const at = css.search(/\.chat-composer-verdict-panel\s*\{/);
   assert.ok(at > -1, '.chat-composer-verdict-panel rule must exist.');
   const block = css.slice(at, at + 1500);
-  assert.ok(/position\s*:\s*fixed/.test(block),
-    '.chat-composer-verdict-panel must keep position: fixed — that\'s the modal-overlay shape bug-50 r2 introduced. bug-55 only changes DISMISSAL behavior, not the visual envelope.');
+  // bug-58 follow-up: was locked to position:fixed (the bug-50 r2
+  // shape) but bug-58 changed it to position:absolute so the modal
+  // is scoped to the chat-pane container instead of the viewport
+  // ("Critic verdict modal overflows chat window width" — the modal
+  // was spanning beyond chat-window bounds on wide screens). The
+  // user-visible CONTRACT bug-55 locks (truly-modal, button-only
+  // dismissal, no Esc, no backdrop click) is preserved either way —
+  // those live in app.js's _renderVerdictPanel, not in CSS.
+  // The modal-overlay SHAPE is preserved with absolute too (both
+  // create a containing-block-filling overlay; absolute is just
+  // scoped to the nearest positioned ancestor instead of the
+  // viewport).
+  assert.ok(/position\s*:\s*(absolute|fixed)/.test(block),
+    '.chat-composer-verdict-panel must keep position: absolute (post-bug-58) OR position: fixed (legacy bug-55 era) — both express the modal-overlay shape.');
   assert.ok(/inset\s*:\s*0|top\s*:\s*0[\s\S]{0,200}left\s*:\s*0/.test(block),
-    '.chat-composer-verdict-panel must keep inset: 0 (or top/left/bottom/right: 0) so it covers the viewport — modal layout preserved.');
+    '.chat-composer-verdict-panel must keep inset: 0 (or top/left/bottom/right: 0) so it fills its containing block — modal layout preserved.');
 });
 
 // ── 3. Explicit-button dismissal still works (state-wipe sites preserved) ──

@@ -54,15 +54,21 @@ function _stripCssComments(s) { return s.replace(/\/\*[\s\S]*?\*\//g, ''); }
 
 // ── r2: the OUTER .chat-composer-verdict-panel is now a modal overlay ──
 
-t('web/public/styles.css r2: .chat-composer-verdict-panel is a fixed-position centered modal (not inline)', () => {
+t('web/public/styles.css r2: .chat-composer-verdict-panel is a positioned centered modal (absolute or fixed, with inset:0 + z-index)', () => {
   const css = _stripCssComments(_read('web/public/styles.css'));
   const re = /\.chat-composer-verdict-panel\s*\{[^}]*\}/;
   const block = (css.match(re) || [''])[0];
   assert.ok(block, '.chat-composer-verdict-panel rule must exist.');
-  assert.ok(/position\s*:\s*fixed/.test(block),
-    '.chat-composer-verdict-panel must be position: fixed (r2 — modal overlay so the chatpane\'s overflow:hidden no longer clips the critique\'s bottom).');
+  // bug-58 follow-up: was locked to position:fixed (r2's viewport-
+  // wide overlay). bug-58 changed it to position:absolute so the
+  // modal scopes to the chat-pane container instead of the
+  // viewport (user-reported "modal overflows chat window width").
+  // Both forms satisfy the r2 contract — a positioned, inset:0,
+  // z-indexed modal-overlay shape — so accept either.
+  assert.ok(/position\s*:\s*(absolute|fixed)/.test(block),
+    '.chat-composer-verdict-panel must be position: absolute (bug-58 — chat-pane scoped) OR position: fixed (legacy r2 — viewport scoped). Both are valid modal-overlay shapes.');
   assert.ok(/inset\s*:\s*0/.test(block) || (/top\s*:\s*0/.test(block) && /left\s*:\s*0/.test(block)),
-    '.chat-composer-verdict-panel must span the viewport (inset: 0 or equivalent) so the backdrop covers the whole chat.');
+    '.chat-composer-verdict-panel must use inset: 0 (or equivalent) so the modal fills its containing block (viewport pre-bug-58, chat-pane post-bug-58).');
   assert.ok(/z-index/.test(block),
     '.chat-composer-verdict-panel must have a z-index so it floats above the chat pane.');
 });
@@ -72,8 +78,14 @@ t('web/public/styles.css r2: .verdict-panel-content child holds the visual card 
   const re = /\.verdict-panel-content\s*\{[^}]*\}|\.chat-composer-verdict-panel\s*>\s*\.verdict-panel-content\s*\{[^}]*\}/;
   const block = (css.match(re) || [''])[0];
   assert.ok(block, '.verdict-panel-content rule must exist (r2 — wrapper for the inner card).');
-  assert.ok(/max-height\s*:\s*(\d+vh|90vh)/.test(block),
-    '.verdict-panel-content must declare a max-height so an enormous critique can scroll INSIDE the modal rather than overflow the viewport (r2 — typical case fits in 90vh).');
+  // bug-58 follow-up: was locked to viewport-relative vh (90vh).
+  // bug-58 changed to parent-relative calc(100% - 40px) since the
+  // modal is now scoped to chat-pane (the 40px accounts for the
+  // parent's 20px top + 20px bottom padding). Both express the
+  // "scroll inside the modal instead of overflowing" contract; the
+  // unit is just different.
+  assert.ok(/max-height\s*:\s*(\d+vh|90vh|calc\([^)]*\))/.test(block),
+    '.verdict-panel-content must declare a max-height (vh-based legacy OR calc()-based parent-relative post-bug-58) so an enormous critique scrolls INSIDE the modal rather than overflow.');
   assert.ok(/overflow-y\s*:\s*auto/.test(block),
     '.verdict-panel-content must declare overflow-y: auto so a truly enormous critique scrolls inside the modal.');
 });

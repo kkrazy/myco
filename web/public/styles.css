@@ -8776,15 +8776,42 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
        the verdict is non-blocking) — see _renderVerdictPanel for the
        handler wiring. */
 .chat-composer-verdict-panel {
-  /* Fixed-position modal centered in the viewport. */
-  position: fixed;
+  /* bug-58: scope the modal to the chat-pane container, not the
+     viewport.
+
+     Pre-bug-58 the panel was `position: fixed; inset: 0` (set by
+     bug-55 r2 to make the verdict pane a true modal overlay). That
+     covered the WHOLE viewport — on wide screens with sidebar
+     chrome (e.g. desktop with the artifact-tab strip open) the
+     backdrop visibly extended past the chat-window edges, breaking
+     layout. User-reported (verbatim):
+       "The critic verdict modal renders wider than the chat window,
+        breaking the layout. Expected: Modal width matches the chat
+        window width. Actual: Modal spans outside the chat window
+        bounds."
+
+     Fix: position:absolute scopes the modal to the nearest
+     positioned ancestor — #chatpane, which is itself
+     `position:absolute; inset:0`. Both the backdrop AND the content
+     card now live within chat-pane bounds; modal width == chat-
+     window width as the user expected. bug-55's truly-modal
+     contract (no backdrop click dismiss, no Esc) is UNCHANGED — the
+     dismissal wiring lives in app.js's _renderVerdictPanel, not in
+     CSS, and is unaffected by the scoping change. */
+  position: absolute;
   inset: 0;
   z-index: 1000;
   /* Backdrop is a pseudo-element + the pane itself sits on top. */
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 5vh 5vw;
+  /* bug-58: pixel-based padding instead of the pre-bug-58 5vh/5vw.
+     The viewport-relative units were natural when the modal covered
+     the viewport (bug-55 r2); inside a chat-pane container, vh/vw
+     compute against the viewport — not the parent — which made the
+     inner card look misaligned on narrow chat panes. 20px is
+     parent-relative-enough. */
+  padding: 20px;
   /* The backdrop click target — clicking the OUTER area (not the
      inner panel) dismisses via the JS handler. The panel itself sits
      in a child <div>; pointer events on the wrapper trigger dismiss. */
@@ -8811,11 +8838,16 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
   width: 100%;
   max-width: 960px;
-  max-height: 90vh;
-  /* INTERNAL scroll only when the critique is truly enormous (the
-     normal case fits in 90vh). The inner .verdict-critique is still
-     UNCAPPED — content drives height. r1's "no inner clip on the
-     critique text" contract stays in effect. */
+  /* bug-58: max-height is now PARENT-relative (calc(100% - 40px))
+     instead of viewport-relative (90vh). Same reasoning as the
+     padding change on the parent — vh inside a smaller container
+     could either over- or under-shoot the actual containing block.
+     The `- 40px` accounts for the parent's 20px top + 20px bottom
+     padding (bug-58). INTERNAL scroll still kicks in when the
+     critique is truly enormous; the inner .verdict-critique is still
+     UNCAPPED so r1's "no inner clip on the critique text" contract
+     stays in effect. */
+  max-height: calc(100% - 40px);
   overflow-y: auto;
   animation: modalRise 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }

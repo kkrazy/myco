@@ -3171,6 +3171,29 @@ test_chat_window() {
   # fix routing via buttons, cross-references, preserved stages,
   # auto-iterate clause REMOVED.
   node_test_result test/td-34-stage-directive-user-driven-progression.test.js "test/td-34-stage-directive-user-driven-progression.test.js (16 cases)"
+  # bug-58 (critic verdict modal overflows chat window width):
+  # user-reported "The critic verdict modal renders wider than the
+  # chat window, breaking the layout. Expected: Modal width matches
+  # the chat window width. Actual: Modal spans outside the chat
+  # window bounds." Pre-fix the verdict pane was position:fixed
+  # inset:0 (per bug-55 r2) which covered the WHOLE viewport — on
+  # wide screens with sidebar chrome the backdrop extended past
+  # chat-window edges. Fix: position:absolute scopes the modal to
+  # the nearest positioned ancestor (#chatpane, itself
+  # position:absolute inset:0) so the modal width == chat-window
+  # width. Padding 5vh/5vw → 20px (vh/vw is misleading inside a
+  # sub-viewport container). Content-card max-height 90vh → calc(
+  # 100% - 40px) (parent-relative, accounts for the parent's 20px
+  # top/bottom padding). bug-55's truly-modal contract (button-only
+  # dismissal) is UNCHANGED — the dismissal wiring lives in JS, not
+  # CSS. Bug-50 r2's modal-overlay shape contract is preserved
+  # (still a positioned, inset:0, z-indexed centered modal — just
+  # absolute instead of fixed). Locks: position:absolute (NOT fixed),
+  # inset:0 + z-index preserved, pixel padding (NOT vh/vw), calc-
+  # based max-height (NOT 90vh), flex centering preserved, max-width
+  # 960px preserved, overflow-y:auto preserved, bug-55 JS dismissal
+  # absence preserved, bug-58 marker comment with provenance.
+  node_test_result test/bug-58-verdict-modal-chat-pane-scoped.test.js "test/bug-58-verdict-modal-chat-pane-scoped.test.js (8 cases)"
   # NOTE: the "bug-53" reference in the comment block below is a
   # stale label from an older HUD-stuck issue (eventually shipped
   # under a different plan-item number). It is NOT the same bug as
