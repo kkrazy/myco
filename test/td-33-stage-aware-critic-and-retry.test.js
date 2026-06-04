@@ -177,7 +177,9 @@ t('server/src/attach.js: stage-done subscriber calls triggerGeminiCritique with 
   // arrow. Search for triggerGeminiCritique in proximity.
   const at = src.search(/session\.on\s*\(\s*['"]stage-done['"]/);
   assert.ok(at > -1);
-  const body = src.slice(at, at + 4000);
+  // bug-61 follow-up: window bumped 4000 → 5500. bug-61 added a
+  // ~30-line guard ABOVE the rest of the stage-done handler.
+  const body = src.slice(at, at + 5500);
   assert.ok(/triggerGeminiCritique/.test(body),
     'stage-done subscriber must call triggerGeminiCritique (td-33 B).');
   assert.ok(/isIntermediate\s*:\s*true/.test(body),
@@ -189,7 +191,9 @@ t('server/src/attach.js: stage-done subscriber calls triggerGeminiCritique with 
 t('server/src/attach.js: stage-done subscriber inherits the dispatch-drift filter (baselineDirty exclusion)', () => {
   const src = _read('server/src/attach.js');
   const at = src.search(/session\.on\s*\(\s*['"]stage-done['"]/);
-  const body = src.slice(at, at + 4000);
+  // bug-61 follow-up: window bumped 4000 → 5500. bug-61 added a
+  // ~30-line guard ABOVE the rest of the stage-done handler.
+  const body = src.slice(at, at + 5500);
   assert.ok(/baselineDirty/.test(body),
     'the stage-done subscriber must filter the diff against baselineDirty (matches the dispatch-drift fix from 2026-06-03; without it a checkpoint critique on an active run with unrelated WIP would see the WIP).');
 });

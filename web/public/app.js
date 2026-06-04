@@ -7384,6 +7384,29 @@ function _applyStateUpdate(msg) {
     return;
   }
   if (msg.kind === 'critique-review') {
+    // bug-61: race-safety net for stale broadcasts. The PRIMARY
+    // enforcement is server-side (attach.js stage-done handler drops
+    // subsequent sentinels when stageState.status is in
+    // awaiting_verdict/awaiting_accept). This client-side check is
+    // belt-and-braces — if a stale broadcast slips through (race
+    // between user clicking ✓ Accept Stage and a server-side
+    // sentinel processed before the resolve arrives), we don't
+    // overwrite the unresolved intermediate verdict that the user is
+    // currently reviewing.
+    //
+    // Retry broadcasts (msg.isRetry: true) are EXPLICITLY allowed to
+    // replace the current verdict — that's the user's explicit
+    // request via ↻ Retry or 💬 Ask Critic. Error broadcasts also
+    // pass (current critique.isError = true means the user clicked
+    // Retry on a broken verdict — replacement is correct).
+    const currentIsUnresolvedIntermediate = state.awaitingVerdict
+      && state.critiqueReview
+      && state.critiqueReview.isIntermediate
+      && !state.critiqueReview.isError;
+    if (currentIsUnresolvedIntermediate && msg.isIntermediate && !msg.isRetry) {
+      console.warn(`[bug-61] dropping incoming intermediate critique-review (stage=${msg.stage}) — current intermediate verdict (stage=${state.critiqueReview.stage}) is unresolved; user must accept/fix existing verdict first`);
+      return;
+    }
     state.awaitingVerdict = true;
     state.critiqueReview = msg;
     _renderVerdictPanel();

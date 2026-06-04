@@ -3194,6 +3194,37 @@ test_chat_window() {
   # 960px preserved, overflow-y:auto preserved, bug-55 JS dismissal
   # absence preserved, bug-58 marker comment with provenance.
   node_test_result test/bug-58-verdict-modal-chat-pane-scoped.test.js "test/bug-58-verdict-modal-chat-pane-scoped.test.js (8 cases)"
+  # bug-61 (pause enforcement — server drops + client guards stale
+  # broadcasts): user-reported "the analyze stage verdict didn't
+  # pause the process, it eventually get overriden by the final
+  # stage overall verdict popover." Root cause: fr-96's state
+  # machine was OBSERVABLE (transitions to awaiting_accept) but not
+  # ENFORCED — nothing physically stopped claude from emitting a
+  # second [stage: X done] sentinel while the previous verdict was
+  # still pending review, and the client's critique-review WS
+  # handler replaced state.critiqueReview unconditionally. Fix: two
+  # paired guards. (1) SERVER (attach.js stage-done handler): before
+  # transitioning + firing the critic, check the current stageState
+  # via stageStateMod.getStageState(item); if status is
+  # awaiting_verdict (critic in flight) OR awaiting_accept (user
+  # reviewing), DROP the sentinel + log + return — claude must wait
+  # for ✓ Accept Stage / ⚡ Ask Claude to Fix Stage before another
+  # sentinel can fire. (2) CLIENT (app.js critique-review WS handler):
+  # race-safety net. If state.critiqueReview is already showing an
+  # unresolved intermediate verdict (awaitingVerdict && critiqueReview
+  # && isIntermediate && !isError), DROP incoming intermediate
+  # broadcasts unless msg.isRetry is true (Retry/Ask Critic
+  # explicitly allowed). Final (non-intermediate) broadcasts also
+  # pass — turn_result's final critique is the run-completion
+  # summary. This finally makes the §9 pause-and-await-accept
+  # methodology physically real instead of directive-only. Locks:
+  # server guard reads getStageState + checks both awaiting_* states
+  # + short-circuits via return + sits BEFORE _transitionStageState
+  # + handles undefined stageState (legacy one-shot dispatches);
+  # client guard reads awaitingVerdict/critiqueReview/isIntermediate
+  # + exempts isRetry + exempts !isIntermediate (finals) + exempts
+  # isError + short-circuits via return; bug-61 marker in both files.
+  node_test_result test/bug-61-pause-enforcement.test.js "test/bug-61-pause-enforcement.test.js (10 cases)"
   # NOTE: the "bug-53" reference in the comment block below is a
   # stale label from an older HUD-stuck issue (eventually shipped
   # under a different plan-item number). It is NOT the same bug as

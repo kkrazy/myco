@@ -5232,8 +5232,31 @@
       "addedAt": "2026-06-04T02:22:10.887Z",
       "addedBy": "claude",
       "source": "user",
-      "voters": [],
-      "comments": []
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "e023a648b9c5",
+          "user": "claude",
+          "text": "✓ success · 79.9s · $20.5308 · 7↓/5780↑\n\n### bug-61 — analyze stage\n\nRepeating back: the §9 pause-and-await-accept methodology is directive-only — claude can violate it by emitting another `[stage: X done]` while the previous stage's verdict is still unresolved. The new broadcast overwrites the previous one on the client, and the user loses the chance to review.\n\n**Locked design — two paired guards:**\n\n**Part 1: Server-side enforcement** (`attach.js` stage-done handler):\n\nThe stage-done handler runs at `attach.js:190`. Before transitioning state + firing the critic, check current stageState:\n\n```js\nconst cur = stageStateMod.getStageState(item);\nif (cur && (cur.status === 'awaiting_verdict' || cur.status === 'awaiting_accept')) {\n  console.log(`[bug-61] dropping stage-done(${stage}) — current stageState is ${cur.stage}.${cur.st…",
+          "ts": "2026-06-04T03:31:59.473Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-04T03:30:39.399Z"
+          }
+        }
+      ],
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-04T03:31:59.473Z",
+          "startedAt": "2026-06-04T03:30:39.399Z",
+          "summary": "79.9s · 7→5780 tok",
+          "result": "### bug-61 — analyze stage\n\nRepeating back: the §9 pause-and-await-accept methodology is directive-only — claude can violate it by emitting another `[stage: X done]` while the previous stage's verdict is still unresolved. The new broadcast overwrites the previous one on the client, and the user loses the chance to review.\n\n**Locked design — two paired guards:**\n\n**Part 1: Server-side enforcement** (`attach.js` stage-done handler):\n\nThe stage-done handler runs at `attach.js:190`. Before transitioning state + firing the critic, check current stageState:\n\n```js\nconst cur = stageStateMod.getStageState(item);\nif (cur && (cur.status === 'awaiting_verdict' || cur.status === 'awaiting_accept')) {\n  console.log(`[bug-61] dropping stage-done(${stage}) — current stageState is ${cur.stage}.${cur.status}; user must accept/fix the existing verdict first`);\n  return;  // don't transition, don't fire critic\n}\n```\n\nWhy block on BOTH `awaiting_verdict` AND `awaiting_accept`:\n- `awaiting_verdict` = critic firing in flight, verdict hasn't arrived yet. Claude emitting another sentinel during this window would cause two critic calls racing → second broadcast could arrive first and get overwritten by first. Safer to drop.\n- `awaiting_accept` = verdict shown, user hasn't decided. This is the core case.\n\n**Part 2: Client-side guard** (`app.js` WS handler for `critique-review`):\n\nPure race-safety net. If the server guard is correct, the client never sees a stale broadcast — but if it does (e.g. broadcast in flight while user clicks Accept), the guard prevents overwrite:\n\n```js\nif (msg.kind === 'critique-review') {\n  // bug-61 guard — don't overwrite an unresolved intermediate verdict\n  const currentIsUnresolvedIntermediate = state.awaitingVerdict\n    && state.critiqueReview\n    && state.critiqueReview.isIntermediate\n    && !state.critiqueReview.isError;\n  // RETRY broadcasts (user clicked ↻ Retry or 💬 Ask Critic on the\n  // current verdict) MUST replace the previous one — that's the user\n  "
+        }
+      ],
+      "meta": {}
     },
     {
       "id": "td-35",
@@ -5251,7 +5274,24 @@
         "rewritten": true
       },
       "description": "**Problem:** Spacing between consecutive chat bubbles feels too large, hurting visual flow.\n**Expected:** Tighter vertical gap between bubbles so grouped messages read as a single exchange.\n**Actual:** Excess whitespace between bubbles, most noticeable around the chrome batch and the reply from myco."
+    },
+    {
+      "id": "bug-62",
+      "text": "Verdict stage uses generic prompt; should focus on per-stage output (analyze, etc.)",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-04T03:44:37.872Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the verdict is not focusing the output of each stage, at analyze stage, it should focus on if the result of analyze makes sense, each stage should have specific prompt, with potential tool invocations to ensure right context is provided.",
+        "rewritten": true
+      },
+      "description": "**Problem:** The verdict step doesn't tailor its evaluation to the stage it's judging, so analyze-stage results aren't actually checked for analytical soundness.\n**Expected:** Each stage (analyze, etc.) has its own verdict prompt that targets that stage's output — e.g., at analyze, verdict assesses whether the analysis result makes sense — with optional tool invocations to pull in the right context.\n**Actual:** A single generic verdict prompt runs across all stages, with no stage-specific focus and no tool calls to ground the judgment."
     }
   ],
-  "updatedAt": "2026-06-04T03:24:23.681Z"
+  "updatedAt": "2026-06-04T03:44:44.749Z"
 }

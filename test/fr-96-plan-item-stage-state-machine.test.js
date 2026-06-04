@@ -180,7 +180,12 @@ t('attach.js: stage-done handler transitions to awaiting_verdict (_transitionSta
   const src = _read('server/src/attach.js');
   // Anchor on the stage-done subscriber.
   const at = src.search(/session\.on\s*\(\s*['"]stage-done['"]/);
-  const body = src.slice(at, at + 1500);
+  // bug-61 follow-up: window bumped 1500 → 3500. bug-61 added a
+  // ~30-line guard block (stageStateMod.getStageState check + early
+  // return on awaiting_verdict/awaiting_accept) ABOVE the existing
+  // _transitionStageState call. The pre-bug-61 1500-char window
+  // caught the call site; post-bug-61 the call sits past 1500 chars.
+  const body = src.slice(at, at + 3500);
   assert.ok(/_transitionStageState\s*\(\s*sessionId\s*,\s*session\s*,\s*active\.itemId\s*,\s*stage\s*,\s*['"]awaiting_verdict['"]/.test(body),
     'attach.js stage-done handler must call _transitionStageState(..., stage, "awaiting_verdict") — that\'s the in_progress → awaiting_verdict transition (fr-96 hook 2).');
 });

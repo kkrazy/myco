@@ -47,7 +47,10 @@ t('attach.js: stage-done handler sets session._sawStageSentinelInRun = true', ()
   // Find the stage-done subscriber.
   const at = src.search(/session\.on\s*\(\s*['"]stage-done['"]/);
   assert.ok(at > -1, 'stage-done subscriber must exist.');
-  const body = src.slice(at, at + 2500);
+  // bug-61 follow-up: window bumped 2500 → 4000. bug-61 added a
+  // ~30-line guard block ABOVE the existing _sawStageSentinelInRun
+  // assignment; pre-bug-61 the 2500-char window caught it.
+  const body = src.slice(at, at + 4000);
   assert.ok(/session\._sawStageSentinelInRun\s*=\s*true/.test(body),
     'stage-done handler must set session._sawStageSentinelInRun = true (bug-57 — the flag the turn_result handler reads to decide whether to keep _activeRunItem alive for multi-stage runs).');
 });

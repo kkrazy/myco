@@ -194,6 +194,30 @@ function _registerExternalSession(sessionId, session) {
           console.log(`[td-33] stage-done(${stage}) fired without active run item — skipping`);
           return;
         }
+        // bug-61: pause enforcement. Pre-bug-61 the §9 methodology
+        // was directive-only — claude could (and empirically DID)
+        // emit a second [stage: X done] sentinel while a previous
+        // stage's verdict was still pending review, which fired
+        // another critic AND overwrote the user's chance to read the
+        // first verdict. User-reported (verbatim):
+        //   "the analyze stage verdict didn't pause the process, it
+        //    eventually get overriden by the final stage overall
+        //    verdict popover."
+        // Fix: check the stageState BEFORE transitioning + firing the
+        // critic. If we're already in awaiting_verdict (critic in
+        // flight) or awaiting_accept (user reviewing verdict), DROP
+        // this sentinel — claude must wait for the user to signal
+        // ✓ Accept Stage / ⚡ Ask Claude to Fix Stage before another
+        // sentinel can fire. The drop is one-shot — if claude later
+        // wants the dropped stage to be critiqued, they re-emit the
+        // sentinel after the user resolves the existing verdict.
+        const recForStageCheck = sessionsMod.getSessionRecord(sessionId);
+        const itemForStageCheck = _findPlanItemInRec(recForStageCheck, active.itemId);
+        const curStageState = stageStateMod.getStageState(itemForStageCheck);
+        if (curStageState && (curStageState.status === 'awaiting_verdict' || curStageState.status === 'awaiting_accept')) {
+          console.log(`[bug-61] dropping stage-done(${stage}) for ${active.itemId} — current stageState is ${curStageState.stage}.${curStageState.status}; claude must wait for the user to signal accept-stage / fix-stage on the existing verdict first`);
+          return;
+        }
         // bug-57: mark that this run has emitted at least one stage
         // sentinel. The turn_result handler reads this to decide
         // whether to keep _activeRunItem alive across the next
