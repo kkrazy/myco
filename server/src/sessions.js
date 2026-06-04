@@ -724,6 +724,13 @@ function _projectNameFromGitUrl(url) {
 // SDK's cwd mid-iteration is out of scope. The user can `cd
 // <projectName>` once the chat message reports clone success.
 //
+function resolveAgentCwd(rec) {
+  if (rec.mainProject && rec.cloneState !== 'pending') {
+    return path.join(rec.absCwd, rec.mainProject);
+  }
+  return rec.absCwd;
+}
+
 // Caller contract: spawnSession sets rec.cloneState='pending' +
 // rec.cloneUrl=<url> BEFORE this helper kicks off (so a chat-pane
 // observer sees the field before the first progress line lands).
@@ -802,6 +809,12 @@ function _runGitCloneInBackground(sessionId, projectAbs, gitUrl) {
       try { injectBestPracticesIntoClaudeMd(projectAbs); }
       catch (err) { console.error(`[fr-94 Phase 3] post-clone CLAUDE.md inject failed for ${sessionId}: ${err.message}`); }
       _emitCloneMsg(sessionId, `✓ Cloned ${gitUrl} in ${elapsed}s. cd ${path.basename(projectAbs)} to anchor work in the project.`, 'fr-94/clone-success');
+      try {
+        const attachMod = require('./attach');
+        attachMod.killSession(sessionId);
+      } catch (err) {
+        console.error(`[fr-94 Phase 3] post-clone killSession failed for ${sessionId}: ${err.message}`);
+      }
     } else {
       _markCloneFailed(sessionId, `✗ git clone failed (exit ${code}${signal ? `, signal ${signal}` : ''}) after ${elapsed}s. Project dir is empty.`);
     }
@@ -953,7 +966,7 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   // process.cwd() all anchor to the actual project, not the
   // session root wrapper. claudeMdRoot computed above mirrors the
   // same choice.
-  const agentCwd = mainProject ? path.join(absCwd, mainProject) : absCwd;
+  const agentCwd = resolveAgentCwd(record);
   const session = spawnAgent(id, { cwd: agentCwd, cols, rows, user });
   ptyMod._registerExternalSession(id, session);
   return { id, cwd: record.cwd, mode };
@@ -1028,14 +1041,15 @@ async function ensureLiveSession(sessionId) {
     saveStore();
     console.log(`[ensureLive] migrated ${sessionId} mode=(unset)→agent sdk=${(rec.sdkSessionId || '').slice(0,8) || 'none'}`);
   }
+  const liveCwd = resolveAgentCwd(rec);
   // One-shot lazy migration of the SDK's auto-memory dir from the
   // pre-2026-05-15 default ($HOME/.claude/projects/<encoded-cwd>/
   // memory/) into the per-session folder (<absCwd>/.claude/memory/).
   // Runs before spawnAgent so the SDK's first read finds the migrated
   // files. Idempotent — once the destination exists we skip.
   try {
-    const migrated = _migrateLegacyMemory(rec.absCwd);
-    if (migrated) console.log(`[ensureLive] migrated ${migrated} memory file(s) into ${rec.absCwd}/.claude/memory/ for ${sessionId}`);
+    const migrated = _migrateLegacyMemory(liveCwd);
+    if (migrated) console.log(`[ensureLive] migrated ${migrated} memory file(s) into ${liveCwd}/.claude/memory/ for ${sessionId}`);
   } catch (err) {
     console.error(`[ensureLive] memory migration failed for ${sessionId}: ${err.message}`);
   }
@@ -1044,16 +1058,18 @@ async function ensureLiveSession(sessionId) {
   // was set up before this feature shipped, or someone hand-deleted the
   // block — claude reads CLAUDE.md on every (re)spawn so the resumed
   // session picks up the fresh content.
-  injectBestPracticesIntoClaudeMd(rec.absCwd);
+  if (rec.cloneState !== 'pending') {
+    injectBestPracticesIntoClaudeMd(liveCwd);
+  }
   const { spawnAgent } = require('./agent-session');
   const session = spawnAgent(sessionId, {
-    cwd: rec.absCwd,
+    cwd: liveCwd,
     resumeSdkSessionId: rec.sdkSessionId || null,
     // fr-26: re-seed git identity on respawn.
     user: rec.user || null,
   });
   ptyMod._registerExternalSession(sessionId, session);
-  console.log(`[ensureLive] respawned agent for ${sessionId} cwd=${rec.absCwd} resume=${rec.sdkSessionId || 'none'}`);
+  console.log(`[ensureLive] respawned agent for ${sessionId} cwd=${liveCwd} resume=${rec.sdkSessionId || 'none'}`);
   // Zombie menu cleanup. A respawned AgentSession has a fresh
   // _pendingPermissions Map (no in-flight canUseTool callbacks carry
   // across a server restart). Any chat row still flagged kind=menu
