@@ -5291,7 +5291,29 @@
         "rewritten": true
       },
       "description": "**Problem:** The verdict step doesn't tailor its evaluation to the stage it's judging, so analyze-stage results aren't actually checked for analytical soundness.\n**Expected:** Each stage (analyze, etc.) has its own verdict prompt that targets that stage's output — e.g., at analyze, verdict assesses whether the analysis result makes sense — with optional tool invocations to pull in the right context.\n**Actual:** A single generic verdict prompt runs across all stages, with no stage-specific focus and no tool calls to ground the judgment."
+    },
+    {
+      "id": "bug-63",
+      "text": "Specialty critic findings don't drive the overall hasDisagreement — if Test Validity or Perf/Security flags a real gap, the verdict still says '✓ AGREED' because only the General critic's verdict gates. User-reported: a verdict where Test Validity critic clearly identified TWO missing assertions (fileApiPreamble called with 'viewer' tier; readOnly: true wiring based on ctx.access) but the overall verdict still showed Agreed. Two paired fixes: (1) specialty prompts (test-validity.js, perf-security.js) must explicitly require either '✓ AGREED' or '✗ DISAGREE' on the first line so detection is unambiguous — remove the 'your verdict is INFORMATIONAL' framing that signals to the model 'your finding doesn't really matter'. (2) critique.js aggregation: hasDisagreement = NOT (generalIsAgreed AND testValidityIsAgreed AND perfSecurityIsAgreed). Any specialty disagreement flips the overall verdict + pauses the run queue + surfaces the Discard/Fix/Accept buttons. Inversely, '✓ AGREED' on all three is required to silently advance.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-04T04:31:10.558Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-97",
+      "text": "Server-side §9 injection at session spawn — universal directive propagation. Pre-fix: §9 directive lives ONLY in web/public/best-practices-template.md, rendered into Arch tab UI but NEVER reaches the per-session CLAUDE.md that claude actually reads. When a session clones a repo, the clone's CLAUDE.md (which lacks §9) wins; per-session CLAUDE.md templating doesn't fire on cloned-repo sessions. Empirically confirmed via myco3 session debugging: cloned upstream kkrazy/myco.git CLAUDE.md had NO methodology references; claude emitted ZERO stage sentinels across ~280 events; the deployed bug-61 hard gate was inert (nothing to gate). Fix: extend the spawn flow to inject the current best-practices-template.md §9 block into the per-session CLAUDE.md regardless of upstream content. Idempotent — check for `td-34` marker before injecting; skip if already present. This makes the methodology truly universal across ALL myco-managed projects, not just ones whose upstream CLAUDE.md happens to include it. Companion to the immediate fix (Option A — add §9 to this repo's CLAUDE.md directly); Option B is the architectural fix.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-04T05:39:01.632Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
-  "updatedAt": "2026-06-04T03:44:44.749Z"
+  "updatedAt": "2026-06-04T05:39:01.632Z"
 }
