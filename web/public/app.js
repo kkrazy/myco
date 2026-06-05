@@ -7902,7 +7902,15 @@ function _renderVerdictPanel() {
     titleText = isIntermediate ? `⚠️ Gemini Flagged Checkpoint (${stageLabel})` : '⚠️ Gemini Flagged Issues (Disagreement)';
   }
 
-  const formattedCritique = escHtml(review.critique);
+  // bug-71: render the critique body as markdown (was escHtml plain
+  // text). Gemini emits markdown-shaped output (headers, bullets,
+  // fenced code blocks, sometimes mermaid diagrams). Pre-fix the
+  // verdict pane showed the raw `# Heading` / `**bold**` / triple-
+  // backtick markers as literal characters. renderMd uses marked +
+  // highlight.js, same path as assistant_text bubbles. Mermaid
+  // diagrams are post-processed after panel.innerHTML lands (see
+  // the renderMermaidInContainer call below).
+  const formattedCritique = renderMd(review.critique || '');
 
   // td-33: action-row composition depends on the verdict shape.
   //   · Error: show only Retry (the other actions don't apply — there's
@@ -8014,6 +8022,19 @@ function _renderVerdictPanel() {
       </div>
     </div>
   `;
+
+  // bug-71: render any mermaid fenced code blocks inside the
+  // verdict body into SVG diagrams. The marked path leaves mermaid
+  // blocks as `<pre><code class="language-mermaid">…</code></pre>`
+  // or `<pre class="mermaid">…</pre>` depending on the marked config;
+  // renderMermaidInContainer handles both shapes (same helper used
+  // by assistant_text bubbles). Fire-and-forget — the catch swallows
+  // render errors so a malformed diagram doesn't break the rest of
+  // the verdict UI.
+  try {
+    const critiqueEl = panel.querySelector('.verdict-critique');
+    if (critiqueEl) renderMermaidInContainer(critiqueEl).catch(() => {});
+  } catch {}
 
   // bug-55 SUPERSEDES bug-50 r2: the verdict pane is now TRULY modal.
   // No outside-click dismiss. No Esc dismiss. The only way to close

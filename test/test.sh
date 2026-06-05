@@ -3894,6 +3894,14 @@ test_chat_window() {
   # bug-69 + bug-68 itself. Fix flips TAIL→HEAD and bumps cap 2KB
   # →32KB at attach.js:262.
   node_test_result test/bug-68-intermediate-critique-explanation-not-truncated.test.js "test/bug-68-intermediate-critique-explanation-not-truncated.test.js (10 cases)"
+  # bug-71: verdict pane was rendering Gemini's critique as
+  # escHtml-escaped plain text — markdown markers (# Headings,
+  # **bold**, ```code fences```) and mermaid blocks all showed as
+  # literal characters. Fix replaces escHtml with renderMd + post-
+  # processes the .verdict-critique container with
+  # renderMermaidInContainer so mermaid blocks become SVG diagrams.
+  # Same render path the assistant_text bubble uses.
+  node_test_result test/bug-71-verdict-renders-markdown-mermaid.test.js "test/bug-71-verdict-renders-markdown-mermaid.test.js (12 cases)"
   # bug-69: test.sh portability — busybox grep (no PCRE) was failing
   # 26 static checks; missing server/node_modules was failing
   # test_npm_deps + 6 server-smoke tests. Fix added pcre_match() (node-

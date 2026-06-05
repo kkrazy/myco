@@ -246,7 +246,15 @@ t('web/public/app.js: _renderVerdictPanel renders ↻ Retry on review.isError', 
 t('web/public/app.js: Retry click POSTs to /sessions/:id/critique/retry', () => {
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
-  const body = app.slice(at, at + 12000);
+  // bug-71 (2026-06-05): bumped the slice budget from 12000 to
+  // 16000. The bug-71 fix inserted ~21 lines INSIDE _renderVerdictPanel
+  // (the renderMd swap + the renderMermaidInContainer post-processor)
+  // which pushed the `authedFetch(`/sessions/${...}/critique/retry`)`
+  // call from offset ~11500 to ~12053 — 53 chars past the old 12000
+  // window. The window was arbitrary; this test asserts a wiring
+  // CONTRACT (Retry → POST /critique/retry), not a function-size
+  // constraint, so widening is the right move.
+  const body = app.slice(at, at + 16000);
   assert.ok(/\/sessions\/\$\{[^}]+\}\/critique\/retry/.test(body),
     'Retry click handler must POST to /sessions/:id/critique/retry (td-33 A wiring).');
   assert.ok(/method:\s*['"]POST['"]/.test(body),
