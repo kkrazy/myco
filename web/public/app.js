@@ -6085,6 +6085,31 @@ function _isChromeEvent(ev) {
   return false;
 }
 
+// bug-67: chrome events that MUST fold into the prev chrome batch
+// regardless of seq-consecutiveness. These are tied to the
+// surrounding tool-call lifecycle — semantically inseparable from
+// the prev batch — and the seq gate would otherwise wrongly split
+// them onto their own row whenever an interleaving chat-msg /
+// system note bumped the shared per-session seq counter (see
+// server/src/sessions.js:1610-1611 — allocSeq is shared between
+// agent events and chat-msg appends).
+//
+// turn_result already had an inline short-circuit at the
+// chrome-routing site; this helper hoists that into one source of
+// truth so the pre-routing finish gate, the chrome-routing fold
+// gate, and any future site all decide the same way.
+//
+// IMPORTANT: callers must still verify prev IS a chrome batch
+// before relying on this. If prev is assistant_text or chat-msg
+// (a real semantic break rendered between), a new batch is the
+// right answer regardless of which type the incoming event is.
+function _chromeEventAlwaysFolds(ev) {
+  if (!ev || !ev.type) return false;
+  return ev.type === 'turn_result'
+      || ev.type === 'permission_request'
+      || ev.type === 'permission_resolved';
+}
+
 // assistant_text still concatenates (separate from chrome) so claude's
 // narration between tool calls renders as one continuous markdown blob
 // with mermaid support — see the dedicated merge branch in
@@ -6189,7 +6214,11 @@ function _appendAgentEvent(ev) {
   if (prevRunning) {
     let willAppend = false;
     if (isChrome) {
-      if (ev.type === 'turn_result') {
+      // bug-67: turn_result + permission_request + permission_resolved
+      // always fold into the prev chrome batch — they're tied to the
+      // surrounding tool-call lifecycle and would otherwise be split
+      // off by a seq gap from any interleaving chat-msg / system note.
+      if (_chromeEventAlwaysFolds(ev)) {
         willAppend = true;
       } else {
         const prevLastSeq = prev.dataset.lastSeq ? parseInt(prev.dataset.lastSeq, 10) : null;
@@ -6279,7 +6308,13 @@ function _appendAgentEvent(ev) {
     const prevLastSeq = prev && prev.dataset && prev.dataset.lastSeq ? parseInt(prev.dataset.lastSeq, 10) : null;
     const evSeq = typeof ev.seq === 'number' ? ev.seq : null;
     const seqsConsecutive = Number.isFinite(prevLastSeq) && Number.isFinite(evSeq) && evSeq === prevLastSeq + 1;
-    if (prev && prev.dataset && prev.dataset.evType === '_chrome_batch' && seqsConsecutive) {
+    // bug-67: permission_request / permission_resolved fold into prev
+    // chrome batch regardless of seq-consecutiveness, mirroring the
+    // pre-routing finish gate. turn_result also matches here (its
+    // separate short-circuit at the top of this block already handled
+    // it, but routing through the helper keeps both gates symmetric).
+    const alwaysFolds = _chromeEventAlwaysFolds(ev);
+    if (prev && prev.dataset && prev.dataset.evType === '_chrome_batch' && (alwaysFolds || seqsConsecutive)) {
       _appendToChromeBatch(prev, ev, ts);
       if (Number.isFinite(evSeq)) prev.dataset.lastSeq = String(evSeq);
       batch = prev;

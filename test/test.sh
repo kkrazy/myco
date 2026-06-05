@@ -3767,6 +3767,16 @@ test_chat_window() {
   # never writes — the glob skips nonexistent files — until the 180s
   # budget tripped and reported a phantom failure on every full run.)
   node_test_result test/bug-38-r2-tool-result-fold.test.js "test/bug-38-r2-tool-result-fold.test.js"
+  # bug-67: permission_request arriving with a non-consecutive seq must
+  # STILL fold into the active chrome batch (not break it + spawn a new
+  # one-row "× 1 perm asked · Bash" batch). The seq counter is shared
+  # per-session between agent events and chat-msg appends, so a viewer
+  # chat-msg or system note interleaving between tool_use and the SDK-
+  # driven perm_request creates a seq gap that pre-fix closed the batch.
+  # Fix: _chromeEventAlwaysFolds(ev) helper (turn_result + permission_*)
+  # used by both seq gates in _appendAgentEvent. turn_result behavior
+  # preserved (it had an inline short-circuit before; helper hoists it).
+  node_test_result test/bug-67-perm-request-folds-into-chrome-batch.test.js "test/bug-67-perm-request-folds-into-chrome-batch.test.js (16 cases)"
   # bug-25: unknown_event events (server-side passthrough for SDK
   # message types myco doesn't recognize) used to leak into the
   # chat pane as literal "unknown_event" rows + JSON dumps. Now
