@@ -107,7 +107,13 @@ t('server/src/index.js: POST /critique/retry reads req.body.userPrompt + passes 
 t('web/public/app.js: verdict pane renders a #verdict-user-prompt-input textarea between the critique body and the action buttons', () => {
   const app = _read('web/public/app.js');
   const at = app.search(/function\s+_renderVerdictPanel\s*\(\)/);
-  const body = app.slice(at, at + 8000);
+  // 16000-byte window matches td-33's post-bug-71 budget. Pre-bug-71 the
+  // function fit in 8000; bug-71's +21 line markdown/mermaid insertion
+  // pushed the textarea past the boundary, hiding the placeholder match
+  // even though the source was correct. Mirror td-33's bump (bumped from
+  // 12000→16000 in commit 3c21cf4) so a future insertion has room before
+  // we have to revisit again.
+  const body = app.slice(at, at + 16000);
   assert.ok(/verdict-user-prompt-input/.test(body),
     '_renderVerdictPanel must render the #verdict-user-prompt-input textarea (bug-52 — the user input field).');
   assert.ok(/verdict-user-prompt-wrap/.test(body),
