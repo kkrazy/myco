@@ -1101,9 +1101,83 @@ async function ensureLiveSession(sessionId) {
   return session;
 }
 
+// bug-66: Best-effort workspace purge on session delete. Removes the
+// session's absCwd from disk so a subsequent create-with-same-project
+// clones cleanly into an empty target. Without this, `/wks/<user>/`
+// accumulates orphan `myco-<user>-<id>/` dirs forever, and any flow
+// that lands at a previously-used path (respawn/reattach, future
+// id-reuse) trips git clone's "destination not empty" guard.
+//
+// Defensive — refuses to act when:
+//   · rec.absCwd is missing or not a string
+//   · path is NOT strictly under userRoot(rec.user) (no traversal)
+//   · basename doesn't match `myco-<rec.user>-<8 hex>` exactly
+//     (the id-as-folder shape from spawnSession). Legacy hand-named
+//     cwds like `test006` / `myco` are deliberately left alone.
+//   · basename's user-segment doesn't match rec.user (rejects forged
+//     rec whose absCwd points into another user's tree)
+//
+// Also best-effort drops the legacy SDK transcript mirror at
+// $HOME/.claude/projects/<encoded-cwd>/ so importExistingTranscripts
+// can't resurrect a deleted session's transcripts.
+//
+// Never throws — failures log and the caller proceeds. Auth is
+// enforced by the caller (HTTP DELETE /sessions/:id is owner-only);
+// this helper trusts its argument.
+function _removeWorkspaceForDeletedSession(rec) {
+  if (!rec || typeof rec.absCwd !== 'string' || !rec.absCwd) return;
+  const user = rec.user || 'default';
+  const absCwd = path.resolve(rec.absCwd);
+  const root = path.resolve(userRoot(user));
+  if (!absCwd.startsWith(root + path.sep)) {
+    console.warn(`[bug-66] refusing to rm ${absCwd} — outside ${root}`);
+    return;
+  }
+  const idShape = new RegExp(
+    `^myco-${user.replace(/[^a-zA-Z0-9_-]/g, '')}-[0-9a-f]{8}$`
+  );
+  if (!idShape.test(path.basename(absCwd))) {
+    console.warn(`[bug-66] refusing to rm ${absCwd} — basename not id-shape for user=${user}`);
+    return;
+  }
+  try {
+    fs.rmSync(absCwd, { recursive: true, force: true });
+    console.log(`[bug-66] purged workspace ${absCwd}`);
+  } catch (err) {
+    console.error(`[bug-66] rm ${absCwd} failed: ${err.message}`);
+  }
+  // Best-effort: drop the legacy SDK transcript mirror so
+  // importExistingTranscripts can't resurface deleted-session
+  // transcripts. The mirror is often absent for modern sessions
+  // (per-session .claude/memory/); when present, this prevents
+  // a `dismissed[]` mishap from auto-reimporting later.
+  try {
+    const mirror = path.join(projectsDir(), encodeCwdForClaude(absCwd));
+    if (fs.existsSync(mirror)) {
+      fs.rmSync(mirror, { recursive: true, force: true });
+      console.log(`[bug-66] purged transcript mirror ${mirror}`);
+    }
+  } catch (err) {
+    console.error(`[bug-66] transcript mirror rm failed: ${err.message}`);
+  }
+}
+
+// Caller MUST verify ownership before calling. There is no internal
+// auth check — the HTTP DELETE /sessions/:id route enforces
+// owner-only via sessionBelongsToUser (admins promoted via
+// `/admin @user` do NOT inherit delete). New internal callers MUST
+// enforce the same contract.
 function deleteSession(sessionId) {
   ptyMod.killSession(sessionId);
+  // bug-66: snapshot rec BEFORE removeSession drops the registry key
+  // so the workspace-purge helper can see absCwd/user. Order:
+  //   1. kill agent (no live writes mid-rm)
+  //   2. snapshot rec
+  //   3. drop registry entry (subsequent attaches 404 immediately)
+  //   4. purge disk
+  const rec = getSessionRecord(sessionId);
   removeSession(sessionId);
+  if (rec) _removeWorkspaceForDeletedSession(rec);
 }
 
 // One-shot importer: walk ~/.claude/projects/, find transcripts whose `cwd`
@@ -1560,4 +1634,6 @@ Object.assign(module.exports, {
   injectBestPracticesIntoClaudeMd,
   // Exposed for the memory-migration regression test.
   _migrateLegacyMemory,
+  // bug-66: exposed for the workspace-purge regression test.
+  _removeWorkspaceForDeletedSession,
 });

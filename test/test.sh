@@ -3807,6 +3807,13 @@ test_chat_window() {
   # cleanup block (gated on state.activeId === s.id) + a simulated
   # state-effect assertion.
   node_test_result test/bug-29-delete-clears-plan.test.js "test/bug-29-delete-clears-plan.test.js (9 cases)"
+  # bug-66: deleting a session must purge its workspace dir from disk
+  # (not just remove the registry entry). Static guards on the helper
+  # _removeWorkspaceForDeletedSession + its call site inside
+  # deleteSession + runtime assertions that the dir IS gone after
+  # delete + safety guards reject paths outside userRoot AND legacy
+  # non-id-shape basenames AND forged cross-user rec.
+  node_test_result test/bug-66-delete-purges-workspace.test.js "test/bug-66-delete-purges-workspace.test.js (14 cases)"
   # bug-31: AskUserQuestion modal dismissal recovery. Two failure modes
   # the user reported — (a) backdrop outside-click dismissed the prompt
   # accidentally; (b) once dismissed, the chat-pane reopen affordance
