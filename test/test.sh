@@ -63,6 +63,67 @@ SKIP=0
 skip()    { SKIP=$((SKIP+1)); echo "  ~ $1 (skipped)"; }
 have_node() { command -v node >/dev/null 2>&1; }
 
+# bug-69: portable PCRE matcher. Replaces `grep -Pzoq` (which busybox
+# doesn't support — busybox grep has no PCRE engine, fails with
+# `grep: unrecognized option: P`) by delegating to Node's RegExp
+# engine. Same syntax: \s, \d, (?i), (?s), [\s\S]{0,N} all work
+# verbatim. Works on every host where the rest of test.sh runs (node
+# >=18 is already a hard dep for node_test_prelaunch + test_npm_deps
+# + test_text_utils). Usage:
+#   pcre_match "<pattern>" "<file>" && pass "..." || fail "..."
+# Return codes: 0 = match, 1 = no match, 2 = unrecoverable (no node /
+# invalid regex / unreadable file). The `|| fail` pattern in callers
+# treats 1 and 2 identically, matching the prior `grep -P` behavior.
+pcre_match() {
+  local pattern="$1" file="$2"
+  if ! have_node; then return 2; fi
+  node -e '
+    const fs = require("fs");
+    try {
+      // PCRE accepts (?i) / (?s) / (?is) as inline-prefix mode flags.
+      // JS RegExp does NOT — it requires those as the second-arg
+      // flags string. Extract any leading (?<flags>) into a flags
+      // string so the patterns from test.sh stay verbatim. Common
+      // PCRE flags we honor: i = case-insensitive, s = dotall (. matches \n).
+      let pat = process.argv[1];
+      let flags = "";
+      const m = pat.match(/^\(\?([a-z]+)\)/);
+      if (m) {
+        const valid = "ims";
+        for (const c of m[1]) if (valid.includes(c) && !flags.includes(c)) flags += c;
+        pat = pat.slice(m[0].length);
+      }
+      const re = new RegExp(pat, flags);
+      const content = fs.readFileSync(process.argv[2], "utf8");
+      process.exit(re.test(content) ? 0 : 1);
+    } catch (err) {
+      console.error("pcre_match: " + err.message);
+      process.exit(2);
+    }
+  ' "$pattern" "$file"
+}
+
+# bug-69: auto-install server/ deps when server/node_modules/ is
+# absent. Without this, test_npm_deps (line ~295) + run_server_smoke
+# (line ~4313) fail on a fresh checkout because `require.resolve` /
+# `require('global-agent/bootstrap')` can't find packages. CLAUDE.md
+# §Pre-Commit §1 says "fix the host OR the script first — don't skip
+# the suite", so we install on the user's behalf rather than skipping.
+# Idempotent: once node_modules + .package-lock.json exist the
+# function returns immediately. First-run cost is ~5-10s; cached
+# subsequent runs are sub-second.
+ensure_server_deps() {
+  if [ -d server/node_modules ] && [ -f server/node_modules/.package-lock.json ]; then
+    return
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    die "ensure_server_deps: npm not on PATH. Install Node >=18 (which ships with npm) before running test.sh."
+  fi
+  echo "── bug-69 ensure_server_deps: installing server/ deps (first run on this checkout) ──"
+  (cd server && npm install --prefer-offline --no-audit --no-fund) || \
+    die "ensure_server_deps: npm install failed in server/. Check network / npm registry availability and re-run."
+}
+
 # ─── parallel node-test runner ────────────────────────────────────────────────
 # Goal: cut wall time by running every test/*.test.js in the background up
 # front, then having each call-site read the pre-computed exit code instead
@@ -183,6 +244,10 @@ mint_session_via_oauth() {
 }
 
 # ─── static checks ───────────────────────────────────────────────────────────
+
+# bug-69: ensure server/ deps exist BEFORE node_test_prelaunch — some
+# tests require modules from server/node_modules to be importable.
+ensure_server_deps
 
 # Kick off every test/*.test.js in parallel up front. Each call-site that
 # would have done `if node test/foo … fi` now reads the cached exit code
@@ -621,7 +686,7 @@ test_best_practices_template() {
   grep -q "agent-card-force-expand" web/public/app.js \
     && pass "app.js: tool errors force-expand" \
     || fail "app.js: tool errors force-expand"
-  grep -Pzoq "agent-card\.agent-card-collapsed[\s\S]{0,80}agent-card-body[\s\S]{0,40}display:\s*none" web/public/styles.css \
+  pcre_match "agent-card\.agent-card-collapsed[\s\S]{0,80}agent-card-body[\s\S]{0,40}display:\s*none" web/public/styles.css \
     && pass "styles.css: collapsed cards hide their body" \
     || fail "styles.css: collapsed cards hide their body"
   # Phase 2.5 retired the sticky-bottom + inline option buttons on the
@@ -707,7 +772,7 @@ test_best_practices_template() {
   grep -q "\.perm-modal-box" web/public/styles.css \
     && pass "styles.css: perm-modal-box styling" \
     || fail "styles.css: perm-modal-box styling"
-  grep -Pzoq "\.perm-modal\s*\{[\s\S]{0,200}position:\s*fixed" web/public/styles.css \
+  pcre_match "\.perm-modal\s*\{[\s\S]{0,200}position:\s*fixed" web/public/styles.css \
     && pass "styles.css: perm-modal is position:fixed overlay" \
     || fail "styles.css: perm-modal is position:fixed overlay"
   # Phase 2: agent events render into #chat-messages (single timeline).
@@ -716,7 +781,7 @@ test_best_practices_template() {
   # On the first agent frame of an attach we force the chat pane open
   # and hide #terminal-wrap (which is empty for agent-mode sessions);
   # session-switch resets the latch so PTY sessions are unaffected.
-  grep -Pzoq "function _ensureAgentLogPane[\s\S]{0,400}getElementById\('chat-messages'\)" web/public/app.js \
+  pcre_match "function _ensureAgentLogPane[\s\S]{0,400}getElementById\('chat-messages'\)" web/public/app.js \
     && pass "app.js: _ensureAgentLogPane targets #chat-messages" \
     || fail "app.js: _ensureAgentLogPane targets #chat-messages"
   grep -q "_agentChatPaneArmed" web/public/app.js \
@@ -856,7 +921,7 @@ test_conv_view_js() {
   # Regression: discussion-panel chat messages must also go through renderMd
   # so menu broadcasts ("Claude wants to run `Bash(...)`"), allow/deny
   # notes, and the /allowlist output don't show as raw backticks/markdown.
-  grep -Pzoq 'class="chat-text">\$\{renderMd' web/public/app.js \
+  pcre_match 'class="chat-text">\$\{renderMd' web/public/app.js \
     && pass "discussion chat body rendered as markdown" \
     || fail "discussion chat body rendered as markdown"
   # Regression: each WS message handler must guard against stale-WS
@@ -1021,10 +1086,10 @@ test_new_session_readonly() {
   else
     pass "app.js: _renderClaudeTyping is layout-neutral (no scroll-anchor needed)"
   fi
-  grep -Pzoq '\.claude-typing\s*\{[^}]*flex:\s*0\s+0\s+\d+px' web/public/styles.css \
+  pcre_match '\.claude-typing\s*\{[^}]*flex:\s*0\s+0\s+\d+px' web/public/styles.css \
     && pass "css: .claude-typing reserves a fixed-px flex slot" \
     || fail "css: .claude-typing slot isn't a fixed-px flex item — chat content will move on spinner toggles"
-  grep -Pzoq '\.claude-typing\[hidden\]\s*\{[^}]*visibility:\s*hidden' web/public/styles.css \
+  pcre_match '\.claude-typing\[hidden\]\s*\{[^}]*visibility:\s*hidden' web/public/styles.css \
     && pass "css: .claude-typing[hidden] uses visibility (slot stays reserved)" \
     || fail "css: .claude-typing[hidden] no longer uses visibility:hidden — slot will collapse and reflow chat"
   grep -qF 'contain: layout style paint' web/public/styles.css \
@@ -1277,7 +1342,7 @@ test_new_session_readonly() {
   # Session id is the folder name. spawnSession must compute id BEFORE
   # building absCwd and use it as the folder. Verified end-to-end by
   # the persistence smoke test below.
-  grep -Pzoq "absCwd = path\.join\(userRootDir, id\)" server/src/sessions.js \
+  pcre_match "absCwd = path\.join\(userRootDir, id\)" server/src/sessions.js \
     && pass "sessions.js: spawnSession uses session id as folder name" \
     || fail "sessions.js: spawnSession does not use session id as folder"
   grep -q 'placeholder="e.g.' web/public/index.html \
@@ -1293,7 +1358,7 @@ test_new_session_readonly() {
   grep -q "autoMemoryDirectory" server/src/agent-session.js \
     && pass "agent-session: per-session autoMemoryDirectory" \
     || fail "agent-session: autoMemoryDirectory not set"
-  grep -Pzoq "settingSources:\s*\['project',\s*'local',\s*'user'\]" server/src/agent-session.js \
+  pcre_match "settingSources:\s*\['project',\s*'local',\s*'user'\]" server/src/agent-session.js \
     && pass "agent-session: settingSources = project+local+user (proxy auth)" \
     || fail "agent-session: settingSources missing 'user' (needed for corporate-proxy auth credentials from \$HOME/.claude/settings.json)"
   # Memory migration: existing sessions whose legacy auto-memory lived
@@ -1311,10 +1376,10 @@ test_new_session_readonly() {
   # .test.js now owns that assertion — do NOT re-pin 880px on the chat
   # column here. The artifact-body 880px readable-line cap below is a
   # DIFFERENT surface (fr-77) and is still in force.
-  grep -Pzoq "#chatpane\.chat-main-view\s*\{[\s\S]{0,400}inset:\s*0" web/public/styles.css \
+  pcre_match "#chatpane\.chat-main-view\s*\{[\s\S]{0,400}inset:\s*0" web/public/styles.css \
     && pass "styles.css: chatpane fills main pane (inset:0, Phase 3)" \
     || fail "styles.css: chatpane still right-anchored sidebar"
-  grep -Pzoq "\.artifact-main-view\s+\.artifact-body[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
+  pcre_match "\.artifact-main-view\s+\.artifact-body[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
     && pass "styles.css: artifact-body centered + max-width 880px (Phase 3)" \
     || fail "styles.css: artifact-body not centered"
   # SDK Phase 9: spawnSession + ensureLiveSession both reject mode=pty;
@@ -1330,7 +1395,7 @@ test_new_session_readonly() {
   # transcript-autoheal and other future ensureLiveSession inserts;
   # the assertion intent ("both calls happen, in order, in the same
   # function") is preserved without bouncing on every code add.
-  grep -Pzoq "_migrateLegacyMemory\((rec\.absCwd|liveCwd)\)[\s\S]{0,3000}spawnAgent" server/src/sessions.js \
+  pcre_match "_migrateLegacyMemory\((rec\.absCwd|liveCwd)\)[\s\S]{0,3000}spawnAgent" server/src/sessions.js \
     && pass "sessions.js: ensureLiveSession invokes _migrateLegacyMemory before spawnAgent" \
     || fail "sessions.js: ensureLiveSession does not run the memory migration"
   # Smoke test the helper itself: copy a tmp fixture from a fake
@@ -1493,7 +1558,7 @@ test_file_explorer_static() {
   # Regression: mobile hides files-tree-pane when opening a file. Re-showing
   # the explorer must reset both inner panes so we don't land on a wrap
   # where every child is hidden (empty screen).
-  grep -Pzoq "(?s)showFilesView[^}]+files-tree-pane.*hidden.*=.*false" web/public/app.js \
+  pcre_match "(?s)showFilesView[^}]+files-tree-pane.*hidden.*=.*false" web/public/app.js \
     && pass "js: showFilesView resets files-tree-pane visibility" \
     || fail "js: showFilesView resets files-tree-pane visibility"
 }
@@ -1680,13 +1745,13 @@ test_chat_window() {
   # messages. iOS needs ALL THREE of user-select:text, touch-callout:default,
   # touch-action:auto for the long-press → Copy callout to fire. Without
   # touch-callout the body's selection-disabled value propagates down.
-  grep -Pzoq '#chat-messages[^{]*\{[^}]*user-select:\s*text\s*!important' web/public/styles.css \
+  pcre_match '#chat-messages[^{]*\{[^}]*user-select:\s*text\s*!important' web/public/styles.css \
     && pass "#chat-messages re-enables user-select with !important" \
     || fail "#chat-messages re-enables user-select with !important"
-  grep -Pzoq '#chat-messages[^{]*\{[^}]*touch-callout:\s*default' web/public/styles.css \
+  pcre_match '#chat-messages[^{]*\{[^}]*touch-callout:\s*default' web/public/styles.css \
     && pass "#chat-messages re-enables iOS touch-callout" \
     || fail "#chat-messages re-enables iOS touch-callout"
-  grep -Pzoq '#chat-messages[^{]*\{[^}]*touch-action:\s*auto' web/public/styles.css \
+  pcre_match '#chat-messages[^{]*\{[^}]*touch-action:\s*auto' web/public/styles.css \
     && pass "#chat-messages re-enables touch-action" \
     || fail "#chat-messages re-enables touch-action"
   grep -q 'id="chat-input"' web/public/index.html && pass "#chat-input element" || fail "#chat-input element"
@@ -1701,19 +1766,19 @@ test_chat_window() {
   # incident proved the old Ctrl/Cmd-Enter-only contract was a UX trap —
   # users typed `1` + Enter to answer a permission menu and got silently
   # stuck because the keystroke never reached the server.
-  grep -Pq '<textarea[^>]*id="chat-input"' web/public/index.html \
+  pcre_match '<textarea[^>]*id="chat-input"' web/public/index.html \
     && pass "chat-input is a multi-line textarea" \
     || fail "chat-input is a multi-line textarea"
   grep -q "Enter sends" web/public/index.html \
     && pass "chat-input placeholder advertises Enter-to-send" \
     || fail "chat-input placeholder advertises Enter-to-send"
-  grep -Pzoq "key !== 'Enter'[\s\S]{0,400}shiftKey[\s\S]{0,200}submitChat\(\)" web/public/app.js \
+  pcre_match "key !== 'Enter'[\s\S]{0,400}shiftKey[\s\S]{0,200}submitChat\(\)" web/public/app.js \
     && pass "Enter sends; Shift+Enter inserts newline" \
     || fail "Enter sends; Shift+Enter inserts newline"
-  grep -Pzoq "key !== 'Enter'[\s\S]{0,200}isComposing" web/public/app.js \
+  pcre_match "key !== 'Enter'[\s\S]{0,200}isComposing" web/public/app.js \
     && pass "chat send guards IME composition (isComposing)" \
     || fail "chat send guards IME composition (isComposing)"
-  grep -Pzoq "key !== 'Enter'[\s\S]{0,400}chat-autocomplete" web/public/app.js \
+  pcre_match "key !== 'Enter'[\s\S]{0,400}chat-autocomplete" web/public/app.js \
     && pass "chat send defers to open autocomplete dropdown" \
     || fail "chat send defers to open autocomplete dropdown"
   grep -q 'function sendChatMessage' web/public/app.js && pass "sendChatMessage() defined" || fail "sendChatMessage() defined"
@@ -3786,6 +3851,18 @@ test_chat_window() {
   # gated to skip clarify-tagged messages and routed BEFORE the
   # slash-command branch.
   node_test_result test/bug-70-chat-accept-fires-run-done.test.js "test/bug-70-chat-accept-fires-run-done.test.js (71 cases)"
+  # bug-69: test.sh portability — busybox grep (no PCRE) was failing
+  # 26 static checks; missing server/node_modules was failing
+  # test_npm_deps + 6 server-smoke tests. Fix added pcre_match() (node-
+  # delegated RegExp) + ensure_server_deps() (auto-install) so test.sh
+  # runs cleanly on any host with node + npm (the existing hard deps).
+  # This regression test is a shell script (not node) — exercises the
+  # bash-level helpers directly.
+  if bash test/bug-69-test-sh-portability.test.sh > /tmp/bug69-portability.out 2>&1; then
+    pass "test/bug-69-test-sh-portability.test.sh (16 cases)"
+  else
+    fail "test/bug-69-test-sh-portability.test.sh — re-run with 'bash test/bug-69-test-sh-portability.test.sh' to see failures"
+  fi
   # bug-25: unknown_event events (server-side passthrough for SDK
   # message types myco doesn't recognize) used to leak into the
   # chat pane as literal "unknown_event" rows + JSON dumps. Now
@@ -4059,7 +4136,7 @@ test_chat_window() {
   # through handleMenuPick (which calls _markMenuChatAnswered first,
   # THEN resolves the SDK promise) so the chat row gets stamped AND
   # the SDK promise settles in one pass.
-  grep -Pzoq "(?i)bare-digit menu pick[\s\S]{0,2000}handleMenuPick\(sessionId" server/src/attach.js \
+  pcre_match "(?i)bare-digit menu pick[\s\S]{0,2000}handleMenuPick\(sessionId" server/src/attach.js \
     && pass "attach.js: bare-digit chat shortcut routes through handleMenuPick" \
     || fail "attach.js: bare-digit chat shortcut bypasses handleMenuPick"
   # Post-bug-21 contract (fix 0eb1289): the supersede-on-broadcast
@@ -4087,13 +4164,13 @@ test_chat_window() {
   # without answered/superseded refers to a canUseTool promise that
   # no live receiver could resolve. Sweep them all .superseded so
   # the user's chat is a clean slate after a deploy/restart.
-  grep -Pzoq "respawned agent[\s\S]{0,1200}_supersedeStaleMenus" server/src/sessions.js \
+  pcre_match "respawned agent[\s\S]{0,1200}_supersedeStaleMenus" server/src/sessions.js \
     && pass "sessions.js: ensureLiveSession sweeps zombie menus on agent respawn" \
     || fail "sessions.js: ensureLiveSession does not sweep zombie menus"
   # Companion regression: a menu state-update (server confirmed pick /
   # supersede) must rebuild the client's modal queue + re-render the
   # popup, otherwise resolved menus stay visible in the modal.
-  grep -Pzoq "_applyMenuStateUpdate[\s\S]{0,2500}_rescanPendingMenuQueue\(\)[\s\S]{0,80}_renderPermModal\(\)" web/public/app.js \
+  pcre_match "_applyMenuStateUpdate[\s\S]{0,2500}_rescanPendingMenuQueue\(\)[\s\S]{0,80}_renderPermModal\(\)" web/public/app.js \
     && pass "app.js: menu state-update refreshes modal queue + popup" \
     || fail "app.js: menu state-update leaves modal queue stale"
   # Modal picks/toggles/submits must queue on a closed WS and drain on
@@ -4118,13 +4195,13 @@ test_chat_window() {
   # event-dedup pushed it from ~4000 → ~4300 chars). When this red-flips
   # on a future feature, bump the window — the contract is "handler
   # lexically inside the function," not a specific offset.
-  grep -Pzoq "_attachAgentWebSocket[\s\S]{0,8000}msg\.t === 'menu-pick'" server/src/attach.js \
+  pcre_match "_attachAgentWebSocket[\s\S]{0,8000}msg\.t === 'menu-pick'" server/src/attach.js \
     && pass "attach.js: agent WS handles menu-pick frame" \
     || fail "attach.js: agent WS missing menu-pick handler"
-  grep -Pzoq "_attachAgentWebSocket[\s\S]{0,8000}msg\.t === 'menu-toggle'" server/src/attach.js \
+  pcre_match "_attachAgentWebSocket[\s\S]{0,8000}msg\.t === 'menu-toggle'" server/src/attach.js \
     && pass "attach.js: agent WS handles menu-toggle frame" \
     || fail "attach.js: agent WS missing menu-toggle handler"
-  grep -Pzoq "_attachAgentWebSocket[\s\S]{0,8000}msg\.t === 'menu-submit'" server/src/attach.js \
+  pcre_match "_attachAgentWebSocket[\s\S]{0,8000}msg\.t === 'menu-submit'" server/src/attach.js \
     && pass "attach.js: agent WS handles menu-submit frame" \
     || fail "attach.js: agent WS missing menu-submit handler"
   # Multi-select AskUserQuestion: agent-session must mark each option
@@ -4137,7 +4214,7 @@ test_chat_window() {
   grep -q "resolveMenuSubmit" server/src/agent-session.js \
     && pass "agent-session: resolveMenuSubmit gathers checked" \
     || fail "agent-session: missing resolveMenuSubmit"
-  grep -Pzoq "isMulti[^}]{0,300}checkbox: true" server/src/agent-session.js \
+  pcre_match "isMulti[^}]{0,300}checkbox: true" server/src/agent-session.js \
     && pass "agent-session: multi-select options flagged checkbox=true" \
     || fail "agent-session: multi-select options missing checkbox flag"
   # handleMenuToggle's only effect is _toggleMenuChatCheckbox (which
