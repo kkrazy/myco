@@ -1889,7 +1889,9 @@ class AgentSession extends EventEmitter {
       const { resolveMycoDir } = require('./artifacts');
       const rec = sessionsMod.getSessionRecord(this.sessionId);
       if (rec) _mycoDir = resolveMycoDir(rec);
-    } catch {}
+    } catch (err) {
+      console.error(`[AgentSession] failed to resolve mycoDir during CWD update for ${this.sessionId}: ${err.message}`);
+    }
     this._eventsFile = path.join(_mycoDir || path.join(this.cwd, '_myco_'), 'events.jsonl');
   }
 
