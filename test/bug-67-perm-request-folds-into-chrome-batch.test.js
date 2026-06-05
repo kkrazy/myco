@@ -127,11 +127,13 @@ t('seq-consecutive check stays in place for non-always-fold events (regression g
 
 // Inlined reference helper. Must match the prod definition exactly
 // (the static guards above pin the prod version's contract).
+// bug-67 r3 added tool_result to the set.
 function _chromeEventAlwaysFolds(ev) {
   if (!ev || !ev.type) return false;
   return ev.type === 'turn_result'
       || ev.type === 'permission_request'
-      || ev.type === 'permission_resolved';
+      || ev.type === 'permission_resolved'
+      || ev.type === 'tool_result';
 }
 
 // Simulate the gate decision: given prev DOM dataset + incoming ev,
@@ -222,12 +224,15 @@ t('perm_request with no prev (empty pane) → new batch', () => {
     'perm_request on an empty pane must create the first batch — no prev to fold into');
 });
 
-t('_chromeEventAlwaysFolds returns false for tool_use / tool_result / hook_allow', () => {
+t('_chromeEventAlwaysFolds returns false for tool_use / hook_allow / system_event / rate_limit', () => {
   // Defense: the helper must NOT silently widen to other chrome
   // types — that would over-relax the seq check and lose the
   // chronological break-detection for the bulk of chrome events.
+  // bug-67 r3: tool_result MOVED into always-folds (user follow-up
+  // — tool_result post-menu-card was still splitting). Updated this
+  // assertion to remove tool_result; the round-2 test now covers
+  // the positive case (tool_result IS in always-folds).
   assert.strictEqual(_chromeEventAlwaysFolds({ type: 'tool_use' }), false);
-  assert.strictEqual(_chromeEventAlwaysFolds({ type: 'tool_result' }), false);
   assert.strictEqual(_chromeEventAlwaysFolds({ type: 'hook_allow' }), false);
   assert.strictEqual(_chromeEventAlwaysFolds({ type: 'hook_deny' }), false);
   assert.strictEqual(_chromeEventAlwaysFolds({ type: 'system_event' }), false);

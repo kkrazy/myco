@@ -249,11 +249,13 @@ t('lookback returns null when chrome_batch is BEFORE a real chat-msg + menu (the
 // Simulate the routing decision: given the pane state and an
 // incoming chrome event, return whether it folds into an existing
 // batch and which one.
+// bug-67 r3 added tool_result to the always-folds set.
 function _chromeEventAlwaysFolds(ev) {
   if (!ev || !ev.type) return false;
   return ev.type === 'turn_result'
       || ev.type === 'permission_request'
-      || ev.type === 'permission_resolved';
+      || ev.type === 'permission_resolved'
+      || ev.type === 'tool_result';
 }
 function simulateChromeRouting(pane, ev) {
   const prev = pane.lastElementChild;
@@ -287,25 +289,45 @@ t('end-to-end: user repro — tool_use → perm_request → menu → perm_resolv
   // (server marks it resolved). The tool_result arrives next.
   menu.classList.add('chat-msg-menu-collapsed');
   const toolResult = { type: 'tool_result', tool_use_id: 'toolu_x', content: 'x'.repeat(2118), seq: 101 };
-  // tool_result is NOT in always-folds → the lookback won't engage.
-  // For the user's repro to render as ONE batch, tool_result must
-  // fold via seq-consecutiveness with the existing batch's lastSeq.
-  // The simulator above doesn't model lastSeq updates, so we just
-  // verify that the chrome-routing call would return null for a
-  // strict-adjacency tool_result with a menu card between (which is
-  // the LIMITATION of this fix — see comment below).
+  // bug-67 r3 (follow-up after user report 2026-06-05 17:01):
+  // tool_result was moved INTO _chromeEventAlwaysFolds so the
+  // lookback also engages for tool_result events arriving after
+  // a menu card. The user-reported repro at 17:00 showed
+  // `× 1 ✓ result · 2301 bytes` as a separate batch — bug-67 r3
+  // fixes that. tool_result now folds into batch 1 via the same
+  // _findChromeBatchAcrossMenus path.
   const tr_target = simulateChromeRouting(pane, toolResult);
-  // Today: tool_result IS not always-fold, so this returns null —
-  // it would create a new batch. The user's trace confirms this:
-  // batch 2 contains [perm_resolved, tool_result]. After bug-67 r2,
-  // perm_resolved goes into batch 1, but tool_result still falls to
-  // a fresh batch UNLESS we extend always-folds to tool_result too.
-  // Scope decision: keeping tool_result out of always-folds for now
-  // (analyze plan only listed perm_* + turn_result). Document the
-  // residual: tool_result post-menu may still split. If the user
-  // wants it in the same batch, a follow-up extends always-folds.
-  assert.ok(tr_target === null || tr_target === batch,
-    'tool_result post-menu: documented scope — may still split into its own batch (not the bug-67 r2 target)');
+  assert.strictEqual(tr_target, batch,
+    'tool_result post-menu MUST fold into the chrome batch via _findChromeBatchAcrossMenus (bug-67 r3) — yielding ONE unified batch for the entire tool-call lifecycle');
+});
+
+t('end-to-end (bug-67 r3): tool_result post-menu folds into the chrome batch', () => {
+  // Direct repro of the user-reported 2026-06-05 17:01 trace:
+  //   batch_1 = [tool_use ToolSearch, tool_result, …, perm_request, perm_resolved]
+  //   menu_card (collapsed after click)
+  //   tool_result (2301 bytes WebSearch result) — was its own batch pre-r3.
+  const batch = makeChromeBatch('B1');
+  const menu = makeMenuCard({ collapsed: true });
+  const pane = makePane(batch, menu);
+  const tr = { type: 'tool_result', tool_use_id: 'toolu_WS', content: 'x'.repeat(2301), seq: 99 };
+  const target = simulateChromeRouting(pane, tr);
+  assert.strictEqual(target, batch,
+    'bug-67 r3: tool_result must fold into chrome_batch even when a collapsed menu card sits between');
+});
+
+t('end-to-end (bug-67 r3): tool_result still breaks batch when prev is a REAL chat-msg', () => {
+  // Defense: tool_result joining always-folds must NOT cause it to
+  // retro-merge across REAL semantic breaks. The _findChromeBatchAcrossMenus
+  // helper stops at any non-menu non-chrome element, including real
+  // chat-msg bubbles. So tool_result + [batch, chat_msg] yields null
+  // (fresh batch is correct).
+  const batch = makeChromeBatch('B1');
+  const realMsg = makeChatMsg();
+  const pane = makePane(batch, realMsg);
+  const tr = { type: 'tool_result', tool_use_id: 'toolu_x', content: 'hi', seq: 50 };
+  const target = simulateChromeRouting(pane, tr);
+  assert.strictEqual(target, null,
+    'bug-67 r3: tool_result after a real chat-msg must NOT retro-merge across the semantic break');
 });
 
 t('end-to-end: chat-msg between batch and menu correctly breaks the chain', () => {

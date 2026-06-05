@@ -6105,9 +6105,22 @@ function _isChromeEvent(ev) {
 // right answer regardless of which type the incoming event is.
 function _chromeEventAlwaysFolds(ev) {
   if (!ev || !ev.type) return false;
+  // bug-67 r3: tool_result joins the always-folds set. Same
+  // motivation as perm_resolved (bug-67 r2): a tool_result arrives
+  // AFTER the menu card transitions to collapsed, so the
+  // .chat-msg.chat-msg-menu-collapsed div is the pane's
+  // lastElementChild and the strict adjacency check fails. User
+  // saw `× 1 ✓ result · 2301 bytes` rendering as a standalone
+  // batch even though the tool_use + perm cycle were already in
+  // the previous batch. Adding tool_result here lets the
+  // chrome-routing block's _findChromeBatchAcrossMenus lookback
+  // engage, folding the result into the perm cycle's batch.
+  // Semantically correct — tool_result IS the tail of the
+  // tool-call lifecycle whose tool_use is already in the batch.
   return ev.type === 'turn_result'
       || ev.type === 'permission_request'
-      || ev.type === 'permission_resolved';
+      || ev.type === 'permission_resolved'
+      || ev.type === 'tool_result';
 }
 
 // bug-67 r2: a menu card (.chat-msg.chat-msg-menu — rendered by
