@@ -5149,7 +5149,7 @@
       "id": "bug-58",
       "text": "Critic verdict modal overflows chat window width",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-06-04T01:26:32.817Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -5172,6 +5172,11 @@
           "user": "kkrazy",
           "text": "the analyze stage verdict didn't pause the process, it eventually get overriden by the final stage overall verdict popover.",
           "ts": "2026-06-04T02:03:37.917Z"
+        },
+        {
+          "user": "kkrazy",
+          "text": "Closed out. The CSS fix shipped in `ab413cb` (\"fix(bug-58): scope verdict modal to chat-pane width — no more viewport overflow\") and is live on mycodev as of build `2026-06-06T14:05:29Z`. `.chat-composer-verdict-panel` is now `position: absolute; inset: 0` (was `fixed`) — backdrop scopes to `#chatpane` instead of viewport. Regression test `test/bug-58-verdict-modal-chat-pane-scoped.test.js` (8 cases) locks the shape. Verified green in the post-merge `./test/test.sh` run (720/0/2). [stage-accepted: verify→done]",
+          "ts": "2026-06-06T15:21:04.546Z"
         }
       ],
       "meta": {
@@ -5188,7 +5193,9 @@
           "summary": "108.3s · 14→5641 tok",
           "result": "**Findings:**\n- `#composer-verdict-pane` is rendered inside `#chatpane` (index.html:167)\n- `#chatpane` is `position: absolute; inset: 0` (its own containing block)\n- Current `.chat-composer-verdict-panel` is `position: fixed; inset: 0` — covers the WHOLE viewport, which is why it extends beyond chat-window edges on wide screens with sidebar chrome\n- `.verdict-panel-content` has `max-width: 960px` + centered via flex; that caps the card but the BACKDROP is still viewport-wide\n\n**Locked design (minimum-surface CSS-only fix):**\n\n| Change | Reason |\n|---|---|\n| `.chat-composer-verdict-panel`: `position: fixed` → `position: absolute` | Scopes to nearest positioned ancestor (`#chatpane`), so the modal covers chat-pane bounds, not viewport |\n| `inset: 0` stays | Means \"fill the containing block\" — i.e., fill the chat pane |\n| `padding: 5vh 5vw` → `padding: 20px` | viewport-relative padding becomes weird when the container is sub-viewport. Fixed-pixel padding is cleaner. |\n| `.verdict-panel-content`: `max-height: 90vh` → `max-height: calc(100% - 40px)` | Was viewport-relative; should be parent-relative now |\n| bug-58 provenance comments | Anchor for future restyles |\n\n**bug-55 contract preserved:**\n- Dismissal still only via explicit buttons (no backdrop click, no Esc)\n- The \"no accidental loss of verdict\" property holds — switching tabs doesn't dismiss; state.critiqueReview persists\n\n**What changes UX-wise:**\n- Modal now covers the chat pane only (correct per the user's spec)\n- Sidebars / tabs remain visible + clickable (user can switch to Plan tab if they want; verdict pane comes back when they return to chat)\n- Backdrop blur scoped to chat pane\n\n**Numbered code plan:**\n1. CSS: `position: fixed` → `position: absolute` on `.chat-composer-verdict-panel`. **verify:** grep matches.\n2. CSS: padding `5vh 5vw` → `20px`. **verify:** grep matches.\n3. CSS: content-card `max-height: 90vh` → `calc(100% - 40px)`. **verify:** grep matches.\n4. bug-58 marker comment. **verify:** grep.\n\n*"
         }
-      ]
+      ],
+      "doneAt": "2026-06-06T15:21:04.546Z",
+      "doneBy": "kkrazy"
     },
     {
       "id": "bug-59",
@@ -5266,7 +5273,9 @@
       "addedAt": "2026-06-04T03:24:17.797Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
+      "voters": [
+        "kkrazy"
+      ],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
@@ -5592,5 +5601,5 @@
       "description": "**Problem:** Plan items submitted for implementation don't run through the required staged workflow with critic gating, so solutions advance without review.\n**Expected:** Each plan item runs 3 stages — 1. analyze (propose a solution), 2. code (implement the proposal), 3. verify (confirm the fix). After every stage a selected critic model runs and opens a modal popover letting the user (1) review the solution, (2) ask further questions, (3) accept the solution, or (4) ask Claude to address the issues. The next stage only starts once the prior stage's solution is accepted.\n**Actual:** Stages are not separated, no critic step runs between them, and no acceptance modal gates progression."
     }
   ],
-  "updatedAt": "2026-06-06T13:01:05.050Z"
+  "updatedAt": "2026-06-06T15:21:04.546Z"
 }
