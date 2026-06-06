@@ -448,7 +448,7 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
   // fr-95: `specialties` carries per-specialty isAgreed/isError so a
   // future client can render per-section badges; today's pane just
   // displays the concatenated markdown body.
-  session.emit('state-update', {
+  const broadcastPayload = {
     kind: 'critique-review',
     itemId: item.id,
     hasDisagreement: !isAgreed,
@@ -466,7 +466,33 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
       isError: e,
       isAgreed: a,
     })),
-  });
+  };
+  session.emit('state-update', broadcastPayload);
+
+  // fr-98: persist the verdict payload at item.meta.lastCriticReview
+  // so a fresh attach (new device, post-restart) sees the same pane
+  // the originating device saw. Without this the verdict was a fire-
+  // once broadcast — every device that wasn't attached at fire time
+  // ended up with stageState=awaiting_accept but no pane to render,
+  // leaving the run un-resolvable.
+  //
+  // Cleared on every resolve path (verify-accept / discard via
+  // clearActiveRunItem → _clearAndBroadcastStageState; accept-stage /
+  // fix-stage via resolveCritique below) so resolved verdicts don't
+  // ghost-replay on next attach. Skipped on error verdicts because
+  // the matching stageState transition is also skipped (the user
+  // hasn't seen a real verdict yet — see the fr-96 block below).
+  if (rec && !isError) {
+    try {
+      const stageStateMod = require('./stageState');
+      const attachMod = require('./attach');
+      const refreshedItem = attachMod._findPlanItemInRec(rec, item.id) || item;
+      stageStateMod.setLastCriticReview(refreshedItem, broadcastPayload);
+      sessionsMod.saveStore();
+    } catch (err) {
+      console.error(`[fr-98] persist lastCriticReview failed for ${item.id}: ${err.message}`);
+    }
+  }
 
   // fr-96: critic verdict broadcast → awaiting_accept transition.
   // Only fires on non-error verdicts (error keeps the previous
@@ -564,9 +590,18 @@ function resolveCritique(sessionId, session, opts = {}) {
       const rec = sessionsMod.getSessionRecord(sessionId);
       const item = attachMod._findPlanItemInRec(rec, itemId);
       const cur = stageStateMod.getStageState(item);
+      // fr-98: clear the persisted verdict regardless of stageState
+      // race — the user has acted on this verdict (accept or fix),
+      // so it should NOT replay on the next attach. The fr-96
+      // transition below moves stageState forward; clearing
+      // lastCriticReview here is the matching half of the bug-54
+      // cross-device sync, just for the persisted slot.
+      if (item && stageStateMod.clearLastCriticReview(item)) {
+        sessionsMod.saveStore();
+      }
       if (!cur) {
         // Race: item has no stageState (cleared by another path).
-        // No-op.
+        // No-op (the verdict clear above already landed).
       } else if (reason === 'accept-stage') {
         // Advance to next stage. nextStage('verify') returns null;
         // a verify-stage accept-stage button shouldn't normally

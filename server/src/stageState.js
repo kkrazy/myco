@@ -128,6 +128,60 @@ function toBroadcastPayload(itemId, stageState) {
   };
 }
 
+// fr-98: per-plan-item verdict persistence.
+//
+// The verdict panel ("Accept Stage / Fix Stage / Ask Critic" pane that
+// pops up after [stage: X done]) used to be a fire-once broadcast — only
+// devices attached at broadcast time saw it. Switching devices or
+// restarting the container produced an item whose stageState was
+// still awaiting_accept but with no rendered pane, leaving the run
+// paused with no way to resolve it.
+//
+// Fix: persist the broadcast payload at item.meta.lastCriticReview in
+// plan.json — the same per-item slot fr-96 used for stageState. The
+// _sendAttachSnapshot path in attach.js replays it on every new attach
+// for any item whose stageState.status is in awaiting_verdict /
+// awaiting_accept. Resolution paths (verify-accept, discard, accept-
+// stage, fix-stage) call clearLastCriticReview to ensure resolved
+// verdicts don't replay on next attach.
+//
+// Payload shape mirrors the live state-update broadcast at
+// critique.js:451 — itemId, hasDisagreement, isError, isIntermediate,
+// isRetry, stage, critique, diff, criticName, criticId, specialties.
+// We add broadcastAt as the persistence timestamp so the client can
+// flag a replay vs. a live broadcast if useful.
+
+// Stamp the current verdict on the item. Overwrites any previous
+// lastCriticReview (each stage's broadcast supersedes the prior one —
+// there's at most one pending verdict per item at a time, gated by
+// stageState).
+function setLastCriticReview(item, payload) {
+  if (!item) return null;
+  if (!item.meta) item.meta = {};
+  item.meta.lastCriticReview = {
+    ...payload,
+    broadcastAt: new Date().toISOString(),
+  };
+  return item.meta.lastCriticReview;
+}
+
+// Clear the persisted verdict. Called from every resolve path
+// (clearActiveRunItem on verify-accept/discard, resolveCritique on
+// accept-stage/fix-stage). Returns true iff anything was cleared, so
+// the caller can decide whether to saveStore() — matches
+// clearStageState's idempotent contract.
+function clearLastCriticReview(item) {
+  if (!item || !item.meta || !item.meta.lastCriticReview) return false;
+  delete item.meta.lastCriticReview;
+  return true;
+}
+
+// Read accessor. Returns the persisted verdict payload or null. Used by
+// _sendAttachSnapshot to decide whether to replay on a fresh attach.
+function getLastCriticReview(item) {
+  return (item && item.meta && item.meta.lastCriticReview) || null;
+}
+
 module.exports = {
   STAGES,
   STATUSES,
@@ -138,4 +192,8 @@ module.exports = {
   clearStageState,
   getStageState,
   toBroadcastPayload,
+  // fr-98: verdict persistence parity with stageState.
+  setLastCriticReview,
+  clearLastCriticReview,
+  getLastCriticReview,
 };

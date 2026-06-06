@@ -203,13 +203,29 @@ t('critique.js concatenates verdicts under markdown section headers when fan-out
 
 t('critique.js broadcasts a single critique-review WS frame with per-specialty metadata in `specialties` field', () => {
   const src = _read('server/src/critique.js');
-  // The session.emit must include a `specialties` field on the
-  // critique-review event.
-  const at = src.search(/session\.emit\s*\(\s*['"]state-update['"]\s*,\s*\{\s*[\s\S]{0,80}kind:\s*['"]critique-review['"]/);
-  assert.ok(at > -1, 'critique-review broadcast must exist.');
-  const body = src.slice(at, at + 1500);
-  assert.ok(/specialties:/.test(body),
+  // The fr-95 invariant is "the critique-review broadcast carries a
+  // `specialties` field." Pre-fr-98 the test pinned the LITERAL form
+  // `session.emit('state-update', { ... kind:'critique-review' ... })`
+  // — but fr-98 refactored the broadcast to assign the payload to
+  // `broadcastPayload` first (so setLastCriticReview can persist it),
+  // then emit. The semantic invariant is unchanged: the
+  // critique-review broadcast still carries the same specialties
+  // field. Locate the kind:'critique-review' marker (which appears
+  // exactly once in critique.js — at the broadcast payload) and
+  // assert specialties shows up adjacent to it.
+  const at = src.search(/kind:\s*['"]critique-review['"]/);
+  assert.ok(at > -1, 'critique-review broadcast (kind:"critique-review") must exist.');
+  // Widen the search window in both directions — the field can appear
+  // before or after the kind: marker depending on object-literal order.
+  const before = src.slice(Math.max(0, at - 500), at);
+  const after = src.slice(at, at + 1500);
+  assert.ok(/specialties:/.test(before) || /specialties:/.test(after),
     'critique-review broadcast must include a `specialties` field carrying per-specialty {id, name, isError, isAgreed} so a future client can render per-section badges.');
+  // Also verify the emit still fires — the broadcast must reach
+  // session.emit somewhere (whether via inline literal or via a
+  // captured variable).
+  assert.ok(/session\.emit\s*\(\s*['"]state-update['"]/.test(src),
+    "critique.js must emit a 'state-update' event (the live WS broadcast that the verdict pane subscribes to).");
 });
 
 // ── 4. Marker comments anchor future restyles ──

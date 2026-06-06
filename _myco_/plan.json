@@ -5413,14 +5413,70 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "b144b92cfb60",
+          "user": "claude",
+          "text": "✓ success · 268.6s · $1.9813 · 65↓/11368↑\n\n---\n\n## Stage: analyze — bug-66\n\n### Restating the bug in my own words\nThe session record (`rec` in `/data/sessions.json`) has a single `mainProject` slot that's meant to anchor `_myco_/` (plan.json, critic.md, events.jsonl, diagrams). The user is reporting two coupled symptoms:\n\n1. **Multiple main projects can accumulate per session** — i.e. nothing in the system prevents a session from ending up with more than one git checkout sitting under `absCwd`, and the \"+ add\" path doesn't enforce that the existing `mainProject` is the only one.\n2. **Plan + memory paths drift away from `<mainProject>/_myco_`** — because resolution still falls back to legacy auto-detect (`findProjectRoot` scans sibling subdirs for `.git/`) and `migrateMainProjectIfNeeded` *bails out* on multi-candidate workspaces…",
+          "ts": "2026-06-06T08:39:10.833Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-06T08:34:40.068Z"
+          }
+        },
+        {
+          "id": "1be495c9cc98",
+          "user": "claude",
+          "text": "✓ success · 411.9s · $4.3538 · 30↓/27751↑\n\n### Summary of code-stage diff\n\n**`server/src/artifacts.js`**\n- `findProjectRoot` — removed the legacy sibling-subdir auto-detect scan (the \"drift cause\"). Resolution rules are now {`mainProject` set + dir exists → that path; `mainProject` set + dir missing → `null` + loud warn; `absCwd` IS a checkout → `absCwd`; else `null`}.\n- Added `setMainProject(rec, name)` — the single chokepoint for `rec.mainProject` writes. Throws on already-set-different-value (single-main invariant), empty name, missing absCwd, or missing target dir. Idempotent same-name re-set is a no-op.\n- `migrateMainProjectIfNeeded` — multi-candidate branch is now deterministic (picks alphabetical-first + persists via `setMainProject`) instead of bailing with a warning. Single-candidate branch also routed through `setMainP…",
+          "ts": "2026-06-06T08:52:45.238Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-06T08:46:57.644Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "{\n  \"items\": [\n    {\n      \"id\": \"bug-1\",\n      \"text\": \"Enforce single main project per session; consolidate plan + memory under main-project/_myco_\",\n      \"layer\": \"Bug\",\n      \"done\": false,\n      \"addedAt\": \"2026-06-06T05:48:10.199Z\",\n      \"addedBy\": \"kkrazy\",\n      \"source\": \"user\",\n      \"voters\": [],\n      \"comments\": [],\n      \"meta\": {\n        \"rewriteRequested\": \"long\",\n        \"originalText\": \"There.should be only one main project for each session added via +. We should be looking at the main-project/_myco_/plan.json, the main-project/_myco_ should be where.the project memory should stay.\",\n        \"rewritten\": true\n      },\n      \"description\": \"**Problem:** Sessions can accumulate multiple \\\"main\\\" projects when added via `+`, and project memory/plan paths are inconsistent.\\n**Expected:** Each session has exactly one main project. Plan is read from `main-project/_myco_/plan.json`, and `main-project/_myco_` is the canonical location for project memory.\\n**Actual:** Multiple main projects can be added per session, and memory/plan locations are not anchored to `main-project/_myco_`.\\n**Context:** Paths involved — `main-project/_myco_/plan.json`, `main-project/_myco_/` (project memory root).\"\n    }\n  ],\n  \"updatedAt\": \"2026-06-06T05:48:16.031Z\"\n}",
         "rewritten": true
       },
-      "description": "**Problem:** Sessions can accumulate multiple \"main\" projects when added via `+`, and project memory/plan paths are not consistently anchored under `main-project/_myco_`.\n**Expected:** Each session has exactly one main project. Plan is read from `main-project/_myco_/plan.json`, and `main-project/_myco_` is the canonical root for project memory.\n**Actual:** Adding via `+` permits multiple main projects per session, and plan/memory locations drift away from `main-project/_myco_`.\n**Context:** Paths involved — `main-project/_myco_/plan.json`, `main-project/_myco_/` (project memory root)."
+      "description": "**Problem:** Sessions can accumulate multiple \"main\" projects when added via `+`, and project memory/plan paths are not consistently anchored under `main-project/_myco_`.\n**Expected:** Each session has exactly one main project. Plan is read from `main-project/_myco_/plan.json`, and `main-project/_myco_` is the canonical root for project memory.\n**Actual:** Adding via `+` permits multiple main projects per session, and plan/memory locations drift away from `main-project/_myco_`.\n**Context:** Paths involved — `main-project/_myco_/plan.json`, `main-project/_myco_/` (project memory root).",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-06T08:39:10.833Z",
+          "startedAt": "2026-06-06T08:34:40.068Z",
+          "summary": "268.6s · 65→11368 tok",
+          "result": "---\n\n## Stage: analyze — bug-66\n\n### Restating the bug in my own words\nThe session record (`rec` in `/data/sessions.json`) has a single `mainProject` slot that's meant to anchor `_myco_/` (plan.json, critic.md, events.jsonl, diagrams). The user is reporting two coupled symptoms:\n\n1. **Multiple main projects can accumulate per session** — i.e. nothing in the system prevents a session from ending up with more than one git checkout sitting under `absCwd`, and the \"+ add\" path doesn't enforce that the existing `mainProject` is the only one.\n2. **Plan + memory paths drift away from `<mainProject>/_myco_`** — because resolution still falls back to legacy auto-detect (`findProjectRoot` scans sibling subdirs for `.git/`) and `migrateMainProjectIfNeeded` *bails out* on multi-candidate workspaces, leaving the resolution to be done at every read by the alphabetical-first scanner. That's the \"drift\" — same session, two reads, two potential answers.\n\n### What I found in the code\n- The only `+` button is `#btn-spawn` (web/public/index.html:34) → opens the spawn modal → `doSpawn()` (web/public/app.js:2860) → `POST /sessions` (server/src/index.js:597-625) → `spawnSession` (server/src/sessions.js:888). Spawn-modal flow is already required-gated by fr-94 Phase 3 r1.\n- `findProjectRoot(rec)` (server/src/artifacts.js:162) honors `rec.mainProject` when set + the dir exists; **otherwise it auto-scans sibling subdirs** for `.git/` and returns the alphabetical-first hit. That is the \"drift surface\" — every plan/memory read on a no-mainProject session can land in a different sibling project than the user expected.\n- `migrateMainProjectIfNeeded` (artifacts.js:235) only commits a value when there's **exactly one** candidate; multi-candidate sessions stay unmigrated forever and re-scan every time.\n- `rec.mainProject` is written in only one place: `spawnSession` at sessions.js:949. There is **no `/sessions/:id` PATCH or \"add another project\" endpoint** today — nothing client-facing lets the use"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-06T08:52:45.238Z",
+          "startedAt": "2026-06-06T08:46:57.644Z",
+          "summary": "411.9s · 30→27751 tok",
+          "result": "### Summary of code-stage diff\n\n**`server/src/artifacts.js`**\n- `findProjectRoot` — removed the legacy sibling-subdir auto-detect scan (the \"drift cause\"). Resolution rules are now {`mainProject` set + dir exists → that path; `mainProject` set + dir missing → `null` + loud warn; `absCwd` IS a checkout → `absCwd`; else `null`}.\n- Added `setMainProject(rec, name)` — the single chokepoint for `rec.mainProject` writes. Throws on already-set-different-value (single-main invariant), empty name, missing absCwd, or missing target dir. Idempotent same-name re-set is a no-op.\n- `migrateMainProjectIfNeeded` — multi-candidate branch is now deterministic (picks alphabetical-first + persists via `setMainProject`) instead of bailing with a warning. Single-candidate branch also routed through `setMainProject` for consistency.\n- Exported `setMainProject` (top-level + `__test`); also added `migrateMainProjectIfNeeded` to `__test` so the new test can exercise it.\n\n**`server/src/sessions.js`**\n- `spawnSession` seed write at line 949 now calls `artifacts.setMainProject(record, mainProject)` via lazy-require instead of stamping the field directly. Wrapped in try/catch so a failure logs but doesn't abort the spawn (the directory was just created moments earlier; failure here is a defensive log point, not a user-facing block).\n\n**`test/bug-66-single-main-project-anchor.test.js`** — new file, 19 cases:\n- 6× chokepoint behaviour (`setMainProject`)\n- 4× `findProjectRoot` resolution (including the bug-66 \"no sibling fallback\" guard — the test that would have caught the original drift)\n- 4× deterministic migration (`migrateMainProjectIfNeeded`)\n- 2× canonical anchor witness (`artifactFilePath` lands at `<absCwd>/<mainProject>/_myco_/plan.json`, or `null` — never a sibling)\n- 3× chokepoint-adoption static-grep guards (sessions.js calls it, no direct writes, setMainProject is exported)\n\n**`test/test.sh`**\n- Wired `test/bug-66-single-main-project-anchor.test.js` into the fr-94 block (after fr-94 P"
+        }
+      ]
+    },
+    {
+      "id": "fr-98",
+      "text": "Render verdict panel like AskUserQuestion for cross-device, session-restart persistence",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-06T09:32:14.249Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the verdict panel should show up like the askuserquestion, which consistent across device and session restart.",
+        "rewritten": true
+      },
+      "description": "**Problem:** The verdict panel doesn't persist consistently across devices or after session restart, unlike AskUserQuestion.\n**Expected:** Verdict panel renders using the same mechanism as AskUserQuestion, so it remains consistent across device and session restart.\n**Actual:** Verdict panel uses a different rendering path that doesn't survive device switches or session restarts."
     }
   ],
-  "updatedAt": "2026-06-06T08:32:44.632Z"
+  "updatedAt": "2026-06-06T09:32:20.624Z"
 }
