@@ -642,6 +642,152 @@ get a brief clarifying question, not an autonomous decision.
   / `code` as a separate keyword after an accept. They did NOT say
   the accept signal itself is optional. Silence means wait.
 
+## 10. Write stable tests — avoid the known anti-patterns
+
+This codebase has been bitten enough times to catalogue the failure
+modes. When adding a new test (or extending `./test/test.sh`), avoid
+these patterns — they LOOK fine and pass on the author's machine,
+then flake on CI / on the constrained `mycobeta` host / under any
+mild load.
+
+### a) Never pipe a captured variable into `grep -q`
+
+```bash
+# ❌ DON'T — races under `set -o pipefail` (which test.sh has on)
+echo "$resp" | grep -q '"ok":true' && pass "..." || fail "..."
+<cmd> | grep -q PAT && pass "..." || fail "..."
+awk '/^function foo/,/^}$/' src/file.js | grep -q 'token'
+
+# ✓ DO — capture, then here-string into grep (or grep the file directly)
+grep -q '"ok":true' <<<"$resp" && pass "..." || fail "..."
+out=$(<cmd>); grep -q PAT <<<"$out" && pass "..." || fail "..."
+body=$(awk '/^function foo/,/^}$/' src/file.js)
+grep -q 'token' <<<"$body" && pass "..." || fail "..."
+```
+
+`grep -q` exits at the first match. The upstream producer's next
+write to the now-closed pipe gets `SIGPIPE` (exit 141). Under
+`pipefail`, the whole pipeline's status becomes 141, and the
+`&& pass || fail` reads that as failure even though the pattern
+*was* found. The bug is host-dependent — it triggers on
+mycobeta (glibc) and sometimes locally; here-strings sidestep it
+entirely because there's no pipe to break.
+
+There's a static guard in `run_static_checks`
+(`test_no_pipe_to_grep_q_antipattern`) that fails the build if
+any new `<cmd> | grep -q` lands. If you legitimately need to grep
+for the pattern in a regression check, put `<<<` on the same line
+(the guard excludes lines that already use here-strings — it's
+how it doesn't self-trigger).
+
+### b) Never `slice(at, at + N)` a function body with a hand-picked N
+
+```js
+// ❌ DON'T — N becomes too small the moment the source function grows
+const at = src.search(/function\s+renderFoo\s*\(/);
+const body = src.slice(at, at + 8000);
+
+// ✓ DO — use the helper; it slices to the next column-0 `}`
+const { sliceFn } = require('./_lib/fn-body');
+const at = src.search(/function\s+renderFoo\s*\(/);
+const body = sliceFn(src, at);
+// Or skip the explicit `at` entirely:
+const { fnBody } = require('./_lib/fn-body');
+const body = fnBody(src, /function\s+renderFoo\s*\(/);
+```
+
+`bug-52` + `td-33` both hit this on `2026-06-05` when `bug-71`
+added 21 lines to `_renderVerdictPanel` and the fixed 8000 /
+12000-byte windows dropped the textarea / retry handler off the
+end. There is no "right N" — every time the function grows,
+someone has to re-discover it. `sliceFn`/`fnBody` (defined in
+`test/_lib/fn-body.js`) walks until the next column-0 `}` line,
+matching the convention awk patterns in `test.sh` use.
+
+The only legitimate reason to keep a hand-picked N is when your
+test *intentionally* spans into a sibling function. There are
+two such sites in `test/td-33-r2-critic-context-enrichment.test.js`
+— look there for the in-line `NOTE:` comments describing the
+exception.
+
+### c) Tests must run sub-second standalone — and own their state
+
+`test.sh` fires every `test/*.test.js` in parallel, capped at
+`NODE_TEST_PARALLELISM` (default 10). Each individual test waits
+up to `NODE_TEST_BUDGET_SEC` (default 180 s) for its background
+runner slot. Two consequences:
+
+- **Don't write tests that take seconds.** `node test/foo.test.js`
+  should finish in well under a second when run standalone. Slow
+  tests bottleneck the parallel pool; tests starve siblings of
+  CPU/RAM on small hosts (mycobeta = 2 cores, 7.7 GB) and get
+  reaped before they can write their `.exit` file — the failure
+  surfaces as "180 s budget exceeded" on a totally innocent test,
+  not on the slow one.
+- **Don't share global state across tests.** Use `free_port`
+  (helper in `test.sh`) for any port, `mktemp -d` for any tmp
+  directory, and never assume `/data/...` or `~/.config/...`
+  reflects only your test's writes — a sibling test might be
+  scribbling on the same path concurrently.
+
+### d) Smoke-server / process readiness — poll, don't `sleep N`
+
+```bash
+# ❌ DON'T — assumes the child is bound after 2 s
+node server/src/index.js &
+sleep 2
+curl http://127.0.0.1:$PORT/...
+
+# ✓ DO — poll until bound (or until we know the child died)
+node server/src/index.js &
+SMOKE_PID=$!
+local waited=0
+while ! curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" 2>/dev/null; do
+  if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+    echo "server (pid=$SMOKE_PID) exited during boot" >&2
+    return 1
+  fi
+  sleep 0.25
+  waited=$((waited + 1))
+  if [ "$waited" -gt 60 ]; then        # 60 × 0.25 s = 15 s cap
+    echo "server failed to bind on :$PORT within 15s" >&2
+    kill "$SMOKE_PID" 2>/dev/null || true
+    return 1
+  fi
+done
+```
+
+`start_smoke_server` (in `test.sh`) already follows this pattern —
+mirror it for any new test that boots a child process.
+
+### e) Print useful failure context
+
+Every `assert.ok(predicate, message)` MUST take a message that
+names WHAT was expected and WHY it matters. The runner prints the
+message verbatim on failure; "should match" is useless, "must read
+`item.comments` (td-33 r2 — comments cap lives in the sibling
+helper)" is gold.
+
+For `bash` checks in `test.sh`, the `pass`/`fail` labels are the
+same surface — write them so a reader who doesn't know the test
+can guess what the contract is from the label alone.
+
+### f) New convention → new static guard
+
+If you invent a new convention (a helper everyone should now use,
+a forbidden pattern, an idiom that must hold), add a check to
+`run_static_checks` that fails the build when the convention is
+violated. Two existing examples:
+
+- `test_index_chatpane_uses_herestring` — locks the chatpane test
+  body to here-strings (no echo-pipe-grep regression).
+- `test_no_pipe_to_grep_q_antipattern` — broader: no
+  `<cmd> | grep -q` anywhere in `test.sh`.
+
+The cost is ~10 lines; the payoff is the rule never silently
+erodes. The runtime cost is sub-millisecond — these are pure
+grep+sed reads of the test file.
+
 ---
 
 *Toggle this section off via the **Best practices** checkbox if your
