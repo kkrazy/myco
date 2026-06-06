@@ -829,7 +829,24 @@ function _runGitCloneInBackground(sessionId, projectAbs, gitUrl) {
         console.error(`[fr-94 Phase 3] post-clone update CWD failed for ${sessionId}: ${err.message}`);
       }
     } else {
-      _markCloneFailed(sessionId, `✗ git clone failed (exit ${code}${signal ? `, signal ${signal}` : ''}) after ${elapsed}s. Project dir is empty.`);
+      // bug-72: the post-failure status of the project dir is the
+      // single most useful diagnostic — was the failure a network /
+      // auth issue (dir genuinely empty), or did something race in
+      // and populate it (the bug-72 symptom)? Probe and report.
+      let dirStatus = 'project dir state unknown.';
+      try {
+        const entries = fs.readdirSync(projectAbs);
+        if (entries.length === 0) {
+          dirStatus = 'Project dir is empty.';
+        } else {
+          const preview = entries.slice(0, 5).join(', ');
+          const more = entries.length > 5 ? `, … +${entries.length - 5}` : '';
+          dirStatus = `Project dir is NOT empty (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}: ${preview}${more}). git clone refuses non-empty targets — see bug-72.`;
+        }
+      } catch (_err) {
+        dirStatus = 'Project dir missing — pre-clone mkdir may have failed.';
+      }
+      _markCloneFailed(sessionId, `✗ git clone failed (exit ${code}${signal ? `, signal ${signal}` : ''}) after ${elapsed}s. ${dirStatus}`);
     }
   });
   child.on('error', (err) => {

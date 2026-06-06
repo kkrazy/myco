@@ -4081,6 +4081,17 @@ test_chat_window() {
   # delete + safety guards reject paths outside userRoot AND legacy
   # non-id-shape basenames AND forged cross-user rec.
   node_test_result test/bug-66-delete-purges-workspace.test.js "test/bug-66-delete-purges-workspace.test.js (14 cases)"
+  # bug-72: clone-pending race. spawnSession pre-creates the empty
+  # project subdir + defers `git clone` via setImmediate. During the
+  # gap, AgentSession's _persistEventToDisk would mkdirsync
+  # <projectSubdir>/_myco_/ for events.jsonl — populating the dir
+  # before git clone runs, so the clone failed with "destination not
+  # empty" (exit 128). Fix: findProjectRoot returns null when
+  # rec.cloneState === 'pending' so the events.jsonl path falls back
+  # to the wrapper. Test pins the early-return in findProjectRoot +
+  # asserts findProjectRoot / resolveMycoDir = null during pending +
+  # confirms post-success behavior is unchanged.
+  node_test_result test/bug-72-clone-pending-myco-dir-race.test.js "test/bug-72-clone-pending-myco-dir-race.test.js (8 cases)"
   # bug-31: AskUserQuestion modal dismissal recovery. Two failure modes
   # the user reported — (a) backdrop outside-click dismissed the prompt
   # accidentally; (b) once dismissed, the chat-pane reopen affordance

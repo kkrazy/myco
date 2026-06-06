@@ -161,6 +161,26 @@ const NESTED_SCAN_SKIP = new Set([
 // with, so writing _myco_/ would be meaningless.
 function findProjectRoot(rec) {
   if (!rec || !rec.absCwd) return null;
+  // bug-72: during fr-94 Phase 3's async-clone window, the project
+  // subdir is pre-created EMPTY (see _kickoffGitCloneAsync) and the
+  // real `git clone` runs one setImmediate tick later. If anything
+  // populates the subdir in that gap — e.g. AgentSession's
+  // _persistEventToDisk mkdirs `<projectSubdir>/_myco_/` for
+  // events.jsonl — git clone fails with "destination path … already
+  // exists and is not an empty directory" (exit 128). Return null
+  // during clone-pending so callers fall back to the WRAPPER:
+  //   · AgentSession._eventsFile → `<rec.absCwd>/_myco_/events.jsonl`
+  //     (the fallback baked into the constructor + updateCwd is
+  //     `path.join(this.cwd, '_myco_')`, and this.cwd is the wrapper
+  //     during clone-pending via resolveAgentCwd's same-shape guard).
+  //   · ensureMycoDir / writeArtifactToFile → no-op (returns false /
+  //     null), which is fine; the user can't author plan/test/arch
+  //     during the clone-pending window anyway.
+  // After clone success, _runGitCloneInBackground flips cloneState
+  // to 'success' AND renames the wrapper-level `_myco_/` into the
+  // freshly-cloned project subdir AND calls AgentSession.updateCwd,
+  // restoring the post-fr-94 layout.
+  if (rec.cloneState === 'pending') return null;
   // fr-94 Phase 1: rec.mainProject (explicit designated main project)
   // takes precedence over auto-detection. Set at session creation via
   // the spawn modal's "Git clone URL OR new project name" field. When
