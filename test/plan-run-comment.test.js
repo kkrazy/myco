@@ -147,12 +147,17 @@ t('real listener path: outcome lands on item.runs[] and item.comments[]', () => 
   const c = updated.comments[0];
   assert.strictEqual(c.user, 'claude');
   assert.strictEqual(c.meta && c.meta.kind, 'run-summary');
-  assert.ok(/✓ success/.test(c.text), 'comment text missing status glyph/word: ' + c.text);
+  // bug-60: success path uses ✓ glyph at the start of a SINGLE-LINE
+  // comment (the "success" word was dropped — redundant with the
+  // glyph + the inline tail's duration/cost/tok chips).
+  assert.ok(/^✓ /.test(c.text), 'comment text must lead with ✓ glyph: ' + c.text);
+  assert.strictEqual(c.text.split(/\r?\n/).length, 1,
+    'bug-60: comment text must be a single line: ' + JSON.stringify(c.text));
   assert.ok(/4\.2s/.test(c.text), 'comment text missing duration: ' + c.text);
   assert.ok(/\$0\.0098/.test(c.text), 'comment text missing cost: ' + c.text);
   assert.ok(/800↓\/220↑/.test(c.text), 'comment text missing token chip: ' + c.text);
   assert.ok(c.text.includes('Wired the toggle'),
-    'comment body missing truncated final assistant text: ' + c.text);
+    'comment body missing first-line summary text: ' + c.text);
 
   // _activeRunItem should be cleared after stamping (one summary per run).
   assert.strictEqual(session._activeRunItem, null,
@@ -187,11 +192,20 @@ t('error outcome uses ⚠ glyph + error status in the comment', () => {
   const updated = store.sessions[sid].artifacts.plan.items.find((i) => i.id === 'td-err');
   const c = updated.comments[0];
   assert.strictEqual(c.user, 'claude');
-  assert.ok(/⚠ error/.test(c.text), 'error comment must use ⚠ glyph + "error" word: ' + c.text);
+  // bug-60: error path uses ⚠ glyph at the start of a SINGLE-LINE
+  // comment (the "error" word was dropped — see plan-run-comment success
+  // case above for the same shape change).
+  assert.ok(/^⚠ /.test(c.text), 'error comment must lead with ⚠ glyph: ' + c.text);
+  assert.strictEqual(c.text.split(/\r?\n/).length, 1,
+    'bug-60: error comment must be a single line: ' + JSON.stringify(c.text));
   assert.strictEqual(updated.runs[0].status, 'error');
 });
 
-t('missing final assistant text falls back to "(no final assistant text)" body', () => {
+// bug-60: the placeholder text was tightened from "(no final assistant
+// text — see the chat timeline for the per-tool detail)" down to
+// "(no summary — see chat timeline)" as part of the single-line shape.
+// Same contract though — empty result still produces a comment.
+t('missing final assistant text falls back to "(no summary)" placeholder body', () => {
   const sid = 'sess-prc-4';
   const item = {
     id: 'td-empty', text: 'silent run', layer: 'Misc', done: false,
@@ -218,8 +232,10 @@ t('missing final assistant text falls back to "(no final assistant text)" body',
   const store = sessionsMod.loadStore();
   const updated = store.sessions[sid].artifacts.plan.items.find((i) => i.id === 'td-empty');
   const c = updated.comments[0];
-  assert.ok(/no final assistant text/i.test(c.text),
-    'empty-result run should still emit a comment with a fallback body: ' + c.text);
+  assert.ok(/no summary/i.test(c.text),
+    'empty-result run should still emit a comment with the bug-60 fallback body: ' + c.text);
+  assert.strictEqual(c.text.split(/\r?\n/).length, 1,
+    'bug-60: empty-result fallback must still be a single line: ' + JSON.stringify(c.text));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

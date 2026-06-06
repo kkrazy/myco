@@ -513,6 +513,58 @@ function _stampPlanItemStatus(sessionId, itemId, status, summary) {
   }
 }
 
+// bug-60: extract a concise one-line summary from claude's final
+// assistant text. Pre-bug-60, _stampPlanItemRunOutcome pasted up to
+// 800 chars of multi-paragraph result text into the auto-comment
+// body — the plan view turned into a wall of text (median 842
+// chars / multiple paragraphs per comment in real plan.json data).
+// Now: first non-empty line of the result, stripped of leading
+// markdown / glyph chrome, whitespace-collapsed, capped at 140
+// chars. The FULL text (up to 2000 chars) still lives at
+// item.runs[last].result for drill-down — only the COMMENT body
+// shrinks.
+//
+// Heuristic, not LLM-summarized: cheap, deterministic, runs inline.
+// Empirically the first line of claude's wrap-up is what a user
+// scanning the plan view actually wants ("Fixed X by Y.", "Shipped
+// in commit abc.", etc.).
+const RUN_SUMMARY_ONE_LINE_CAP = 140;
+const RUN_SUMMARY_PLACEHOLDER = '(no summary — see chat timeline)';
+function _extractRunOutcomeSummaryLine(rawText) {
+  if (rawText == null) return RUN_SUMMARY_PLACEHOLDER;
+  const s = String(rawText).trim();
+  if (!s) return RUN_SUMMARY_PLACEHOLDER;
+  // First non-empty line.
+  let first = '';
+  for (const ln of s.split(/\r?\n/)) {
+    const t = ln.trim();
+    if (t) { first = t; break; }
+  }
+  if (!first) return RUN_SUMMARY_PLACEHOLDER;
+  // Strip stacked leading prefix junk so e.g. "## ✅ **Shipped** in commit"
+  // → "Shipped in commit". Loop because real entries chain multiple
+  // prefix layers — heading + glyph + bold + bullet are all common.
+  // Cap iterations to 6 so a pathological input can't spin.
+  let prev = '';
+  for (let i = 0; i < 6 && prev !== first; i++) {
+    prev = first;
+    first = first.replace(/^[#>*\-]+\s*/, '');                      // md leaders
+    first = first.replace(/^\*\*\s*/, '');                          // bold-start
+    // Common claude/myco status glyphs: ✅ ❌ ⏳ ✨ ℹ 📋 🧪 🏗 ⚠
+    first = first.replace(/^[✅❌⏳✨ℹ⚠📋🧪🏗]+\s*/, '');
+  }
+  // Drop a trailing `**` if the leading-strip ate the opening one
+  // but left the close — keeps "**Shipped**" → "Shipped".
+  first = first.replace(/\*\*$/, '').trim();
+  // Collapse internal whitespace runs.
+  first = first.replace(/\s+/g, ' ').trim();
+  if (!first) return RUN_SUMMARY_PLACEHOLDER;
+  if (first.length > RUN_SUMMARY_ONE_LINE_CAP) {
+    first = first.slice(0, RUN_SUMMARY_ONE_LINE_CAP - 1) + '…';
+  }
+  return first;
+}
+
 // Append a terminal "run outcome" record to a plan item after the
 // turn_result event lands. status = success / error / etc. (matches
 // the agent's turn subtype). summary captures cost + duration so
@@ -523,6 +575,12 @@ function _stampPlanItemStatus(sessionId, itemId, status, summary) {
 // dispatched run live on the item itself — clicking the comment thread
 // shows the per-run log inline with any human discussion. One summary
 // comment per run.
+//
+// bug-60: the comment body is now a SINGLE LINE — `${glyph} ${oneLine}
+// · ${metrics tail}`. Pre-bug-60 the body was two paragraphs (header
+// then a multi-paragraph paste of outcome.result). The full result
+// text (up to 2000 chars) is still preserved on item.runs[last].result
+// for drill-down.
 function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   const rec = sessionsMod.getSessionRecord(sessionId);
   if (!rec) return;
@@ -566,14 +624,19 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   // teammate scanning the plan sees "what did claude actually do for
   // this todo" without leaving the Plan tab. Tagged user='claude' +
   // meta.kind='run-summary' so the UI can render it distinctively.
+  //
+  // bug-60: SINGLE-LINE shape. Pre-bug-60 this composed
+  //   `${glyph} ${status} · ${metrics}\n\n${800-char paste of outcome.result}`
+  // which median'd 842 chars and topped out around 5,000 / 60+ lines in
+  // real plan.json data — clutter the user explicitly called out.
+  // Now: glyph + first-line summary extracted from outcome.result +
+  // inline metrics tail, total ≤ ~200 chars. The full text remains
+  // available at item.runs[last].result for drill-down.
   if (!Array.isArray(item.comments)) item.comments = [];
   const glyph = status === 'success' ? '✓' : '⚠';
-  const headerBits = [`${glyph} ${status}`, durS, costStr,
-    `${inTok}↓/${outTok}↑`].filter(Boolean).join(' · ');
-  const resultBody = outcome.result
-    ? (outcome.result.length > 800 ? outcome.result.slice(0, 797) + '…' : outcome.result)
-    : '_(no final assistant text — see the chat timeline for the per-tool detail)_';
-  const summaryText = `${headerBits}\n\n${resultBody}`;
+  const oneLineSummary = _extractRunOutcomeSummaryLine(outcome.result);
+  const tailBits = [durS, costStr, `${inTok}↓/${outTok}↑`].filter(Boolean).join(' · ');
+  const summaryText = `${glyph} ${oneLineSummary}${tailBits ? ` · ${tailBits}` : ''}`;
   item.comments.push({
     id: crypto.randomBytes(6).toString('hex'),
     user: 'claude',
@@ -2387,6 +2450,13 @@ module.exports = {
   _transitionStageState,
   _clearAndBroadcastStageState,
   _findPlanItemInRec,
+  // bug-60: exposed for testability. The one-line summary extractor
+  // is a pure function (unit-testable in isolation); the run-outcome
+  // stamper is exercised end-to-end by test/bug-60-…-test.js with a
+  // synthesized rec + plan-item to assert the comment body is a
+  // single line.
+  _extractRunOutcomeSummaryLine,
+  _stampPlanItemRunOutcome,
   // Re-export menu helpers so callers that historically grabbed them off
   // ptyMod continue to find them.
   handleSessionMenu: menuMod.handleSessionMenu,

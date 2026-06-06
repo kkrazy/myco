@@ -2619,6 +2619,15 @@ test_chat_window() {
   # (user='claude', meta.kind='run-summary') so findings live ON the
   # item. Added with the @myco-prefix removal 2026-05-16.
   node_test_result test/plan-run-comment.test.js "test/plan-run-comment.test.js (4 cases)"
+  # bug-60: the run-summary comment auto-posted by _stampPlanItemRunOutcome
+  # must be a SINGLE LINE — not the verbose multi-paragraph paste of
+  # outcome.result that the user reported as plan-view clutter (median
+  # 842 chars, top entries ~5,000 chars / 60+ lines in real plan.json
+  # data at the time of the report). Test pins the helper
+  # _extractRunOutcomeSummaryLine + the new single-line summaryText
+  # shape + the contract that item.runs[last].result still keeps the
+  # full text (≤2000) for drill-down.
+  node_test_result test/bug-60-concise-run-summary-comment.test.js "test/bug-60-concise-run-summary-comment.test.js (13 cases)"
   # fr-4 regression: /td /fr /bug with >8-word body OR the /td! /fr!
   # /bug! bang variants kick off an async claude rewrite that
   # reshapes the description into a tight issue-style body. Item is
