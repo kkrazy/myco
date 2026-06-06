@@ -2680,6 +2680,17 @@ test_chat_window() {
   # artifacts-init handler tagging the cache with state.activeId, and
   # the _resetUiForNewSession reset.
   node_test_result test/plan-cache-session-isolation.test.js "test/plan-cache-session-isolation.test.js (9 cases)"
+  # bug-74: _findPlanItemInRec must locate plan items that exist in
+  # _myco_/plan.json on disk even when rec.artifacts.plan.items is
+  # stale/empty. Pre-bug-74 the in-memory miss silently no-op'd —
+  # [run:plan#X] dispatch did NOT initialize stageState for items
+  # present only in the file mirror (e.g. items added by a sibling
+  # session, hand-edited, or just added via /td|/bug before the
+  # extractor re-hydrated). The critic never fired, no verdict pane,
+  # the user saw "the gemini critic never showed up." Test pins the
+  # file-mirror fallback + the rec.artifacts.plan hydration side-
+  # effect + the in-memory-wins-first contract + the try/catch.
+  node_test_result test/bug-74-find-plan-item-file-mirror-fallback.test.js "test/bug-74-find-plan-item-file-mirror-fallback.test.js (10 cases)"
   # bug-13 regression: chrome batch messages (agent-event frames) +
   # exit notifications must reach share-link viewers, not just the
   # session owner. Locks attachViewerWebSocket to subscribe + unsub

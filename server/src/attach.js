@@ -2302,11 +2302,77 @@ async function runAssistant(sessionId, session, lastMessage) {
 // the queue entry), the helper returns gracefully.
 const stageStateMod = require('./stageState');
 
+// bug-74: lookup with file-mirror fallback. The pre-bug-74 version
+// read ONLY rec.artifacts.plan.items (the in-memory snapshot) and
+// returned null on a miss — silently breaking downstream handlers
+// when the item existed in _myco_/plan.json on disk but hadn't
+// propagated into the in-memory rec yet.
+//
+// The in-memory rec.artifacts.plan can lag _myco_/plan.json after:
+//   · /td|/bug|/fr in another session that shares the same project
+//     dir,
+//   · a hand-edit to plan.json,
+//   · a migration that ran on a different session,
+// — items land in the file mirror but extractor.js's transcript-
+// synthesis path hasn't re-hydrated rec.artifacts since.
+//
+// Symptom that surfaced this (user-reported, 2026-06-06):
+//   [run:plan#bug-67] dispatch → _initAndBroadcastStageState →
+//   _findPlanItemInRec → null → silent "item not found" log + no-op.
+//   stageState stayed null, the critic never fired, no verdict pane,
+//   no advancement. "the gemini critic never showed up."
+//
+// Resolution order:
+//   1. In-memory rec.artifacts.plan.items — cheap path, also the
+//      authoritative source for mid-handler mutations that haven't
+//      been persisted yet.
+//   2. File mirror via readArtifactFromFile(rec, 'plan'). On hit,
+//      hydrate rec.artifacts.plan so subsequent lookups in the same
+//      handler chain see the item in-memory — no thrashing.
+//   3. null.
+//
+// Defensive: the file-mirror branch is wrapped in try/catch so a
+// malformed _myco_/plan.json (corrupted, mid-write, missing) never
+// bubbles an exception to the caller. Failure logs + returns null.
 function _findPlanItemInRec(rec, itemId) {
-  if (!rec || !rec.artifacts || !rec.artifacts.plan) return null;
-  const items = rec.artifacts.plan.items;
-  if (!Array.isArray(items)) return null;
-  return items.find((it) => it && it.id === itemId) || null;
+  if (!rec) return null;
+  // Phase 1 — in-memory (cheap; honors mid-handler mutations).
+  if (rec.artifacts && rec.artifacts.plan) {
+    const items = rec.artifacts.plan.items;
+    if (Array.isArray(items)) {
+      const hit = items.find((it) => it && it.id === itemId);
+      if (hit) return hit;
+    }
+  }
+  // Phase 2 — file mirror fallback. Only reach here on in-memory
+  // miss; reading disk on every successful lookup would be wasteful.
+  try {
+    const { readArtifactFromFile } = require('./artifacts');
+    const fromFile = readArtifactFromFile(rec, 'plan');
+    if (fromFile && Array.isArray(fromFile.items)) {
+      const hit = fromFile.items.find((it) => it && it.id === itemId);
+      if (hit) {
+        // Side-effect: hydrate rec.artifacts.plan from the file
+        // payload so subsequent lookups in this handler chain (and
+        // the rest of this run) hit in-memory. Defensive shape —
+        // never overwrite an existing rec.artifacts.plan with the
+        // file copy; we only fill in what was empty.
+        if (!rec.artifacts) rec.artifacts = {};
+        if (!rec.artifacts.plan) rec.artifacts.plan = fromFile;
+        else if (!Array.isArray(rec.artifacts.plan.items)) rec.artifacts.plan.items = fromFile.items;
+        else {
+          // The in-memory snapshot had items but missed our target.
+          // Append the missing item rather than wholesale-replace —
+          // preserving any mid-handler mutations sitting in-memory.
+          rec.artifacts.plan.items.push(hit);
+        }
+        return hit;
+      }
+    }
+  } catch (err) {
+    console.error(`[bug-74] _findPlanItemInRec file-mirror fallback failed for ${itemId}: ${err && err.message ? err.message : err}`);
+  }
+  return null;
 }
 
 function _broadcastStageState(sessionId, session, itemId, stageState) {

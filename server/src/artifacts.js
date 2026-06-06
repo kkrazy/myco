@@ -1245,6 +1245,14 @@ module.exports = {
   // _attachAgentWebSocket once per WS connect; idempotent (no-op
   // when rec.mainProject is already set).
   migrateMainProjectIfNeeded,
+  // bug-74: promoted from __test to the public surface — attach.js's
+  // _findPlanItemInRec uses it as a file-mirror fallback when the
+  // in-memory rec.artifacts.plan lookup misses. Pre-bug-74 the
+  // in-memory miss silently no-op'd, breaking [run:plan#X] dispatch
+  // for items present only in _myco_/plan.json (e.g. items added by
+  // a sibling session or hand-edited). Still safe to call from
+  // tests via the __test namespace below.
+  readArtifactFromFile,
   // _myco_/ persistence helpers — exported for unit tests that exercise
   // the file-mirror path without spinning up the full express + sessions
   // plumbing. Not part of the public route surface.
