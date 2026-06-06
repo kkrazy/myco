@@ -1668,6 +1668,22 @@ function flashToast(msg) {
   }, 1600);
 }
 
+// bug-68 (Option B addition 2): longer-lived warn toast for messages
+// that need user attention but aren't fatal. flashToast (above) is
+// 1.6s — too short to read a sentence. warnToast lives 5s and uses a
+// distinct .toast-warn style so it stands out from success/info
+// confirmations.
+function warnToast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast toast-warn';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('hide');
+    setTimeout(() => el.remove(), 300);
+  }, 5000);
+}
+
 async function deleteSessionWithConfirm(s) {
   const label = s.cwd || s.id;
   if (!window.confirm(`Delete session "${label}"?\n\nThis closes the session in mycod. The Claude transcript on disk is kept; you can resume it later by creating a new session in the same directory.`)) return;
@@ -7526,6 +7542,18 @@ function _applyStateUpdate(msg) {
       && !state.critiqueReview.isError;
     if (currentIsUnresolvedIntermediate && msg.isIntermediate && !msg.isRetry) {
       console.warn(`[bug-61] dropping incoming intermediate critique-review (stage=${msg.stage}) — current intermediate verdict (stage=${state.critiqueReview.stage}) is unresolved; user must accept/fix existing verdict first`);
+      // bug-68 (Option B addition 2): the drop above used to be
+      // silent (stderr-only console.warn). User-reported in the
+      // bug-68 dispatch comment: "sometimes the critic verdict would
+      // show up, sometimes no." This was one of the "no" cases — a
+      // second stage's verdict arrived while the prior one was still
+      // on screen, got dropped, and the user saw nothing. Show a
+      // 5-second warn toast explaining what happened + what to do.
+      try {
+        warnToast(`⚠ Another verdict is still on screen — resolve the ${state.critiqueReview.stage} verdict first; the ${msg.stage} verdict will follow.`);
+      } catch (err) {
+        console.warn('[bug-68] warnToast failed:', err && err.message);
+      }
       return;
     }
     // bug-64: parallel hole — bug-61's guard only blocks incoming

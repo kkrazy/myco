@@ -186,7 +186,14 @@ t('attach.js: stage-done handler transitions to awaiting_verdict (_transitionSta
   // return on awaiting_verdict/awaiting_accept) ABOVE the existing
   // _transitionStageState call. The pre-bug-61 1500-char window
   // caught the call site; post-bug-61 the call sits past 1500 chars.
-  const body = src.slice(at, at + 3500);
+  // bug-68 Option B addition 1: bumped 3500 → 5500. _emitSentinelReceivedNote
+  // is now called IMMEDIATELY after the active-run-item check (BEFORE
+  // the bug-61 guard + _transitionStageState), pushing the transition
+  // call further down. The fr-96 invariant is "transition fires from
+  // the handler"; the helper insertion between handler-entry +
+  // transition is legitimate (it's the user-visible "sentinel received"
+  // chat note, not a state mutation).
+  const body = src.slice(at, at + 5500);
   assert.ok(/_transitionStageState\s*\(\s*sessionId\s*,\s*session\s*,\s*active\.itemId\s*,\s*stage\s*,\s*['"]awaiting_verdict['"]/.test(body),
     'attach.js stage-done handler must call _transitionStageState(..., stage, "awaiting_verdict") — that\'s the in_progress → awaiting_verdict transition (fr-96 hook 2).');
 });

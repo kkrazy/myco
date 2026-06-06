@@ -168,7 +168,14 @@ t('app.js: client guard short-circuits via `return` when blocking — does NOT o
   // The guard's drop path must use `return` so the subsequent
   // state.critiqueReview = msg assignment doesn't run. Without the
   // return, the guard would only log + still overwrite.
-  assert.ok(/\[bug-61\][\s\S]{0,400}return\s*;/.test(body),
+  // bug-68 Option B addition 2: bumped 400 → 1200 char window. The
+  // pre-Option-B drop was console.warn + return on adjacent lines.
+  // Option B addition 2 inserts a try/warnToast/catch block between
+  // them (explanatory comment + try { warnToast(...) } catch). The
+  // bug-61 invariant ("guard returns; doesn't overwrite") is
+  // unchanged — the assertion just needs the wider window to find
+  // the return after the new toast call.
+  assert.ok(/\[bug-61\][\s\S]{0,1200}return\s*;/.test(body),
     'client guard must `return;` after logging the drop — without it the subsequent state.critiqueReview = msg assignment would still run + clobber the current verdict.');
 });
 

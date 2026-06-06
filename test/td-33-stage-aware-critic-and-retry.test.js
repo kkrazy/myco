@@ -180,7 +180,16 @@ t('server/src/attach.js: stage-done subscriber calls triggerGeminiCritique with 
   assert.ok(at > -1);
   // bug-61 follow-up: window bumped 4000 → 5500. bug-61 added a
   // ~30-line guard ABOVE the rest of the stage-done handler.
-  const body = src.slice(at, at + 5500);
+  // bug-68 Option B addition 1 follow-up: window bumped 5500 → 8500.
+  // _emitSentinelReceivedNote was inserted between handler-entry +
+  // the existing bug-61 guard, pushing triggerGeminiCritique further
+  // down. The td-33 invariant ("stage-done subscriber calls
+  // triggerGeminiCritique with isIntermediate:true") is preserved —
+  // the helper insertion between handler-entry + critic-fire is
+  // legitimate. 8500 chars catches both the trigger call AND its
+  // isIntermediate option, which sits on a separate line ~1200 chars
+  // past the function name due to the multi-line call signature.
+  const body = src.slice(at, at + 8500);
   assert.ok(/triggerGeminiCritique/.test(body),
     'stage-done subscriber must call triggerGeminiCritique (td-33 B).');
   assert.ok(/isIntermediate\s*:\s*true/.test(body),
@@ -194,7 +203,10 @@ t('server/src/attach.js: stage-done subscriber inherits the dispatch-drift filte
   const at = src.search(/session\.on\s*\(\s*['"]stage-done['"]/);
   // bug-61 follow-up: window bumped 4000 → 5500. bug-61 added a
   // ~30-line guard ABOVE the rest of the stage-done handler.
-  const body = src.slice(at, at + 5500);
+  // bug-68 Option B addition 1 follow-up: window bumped 5500 → 8500
+  // (same reason as the sibling test above — _emitSentinelReceivedNote
+  // insertion pushes baselineDirty filter further down).
+  const body = src.slice(at, at + 8500);
   assert.ok(/baselineDirty/.test(body),
     'the stage-done subscriber must filter the diff against baselineDirty (matches the dispatch-drift fix from 2026-06-03; without it a checkpoint critique on an active run with unrelated WIP would see the WIP).');
 });

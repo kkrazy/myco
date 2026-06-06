@@ -607,6 +607,16 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   animation: toast-in .2s cubic-bezier(.2, .8, .2, 1);
 }
 .toast.hide { opacity: 0; transition: opacity .25s; }
+/* bug-68 (Option B addition 2): warn variant for messages that need
+   user attention but aren't fatal. Distinct amber edge so a
+   verdict-pane drop notification stands out from success/info toasts. */
+.toast.toast-warn {
+  background: rgba(60, 35, 10, .94);
+  border-color: rgba(255, 176, 64, .35);
+  color: #ffd99b;
+  max-width: min(420px, calc(100vw - 24px));
+  text-align: center;
+}
 @keyframes toast-in {
   from { transform: translate(-50%, 14px); opacity: 0; }
   to   { transform: translate(-50%, 0);    opacity: 1; }

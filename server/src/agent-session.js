@@ -916,6 +916,11 @@ class AgentSession extends EventEmitter {
       // turns it's a fresh slate — claude may re-do analyze/code/verify
       // as the conversation evolves and each pass deserves a critique.)
       this._firedStages = null;
+      // bug-68: also clear the per-turn one-sentinel-only cap so the
+      // next turn can fire a fresh stage. Same lifecycle as
+      // _firedStages — both reset on turn_result, both restart on the
+      // next assistant_text.
+      this._firedStagesThisTurn = null;
       // bug-40: the turn produced a result, so the in-flight user message
       // was processed — drop it so a later recovery can't redeliver a turn
       // that's already been answered.
@@ -1748,19 +1753,50 @@ class AgentSession extends EventEmitter {
   _detectStageSentinels(text) {
     if (!text || typeof text !== 'string') return;
     if (!this._firedStages) this._firedStages = new Set();
+    // bug-68: per-turn sentinel cap. Pre-bug-68 the dedup was per-stage
+    // only — if claude emitted "[stage: analyze done] ... [stage: code
+    // done]" in a single assistant_text block, BOTH fired sequentially.
+    // The downstream bug-61 drop guard catches the SECOND sentinel only
+    // AFTER the first one's broadcast has landed and transitioned
+    // stageState; in the same-tick case, both sentinels are processed
+    // before any broadcast arrives. Result was an out-of-order verdict
+    // pane sequence the user reported in the bug-68 comments
+    // ("sometimes in wrong order"). Fix: at most ONE stage-done per
+    // turn. The _firedStagesThisTurn set is cleared on turn_result by
+    // _handleEvent's result branch so the NEXT turn can fire.
+    if (!this._firedStagesThisTurn) this._firedStagesThisTurn = new Set();
+    if (this._firedStagesThisTurn.size > 0) {
+      // Already fired one stage this turn. Log + skip any further
+      // sentinels in the same text. Forces claude to do one stage per
+      // turn — which matches CLAUDE.md §9's "the stage gets DONE per
+      // the criteria above" cadence anyway.
+      const re = /\[\s*stage\s*:\s*(analyze|code|verify)\s+done\s*\]/gi;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const stage = m[1].toLowerCase();
+        const fired = Array.from(this._firedStagesThisTurn).join(',');
+        console.log(`[bug-68] session ${this.sessionId} dropping stage-done(${stage}) — already fired this turn (${fired}). Only one stage per turn (the bug-64 defer + bug-61 drop catch the runtime case but a same-tick claude reply with two sentinels needs this lexical cap).`);
+      }
+      return;
+    }
     // RegExp.exec in a loop gathers every match so we don't miss a
     // claude reply that announces two stages back-to-back (e.g.
     // "[stage: analyze done] ... [stage: code done]" in a single
-    // text block).
+    // text block) — BUT per bug-68 we only honor the FIRST one.
     const re = /\[\s*stage\s*:\s*(analyze|code|verify)\s+done\s*\]/gi;
     let m;
     while ((m = re.exec(text)) !== null) {
       const stage = m[1].toLowerCase();
       if (this._firedStages.has(stage)) continue;
       this._firedStages.add(stage);
+      this._firedStagesThisTurn.add(stage);
       console.log(`[td-33] session ${this.sessionId} fired stage-done: ${stage}`);
       try { this.emit('stage-done', { stage }); }
       catch (err) { console.error(`[td-33] stage-done emit failed: ${err.message}`); }
+      // bug-68: stop after the first fire even if more sentinels are
+      // in the same text block. The next turn can fire a different
+      // stage; this turn is one-and-done.
+      break;
     }
   }
 

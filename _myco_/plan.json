@@ -5469,14 +5469,128 @@
       "voters": [
         "kkrazy"
       ],
-      "comments": [],
+      "comments": [
+        {
+          "id": "8d178f62d3cf",
+          "user": "claude",
+          "text": "✓ success · 220.2s · $14.3621 · 34↓/11670↑\n\n---\n\n## Stage: analyze — fr-98\n\n### Restating the problem in my own words\nThe verdict panel that pops up after a `[stage: X done]` sentinel — showing the critic's verdict + the Accept Stage / Fix Stage / Ask Critic buttons — is **fire-once and ephemeral**. It only reaches devices that were attached at the moment of broadcast. If you switch devices, attach a second device, or the server restarts, the pane stays empty even though the per-item state machine (fr-96 `stageState`) still says `awaiting_accept` — so the run is paused waiting for input you can no longer see or give.\n\n`AskUserQuestion` (claude's permission/clarifying-question modal) doesn't have this problem because it's tied to an SDK tool_use event that lives in `session.buffer` + `events.jsonl`. Every new attach replays the bu…",
+          "ts": "2026-06-06T09:37:07.533Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-06T09:33:27.219Z"
+          }
+        },
+        {
+          "id": "3320933c4ec2",
+          "user": "claude",
+          "text": "✓ success · 65.2s · $14.8552 · 8↓/4182↑\n\nAwaiting your accept signal per CLAUDE.md §9. Substance is identical to the prior analyze writeup (which the critic appears to have judged against an empty-diff view, same as bug-66's Perf/Security verdict). Options unchanged:\n\n- **Accept** → I move to code stage with Approach A.\n- **B instead** → pivot to literal `session.buffer` push.\n- **⚡ Ask Claude to Fix Stage** → tell me what's substantively missing and I'll redo.",
+          "ts": "2026-06-06T09:38:37.006Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-06T09:33:27.219Z"
+          }
+        },
+        {
+          "id": "724ce3ce0525",
+          "user": "claude",
+          "text": "✓ success · 49.7s · $15.2909 · 8↓/2850↑\n\nPaused awaiting your accept signal. If the critic verdict comes back ✓ AGREED again and you accept, I move to code stage with Approach A as outlined. If there's a substantive concern that didn't surface in the prior two critic passes, name it and I'll address it directly.",
+          "ts": "2026-06-06T09:44:58.238Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-06T09:33:27.219Z"
+          }
+        },
+        {
+          "id": "da9a2ec20a90",
+          "user": "claude",
+          "text": "✓ success · 423.7s · $20.8437 · 40↓/29476↑\n\n### Summary of code-stage diff\n\n| File | Change |\n|---|---|\n| `server/src/stageState.js` | + `setLastCriticReview(item, payload)` / `clearLastCriticReview(item)` / `getLastCriticReview(item)` — three helpers next to existing stageState API. Persisted at `item.meta.lastCriticReview` in plan.json. Exported top-level. |\n| `server/src/critique.js` | Captured the broadcast payload as `broadcastPayload`, then after the `session.emit('state-update', …)` fires, calls `setLastCriticReview(item, payload)` + `sessionsMod.saveStore()` (skipped on error verdicts to mirror the existing `_transitionStageState` skip). In `resolveCritique`, the accept-stage / fix-stage branches now also call `clearLastCriticReview(item)` so resolved verdicts don't replay. |\n| `server/src/attach.js` | `_clearAndBroadcast…",
+          "ts": "2026-06-06T09:54:21.850Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-06T09:48:14.507Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "the verdict panel should show up like the askuserquestion, which consistent across device and session restart.",
         "rewritten": true
       },
-      "description": "**Problem:** The verdict panel doesn't persist consistently across devices or after session restart, unlike AskUserQuestion.\n**Expected:** Verdict panel renders using the same mechanism as AskUserQuestion, so it remains consistent across device and session restart.\n**Actual:** Verdict panel uses a different rendering path that doesn't survive device switches or session restarts."
+      "description": "**Problem:** The verdict panel doesn't persist consistently across devices or after session restart, unlike AskUserQuestion.\n**Expected:** Verdict panel renders using the same mechanism as AskUserQuestion, so it remains consistent across device and session restart.\n**Actual:** Verdict panel uses a different rendering path that doesn't survive device switches or session restarts.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-06T09:37:07.533Z",
+          "startedAt": "2026-06-06T09:33:27.219Z",
+          "summary": "220.2s · 34→11670 tok",
+          "result": "---\n\n## Stage: analyze — fr-98\n\n### Restating the problem in my own words\nThe verdict panel that pops up after a `[stage: X done]` sentinel — showing the critic's verdict + the Accept Stage / Fix Stage / Ask Critic buttons — is **fire-once and ephemeral**. It only reaches devices that were attached at the moment of broadcast. If you switch devices, attach a second device, or the server restarts, the pane stays empty even though the per-item state machine (fr-96 `stageState`) still says `awaiting_accept` — so the run is paused waiting for input you can no longer see or give.\n\n`AskUserQuestion` (claude's permission/clarifying-question modal) doesn't have this problem because it's tied to an SDK tool_use event that lives in `session.buffer` + `events.jsonl`. Every new attach replays the buffer via the `agent-replay` WS frame, so the menu re-renders identically on every device, after every restart.\n\nYou want the verdict panel to behave the same way: as long as the verdict hasn't been resolved, a fresh attach (new device or post-restart) should see the same pane the originating device saw.\n\n### What I found in the code\n\n**AskUserQuestion's working persistence pattern:**\n- `server/src/agent-session.js _handleAskUserQuestion` — the SDK's tool_use event lands in `session.buffer` (the per-session event ring) + mirrors to `<absCwd>/_myco_/events.jsonl`.\n- `server/src/attach.js _shipAgentReplay` (line 1200) — on every attach (initial OR catch-up via `?afterSeq=N`), reads `session.buffer` and ships an `agent-replay` WS frame. The client re-renders every tool card.\n- Cross-device: same `session.buffer` → identical replay on every device.\n- Container restart: `events.jsonl` feeds `session.buffer` reload.\n\n**Verdict-review's broken path:**\n- `server/src/critique.js:451` — `session.emit('state-update', { kind: 'critique-review', itemId, hasDisagreement, isError, isIntermediate, stage, critique, diff, criticName, criticId, specialties })`. **Fire-once `state-update` broadcast.** Not"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-06T09:38:37.006Z",
+          "startedAt": "2026-06-06T09:33:27.219Z",
+          "summary": "65.2s · 8→4182 tok",
+          "result": "Awaiting your accept signal per CLAUDE.md §9. Substance is identical to the prior analyze writeup (which the critic appears to have judged against an empty-diff view, same as bug-66's Perf/Security verdict). Options unchanged:\n\n- **Accept** → I move to code stage with Approach A.\n- **B instead** → pivot to literal `session.buffer` push.\n- **⚡ Ask Claude to Fix Stage** → tell me what's substantively missing and I'll redo."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-06T09:44:58.238Z",
+          "startedAt": "2026-06-06T09:33:27.219Z",
+          "summary": "49.7s · 8→2850 tok",
+          "result": "Paused awaiting your accept signal. If the critic verdict comes back ✓ AGREED again and you accept, I move to code stage with Approach A as outlined. If there's a substantive concern that didn't surface in the prior two critic passes, name it and I'll address it directly."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-06T09:54:21.850Z",
+          "startedAt": "2026-06-06T09:48:14.507Z",
+          "summary": "423.7s · 40→29476 tok",
+          "result": "### Summary of code-stage diff\n\n| File | Change |\n|---|---|\n| `server/src/stageState.js` | + `setLastCriticReview(item, payload)` / `clearLastCriticReview(item)` / `getLastCriticReview(item)` — three helpers next to existing stageState API. Persisted at `item.meta.lastCriticReview` in plan.json. Exported top-level. |\n| `server/src/critique.js` | Captured the broadcast payload as `broadcastPayload`, then after the `session.emit('state-update', …)` fires, calls `setLastCriticReview(item, payload)` + `sessionsMod.saveStore()` (skipped on error verdicts to mirror the existing `_transitionStageState` skip). In `resolveCritique`, the accept-stage / fix-stage branches now also call `clearLastCriticReview(item)` so resolved verdicts don't replay. |\n| `server/src/attach.js` | `_clearAndBroadcastStageState` (the single chokepoint that calls `clearStageState`) now also calls `clearLastCriticReview` and saves if either changed. `_sendAttachSnapshot` scans `artifacts.plan.items` for any item with a persisted verdict AND `stageState.status ∈ {awaiting_verdict, awaiting_accept}`, ships it as `{ t:'state-update', kind:'critique-review', …payload, _replayedOnAttach:true }`, capped at 1 per attach. |\n| `test/fr-98-verdict-panel-persistence.test.js` | New file. 13 cases covering: helper round-trip, payload preservation, lifecycle coupling (stageState + lastCriticReview move together), and 5 static-grep wiring guards across stageState.js, critique.js, attach.js. |\n| `test/test.sh` | + `node_test_result` line for fr-98. + `test_lastCriticReview_paired_with_stageState` static guard in `run_static_checks` (±10-line window — synthetic violation self-tested to fail; clean tree passes). |\n| `test/fr-96-plan-item-stage-state-machine.test.js` | Widened the post-emit window from 1500 → 3000 chars in the \"transition to awaiting_accept\" case. The fr-96 ordering contract is unchanged; the legitimate fr-98 persist block sits between the emit and the existing transition. |\n\n### Client-side code touc"
+        }
+      ]
+    },
+    {
+      "id": "bug-67",
+      "text": "Stage acceptance doesn't auto-advance until user sends \"continue\"",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-06T12:54:55.149Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "after accepting a stage, didn't proceed automatically until i send a continue. test/test.sh — wired bug-60 next to plan-run-comment.test.js.\n\nVerification (post-fix):\n\nbug-60: 13/13 ✓\nplan-run-comment: 4/4 ✓ (was 1/4 before the assertion updates)\nplan-item-run-button: 13/13 ✓ (untouched, just confirming no spillover)\n[stage: code done]\n\nPausing for your review (per CLAUDE.md §9 step 3 — silence ≠ accept). Use:\n\n✓ Accept Stage (or \"accept\" / \"proceed\" / \"verify stage\") → I move to the verify stage (full ./test/test.sh + wire-check + grep regression sweep).\n⚡ Ask Claude to Fix Stage → tell me what's off; I redo code.\n💬 Ask Critic → I'll incorporate the critic's feedback on the next pass.\n20:24:29\n▸\n× 1\nreattach\n20:24:29\n⟲ reattach\nsdk=568f41c1\nkkrazy08:25 PM\naccept\n\nmyco08:25 PM\n✓ accepted — advancing bug-60 to verify stage.",
+        "rewritten": true
+      },
+      "description": "**Problem:** After the user accepts a stage, the workflow stalls instead of progressing to the next stage automatically.\n**Expected:** Accepting a stage (via \"accept\" / \"proceed\" / \"verify stage\") immediately advances to the next stage (e.g., verify stage runs `./test/test.sh` + wire-check + grep regression sweep).\n**Actual:** Workflow waits idle until the user sends an additional \"continue\" message.\n**Context:** Repro covered by `test/test.sh` — bug-60 wired next to `plan-run-comment.test.js`. Post-fix verification: bug-60 13/13 ✓, plan-run-comment 4/4 ✓ (was 1/4), plan-item-run-button 13/13 ✓. Related to CLAUDE.md §9 step 3 (silence ≠ accept)."
+    },
+    {
+      "id": "bug-68",
+      "text": "Plan items must run analyze/code/verify stages each gated by a critic review modal",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-06T13:00:58.041Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "ec758707ce19",
+          "user": "kkrazy",
+          "text": "the current solution is half baked, sometimes the critic verdict would show up, sometimes no, sometimes in wrong order. sometimes no action after I accept the proposal.",
+          "ts": "2026-06-06T13:02:01.461Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "for each plan item submitted for implementation, it is suppose to be separated into 3 stages: 1. analyze, with a proposal to solve the problem,  2. code, implment the proposed solution 3. verify to ensure the proposed solution fix the problem. after each stage there should be a critic stage where we will involve a selected critic model to ensure each stage is doing it's job. the critic should bring up a modal popover for user to 1. review the solution 2. ask further question 3. accept the solution 4. ask claude address the issues. only proceed to next stage when previous stage solution is accepted.",
+        "rewritten": true
+      },
+      "description": "**Problem:** Plan items submitted for implementation don't run through the required staged workflow with critic gating, so solutions advance without review.\n**Expected:** Each plan item runs 3 stages — 1. analyze (propose a solution), 2. code (implement the proposal), 3. verify (confirm the fix). After every stage a selected critic model runs and opens a modal popover letting the user (1) review the solution, (2) ask further questions, (3) accept the solution, or (4) ask Claude to address the issues. The next stage only starts once the prior stage's solution is accepted.\n**Actual:** Stages are not separated, no critic step runs between them, and no acceptance modal gates progression."
     }
   ],
-  "updatedAt": "2026-06-06T09:32:20.624Z"
+  "updatedAt": "2026-06-06T13:01:05.050Z"
 }

@@ -511,6 +511,27 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
     } catch (err) {
       console.error(`[fr-96] critique broadcast → awaiting_accept failed: ${err.message}`);
     }
+  } else {
+    // bug-68: surface the critic-error in chat. Pre-bug-68 the error
+    // broadcast landed (isError:true) but the user saw a verdict pane
+    // with a ↻ Retry button + no explanation of why the error
+    // occurred (Gemini 503, malformed output, etc.) — and from the
+    // user's POV "the critic didn't show up" because it didn't
+    // produce a real verdict. The system note tells them clearly:
+    // "the critic call errored; click ↻ Retry to try again."
+    try {
+      const note = {
+        user: 'system',
+        text: `⚠️ Critic call for **${item.id}** (${stage || 'final'} stage) errored. The verdict pane shows a ↻ Retry button — click it to re-fire the critic. If the error persists, check the server log for the underlying cause (Gemini 503 / quota / malformed response).`,
+        ts: new Date().toISOString(),
+        meta: { kind: 'bug-68-critique-error', stage: stage || 'final', itemId: item.id },
+      };
+      sessionsMod.appendChatMessage(sessionId, note);
+      session.emit('chat', note);
+      console.log(`[bug-68] critique-error note emitted for ${item.id} stage=${stage || 'final'}`);
+    } catch (err) {
+      console.error(`[bug-68] critique-error note emit failed: ${err.message}`);
+    }
   }
 }
 
@@ -596,8 +617,24 @@ function resolveCritique(sessionId, session, opts = {}) {
       // transition below moves stageState forward; clearing
       // lastCriticReview here is the matching half of the bug-54
       // cross-device sync, just for the persisted slot.
+      // bug-68: fix-stage needs the verdict body to dispatch to
+      // claude — capture it BEFORE clearing.
+      let savedReview = null;
+      if (item && reason === 'fix-stage') {
+        savedReview = stageStateMod.getLastCriticReview(item);
+      }
       if (item && stageStateMod.clearLastCriticReview(item)) {
         sessionsMod.saveStore();
+      }
+      // bug-68: restore the verdict for the fix-stage prompt so
+      // _postAcceptStagePrompt can read it. We only need the
+      // critique body field; the rest of the payload is irrelevant
+      // to claude's redo prompt. Restored temporarily so the helper
+      // can read it; the saveStore above already persisted the
+      // cleared state, and the helper's read does not re-save.
+      if (item && reason === 'fix-stage' && savedReview) {
+        if (!item.meta) item.meta = {};
+        item.meta.lastCriticReview = savedReview;
       }
       if (!cur) {
         // Race: item has no stageState (cleared by another path).
@@ -610,11 +647,32 @@ function resolveCritique(sessionId, session, opts = {}) {
         const next = stageStateMod.nextStage(cur.stage);
         if (next) {
           attachMod._transitionStageState(sessionId, session, itemId, next, 'in_progress');
+          // bug-68: notify claude. Pre-bug-68 the button accept
+          // ended here — the modal closed + stageState advanced, but
+          // claude received no input. User had to type "continue".
+          attachMod._postAcceptStagePrompt(sessionId, session, {
+            itemId, stage: cur.stage, next, reason: 'accept-stage',
+          });
         }
       } else {
         // Fix Stage — redo current stage. Same stage, back to
         // in_progress.
         attachMod._transitionStageState(sessionId, session, itemId, cur.stage, 'in_progress');
+        // bug-68: dispatch the critic's flagged-issues body to claude
+        // as a synthetic turn so claude knows what to redo. Without
+        // this, the modal closed + stageState reset to in_progress
+        // but claude received nothing and sat idle.
+        attachMod._postAcceptStagePrompt(sessionId, session, {
+          itemId, stage: cur.stage, reason: 'fix-stage',
+        });
+      }
+      // bug-68: re-clear the temporarily-restored lastCriticReview
+      // for fix-stage now that the helper has consumed it. Otherwise
+      // a future attach would replay a verdict that the user has
+      // already acted on. saveStore again so disk matches memory.
+      if (item && reason === 'fix-stage' && savedReview) {
+        stageStateMod.clearLastCriticReview(item);
+        sessionsMod.saveStore();
       }
     } catch (err) {
       console.error(`[fr-96] resolveCritique → stageState transition (${reason}) failed: ${err.message}`);

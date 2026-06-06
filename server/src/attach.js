@@ -194,6 +194,18 @@ function _registerExternalSession(sessionId, session) {
           console.log(`[td-33] stage-done(${stage}) fired without active run item — skipping`);
           return;
         }
+        // bug-68 (Option B addition 1): immediately echo the sentinel
+        // back to chat. Pre-bug-68 the time between claude emitting
+        // [stage: X done] and the critic verdict pane appearing could
+        // be 10-60s+ with NO user-visible signal — the regex match
+        // happened in stderr only. If the critic later skipped (empty
+        // diff) or errored, the user had no idea whether the sentinel
+        // was even received. The chat-pane echo closes that observability
+        // gap: every detected sentinel produces a "📍 sentinel received"
+        // chat row IMMEDIATELY, before the critic fires. Subsequent
+        // outcomes (skip / error / verdict) appear as their own chat
+        // rows — a visible timeline the user can scroll through.
+        _emitSentinelReceivedNote(sessionId, session, { stage, itemId: active.itemId });
         // bug-61: pause enforcement. Pre-bug-61 the §9 methodology
         // was directive-only — claude could (and empirically DID)
         // emit a second [stage: X done] sentinel while a previous
@@ -237,12 +249,27 @@ function _registerExternalSession(sessionId, session) {
         const changedInfo = await listChangedFiles(rec.absCwd);
         if (!changedInfo || !Array.isArray(changedInfo.entries) || changedInfo.entries.length === 0) {
           console.log(`[td-33] stage-done(${stage}) — no dirty files at this checkpoint; skipping critique`);
+          // bug-68: tell the user. Pre-bug-68 the skip was stderr-only,
+          // so the user saw "verdict didn't show up" with no signal
+          // why. Emit a system chat note explaining the skip so the
+          // user can decide whether to make actual changes + re-emit
+          // the sentinel, or accept the skip and move on.
+          _emitCritiqueSkipNote(sessionId, session, {
+            stage, itemId: active.itemId, reason: 'no-changes',
+            message: `📋 Critic skipped for **${stage}** stage — no file changes detected at this checkpoint. If you intended for this stage to produce changes, make them now and re-emit \`[stage: ${stage} done]\`. Otherwise click **✓ Accept Stage** in the verdict HUD to continue.`,
+          });
           return;
         }
         const baselineDirty = (active.baselineDirty instanceof Set) ? active.baselineDirty : new Set();
         const newEntries = changedInfo.entries.filter((e) => !baselineDirty.has(e.path));
         if (newEntries.length === 0) {
           console.log(`[td-33] stage-done(${stage}) — only baseline-WIP paths are dirty; skipping critique`);
+          // bug-68: tell the user. This is the "all dirty paths were
+          // already dirty at run-start" case (the dispatch-drift filter).
+          _emitCritiqueSkipNote(sessionId, session, {
+            stage, itemId: active.itemId, reason: 'baseline-wip-only',
+            message: `📋 Critic skipped for **${stage}** stage — all dirty paths were already modified before this run started (baseline WIP). The critic couldn't attribute any changes to this stage. If your changes for this stage haven't been made yet, make them and re-emit \`[stage: ${stage} done]\`.`,
+          });
           return;
         }
         let fullDiff = '';
@@ -285,6 +312,19 @@ function _registerExternalSession(sessionId, session) {
     // turn ts) and broadcast the artifact update so all clients
     // see the linked status. One run per turn — _activeRunItem
     // clears after the outcome is stamped.
+    // bug-68 (Option B addition 3): a separate agent-event listener
+    // for the assistant_text → accept-ack clear hook. The terminal-
+    // event listener below filters early to {turn_result,
+    // iteration_aborted, fatal} — assistant_text wouldn't reach it.
+    // This listener is intentionally narrow: it ONLY clears the
+    // accept-ack expectation when an assistant_text arrives. Any
+    // assistant_text counts as "claude picked up the dispatch" — we
+    // don't need to inspect content because if claude is producing
+    // output, the synthetic accept prompt reached the queue.
+    session.on('agent-event', (ev) => {
+      if (!ev || ev.type !== 'assistant_text') return;
+      _onAssistantTextClearAckExpectation(session);
+    });
     session.on('agent-event', (ev) => {
       if (!ev) return;
       // fr-48 bugfix: queue must see iteration_aborted + fatal as
@@ -372,6 +412,13 @@ function _registerExternalSession(sessionId, session) {
                   console.log(`[critique-gate] Plan item ${active.itemId} produced no run-attributable changes ` +
                     `(${changedInfo.entries.length} dirty paths were all baseline WIP; baselineHead=${active && active.baselineHead || 'unknown'}). ` +
                     `Skipping critique — there's nothing this run produced for Gemini to review.`);
+                  // bug-68: surface the skip in chat so the user sees
+                  // why no final verdict appeared. Mirrors the
+                  // intermediate-critique skip note.
+                  _emitCritiqueSkipNote(sessionId, session, {
+                    stage: 'verify', itemId: active.itemId, reason: 'baseline-wip-only-final',
+                    message: `📋 Final critic skipped for **${active.itemId}** — no run-attributable file changes detected (all dirty paths were modified before the run started). The run is technically complete, but if your fix isn't reflected on disk you may want to re-dispatch with **▶ Run** after making the actual changes.`,
+                  });
                 } else {
                   let fullDiff = '';
                   for (const entry of newEntries) {
@@ -2090,6 +2137,15 @@ function _maybeHandleChatAccept(sessionId, session, user, text) {
     };
     sessionsMod.appendChatMessage(sessionId, note);
     session.emit('chat', note);
+    // bug-68: notify claude. Pre-bug-68 the chat-accept handler ended
+    // here — the run-queue advanced server-side but claude received no
+    // signal that the verify stage was accepted. On a multi-item
+    // queue, the next dispatch came in as a fresh [run:plan#Y]; on a
+    // single-item queue, claude sat idle. Send a synthetic verify→done
+    // turn so claude knows the run wrapped + can acknowledge.
+    _postAcceptStagePrompt(sessionId, session, {
+      itemId: active.itemId, stage: 'verify', reason: 'accept-verify',
+    });
     return true;
   }
   // Intermediate stage — advance to next.in_progress (mirrors
@@ -2130,6 +2186,14 @@ function _maybeHandleChatAccept(sessionId, session, user, text) {
   };
   sessionsMod.appendChatMessage(sessionId, note);
   session.emit('chat', note);
+  // bug-68: notify claude. Pre-bug-68 the intermediate chat-accept
+  // ended here — stageState was at next.in_progress, but claude
+  // received no input. User had to type "continue" manually to nudge
+  // the next stage. The synthetic prompt tells claude to start the
+  // next stage immediately, matching what CLAUDE.md §9 documents.
+  _postAcceptStagePrompt(sessionId, session, {
+    itemId: active.itemId, stage, next, reason: 'accept-stage',
+  });
   return true;
 }
 
@@ -2429,6 +2493,264 @@ function _clearAndBroadcastStageState(sessionId, session, itemId) {
   }
 }
 
+// bug-68 (Option B addition 1): emit a system chat note when a stage
+// sentinel is received by the server. Closes the observability gap
+// between claude's [stage: X done] sentinel and the eventual critic
+// verdict (which can be 10-60s+ away for a real critic call). With
+// this note, the user always sees "📍 received → 🤔 critic firing →
+// (verdict | skip | error)" as a visible chain instead of a 10-60s
+// dead air with no signal.
+function _emitSentinelReceivedNote(sessionId, session, opts) {
+  if (!session) return;
+  const { stage, itemId } = opts || {};
+  if (!stage || !itemId) return;
+  try {
+    const note = {
+      user: ASSISTANT_USER,
+      text: `📍 **${stage.charAt(0).toUpperCase() + stage.slice(1)} sentinel received** for ${itemId} — critic firing (typically 10-30s for Gemini 2.5).`,
+      ts: new Date().toISOString(),
+      meta: { kind: 'bug-68-sentinel-received', stage, itemId },
+    };
+    sessionsMod.appendChatMessage(sessionId, note);
+    session.emit('chat', note);
+    console.log(`[bug-68] sentinel-received note for ${itemId} stage=${stage}`);
+  } catch (err) {
+    console.error(`[bug-68] sentinel-received note emit failed: ${err.message}`);
+  }
+}
+
+// bug-68: emit a system chat note when a critic call is skipped.
+// Pre-bug-68 these skips logged to stderr only — the user saw the
+// verdict pane never open and had no signal why. Now both skip cases
+// (no-changes, baseline-wip-only) explain themselves in chat so the
+// user can decide their next action.
+function _emitCritiqueSkipNote(sessionId, session, opts) {
+  if (!session) return;
+  const { stage, itemId, reason, message } = opts || {};
+  if (!message) return;
+  try {
+    const note = {
+      user: ASSISTANT_USER,
+      text: message,
+      ts: new Date().toISOString(),
+      meta: { kind: 'bug-68-critique-skip', stage, itemId, reason },
+    };
+    sessionsMod.appendChatMessage(sessionId, note);
+    session.emit('chat', note);
+    console.log(`[bug-68] critique-skip note emitted for ${itemId} stage=${stage} reason=${reason}`);
+  } catch (err) {
+    console.error(`[bug-68] critique-skip note emit failed: ${err.message}`);
+  }
+}
+
+// bug-68: post a synthetic user-turn to claude when the user accepts
+// or fixes a stage verdict.
+//
+// Why this exists: pre-bug-68, the accept signal (button click or
+// chat-accept phrase) transitioned stageState server-side + broadcast
+// `critique-resolved` to clear the verdict pane, but it NEVER
+// dispatched anything to claude. The CLAUDE.md §9 protocol document
+// said "claude advances to the next stage immediately — NO additional
+// `continue` / `proceed` keyword needed beyond the accept signal" but
+// the implementation never wired it: claude sat idle awaiting input
+// that never arrived. User-reported (verbatim, bug-68 comment):
+//   "the current solution is half baked, sometimes the critic verdict
+//    would show up, sometimes no, sometimes in wrong order. sometimes
+//    no action after I accept the proposal."
+//
+// Fix: every accept path now calls this helper after the server-side
+// state transition. The helper formats a structured synthetic prompt
+// + calls session.write() so claude sees a normal user turn with the
+// stage-advance cue. Claude reads the bracketed marker
+// (`[stage-accepted: X→Y]` or `[stage-fix]`) + the plain-English
+// follow-up + acts. The synthetic prompt is also mirrored into the
+// chat record (system message, ASSISTANT_USER) so the user can SEE
+// what was sent — the chat note + the SDK input share the same body.
+//
+// Reasons:
+//   'accept-stage' → intermediate stage accepted; advance to next
+//   'accept-verify' → verify stage accepted; run is complete
+//   'fix-stage' → critic flagged issues; redo current stage with
+//                 the verdict body included as context
+//
+// The helper is best-effort: write failures are logged + swallowed so
+// a transient SDK queue issue doesn't break the surrounding accept
+// flow (the server-side state already moved; the user can re-prompt
+// claude with "continue" as a fallback).
+function _postAcceptStagePrompt(sessionId, session, opts) {
+  if (!session) return false;
+  const { itemId, stage, next, reason } = opts || {};
+  if (!itemId || !stage || !reason) {
+    console.warn(`[bug-68] _postAcceptStagePrompt called with missing fields itemId=${itemId} stage=${stage} reason=${reason}`);
+    return false;
+  }
+  let prompt = '';
+  if (reason === 'accept-verify') {
+    prompt = `[stage-accepted: verify→done] User accepted the verify stage for plan-item ${itemId}. The 3-stage run is complete. No further action needed for this item; the run-queue will advance to the next pending item if any.`;
+  } else if (reason === 'accept-stage') {
+    if (!next) {
+      console.warn(`[bug-68] accept-stage reason but no next stage provided (stage=${stage}, itemId=${itemId})`);
+      return false;
+    }
+    prompt = `[stage-accepted: ${stage}→${next}] User accepted the ${stage} stage. Please proceed to the ${next} stage.`;
+  } else if (reason === 'fix-stage') {
+    // fr-98: the verdict body lives at item.meta.lastCriticReview.
+    // Include it in the synthetic prompt so claude knows exactly what
+    // the critic flagged without re-reading the chat history.
+    let verdictBody = '';
+    try {
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      const item = _findPlanItemInRec(rec, itemId);
+      const review = stageStateMod.getLastCriticReview(item);
+      if (review && typeof review.critique === 'string') {
+        // Cap body at 8KB — keep claude's context bounded; the critic
+        // verdict markdown is typically 2-5KB anyway.
+        verdictBody = review.critique.length > 8192
+          ? review.critique.slice(0, 8192) + '\n\n…(truncated; full verdict in chat history)'
+          : review.critique;
+      }
+    } catch (err) {
+      console.error(`[bug-68] fix-stage verdict body read failed: ${err.message}`);
+    }
+    const bodyBlock = verdictBody
+      ? `\n\nCritic flagged the following issues:\n\n${verdictBody}\n\n`
+      : '\n\n(Critic verdict body unavailable — check the verdict pane in chat for details.)\n\n';
+    prompt = `[stage-fix] Critic flagged issues in your ${stage} stage.${bodyBlock}Please redo the ${stage} stage addressing these concerns. Re-emit \`[stage: ${stage} done]\` when finished so the critic can re-evaluate.`;
+  } else {
+    console.warn(`[bug-68] _postAcceptStagePrompt unknown reason=${reason} (itemId=${itemId}, stage=${stage})`);
+    return false;
+  }
+  // Mirror into the chat record so the user can SEE what was sent.
+  // The system-note speaker is ASSISTANT_USER (matching bug-70's pattern
+  // for chat-accept notes), but meta.kind tags it for traceability.
+  const noteText = reason === 'fix-stage'
+    ? `↻ **Fix stage dispatched** — claude was prompted to redo the **${stage}** stage with the critic's flagged issues. See claude's next turn for the redo.`
+    : reason === 'accept-verify'
+      ? `✓ **Verify accepted** — claude was notified the run is complete; the queue will advance.`
+      : `→ **${stage.charAt(0).toUpperCase() + stage.slice(1)} accepted** — claude was prompted to proceed to the **${next}** stage.`;
+  try {
+    const note = {
+      user: ASSISTANT_USER,
+      text: noteText,
+      ts: new Date().toISOString(),
+      meta: { kind: 'bug-68-dispatch', stage, next, reason, itemId },
+    };
+    sessionsMod.appendChatMessage(sessionId, note);
+    session.emit('chat', note);
+  } catch (err) {
+    console.error(`[bug-68] chat note append failed: ${err.message}`);
+  }
+  // Dispatch the synthetic prompt as a user-turn to claude.
+  try {
+    session.write(prompt);
+    console.log(`[bug-68] dispatched synthetic prompt to claude — reason=${reason}, itemId=${itemId}, stage=${stage}${next ? ', next=' + next : ''}, len=${prompt.length}`);
+    // bug-68 (Option B addition 3): set an accept-ack expectation +
+    // start a timeout watcher. The synthetic prompt was pushed into the
+    // SDK queue, but session.write is fire-and-forget — if claude is
+    // mid-tool-call, interrupted, or the SDK queue is in a weird state,
+    // the message could silently fail to land. The expectation tracks
+    // {stage, next, itemId, deadline}; the next assistant_text
+    // satisfies + clears it (handled in _onAssistantTextClearAckExpectation).
+    // If the deadline passes WITHOUT an assistant_text, _emitAcceptAckTimeoutNote
+    // surfaces a "claude hasn't picked up the X accept — try typing
+    // 'continue' to nudge" note so the user knows + can recover.
+    _armAcceptAckExpectation(sessionId, session, { itemId, stage, next, reason });
+    return true;
+  } catch (err) {
+    console.error(`[bug-68] session.write failed: ${err.message}`);
+    return false;
+  }
+}
+
+// bug-68 (Option B addition 3): accept-ack timeout machinery. The
+// 3-stage workflow has a fragile boundary at step 4→5: server
+// dispatches the synthetic prompt via session.write (fire-and-forget
+// into the SDK queue), then waits for claude to acknowledge by
+// producing the next assistant_text. If claude is mid-tool-call,
+// interrupted, the SDK queue is in a weird state, or the synthetic
+// prompt is unreachable for any other reason, the user sees nothing
+// and the run stalls.
+//
+// The watcher is bounded: 90 seconds is generous for claude to start
+// a new turn after an accept (typical: 1-5s for a turn_start; rarely
+// past 30s even on a slow model). 90s leaves headroom without making
+// a wedged session feel infinite.
+//
+// At most ONE expectation per session at a time. A new arm replaces
+// the previous (most-recent accept wins; the prior one is no longer
+// relevant if it didn't fire). _activeRunItem clear (verify-accept /
+// discard) also clears the expectation.
+const ACCEPT_ACK_TIMEOUT_MS = 90_000;
+
+function _armAcceptAckExpectation(sessionId, session, opts) {
+  if (!session) return;
+  const { itemId, stage, next, reason } = opts || {};
+  if (!itemId || !stage || !reason) return;
+  // Cancel any existing timer (most-recent accept wins).
+  _clearAcceptAckExpectation(session);
+  const expectation = {
+    itemId, stage, next, reason,
+    armedAt: Date.now(),
+    deadline: Date.now() + ACCEPT_ACK_TIMEOUT_MS,
+  };
+  expectation.timer = setTimeout(() => {
+    // Re-check expectation is still set (defensive — could have been
+    // cleared between deadline + this firing).
+    if (session._expectingAcceptAck === expectation) {
+      _emitAcceptAckTimeoutNote(sessionId, session, expectation);
+      session._expectingAcceptAck = null;
+    }
+  }, ACCEPT_ACK_TIMEOUT_MS);
+  session._expectingAcceptAck = expectation;
+  console.log(`[bug-68] armed accept-ack expectation — itemId=${itemId}, stage=${stage}, reason=${reason}, timeout=${ACCEPT_ACK_TIMEOUT_MS}ms`);
+}
+
+function _clearAcceptAckExpectation(session) {
+  if (!session || !session._expectingAcceptAck) return false;
+  const e = session._expectingAcceptAck;
+  if (e.timer) {
+    try { clearTimeout(e.timer); } catch {}
+  }
+  session._expectingAcceptAck = null;
+  return true;
+}
+
+// Called from the agent-event listener when assistant_text arrives.
+// Clearing on FIRST assistant_text means claude is producing output,
+// which is the cleanest "I picked up the accept" signal we have.
+function _onAssistantTextClearAckExpectation(session) {
+  if (!session || !session._expectingAcceptAck) return;
+  const e = session._expectingAcceptAck;
+  const elapsedMs = Date.now() - e.armedAt;
+  console.log(`[bug-68] accept-ack satisfied by assistant_text — itemId=${e.itemId}, stage=${e.stage}, elapsed=${elapsedMs}ms`);
+  _clearAcceptAckExpectation(session);
+}
+
+function _emitAcceptAckTimeoutNote(sessionId, session, expectation) {
+  if (!session) return;
+  try {
+    const { itemId, stage, reason } = expectation;
+    const nudgeHint = reason === 'accept-verify'
+      ? '`continue` or `summary please`'
+      : `\`continue\` or simply name the next stage (e.g. \`${expectation.next || 'code'}\`)`;
+    const note = {
+      user: ASSISTANT_USER,
+      text:
+        `⚠️ **Claude hasn't picked up the ${stage} accept** after ${ACCEPT_ACK_TIMEOUT_MS / 1000}s ` +
+        `(no assistant turn started). The synthetic dispatch may have fallen into a wedged SDK queue ` +
+        `(mid-tool-call, interrupted session, or restart race). ` +
+        `Try typing ${nudgeHint} in chat to nudge — the same end state is reached.`,
+      ts: new Date().toISOString(),
+      meta: { kind: 'bug-68-ack-timeout', stage, itemId, reason, timeoutMs: ACCEPT_ACK_TIMEOUT_MS },
+    };
+    sessionsMod.appendChatMessage(sessionId, note);
+    session.emit('chat', note);
+    console.log(`[bug-68] accept-ack TIMEOUT for ${itemId} stage=${stage} — emitted nudge note`);
+  } catch (err) {
+    console.error(`[bug-68] accept-ack timeout note emit failed: ${err.message}`);
+  }
+}
+
 // bug-57: clear the active-run-item context + optionally advance the
 // run queue. Called by POST /sessions/:id/run/done (which the verdict
 // pane's ✓ Accept on verify-stage + ✗ Discard buttons fire). The
@@ -2456,7 +2778,29 @@ function clearActiveRunItem(sessionId, session, opts = {}) {
     return false;
   }
   console.log(`[bug-57] clearActiveRunItem(${sessionId}, ${active.itemId}, ${reason}) — clearing + advancing queue`);
+  // bug-68 (Option B addition 3): clear any pending accept-ack
+  // expectation. The run is ending (verify-accept / discard) — even
+  // if the expectation hasn't fired, there's nothing for claude to
+  // respond TO anymore. Without this clear, a stale expectation
+  // could fire 30-90s later and emit a misleading "claude hasn't
+  // picked up" note on a run that's already over.
+  _clearAcceptAckExpectation(session);
   const finishedItemId = active.itemId;
+  // bug-68: dispatch the verify-accept synthetic prompt to claude
+  // BEFORE the clear runs (so the synthetic turn sees the same
+  // _activeRunItem the user accepted). 'chat-accept-verify' is skipped
+  // because _maybeHandleChatAccept already dispatched. 'discard' is
+  // skipped because the run was ABANDONED, not accepted. 'accept-verify'
+  // is the final-pane button's reason — that's the one we wire.
+  if (reason === 'accept-verify') {
+    try {
+      _postAcceptStagePrompt(sessionId, session, {
+        itemId: finishedItemId, stage: 'verify', reason: 'accept-verify',
+      });
+    } catch (err) {
+      console.error(`[bug-68] verify-accept dispatch failed: ${err.message}`);
+    }
+  }
   session._activeRunItem = null;
   session._sawStageSentinelInRun = false;
   // fr-96: clear the stage-state machine. This is the
@@ -2523,6 +2867,11 @@ module.exports = {
   // single line.
   _extractRunOutcomeSummaryLine,
   _stampPlanItemRunOutcome,
+  // bug-68: synthetic accept-prompt dispatcher. Exported so
+  // critique.resolveCritique can call the same chokepoint as
+  // _maybeHandleChatAccept — both accept paths land at the same end
+  // state (claude actually moves on).
+  _postAcceptStagePrompt,
   // Re-export menu helpers so callers that historically grabbed them off
   // ptyMod continue to find them.
   handleSessionMenu: menuMod.handleSessionMenu,

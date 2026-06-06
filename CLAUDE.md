@@ -604,6 +604,31 @@ critic step — claude does NOT auto-advance, does NOT auto-iterate.
    stage immediately — NO additional `continue` / `proceed` keyword
    needed beyond the accept signal itself.
 
+   **How accept reaches claude (bug-68 mechanism).** Pre-bug-68 the
+   accept signal transitioned `stageState` server-side but never
+   actually dispatched anything to claude — the protocol document
+   above was aspirational, and claude sat idle awaiting input that
+   never arrived. As of bug-68, both accept paths (button click and
+   chat-accept phrase) call `_postAcceptStagePrompt(sessionId,
+   session, …)` in `server/src/attach.js`, which formats a synthetic
+   user-turn and dispatches it via `session.write()`. The synthetic
+   turn carries a bracketed marker so claude can branch
+   deterministically:
+   - `[stage-accepted: analyze→code]` — intermediate accept; proceed
+     to the named next stage.
+   - `[stage-accepted: verify→done]` — verify stage accepted; the run
+     is complete.
+   - `[stage-fix]` — Ask Claude to Fix Stage was clicked; the prompt
+     includes the critic's flagged-issues body (read from
+     `item.meta.lastCriticReview`, fr-98) so claude knows what to
+     redo. Same shape used by the final-pane Fix button (which
+     dispatches via `sendChatMessage` from the client side; bug-68
+     unified the intermediate-Fix path to use the server-side helper).
+   The same synthetic prompt is also mirrored into the chat record as
+   a system note tagged `meta.kind:'bug-68-dispatch'` so the user can
+   SEE what was sent to claude. Two consumers (user-visible note +
+   claude-input), one body.
+
 4. **rerun critic if follow-up question is provided** — the user
    types into the verdict pane's textarea + clicks
    `💬 Ask Critic` (bug-53). The critic re-fires with the typed

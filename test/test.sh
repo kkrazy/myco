@@ -3146,6 +3146,47 @@ test_chat_window() {
   # (below) catches future regressions where a new clear path forgets
   # to clear the verdict alongside the stageState.
   node_test_result test/fr-98-verdict-panel-persistence.test.js "test/fr-98-verdict-panel-persistence.test.js (13 cases)"
+  # bug-68: plan items must run analyze/code/verify stages each gated
+  # by a critic review modal — and the accept signal must actually
+  # advance claude to the next stage. Pre-bug-68 the accept signal
+  # (button click or chat-accept phrase) transitioned stageState
+  # server-side but NEVER dispatched anything to claude — the modal
+  # closed and claude sat idle. User-reported (verbatim): "the current
+  # solution is half baked, sometimes the critic verdict would show
+  # up, sometimes no, sometimes in wrong order. sometimes no action
+  # after I accept the proposal."
+  #
+  # Four coupled fixes locked here:
+  #   1. _postAcceptStagePrompt helper (attach.js) — formats
+  #      synthetic [stage-accepted: X→Y] / [stage-fix] prompts +
+  #      calls session.write(). Wired into _maybeHandleChatAccept
+  #      (chat path) + resolveCritique (button path for accept-stage
+  #      / fix-stage) + clearActiveRunItem (button path for
+  #      accept-verify).
+  #   2. _emitCritiqueSkipNote helper (attach.js) — surfaces critic
+  #      skips (empty diff / baseline-WIP-only) in chat instead of
+  #      stderr-only.
+  #   3. Critique-error chat note (critique.js) — surfaces error
+  #      verdicts in chat too.
+  #   4. One-sentinel-per-turn cap in _detectStageSentinels
+  #      (agent-session.js) — same-tick claude reply with two
+  #      sentinels (`[stage: analyze done] ... [stage: code done]`)
+  #      no longer fires both critics in sequence (root cause of
+  #      "wrong order" symptom). Cleared on turn_result so the next
+  #      turn fires fresh.
+  # bug-68 Option B additions (3 reliability follow-ups bundled in):
+  #   · _emitSentinelReceivedNote — chat note IMMEDIATELY when stage
+  #     sentinel is detected so user sees a visible timeline of
+  #     received→firing→(verdict|skip|error) instead of 10-60s dead air.
+  #   · warnToast (client-side) — fires on bug-61 broadcast drop so a
+  #     verdict-pane drop produces a visible amber notice instead of
+  #     console.warn-only silence.
+  #   · ACCEPT_ACK_TIMEOUT_MS + arm/clear/timeout machinery — server
+  #     watches for claude's next assistant_text after _postAcceptStagePrompt;
+  #     if 90s pass with no response, emits a "claude hasn't picked up
+  #     the X accept — try typing 'continue' to nudge" chat note so a
+  #     wedged SDK queue is recoverable.
+  node_test_result test/bug-68-stage-accept-dispatch.test.js "test/bug-68-stage-accept-dispatch.test.js (27 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in
