@@ -89,18 +89,31 @@ t('migrateMainProjectIfNeeded scans subdirs for .git/ + filters with NESTED_SCAN
     'migrateMainProjectIfNeeded must apply the same NESTED_SCAN_SKIP filter as findProjectRoot (node_modules, dist, build, etc.) so it doesn\'t latch onto build artifacts.');
 });
 
-t('migrateMainProjectIfNeeded warns + leaves unset when multiple candidates exist', () => {
+t('migrateMainProjectIfNeeded deterministically picks alphabetical-first when multiple candidates exist (bug-66 supersedes Phase 2 r0 "leave unset")', () => {
+  // Pre-bug-66: multi-candidate bailed with a warn + left mainProject
+  // unset, and the now-retired findProjectRoot auto-detect fallback
+  // re-picked alphabetical-first on every read — so resolution was
+  // non-deterministic if siblings appeared/disappeared. bug-66 makes
+  // multi-candidate the deterministic case at MIGRATION time: pick
+  // alphabetical-first, persist via setMainProject, and warn loudly so
+  // the user knows which project was claimed. The runtime semantic
+  // tests (in test/bug-66-single-main-project-anchor.test.js) lock the
+  // PICK behavior; this case is the static-grep guard that the source
+  // still distinguishes the multi-candidate branch + still warns.
   const src = _read('server/src/artifacts.js');
   const at = src.search(/function\s+migrateMainProjectIfNeeded\s*\(/);
   const body = sliceFn(src, at);
-  // The helper must distinguish "exactly one" from "multiple" — the
-  // multi-candidate path must NOT set mainProject (would silently
-  // pick one repo over another) and must log a warn so the user
-  // notices and sets it explicitly.
   assert.ok(/candidates\.length\s*>\s*1/.test(body),
     'migrateMainProjectIfNeeded must branch on `candidates.length > 1` (multi-candidate case).');
-  assert.ok(/console\.warn\s*\(\s*[`'"]\[fr-94 Phase 2\][\s\S]*?multiple/.test(body),
-    'multi-candidate path must console.warn so a user with a multi-repo workspace gets a heads-up (silent picking is the failure mode Phase 1 r1 fixed).');
+  // Warn prefix carries both Phase-2 and bug-66 markers so future
+  // refactors can re-find this code path from either history entry.
+  assert.ok(/console\.warn\s*\(\s*[`'"]\[fr-94 Phase 2 \/ bug-66\][\s\S]*?multiple/.test(body),
+    'multi-candidate path must console.warn under the `[fr-94 Phase 2 / bug-66]` prefix so the user sees which project was deterministically claimed (bug-66 supersedes the pre-r0 "leave unset" behavior).');
+  // Both branches must persist via setMainProject — the bug-66
+  // chokepoint. The static guard test_no_direct_main_project_write in
+  // test.sh also locks this from the other direction.
+  assert.ok(/setMainProject\s*\(\s*rec\s*,/.test(body),
+    'migrateMainProjectIfNeeded must persist via setMainProject(rec, …) — the bug-66 single-main chokepoint (no direct rec.mainProject = … writes).');
 });
 
 t('migrateMainProjectIfNeeded persists via the saveStoreFn callback on success', () => {

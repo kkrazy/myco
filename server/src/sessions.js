@@ -963,7 +963,25 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   }
 
   const record = { id, user, cwd: toRel(absCwd, user), absCwd, label, claudeSessionId: null, createdAt, mode };
-  if (mainProject) record.mainProject = mainProject;
+  // bug-66: route the seed write through artifacts.setMainProject so
+  // the single-main invariant is enforced at session-birth time —
+  // same chokepoint future code paths must use if they ever want to
+  // designate a main project for an existing session. Lazy-require
+  // dodges the sessions↔artifacts circular at module-load time.
+  if (mainProject) {
+    try {
+      const artifacts = require('./artifacts');
+      artifacts.setMainProject(record, mainProject);
+    } catch (err) {
+      // Fall through with a logged warning rather than aborting the
+      // spawn: the project dir was JUST created by _spawnViaNewDir /
+      // _kickoffGitCloneAsync above, so a failure here is either a
+      // legit race (clone-pending dir staged moments earlier) or a
+      // genuine bug worth surfacing. The session is still usable; the
+      // user can hand-edit /data/sessions.json to recover.
+      console.error(`[bug-66] setMainProject("${mainProject}") refused at spawn for ${id}: ${err && err.message ? err.message : err}`);
+    }
+  }
   if (cloneState) record.cloneState = cloneState;
   if (cloneUrl) record.cloneUrl = cloneUrl;
   putSession(record);

@@ -185,8 +185,7 @@ function findProjectRoot(rec) {
   // takes precedence over auto-detection. Set at session creation via
   // the spawn modal's "Git clone URL OR new project name" field. When
   // present and the directory exists, it's the canonical project root
-  // for this session — period. Auto-detection is the LEGACY fallback
-  // for sessions spawned before fr-94 landed.
+  // for this session — period.
   if (rec.mainProject && typeof rec.mainProject === 'string' && rec.mainProject.trim()) {
     const candidate = path.join(rec.absCwd, rec.mainProject.trim());
     try {
@@ -204,25 +203,23 @@ function findProjectRoot(rec) {
     console.warn(`[fr-94] rec.mainProject="${rec.mainProject}" but ${candidate} does not exist — artifact mirror skipped for ${rec.id || '?'} (fix: delete or correct rec.mainProject in /data/sessions.json)`);
     return null;
   }
-  // Direct hit: session.absCwd is itself a checkout.
+  // Direct hit: session.absCwd is itself a checkout. Kept for the
+  // pre-fr-94 "the session IS the project" layout — those sessions
+  // have no mainProject AND no subdir, so this is the only branch
+  // that resolves them.
   try {
     if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory()) return rec.absCwd;
   } catch {}
-  // Nested hit: find the immediate subdir that's a checkout.
-  // Alphabetical for determinism when multiple repos share a workspace.
-  try {
-    const entries = fs.readdirSync(rec.absCwd, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !NESTED_SCAN_SKIP.has(d.name))
-      .map((d) => d.name)
-      .sort();
-    for (const name of entries) {
-      try {
-        if (fs.statSync(path.join(rec.absCwd, name, '.git')).isDirectory()) {
-          return path.join(rec.absCwd, name);
-        }
-      } catch {}
-    }
-  } catch {}
+  // bug-66: the legacy sibling-subdir auto-detect scan is RETIRED.
+  // It produced non-deterministic resolution on multi-repo
+  // workspaces — same rec, different reads, different paths,
+  // because the alphabetical-first .git/-marked subdir could
+  // change as files appeared/disappeared. _myco_/ (plan, memory,
+  // events) is now ONLY anchored at <absCwd>/<rec.mainProject>/_myco_
+  // (or absCwd directly when the session IS the project). Legacy
+  // multi-repo sessions hit this null path until
+  // migrateMainProjectIfNeeded runs on next attach — which now
+  // deterministically picks alphabetical-first + persists.
   return null;
 }
 
@@ -232,25 +229,80 @@ function resolveMycoDir(rec) {
   return path.join(projectRoot, MYCO_DIR);
 }
 
+// bug-66: the ONLY function allowed to write rec.mainProject. Enforces
+// the single-main invariant — every session has exactly one main
+// project, and once set it can't be silently replaced. Use this from
+// spawnSession (initial set) and migrateMainProjectIfNeeded (legacy
+// auto-cure). Any other writer is a bug; the static guard
+// `test_no_direct_main_project_write` in ./test/test.sh fails the
+// build if a `rec.mainProject = …` or `record.mainProject = …`
+// assignment lands outside this function.
+//
+// Throws:
+//   - if rec.mainProject is already non-empty AND differs from the
+//     incoming name (the "no second main" guard — bug-66's core
+//     invariant). Idempotent same-name re-set is a no-op.
+//   - if name is empty / non-string after trim
+//   - if the resolved <absCwd>/<name> doesn't exist as a directory
+//     (defense against ghost-anchoring _myco_/ at a path that won't
+//     accept writes)
+//
+// Returns the trimmed name that was assigned, so callers can chain
+// (e.g. `record.mainProject = setMainProject(record, raw)` reads as
+// "validated assignment").
+function setMainProject(rec, name) {
+  if (!rec || typeof rec !== 'object') {
+    throw new Error('setMainProject: rec is required');
+  }
+  if (!rec.absCwd || typeof rec.absCwd !== 'string') {
+    throw new Error(`setMainProject: rec.absCwd is required (rec.id=${rec.id || '?'})`);
+  }
+  const trimmed = (typeof name === 'string' ? name.trim() : '');
+  if (!trimmed) {
+    throw new Error(`setMainProject: name must be a non-empty string (rec.id=${rec.id || '?'})`);
+  }
+  if (rec.mainProject && typeof rec.mainProject === 'string' && rec.mainProject.trim()) {
+    if (rec.mainProject.trim() === trimmed) return trimmed; // idempotent no-op
+    throw new Error(
+      `setMainProject: rec.mainProject="${rec.mainProject}" already set — refusing to overwrite with "${trimmed}" ` +
+      `(bug-66 single-main invariant; rec.id=${rec.id || '?'}). ` +
+      `Each session has exactly one main project; spawn a new session to work on a different project.`
+    );
+  }
+  const candidate = path.join(rec.absCwd, trimmed);
+  try {
+    if (!fs.statSync(candidate).isDirectory()) {
+      throw new Error(`setMainProject: ${candidate} is not a directory (rec.id=${rec.id || '?'})`);
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      throw new Error(`setMainProject: ${candidate} does not exist (rec.id=${rec.id || '?'})`);
+    }
+    throw err;
+  }
+  rec.mainProject = trimmed;
+  return trimmed;
+}
+
 // fr-94 Phase 2: lazy migration helper. For sessions spawned before
 // fr-94 Phase 1 landed (no rec.mainProject set), run the same
-// subdir-scan that findProjectRoot does, and if there's EXACTLY ONE
-// candidate `.git/`-marked subdirectory, cache it on rec.mainProject
-// + persist via the caller's saveStore callback. Migration is
-// best-effort:
-//   - no candidates → leave rec.mainProject unset (legacy auto-
-//     detect picks the session root if it's a repo, else null —
-//     same as before).
+// subdir-scan that findProjectRoot does, and pick a main project:
+//   - no candidates → leave rec.mainProject unset. findProjectRoot's
+//     "session IS the project" branch covers the absCwd-is-a-repo
+//     case; everything else resolves to null until the user spawns
+//     a fresh session with the field set.
 //   - exactly one candidate → set rec.mainProject = candidate.
-//     Subsequent resolveMycoDir calls skip the scan + use the
-//     explicit override path through findProjectRoot's Phase 1
-//     branch.
-//   - multiple candidates → log a warning, leave rec.mainProject
-//     unset. The legacy auto-detect path picks the alphabetically-
-//     first one each time, same as before; the warning gives the
-//     user a heads-up that they should set rec.mainProject
-//     explicitly (the future Phase 3 spawn-modal-style action will
-//     surface this in the UI).
+//     Subsequent resolveMycoDir calls hit the explicit override path
+//     through findProjectRoot's Phase 1 branch.
+//   - multiple candidates → bug-66: was previously "bail with a
+//     warning" (left rec.mainProject unset → the retired auto-detect
+//     fallback re-picked alphabetical-first on every read, so the
+//     same rec resolved to different paths over time as siblings
+//     appeared/disappeared). Now: deterministically pick
+//     alphabetical-first, persist via setMainProject, and log
+//     loudly so the user sees which project the system claimed. If
+//     the choice is wrong, hand-editing /data/sessions.json
+//     overrides it (single source of truth from then on).
 // Returns true iff the migration set a new value.
 function migrateMainProjectIfNeeded(rec, saveStoreFn) {
   if (!rec || !rec.absCwd) return false;
@@ -275,12 +327,18 @@ function migrateMainProjectIfNeeded(rec, saveStoreFn) {
       .sort();
   } catch {}
   if (candidates.length === 0) return false;
+  const pick = candidates[0];
   if (candidates.length > 1) {
-    console.warn(`[fr-94 Phase 2] ${rec.id || '?'}: multiple project candidates under ${rec.absCwd} (${candidates.join(', ')}) — leaving rec.mainProject unset; legacy auto-detect will pick "${candidates[0]}" each time. Set rec.mainProject explicitly to silence this warning.`);
+    console.warn(`[fr-94 Phase 2 / bug-66] ${rec.id || '?'}: multiple project candidates under ${rec.absCwd} (${candidates.join(', ')}) — deterministically claiming alphabetical-first "${pick}" for rec.mainProject. Hand-edit /data/sessions.json if the wrong project was picked.`);
+  } else {
+    console.log(`[fr-94 Phase 2] ${rec.id || '?'}: auto-migrated rec.mainProject = "${pick}" (sole .git/-marked subdir under ${rec.absCwd}).`);
+  }
+  try {
+    setMainProject(rec, pick);
+  } catch (err) {
+    console.error(`[fr-94 Phase 2] setMainProject(${pick}) refused: ${err && err.message ? err.message : err}`);
     return false;
   }
-  rec.mainProject = candidates[0];
-  console.log(`[fr-94 Phase 2] ${rec.id || '?'}: auto-migrated rec.mainProject = "${candidates[0]}" (sole .git/-marked subdir under ${rec.absCwd}).`);
   if (typeof saveStoreFn === 'function') {
     try { saveStoreFn(); }
     catch (err) { console.error(`[fr-94 Phase 2] saveStore after migrate failed: ${err && err.message ? err.message : err}`); }
@@ -1175,6 +1233,13 @@ module.exports = {
   MYCO_DIR,
   resolveMycoDir,
   findProjectRoot,
+  // bug-66: the only function allowed to write rec.mainProject.
+  // Single-main-per-session invariant lives here; every caller
+  // that wants to set the field MUST go through this chokepoint.
+  // The static guard `test_no_direct_main_project_write` in
+  // ./test/test.sh fails the build if any server/ file lands a
+  // direct `rec.mainProject = …` outside this helper.
+  setMainProject,
   // fr-94 Phase 2: lazy migration for legacy sessions spawned
   // before fr-94 Phase 1 landed. Called from attach.js
   // _attachAgentWebSocket once per WS connect; idempotent (no-op
@@ -1188,6 +1253,8 @@ module.exports = {
     mycoDirPath,
     resolveMycoDir,
     findProjectRoot,
+    setMainProject,
+    migrateMainProjectIfNeeded,
     artifactFilePath,
     readArtifactFromFile,
     writeArtifactToFile,

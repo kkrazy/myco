@@ -42,11 +42,20 @@ function makeRec(name) {
 // Build a session rec whose absCwd is a WORKSPACE (no .git/ directly),
 // with the project nested one level deeper. Returns { rec, repo } so
 // the test can plant files inside the repo directly.
+//
+// bug-66: rec.mainProject is set to projectName — pre-bug-66 the
+// nested-project case relied on findProjectRoot's sibling-subdir
+// auto-detect fallback, but that fallback is retired (it produced
+// non-deterministic resolution on multi-repo workspaces). Production
+// code now sets mainProject explicitly via spawnSession (new sessions)
+// or migrateMainProjectIfNeeded (legacy sessions, on first attach).
+// This helper mirrors that — the rec it returns is shaped the way
+// production sees the same workspace shape.
 function makeWorkspaceRec(name, projectName = 'myrepo') {
   const cwd = path.join(tmpRoot, 'wks-' + name);
   const repo = path.join(cwd, projectName);
   fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
-  return { rec: { id: 'rec-' + name, absCwd: cwd }, repo };
+  return { rec: { id: 'rec-' + name, absCwd: cwd, mainProject: projectName }, repo };
 }
 
 console.log('── _myco_/ mirror ──');
@@ -193,14 +202,28 @@ t('findProjectRoot skips heavy / hidden dirs while searching', () => {
     'must skip node_modules/.cache/etc. — those aren\'t real projects');
 });
 
-t('findProjectRoot picks alphabetical first when multiple repos coexist', () => {
-  // Session.absCwd has two checkouts side-by-side. Resolution is
-  // deterministic — alphabetical winner.
+t('findProjectRoot returns NULL for multi-repo workspaces with no mainProject (bug-66 retires sibling-subdir auto-detect)', () => {
+  // bug-66: pre-bug-66 this case asserted findProjectRoot returned
+  // the alphabetical-first sibling. That auto-detect fallback is
+  // retired — it produced non-deterministic resolution if siblings
+  // appeared/disappeared between reads. The "deterministic
+  // alphabetical-first" pick is now MIGRATION-time behavior
+  // (migrateMainProjectIfNeeded persists it on first attach), not
+  // RESOLUTION-time behavior. With no mainProject anchor, the
+  // multi-repo workspace returns null until migration runs.
   const cwd = path.join(tmpRoot, 'multi-repo');
   fs.mkdirSync(path.join(cwd, 'aaa', '.git'), { recursive: true });
   fs.mkdirSync(path.join(cwd, 'bbb', '.git'), { recursive: true });
   const rec = { id: 'rec-multi', absCwd: cwd };
-  assert.strictEqual(__test.findProjectRoot(rec), path.join(cwd, 'aaa'));
+  assert.strictEqual(
+    __test.findProjectRoot(rec), null,
+    'bug-66: multi-repo workspace with no mainProject MUST return null — the retired auto-detect fallback used to return the alphabetical-first sibling, which caused drift across reads.'
+  );
+  // After Phase 2 migration (deterministic alphabetical-first pick),
+  // findProjectRoot resolves via the explicit anchor.
+  __test.migrateMainProjectIfNeeded(rec, () => {});
+  assert.strictEqual(rec.mainProject, 'aaa', 'migration must claim alphabetical-first');
+  assert.strictEqual(__test.findProjectRoot(rec), path.join(cwd, 'aaa'), 'post-migration: findProjectRoot resolves via rec.mainProject');
 });
 
 t('rec without absCwd is a no-op (no crash)', () => {

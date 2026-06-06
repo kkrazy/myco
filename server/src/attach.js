@@ -1530,6 +1530,37 @@ function _sendAttachSnapshot(session, ws) {
       if (picked) artifacts[type] = picked;
     }
     ws.send(JSON.stringify({ t: 'artifacts-init', artifacts }));
+
+    // fr-98: replay any persisted verdict pane that's still pending.
+    // The verdict broadcast at critique.js was a fire-once state-update —
+    // devices that weren't attached at fire time saw a stageState of
+    // awaiting_accept but no pane to render. The bug-66-style fix is to
+    // persist the broadcast payload at item.meta.lastCriticReview and
+    // re-ship it here on every attach, BUT only when the stageState
+    // still says the verdict is pending (awaiting_verdict /
+    // awaiting_accept). Resolved verdicts have lastCriticReview
+    // cleared by _clearAndBroadcastStageState + resolveCritique, so
+    // they never replay. Capped at 1 — the UI shows one verdict pane
+    // at a time, and bug-64's intermediate-vs-final precedence rules
+    // mean the most-recently-broadcast pending one is the right one.
+    try {
+      const planItems = (artifacts.plan && Array.isArray(artifacts.plan.items)) ? artifacts.plan.items : [];
+      for (const it of planItems) {
+        const review = stageStateMod.getLastCriticReview(it);
+        if (!review) continue;
+        const ss = stageStateMod.getStageState(it);
+        if (!ss || (ss.status !== 'awaiting_verdict' && ss.status !== 'awaiting_accept')) continue;
+        ws.send(JSON.stringify({
+          t: 'state-update',
+          ...review,
+          _replayedOnAttach: true,
+        }));
+        console.log(`[fr-98] replayed pending critique-review on attach for item ${it.id} (stage=${ss.stage}, status=${ss.status})`);
+        break; // single-verdict-pane UI; only replay the first pending one
+      }
+    } catch (err) {
+      console.error(`[fr-98] critique-review replay on attach failed: ${err.message}`);
+    }
   } catch (err) {
     console.error(`[attach-snapshot] artifacts-init failed: ${err.message}`);
   }
@@ -2254,9 +2285,18 @@ function _clearAndBroadcastStageState(sessionId, session, itemId) {
   const item = _findPlanItemInRec(rec, itemId);
   if (!item) return;                            // already gone — no-op
   const cleared = stageStateMod.clearStageState(item);
-  if (cleared) {
+  // fr-98: the persisted verdict (item.meta.lastCriticReview) lives in
+  // the same item.meta slot as stageState — it's the content the
+  // stageState's "awaiting_*" status referred to. When stageState
+  // clears (verify-accept / discard), the verdict is no longer
+  // pending, so it MUST also clear. The static guard
+  // test_lastCriticReview_paired_with_stageState in ./test/test.sh
+  // locks this pairing — every clearStageState in attach.js must be
+  // adjacent to a clearLastCriticReview.
+  const reviewCleared = stageStateMod.clearLastCriticReview(item);
+  if (cleared || reviewCleared) {
     sessionsMod.saveStore();
-    _broadcastStageState(sessionId, session, itemId, null);
+    if (cleared) _broadcastStageState(sessionId, session, itemId, null);
   }
 }
 

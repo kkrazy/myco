@@ -62,6 +62,12 @@ free_port() {
 SKIP=0
 skip()    { SKIP=$((SKIP+1)); echo "  ~ $1 (skipped)"; }
 have_node() { command -v node >/dev/null 2>&1; }
+# Docker is needed for the image build + the persistence section
+# (container start/restart/redeploy). Sandboxes / CI runners without a
+# docker daemon would otherwise cascade-fail dozens of slots that are
+# really just "environment can't run this." Treat as a skip so the
+# functional pass/fail tally stays meaningful.
+have_docker() { command -v docker >/dev/null 2>&1; }
 
 # bug-69: portable PCRE matcher. Replaces `grep -Pzoq` (which busybox
 # doesn't support — busybox grep has no PCRE engine, fails with
@@ -1819,6 +1825,92 @@ test_no_pipe_to_grep_q_antipattern() {
   fi
 }
 
+# bug-66 single-main invariant guard. The ONLY function allowed to
+# write rec.mainProject (or record.mainProject) is
+# artifacts.setMainProject. Any other server/ assignment regresses the
+# single-chokepoint convention — the "no second main per session"
+# guarantee leaks if a code path can bypass setMainProject and just
+# stamp a new value onto the record. This grep catches that pattern at
+# build time.
+#
+# Allowlisted (the chokepoint itself + its idempotent same-name path):
+#   - server/src/artifacts.js (setMainProject body lives here)
+# Everywhere else: forbidden. Reads (typeof rec.mainProject,
+# truthy checks, `if (rec.mainProject)`, comparisons) are unaffected —
+# only `=` assignments match the pattern.
+test_no_direct_main_project_write() {
+  local bad
+  # \b matches the word boundary; (?:rec|record) covers both naming
+  # styles in the codebase; `=` with a negative lookahead for `=`
+  # excludes `==` / `===` comparisons (grep -E doesn't support
+  # lookaheads, so we approximate with `=[^=]`).
+  bad=$(grep -rnE '\b(rec|record)\.mainProject[[:space:]]*=[^=]' server/ \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*\*' \
+        | grep -v 'server/src/artifacts.js' \
+        || true)
+  if [ -z "$bad" ]; then
+    pass "test.sh: no direct rec/record.mainProject = … writes outside artifacts.setMainProject (bug-66 single-main chokepoint intact)"
+  else
+    fail "test.sh: $(echo "$bad" | wc -l) direct rec/record.mainProject assignment(s) outside artifacts.setMainProject — route through setMainProject(rec, name) to preserve the bug-66 single-main invariant"
+    echo "$bad" | sed 's/^/    │ /'
+  fi
+}
+
+# fr-98: the persisted verdict (item.meta.lastCriticReview) and the
+# stage state (item.meta.stageState) live in the same item.meta slot
+# and move together. When stageState clears (verify-accept / discard),
+# the verdict referring to it MUST clear too — otherwise the next
+# attach replays a verdict whose stage has already finished. This
+# guard checks attach.js for every clearStageState(…) call and ensures
+# a clearLastCriticReview(…) call appears within ±10 lines of it.
+#
+# Window picked at ±10 because the chokepoint
+# _clearAndBroadcastStageState includes a multi-line fr-98 explainer
+# comment between the two helper calls (7 lines), and a future
+# code-relevant docstring shouldn't make the guard misfire. ±10 is
+# still tight enough to catch genuine misses (a forgotten clear in a
+# new helper at the bottom of attach.js would land far further away
+# than 10 lines).
+#
+# The stageState.js definition site is excluded by path filter: the
+# helper bodies themselves naturally have the calls without pairing.
+# attach.js is the chokepoint: _clearAndBroadcastStageState is the
+# only function in attach.js that calls clearStageState today, and it
+# must call both. A future "added a 5th button, forgot to clear the
+# verdict" regression would land a new clearStageState elsewhere in
+# attach.js without an adjacent clearLastCriticReview — this guard
+# catches it.
+test_lastCriticReview_paired_with_stageState() {
+  local missing
+  # Find every clearStageState(…) call site in attach.js (ignore
+  # comments + the require lines). For each, look at the surrounding
+  # 21-line window (10 before, 10 after) for clearLastCriticReview.
+  local lines
+  lines=$(grep -nE '\bclearStageState\s*\(' server/src/attach.js \
+          | grep -vE ':[[:space:]]*//' \
+          | grep -v 'require' \
+          | cut -d: -f1 || true)
+  missing=""
+  if [ -n "$lines" ]; then
+    for ln in $lines; do
+      local lo=$((ln - 10)); [ "$lo" -lt 1 ] && lo=1
+      local hi=$((ln + 10))
+      local window
+      window=$(sed -n "${lo},${hi}p" server/src/attach.js)
+      if ! grep -q 'clearLastCriticReview' <<<"$window"; then
+        missing="${missing}server/src/attach.js:${ln}: clearStageState without nearby clearLastCriticReview\n"
+      fi
+    done
+  fi
+  if [ -z "$missing" ]; then
+    pass "test.sh: clearStageState always paired with clearLastCriticReview in attach.js (fr-98 verdict-clear chokepoint intact)"
+  else
+    fail "test.sh: clearStageState site(s) in attach.js NOT paired with clearLastCriticReview — verdict will ghost-replay after stage clears (fr-98 regression):"
+    printf "$missing" | sed 's/^/    │ /'
+  fi
+}
+
 run_static_checks() {
   section "Static checks"
   test_server_js_files
@@ -1846,6 +1938,8 @@ run_static_checks() {
   test_file_viewer_polish_static
   test_index_chatpane_uses_herestring
   test_no_pipe_to_grep_q_antipattern
+  test_no_direct_main_project_write
+  test_lastCriticReview_paired_with_stageState
 }
 
 # ─── feature checks ──────────────────────────────────────────────────────────
@@ -2987,6 +3081,51 @@ test_chat_window() {
   # against a stale client). The guard fires BEFORE spawnSession is
   # called — no half-spawned sessions on validation failure.
   node_test_result test/fr-94-phase-3-r1-main-project-required.test.js "test/fr-94-phase-3-r1-main-project-required.test.js (5 cases)"
+  # bug-66: enforce single main project per session; anchor plan +
+  # memory to main-project/_myco_. Three coupled fixes:
+  #   1. artifacts.setMainProject(rec, name) is the SINGLE chokepoint
+  #      that writes rec.mainProject. Throws if rec.mainProject is
+  #      already set to a different value (the "no second main"
+  #      invariant), if the name is empty, or if <absCwd>/<name>
+  #      doesn't exist as a directory.
+  #   2. findProjectRoot RETIRES the legacy sibling-subdir auto-detect
+  #      fallback. Resolution is now {mainProject set + dir exists →
+  #      that path; mainProject set + dir missing → null; absCwd IS
+  #      a checkout → absCwd; otherwise → null}. No more "alphabetical-
+  #      first sibling" path that drifted between reads on multi-repo
+  #      workspaces.
+  #   3. migrateMainProjectIfNeeded becomes deterministic on multi-
+  #      candidate legacy sessions: picks alphabetical-first, persists
+  #      via setMainProject. Previously bailed with a warning + left
+  #      rec.mainProject unset → the retired auto-detect re-resolved
+  #      every read.
+  # Plus: sessions.js spawnSession routes its seed write through
+  # setMainProject. The static guard test_no_direct_main_project_write
+  # below locks the single-chokepoint convention.
+  node_test_result test/bug-66-single-main-project-anchor.test.js "test/bug-66-single-main-project-anchor.test.js (19 cases)"
+  # fr-98: render verdict panel like AskUserQuestion for cross-device
+  # + session-restart persistence. Pre-fix: critique.js emitted
+  # state-update{kind:'critique-review'} as a fire-once broadcast —
+  # never persisted, so a new device attaching mid-pending-verdict
+  # (or any device after container restart) saw stageState =
+  # awaiting_accept (fr-96 persisted that) but no pane to render.
+  # Three coupled fixes locked here:
+  #   1. stageState.js — setLastCriticReview / clearLastCriticReview /
+  #      getLastCriticReview helpers. Verdict payload persisted at
+  #      item.meta.lastCriticReview in plan.json.
+  #   2. critique.js — broadcast site ALSO calls setLastCriticReview
+  #      + saveStore. resolveCritique clears lastCriticReview on
+  #      accept-stage / fix-stage so resolved verdicts do not replay.
+  #   3. attach.js — _clearAndBroadcastStageState pairs
+  #      clearLastCriticReview with clearStageState (verify-accept /
+  #      discard clear both). _sendAttachSnapshot replays the
+  #      persisted verdict for any item with stageState.status in
+  #      awaiting_verdict / awaiting_accept, tagged
+  #      _replayedOnAttach:true so the client can distinguish replays.
+  # Plus: test_lastCriticReview_paired_with_stageState static guard
+  # (below) catches future regressions where a new clear path forgets
+  # to clear the verdict alongside the stageState.
+  node_test_result test/fr-98-verdict-panel-persistence.test.js "test/fr-98-verdict-panel-persistence.test.js (13 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in
@@ -4627,6 +4766,15 @@ run_server_smoke() {
 
 test_docker_build() {
   section "Docker build"
+  # Skip cleanly on docker-less hosts (agent sandboxes, lean CI runners).
+  # The build is genuinely environmental — there's nothing the test can
+  # do to recover, and cascading the failure into the persistence
+  # section produced a misleading "FAILED" verdict for hosts that just
+  # don't ship docker.
+  if ! have_docker; then
+    skip "Docker build (docker CLI not on PATH)"
+    return 0
+  fi
   # td-34: Dockerfile moved under docker/. The build context stays
   # at the repo root (.) so the COPY paths inside the Dockerfile
   # (server/, web/public/, USER_MANUAL.md, etc.) still resolve;
@@ -5143,6 +5291,15 @@ cleanup_persist_env() {
 
 run_persistence_checks() {
   section "Persistence: claude config / auth / sessions survive restart"
+  # Persistence checks all spin up a real container via `docker run`,
+  # exercise it through curl, restart it, and re-attach. Without
+  # docker every single slot in this section would cascade-fail with
+  # an environmental error that masks the real pass/fail tally.
+  # Skip the whole section once (one skip line) on docker-less hosts.
+  if ! have_docker; then
+    skip "Persistence: claude config / auth / sessions survive restart (docker CLI not on PATH)"
+    return 0
+  fi
   setup_persist_env
   test_persist_initial
   test_allowlist_gate

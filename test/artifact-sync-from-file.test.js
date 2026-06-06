@@ -61,8 +61,17 @@ t('shape 1: absCwd IS the project root, stale memory + fresh file', () => {
   assert.strictEqual(rec.artifacts.plan.items[0].id, 'td-1');
 });
 
-t('shape 2: absCwd is a WRAPPER, project is in a subdir with .git', () => {
+t('shape 2: absCwd is a WRAPPER, project is in a subdir with .git (bug-66: requires explicit rec.mainProject)', () => {
   // This is the exact mycobeta myco-ken shape.
+  // bug-66: pre-bug-66 this case relied on findProjectRoot's
+  // sibling-subdir auto-detect fallback to walk one level deep + claim
+  // the .git/-marked subdir. That fallback is retired (it produced
+  // non-deterministic resolution on multi-repo workspaces — same rec,
+  // different reads, different paths). The wrapper layout now requires
+  // an explicit rec.mainProject anchor, which spawnSession seeds for
+  // new sessions and migrateMainProjectIfNeeded cures for legacy ones
+  // on first attach. Setting rec.mainProject = 'myco' here mirrors
+  // both production paths.
   const wrap = path.join(tmp, 'wrap2');
   fs.mkdirSync(wrap, { recursive: true });
   const proj = path.join(wrap, 'myco');
@@ -76,10 +85,11 @@ t('shape 2: absCwd is a WRAPPER, project is in a subdir with .git', () => {
   const rec = {
     id: 'sess-shape2',
     absCwd: wrap,
+    mainProject: 'myco', // bug-66: explicit anchor (no auto-detect fallback)
     artifacts: { plan: { items: [{ id: 'phantom-1', layer: 'Todo', text: 'never-existed', source: 'user' }] } },
   };
-  // findProjectRoot must walk one level deep to find <wrap>/myco/.git.
-  assert.strictEqual(findProjectRoot(rec), proj, 'findProjectRoot resolves the project subdir');
+  // findProjectRoot resolves via rec.mainProject (bug-66 canonical path).
+  assert.strictEqual(findProjectRoot(rec), proj, 'findProjectRoot resolves <absCwd>/<mainProject>');
   _loadArtifactIntoRecFromFile(rec, 'plan');
   assert.strictEqual(rec.artifacts.plan.items.length, 2, 'rec.artifacts now mirrors the project plan.json');
   assert.deepStrictEqual(rec.artifacts.plan.items.map((it) => it.id), ['td-1', 'td-2']);
