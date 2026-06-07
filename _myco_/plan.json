@@ -5604,7 +5604,7 @@
       "id": "bug-69",
       "text": "Verdict panel renders follow-up questions unreadably alongside original message",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-06-07T05:26:25.727Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -5626,68 +5626,7 @@
       "meta": {
         "rewriteRequested": "long",
         "originalText": "verdict panel should show user follow up questions in a more readable format, together with the original message.",
-        "rewritten": true,
-        "stageState": {
-          "stage": "code",
-          "status": "in_progress",
-          "updatedAt": "2026-06-07T09:07:11.117Z",
-          "history": [
-            {
-              "stage": "analyze",
-              "status": "in_progress",
-              "ts": "2026-06-07T08:40:11.874Z"
-            },
-            {
-              "stage": "analyze",
-              "status": "awaiting_verdict",
-              "ts": "2026-06-07T08:42:37.032Z"
-            },
-            {
-              "stage": "analyze",
-              "status": "awaiting_accept",
-              "ts": "2026-06-07T08:42:44.379Z"
-            },
-            {
-              "stage": "code",
-              "status": "in_progress",
-              "ts": "2026-06-07T09:07:11.117Z"
-            }
-          ]
-        },
-        "lastCriticReview": {
-          "kind": "critique-review",
-          "itemId": "bug-69",
-          "hasDisagreement": true,
-          "isError": true,
-          "isIntermediate": false,
-          "isRetry": true,
-          "stage": null,
-          "critique": "## General QA critic\n\n(Gemini call failed: {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}})\n\n---\n\n## Test Validity critic\n\n(Gemini call failed: {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}})\n\n---\n\n## Perf / Security critic\n\n✗ DISAGREE\nThe provided diff does not contain any of the code changes necessary to address `bug-69` or implement the analyze-stage plan. The diff only shows a metadata change to `_myco_/plan.json` (adding a voter), which is not related to the problem of rendering follow-up questions in the verdict panel.\n\n*   **End-to-end problem coverage:** The user's reported problem (\"Verdict panel renders follow-up questions unreadably alongside original message\") remains unaddressed. The diff does not include any modifications to `server/src/critique.js`, `web/public/app.js`, or `web/public/styles.css` that would enable the display of user follow-up questions.\n*   **Plan-to-implementation fidelity:** The analyze-stage plan clearly outlined specific changes to `server/src/critique.js`, `web/public/app.js`, `web/public/styles.css`, and the addition of a new test file. None of these planned changes are present in the `STAGED GIT CHANGES` block.\n*   **Run-summary integrity:** Claude's explanation describes a detailed plan for code modifications and a new test, but the actual diff provided is entirely unrelated to those changes. This indicates a significant mismatch between the planned work and the output presented for review. The `PLAN ITEM HISTORY` shows an `(aborted) interrupted by Stop` entry after the analyze stage, which likely explains the missing code changes.\n\nThe current output does not solve the problem. Claude needs to proceed to the code stage and implement the changes outlined in its analyze plan.",
-          "diff": "\n--- File: myco/_myco_/plan.json ---\ndiff --git a/_myco_/plan.json b/_myco_/plan.json\nindex 74c2fa3..e374e69 100644\n--- a/_myco_/plan.json\n+++ b/_myco_/plan.json\n@@ -5608,7 +5608,9 @@\n       \"addedAt\": \"2026-06-07T05:26:25.727Z\",\n       \"addedBy\": \"kkrazy\",\n       \"source\": \"user\",\n-      \"voters\": [],\n+      \"voters\": [\n+        \"labxnow\"\n+      ],\n       \"comments\": [],\n       \"meta\": {\n         \"rewriteRequested\": \"long\",\n\n",
-          "criticName": "Gemini-2.5-Flash",
-          "criticId": "gemini",
-          "specialties": [
-            {
-              "id": "general",
-              "name": "General QA",
-              "isError": true,
-              "isAgreed": false
-            },
-            {
-              "id": "test-validity",
-              "name": "Test Validity",
-              "isError": true,
-              "isAgreed": false
-            },
-            {
-              "id": "perf-security",
-              "name": "Perf / Security",
-              "isError": false,
-              "isAgreed": false
-            }
-          ],
-          "broadcastAt": "2026-06-07T09:07:47.093Z"
-        }
+        "rewritten": true
       },
       "description": "**Problem:** User follow-up questions in the verdict panel are hard to read and poorly grouped with the original message.\n**Expected:** Follow-up questions display in a readable, structured format paired clearly with the original message they relate to.\n**Actual:** Follow-ups render in a format that's hard to scan and not visually tied to the original message.",
       "runs": [
@@ -5728,7 +5667,7 @@
       "id": "bug-71",
       "text": "Critic model retry drops user question on rate-limit/error",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-06-07T09:08:44.803Z",
       "addedBy": "kkrazy",
       "source": "user",
@@ -5750,52 +5689,7 @@
       "meta": {
         "rewriteRequested": "long",
         "originalText": "when there is an error in the critic model due to rate limit or other reasonse, the retry lost the user questions.",
-        "rewritten": true,
-        "stageState": {
-          "stage": "analyze",
-          "status": "awaiting_accept",
-          "updatedAt": "2026-06-07T10:13:34.303Z",
-          "history": [
-            {
-              "stage": "analyze",
-              "status": "in_progress",
-              "ts": "2026-06-07T10:09:41.753Z"
-            },
-            {
-              "stage": "analyze",
-              "status": "awaiting_verdict",
-              "ts": "2026-06-07T10:13:15.119Z"
-            },
-            {
-              "stage": "analyze",
-              "status": "awaiting_accept",
-              "ts": "2026-06-07T10:13:34.303Z"
-            }
-          ]
-        },
-        "lastCriticReview": {
-          "kind": "critique-review",
-          "itemId": "bug-71",
-          "hasDisagreement": false,
-          "isError": false,
-          "isIntermediate": true,
-          "isRetry": true,
-          "stage": "analyze",
-          "critique": "✓ AGREED\nThe plan accurately identifies the root cause of the `userPrompt` being dropped on retry: it's not persisted in the `_lastCritique` cache. The proposed surgical fix directly addresses this by adding the `userPrompt` to the cache and implementing a server-side fallback to retrieve it if the client sends an empty prompt on retry. The verification steps are appropriate and will effectively prove the fix.",
-          "diff": "",
-          "criticName": "Gemini-2.5-Flash",
-          "criticId": "gemini",
-          "userPrompt": "",
-          "specialties": [
-            {
-              "id": "general",
-              "name": "General QA",
-              "isError": false,
-              "isAgreed": true
-            }
-          ],
-          "broadcastAt": "2026-06-07T10:13:34.288Z"
-        }
+        "rewritten": true
       },
       "description": "**Problem:** When the critic model fails (e.g., rate limit), the retry path loses the original user question.\n**Expected:** Retry after a critic-model error preserves and resubmits the original user question.\n**Actual:** The user question is lost on retry, so the retried call runs without it.\n**Context:** Triggered by critic model errors including rate-limit responses and other failure modes.",
       "runs": [
@@ -5826,5 +5720,5 @@
       "description": "**Problem:** Once the verdict modal is dismissed, there's no affordance to bring it back.\n**Expected:** A control (button, menu item, or shortcut) to re-open the verdict modal after dismissal.\n**Actual:** Clicking \"Dismiss\" closes the modal permanently with no way to reopen it."
     }
   ],
-  "updatedAt": "2026-06-07T10:17:04.110Z"
+  "updatedAt": "2026-06-07T15:36:10.713Z"
 }
