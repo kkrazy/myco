@@ -3145,7 +3145,7 @@ test_chat_window() {
   # Plus: test_lastCriticReview_paired_with_stageState static guard
   # (below) catches future regressions where a new clear path forgets
   # to clear the verdict alongside the stageState.
-  node_test_result test/fr-98-verdict-panel-persistence.test.js "test/fr-98-verdict-panel-persistence.test.js (13 cases)"
+  node_test_result test/fr-98-verdict-panel-persistence.test.js "test/fr-98-verdict-panel-persistence.test.js (15 cases — incl. fr-98 follow-up: error verdicts persist too)"
   # bug-68: plan items must run analyze/code/verify stages each gated
   # by a critic review modal — and the accept signal must actually
   # advance claude to the next stage. Pre-bug-68 the accept signal
