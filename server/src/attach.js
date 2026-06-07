@@ -259,6 +259,59 @@ function _registerExternalSession(sessionId, session) {
           });
           return;
         }
+
+        // bug-68 third-wave follow-up (2026-06-07 user-reported on
+        // td-35/fr-98): the ANALYZE stage by CLAUDE.md §9 contract has
+        // ZERO source-file edits. Its output is claude's PLAN TEXT —
+        // problem restated, numbered plan with verify clauses,
+        // assumptions. Pre-follow-up the critic-fire required non-
+        // empty diff → analyze always skipped → user's plan text was
+        // never reviewed. User-reported verbatim: "the analyze output,
+        // which might the response from claude, should be provided to
+        // the critic."
+        //
+        // Fix: for analyze stage, if claude emitted substantial
+        // assistant_text this turn, fire the real critic with the text
+        // (empty diff). The critique.js stageAnalyze prompt already
+        // tells the critic to evaluate the PLAN — no critique.js
+        // changes needed. The 200-char threshold filters trivial
+        // turns (a bare "ok" or empty re-prompt); a real analyze plan
+        // is always > 500 chars.
+        //
+        // For CODE / VERIFY stages, the current diff-required behavior
+        // stays. Those stages SHOULD produce file changes; an empty
+        // diff IS a legitimate skip there. The synthetic skip-verdict
+        // (c941278) covers that case.
+        const claudeText = (session._currentTurnAssistantText || '').trim();
+        if (stage === 'analyze' && claudeText.length >= 200) {
+          console.log(`[bug-68] analyze stage: firing critic on claude's plan text (${claudeText.length} chars, no diff required per §9 analyze contract)`);
+          // Find the plan item for the critique fire — same lookup as
+          // the diff path below.
+          const planArtifactA = rec.artifacts && rec.artifacts.plan;
+          const itemA = planArtifactA && Array.isArray(planArtifactA.items)
+            && planArtifactA.items.find((it) => it.id === active.itemId);
+          if (itemA) {
+            try {
+              const { triggerGeminiCritique } = require('./critique');
+              await triggerGeminiCritique(sessionId, session, itemA, '',
+                claudeText.slice(0, 32000),
+                { isIntermediate: true, stage, changedEntries: [] });
+            } catch (err) {
+              console.error(`[bug-68] analyze-text critic fire failed: ${err.message}`);
+              try {
+                _emitCritiqueSkipNote(sessionId, session, {
+                  stage, itemId: active.itemId, reason: 'handler-exception',
+                  message: `⚠️ Critic call for **analyze** stage crashed: \`${err && err.message ? err.message.slice(0, 200) : 'unknown error'}\`. Try ▶ Run on the plan item again — if the error recurs, check the server log.`,
+                });
+              } catch {}
+            }
+            return;
+          }
+          console.warn(`[bug-68] analyze-text critic fire — item ${active.itemId} not found in rec.artifacts.plan; falling through to diff path`);
+          // Fall through to the existing diff-path so the user at least
+          // sees the item-missing skip note.
+        }
+
         const { listChangedFiles, readDiff } = require('./files');
         const changedInfo = await listChangedFiles(rec.absCwd);
         if (!changedInfo || !Array.isArray(changedInfo.entries) || changedInfo.entries.length === 0) {

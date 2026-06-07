@@ -264,13 +264,17 @@ t('attach.js skip sites transition stageState to awaiting_accept so chat-accept 
   // transitions to awaiting_accept on skip so bug-70 chat-accept
   // handler (which gates on awaiting_accept) works immediately.
   //
-  // Window 10500 chars: enough to cover all 3 transitioning skip
-  // sites. The other 3 silent bail paths (no-session-rec, item-
-  // missing, handler-exception) DO emit chat notes but intentionally
-  // do NOT transition — state is unknown or the item can't be
-  // located, so chat-accept on them wouldn't have a clean target.
+  // Window 14000 chars: enough to cover all 3 transitioning skip
+  // sites + their post-skip transitions. Window grew over follow-ups —
+  // empty-diff now sits at ~12800 chars from handler start (bug-68
+  // third-wave follow-up pushed it down by adding the analyze-stage
+  // text-critic branch BEFORE listChangedFiles). The other 3 silent
+  // bail paths (no-session-rec, item-missing, handler-exception) DO
+  // emit chat notes but intentionally do NOT transition — state is
+  // unknown or the item can't be located, so chat-accept on them
+  // wouldn't have a clean target.
   const at = src.search(/session\.on\(\s*['"]stage-done['"]/);
-  const body = src.slice(at, at + 10500);
+  const body = src.slice(at, at + 14000);
   const re = /_emitCritiqueSkipNote\s*\([\s\S]{0,1500}_transitionStageState\s*\([^)]*['"]awaiting_accept['"]/g;
   const matches = body.match(re) || [];
   assert.ok(matches.length >= 3,
@@ -347,6 +351,26 @@ t('attach.js stage-done handler: 3 transitioning skip sites also call _broadcast
         `non-transitioning skip site '${reason}' must NOT call _broadcastSyntheticSkipVerdict — state is unknown (degraded path); a synthetic verdict would mislead the user. The chat note alone is the correct treatment.`);
     }
   }
+});
+
+t('attach.js stage-done handler: ANALYZE stage fires critic on claude\'s text even when diff is empty (bug-68 third-wave follow-up — td-35/fr-98 in-the-wild repro)', () => {
+  const src = _read('server/src/attach.js');
+  const at = src.search(/session\.on\(\s*['"]stage-done['"]/);
+  assert.ok(at > -1, 'stage-done handler must exist.');
+  const body = src.slice(at, at + 15000);
+  // The analyze-stage-text branch must exist BEFORE the listChangedFiles
+  // path. Locate by the substantive claudeText check.
+  assert.ok(/stage\s*===\s*['"]analyze['"][\s\S]{0,500}claudeText\.length/.test(body),
+    'stage-done handler must check `stage === "analyze" && claudeText.length >= N` BEFORE the listChangedFiles + diff path. Pre-follow-up the analyze stage always skipped because there was no diff (CLAUDE.md §9 mandates zero file changes at analyze) — user\'s plan text was never reviewed.');
+  // It must call triggerGeminiCritique with empty diff (\'\' as the
+  // 4th arg) and isIntermediate:true + stage. The critique.js
+  // stageAnalyze prompt handles the empty STAGED GIT CHANGES section.
+  const analyzeBlock = body.match(/stage\s*===\s*['"]analyze['"][\s\S]{0,3000}/);
+  assert.ok(analyzeBlock, 'analyze-stage block must exist.');
+  assert.ok(/triggerGeminiCritique\s*\([\s\S]{0,200}['"]['"]/.test(analyzeBlock[0]),
+    'analyze-stage critic-fire must pass empty string (\'\') as the diff arg — there is no diff at analyze stage by §9 contract.');
+  assert.ok(/isIntermediate:\s*true/.test(analyzeBlock[0]),
+    'analyze-stage critic-fire must pass isIntermediate:true so the broadcast takes the checkpoint path.');
 });
 
 t('attach.js skip-note text advises typing accept in chat (NOT click verdict HUD)', () => {
