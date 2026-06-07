@@ -1,12 +1,17 @@
 // Gemini critic wrapper. The model + sampling config below were
-// last reviewed 2026-06-02 after `gemini-1.5-pro` returned 404
-// against v1beta (Google retired the 1.5 family). Three calibration
-// changes shipped at the same time:
+// last reviewed 2026-06-07 after `gemini-2.5-flash` started 503ing
+// frequently (Google capacity-shedding on the flash endpoint —
+// "model is currently experiencing high demand" responses on most
+// final-stage fan-out calls). User asked for the bump to -pro as a
+// mitigation. Three calibration changes have shipped historically:
 //
-//   1. Model: `gemini-1.5-pro` → `gemini-2.5-flash`. 2.5 is the
-//      current family; flash is the cost-effective sharp tier
-//      (cheaper + faster than -pro, sharp enough for diff review).
-//      Bump to `gemini-2.5-pro` if verdict quality degrades.
+//   1. Model: `gemini-1.5-pro` → `gemini-2.5-flash` (2026-06-02) →
+//      `gemini-2.5-pro` (2026-06-07). 2.5 is the current family. Pro
+//      runs on a different endpoint that's typically under less load
+//      than flash; cost is ~3-5x per call but verdict quality is
+//      sharper too. Bump BACK to `gemini-2.5-flash` when load on -pro
+//      stops being acceptable (or for cost reasons on a high-traffic
+//      project).
 //   2. Sampling: explicit `temperature: 0.2` (was default 1.0),
 //      `topP: 0.8` (was 0.95). Adversarial code review wants
 //      determinism. Defaults are tuned for creative chat, not
@@ -29,7 +34,7 @@
 //   change if a future critic-prompt change pushes longer.
 const { GoogleGenAI } = require('@google/genai');
 
-const CRITIC_MODEL = 'gemini-2.5-flash';
+const CRITIC_MODEL = 'gemini-2.5-pro';
 // Floor at 4096 to prevent regressing back into the truncation
 // failure mode if someone overrides the env to a small value.
 const CRITIC_MAX_OUTPUT_TOKENS = Math.max(
@@ -67,6 +72,6 @@ async function runCritique(prompt, systemInstruction = '') {
 
 module.exports = {
   id: 'gemini',
-  name: 'Gemini-2.5-Flash',
+  name: 'Gemini-2.5-Pro',
   runCritique,
 };
