@@ -189,7 +189,7 @@ t('server/src/attach.js: stage-done subscriber calls triggerGeminiCritique with 
   // legitimate. 8500 chars catches both the trigger call AND its
   // isIntermediate option, which sits on a separate line ~1200 chars
   // past the function name due to the multi-line call signature.
-  const body = src.slice(at, at + 8500);
+  const body = src.slice(at, at + 9500);
   assert.ok(/triggerGeminiCritique/.test(body),
     'stage-done subscriber must call triggerGeminiCritique (td-33 B).');
   assert.ok(/isIntermediate\s*:\s*true/.test(body),
@@ -206,7 +206,7 @@ t('server/src/attach.js: stage-done subscriber inherits the dispatch-drift filte
   // bug-68 Option B addition 1 follow-up: window bumped 5500 → 8500
   // (same reason as the sibling test above — _emitSentinelReceivedNote
   // insertion pushes baselineDirty filter further down).
-  const body = src.slice(at, at + 8500);
+  const body = src.slice(at, at + 9500);
   assert.ok(/baselineDirty/.test(body),
     'the stage-done subscriber must filter the diff against baselineDirty (matches the dispatch-drift fix from 2026-06-03; without it a checkpoint critique on an active run with unrelated WIP would see the WIP).');
 });

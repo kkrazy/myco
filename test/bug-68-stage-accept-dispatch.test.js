@@ -239,15 +239,51 @@ t('attach.js stage-done handler emits skip-note when critic skips (no changes / 
   const src = _read('server/src/attach.js');
   // The two skip sites in the stage-done handler (no-changes branch +
   // baseline-wip-only branch). Find the handler + assert both skip
-  // sites emit a note. Window of 7000 chars covers the full handler
+  // sites emit a note. Window of 7500 chars covers the full handler
   // including bug-68's added skip-note bodies + their explanatory
-  // comments.
+  // comments + the bug-68 follow-up transition-to-awaiting_accept
+  // calls.
   const at = src.search(/session\.on\(\s*['"]stage-done['"]/);
   assert.ok(at > -1, 'stage-done handler must exist.');
-  const body = src.slice(at, at + 7000);
+  const body = src.slice(at, at + 7500);
   const noteCallCount = (body.match(/_emitCritiqueSkipNote\s*\(/g) || []).length;
   assert.ok(noteCallCount >= 2,
     `stage-done handler must call _emitCritiqueSkipNote at BOTH skip sites (no-changes + baseline-wip-only) — found ${noteCallCount} call(s). Without this the critic-skip is stderr-only and the user sees "verdict didn't show up" with no explanation (bug-68).`);
+});
+
+t('attach.js skip sites transition stageState to awaiting_accept so chat-accept works (bug-68 follow-up — td-35 stuck-stage repro)', () => {
+  const src = _read('server/src/attach.js');
+  // Both skip sites must follow the chat note with
+  // _transitionStageState(..., stage, 'awaiting_accept'). Pre-follow-up
+  // the skip path left stageState at awaiting_verdict (set on sentinel
+  // detection earlier in the handler) — because the awaiting_accept
+  // transition lives in critique.js and the critic never fired for
+  // skips. User-reported on td-35: "I've never seen ✓ Accept Stage in
+  // the verdict HUD either" + "the verdict modal is never shown up".
+  // The fix transitions to awaiting_accept on skip so bug-70 chat-
+  // accept handler (which gates on awaiting_accept) works immediately.
+  const at = src.search(/session\.on\(\s*['"]stage-done['"]/);
+  const body = src.slice(at, at + 7500);
+  // Look for _transitionStageState(...'awaiting_accept'...) calls in
+  // the skip-note regions (one per skip branch).
+  const re = /_emitCritiqueSkipNote\s*\([\s\S]{0,1500}_transitionStageState\s*\([^)]*['"]awaiting_accept['"]/g;
+  const matches = body.match(re) || [];
+  assert.ok(matches.length >= 2,
+    `both skip sites must call _transitionStageState(..., 'awaiting_accept') after the skip note — found ${matches.length} site(s). Without this the chat-accept handler (gated on awaiting_accept) silently no-ops on skips, and the verdict pane never renders (no broadcast). User is stuck with no recovery path (bug-68 follow-up).`);
+});
+
+t('attach.js skip-note text advises typing accept in chat (NOT click verdict HUD)', () => {
+  const src = _read('server/src/attach.js');
+  const at = src.search(/session\.on\(\s*['"]stage-done['"]/);
+  const body = src.slice(at, at + 7500);
+  // The bug-68 follow-up replaced the misleading "click ✓ Accept Stage
+  // in the verdict HUD" text with "type accept in chat" because the
+  // HUD pane doesn't render on skip (no critic broadcast). Both skip
+  // sites should reflect the new advice.
+  assert.ok(!/click\s+\*\*✓\s*Accept Stage\*\*\s+in\s+the\s+verdict\s+HUD/i.test(body),
+    'skip notes must NOT advise "click ✓ Accept Stage in the verdict HUD" — the HUD doesn\'t render on skip (no critic broadcast → no critique-review state). User-reported td-35: "I\'ve never seen ✓ Accept Stage in the verdict HUD either".');
+  assert.ok(/type\s+\*\*accept\*\*\s+in\s+chat/i.test(body),
+    'skip notes must advise "type accept in chat" — the bug-70 chat-accept handler (now reachable after the awaiting_accept transition) is the working recovery path on skip (bug-68 follow-up).');
 });
 
 t('attach.js final-critique site (turn_result IIFE) emits skip-note on baseline-wip-only', () => {

@@ -256,8 +256,21 @@ function _registerExternalSession(sessionId, session) {
           // the sentinel, or accept the skip and move on.
           _emitCritiqueSkipNote(sessionId, session, {
             stage, itemId: active.itemId, reason: 'no-changes',
-            message: `📋 Critic skipped for **${stage}** stage — no file changes detected at this checkpoint. If you intended for this stage to produce changes, make them now and re-emit \`[stage: ${stage} done]\`. Otherwise click **✓ Accept Stage** in the verdict HUD to continue.`,
+            message: `📋 Critic skipped for **${stage}** stage — no file changes detected at this checkpoint. If you intended for this stage to produce changes, make them now and re-emit \`[stage: ${stage} done]\`. Otherwise type **accept** in chat to proceed to the next stage.`,
           });
+          // bug-68 follow-up (2026-06-07): transition stageState to
+          // awaiting_accept. Pre-follow-up the skip path left the item
+          // at awaiting_verdict (set on sentinel detection at line ~245
+          // above) — because the awaiting_accept transition lives in
+          // critique.js and the critic never fired. The bug-70 chat-
+          // accept handler gates on `awaiting_accept`, so typing
+          // "accept" in chat silently no-op'd, and no verdict pane
+          // rendered either (no broadcast). User-reported on td-35
+          // verbatim: "I've never seen ✓ Accept Stage in the verdict
+          // HUD either" + "the verdict modal is never shown up". With
+          // the skip → awaiting_accept transition, chat-accept works
+          // immediately + claude advances via bug-68's dispatch wire.
+          _transitionStageState(sessionId, session, active.itemId, stage, 'awaiting_accept');
           return;
         }
         const baselineDirty = (active.baselineDirty instanceof Set) ? active.baselineDirty : new Set();
@@ -268,8 +281,12 @@ function _registerExternalSession(sessionId, session) {
           // already dirty at run-start" case (the dispatch-drift filter).
           _emitCritiqueSkipNote(sessionId, session, {
             stage, itemId: active.itemId, reason: 'baseline-wip-only',
-            message: `📋 Critic skipped for **${stage}** stage — all dirty paths were already modified before this run started (baseline WIP). The critic couldn't attribute any changes to this stage. If your changes for this stage haven't been made yet, make them and re-emit \`[stage: ${stage} done]\`.`,
+            message: `📋 Critic skipped for **${stage}** stage — all dirty paths were already modified before this run started (baseline WIP). The critic couldn't attribute any changes to this stage. If your changes for this stage haven't been made yet, make them and re-emit \`[stage: ${stage} done]\`. Otherwise type **accept** in chat to proceed to the next stage.`,
           });
+          // bug-68 follow-up (2026-06-07): same fix as the no-changes
+          // skip site above — transition to awaiting_accept so chat-
+          // accept works + claude advances via the bug-68 dispatch wire.
+          _transitionStageState(sessionId, session, active.itemId, stage, 'awaiting_accept');
           return;
         }
         let fullDiff = '';
