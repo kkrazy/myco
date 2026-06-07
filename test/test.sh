@@ -3239,6 +3239,20 @@ test_chat_window() {
   # is empty (explicit non-empty still wins so a user can re-ask with
   # a different question).
   node_test_result test/bug-71-critic-retry-preserves-userprompt.test.js "test/bug-71-critic-retry-preserves-userprompt.test.js (4 cases)"
+  # bug-72 (reopen dismissed verdict modal): ✗ Dismiss left the user
+  # with no live affordance to bring the verdict back — only a page
+  # refresh (which triggers fr-98's attach-replay) would recover it,
+  # and only when stageState was still pending. Local-only fix:
+  # btnDismiss snapshots state.lastDismissedVerdict before nulling
+  # state.critiqueReview; _renderVerdictPanel renders a compact
+  # `↻ Reopen verdict` pill in the same composer-verdict-pane slot
+  # when lastDismissedVerdict is set + critiqueReview is null; clicking
+  # the pill restores critiqueReview from the snapshot, sets
+  # awaitingVerdict, clears the snapshot, and re-renders. The
+  # critique-review broadcast handler clears the snapshot on supersede.
+  # Server-side state (rec._lastCritique + item.meta.lastCriticReview)
+  # already survives Dismiss — no server changes needed.
+  node_test_result test/bug-72-reopen-dismissed-verdict.test.js "test/bug-72-reopen-dismissed-verdict.test.js (7 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

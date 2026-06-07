@@ -9098,6 +9098,43 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: #6e7681;
   border-color: rgba(139, 148, 158, 0.25);
 }
+/* bug-72: Reopen pill — compact affordance that replaces the empty
+   composer-verdict-pane slot when state.lastDismissedVerdict is set.
+   Visually distinct from .verdict-btn-* (which are inline action
+   buttons inside the verdict card): the pill is a STANDALONE
+   single-button surface that lives in the panel slot. Lavender
+   identity matches verdict-intermediate-badge to reinforce "critic
+   surface" color coding. */
+.verdict-reopen-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 16px;
+  background: rgba(187, 134, 252, 0.10);
+  border: 1px solid rgba(187, 134, 252, 0.45);
+  color: #d2a8ff;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  margin: 6px 0;
+}
+.verdict-reopen-pill:hover {
+  background: rgba(187, 134, 252, 0.18);
+  border-color: rgba(187, 134, 252, 0.70);
+}
+.verdict-reopen-pill-icon {
+  font-size: 14px;
+}
+.verdict-reopen-pill-label {
+  font-weight: 600;
+}
+.verdict-reopen-pill-meta {
+  opacity: 0.75;
+  font-family: monospace;
+  font-size: 11px;
+}
 .verdict-title.error {
   color: #ffa657;
 }

@@ -128,15 +128,27 @@ t('web/public/app.js: .verdict-user-question renders BEFORE .verdict-critique (v
   const src = _read('web/public/app.js');
   const at = src.search(/function\s+_renderVerdictPanel\s*\(\)/);
   const body = sliceFn(src, at);
-  // Locate the panel.innerHTML template literal — both classes must
-  // appear there, with .verdict-user-question before .verdict-critique.
-  const tmpl = body.match(/panel\.innerHTML\s*=\s*`[\s\S]{0,2000}`/);
-  assert.ok(tmpl, '_renderVerdictPanel must contain panel.innerHTML = `...`.');
+  // Locate the panel.innerHTML template literal that contains the
+  // VERDICT CARD (the one with .verdict-critique). _renderVerdictPanel
+  // may have OTHER panel.innerHTML assignments earlier in the function
+  // for orthogonal affordances (e.g. bug-72's `↻ Reopen verdict` pill,
+  // which renders when state.lastDismissedVerdict is set + no active
+  // review). We want THIS test to lock the question-before-critique
+  // ordering inside the verdict card template specifically — not the
+  // first template it happens to find.
+  //
+  // Find all `panel.innerHTML = \`...\`` literals and pick the one
+  // containing verdict-critique. The non-greedy quantifier `?` and the
+  // closing backtick + lookahead avoid swallowing across multiple
+  // assignments.
+  const tmplMatches = [...body.matchAll(/panel\.innerHTML\s*=\s*`[\s\S]*?`/g)];
+  const tmpl = tmplMatches.find((m) => /verdict-critique/.test(m[0]));
+  assert.ok(tmpl, '_renderVerdictPanel must contain a panel.innerHTML = `...` template literal that includes the .verdict-critique class.');
   const tmplBody = tmpl[0];
   const uqAt = tmplBody.search(/userQuestionHtml|verdict-user-question/);
   const vcAt = tmplBody.search(/verdict-critique/);
-  assert.ok(uqAt > -1, '.verdict-user-question must appear in the panel.innerHTML template.');
-  assert.ok(vcAt > -1, '.verdict-critique must appear in the panel.innerHTML template.');
+  assert.ok(uqAt > -1, '.verdict-user-question must appear in the verdict-card panel.innerHTML template.');
+  assert.ok(vcAt > -1, '.verdict-critique must appear in the verdict-card panel.innerHTML template.');
   assert.ok(uqAt < vcAt,
     `.verdict-user-question (or its variable userQuestionHtml) must come BEFORE .verdict-critique in the template — visual order matches user's mental model "I asked → the critic replied". Found question at ${uqAt}, critique at ${vcAt}.`);
 });

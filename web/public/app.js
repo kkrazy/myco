@@ -7577,6 +7577,12 @@ function _applyStateUpdate(msg) {
     }
     state.awaitingVerdict = true;
     state.critiqueReview = msg;
+    // bug-72: a fresh critique-review supersedes any prior
+    // dismissed-verdict snapshot — restoring the old one would be
+    // confusing once a newer verdict has landed. Clearing here keeps
+    // the Reopen pill scoped to "the LAST thing I dismissed, until
+    // something new arrives."
+    state.lastDismissedVerdict = null;
     _renderVerdictPanel();
     _updateTaskHUD();
     return;
@@ -7901,6 +7907,48 @@ function _renderVerdictPanel() {
 
   const review = state.critiqueReview;
   if (!review || !state.awaitingVerdict) {
+    // bug-72: when there's no active review BUT the user previously
+    // dismissed a verdict (state.lastDismissedVerdict), render a
+    // compact `↻ Reopen verdict` pill in the same panel slot so the
+    // user has a live affordance to bring the dismissed verdict back.
+    // Without this, Dismiss is irreversible until page refresh
+    // (fr-98 attach-replay covers the persistent case, but it's
+    // neither discoverable nor live). Local-only: only the device
+    // that dismissed sees the pill; other devices stay in the
+    // post-dismiss state.
+    const dismissed = state.lastDismissedVerdict;
+    if (dismissed) {
+      const stageLabel = (dismissed.stage || 'final').toString();
+      const itemId = String(dismissed.itemId || 'unknown');
+      const stageBadge = dismissed.isIntermediate
+        ? `CHECKPOINT: ${stageLabel}`
+        : stageLabel === 'final' || !dismissed.stage
+          ? 'final verdict'
+          : `${stageLabel} verdict`;
+      panel.hidden = false;
+      panel.innerHTML =
+        `<button class="verdict-reopen-pill" type="button" title="Bring back the dismissed verdict for ${escHtml(itemId)} (${escHtml(stageBadge)})">` +
+          `<span class="verdict-reopen-pill-icon">↻</span>` +
+          `<span class="verdict-reopen-pill-label">Reopen verdict</span>` +
+          `<span class="verdict-reopen-pill-meta">${escHtml(stageBadge)} · ${escHtml(itemId)}</span>` +
+        `</button>`;
+      const btnReopen = panel.querySelector('.verdict-reopen-pill');
+      if (btnReopen) {
+        btnReopen.addEventListener('click', () => {
+          // bug-72: restore inverse of Dismiss — re-set awaitingVerdict,
+          // re-populate critiqueReview from the snapshot, clear the
+          // snapshot so a future Dismiss doesn't see stale state, and
+          // re-render the full pane.
+          const restoring = state.lastDismissedVerdict;
+          if (!restoring) return;
+          state.critiqueReview = restoring;
+          state.awaitingVerdict = true;
+          state.lastDismissedVerdict = null;
+          _renderVerdictPanel();
+        });
+      }
+      return;
+    }
     panel.hidden = true;
     panel.innerHTML = '';
     return;
@@ -8244,6 +8292,16 @@ function _renderVerdictPanel() {
       // Intermediate critiques are advisory — clicking dismiss just
       // hides the panel; the queue wasn't paused so there's nothing
       // to resume.
+      //
+      // bug-72: snapshot the verdict BEFORE nulling so the Reopen
+      // pill (rendered by _renderVerdictPanel when
+      // lastDismissedVerdict && !critiqueReview) has the body to
+      // restore. Local-only — other devices receive the dismiss
+      // broadcast and clear their pane without a reopen affordance
+      // (they can refresh to get fr-98's attach-replay if stageState
+      // is still pending). Cleared on Reopen-click consumption or on
+      // a fresh critique-review broadcast (whichever comes first).
+      state.lastDismissedVerdict = review;
       state.awaitingVerdict = false;
       state.critiqueReview = null;
       _renderVerdictPanel();

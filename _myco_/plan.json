@@ -5710,14 +5710,137 @@
       "addedAt": "2026-06-07T10:16:58.582Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "10fdeb7ca7e4",
+          "user": "claude",
+          "text": "✓ Pausing for the critic verdict + your accept signal (`✓ Accept Stage`, or chat-accept like \"proceed\" / \"code stage\"). If you want a differe… · 152.3s · $1.4981 · 14↓/9444↑",
+          "ts": "2026-06-07T11:21:34.146Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-07T11:19:01.799Z"
+          }
+        },
+        {
+          "id": "8091192daac3",
+          "user": "claude",
+          "text": "✓ Code stage summary · 291.2s · $4.5659 · 28↓/19420↑",
+          "ts": "2026-06-07T11:27:27.930Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-07T11:19:01.799Z"
+          }
+        },
+        {
+          "id": "dcfa76f4e1c1",
+          "user": "claude",
+          "text": "✓ Yes — that toast means the server detected my `[stage: code done]` sentinel and kicked off the Gemini call; the verdict pane is supposed to… · 60.1s · $4.7812 · 6↓/3939↑",
+          "ts": "2026-06-07T11:31:17.211Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-07T11:19:01.799Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "should have a way to bring up the verdict modal again if I click \"dismiss\"",
-        "rewritten": true
+        "rewritten": true,
+        "stageState": {
+          "stage": "analyze",
+          "status": "awaiting_accept",
+          "updatedAt": "2026-06-07T11:21:43.918Z",
+          "history": [
+            {
+              "stage": "analyze",
+              "status": "in_progress",
+              "ts": "2026-06-07T11:19:01.828Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-07T11:21:30.176Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_accept",
+              "ts": "2026-06-07T11:21:43.918Z"
+            }
+          ]
+        },
+        "lastCriticReview": {
+          "kind": "critique-review",
+          "itemId": "bug-72",
+          "hasDisagreement": false,
+          "isError": false,
+          "isIntermediate": true,
+          "isRetry": false,
+          "stage": "analyze",
+          "critique": "✓ AGREED\n\nThis is a solid and well-reasoned plan that directly addresses the user's reported problem: the inability to reopen a dismissed verdict modal.\n\n- **Correct Root Cause:** The plan correctly identifies that the necessary data is already preserved on the server and the issue is purely a missing client-side UI affordance.\n- **Sound Solution:** The proposed solution of adding a \"Reopen verdict\" pill in the chat composer is a sensible, low-impact approach. The plan clearly outlines the client-side state management required to show, hide, and handle clicks on this new pill.\n- **Handles Edge Cases:** The plan thoughtfully considers what should happen when a new verdict arrives from the server, ensuring the \"reopen\" pill for a stale verdict is correctly removed.\n- **Clear Verification:** Each step includes a specific verification clause, which will make it easy to confirm during the code stage that the implementation matches the plan.",
+          "diff": "",
+          "criticName": "Gemini-2.5-Pro",
+          "criticId": "gemini",
+          "userPrompt": "",
+          "specialties": [
+            {
+              "id": "general",
+              "name": "General QA",
+              "isError": false,
+              "isAgreed": true
+            }
+          ],
+          "broadcastAt": "2026-06-07T11:21:43.899Z"
+        }
       },
-      "description": "**Problem:** Once the verdict modal is dismissed, there's no affordance to bring it back.\n**Expected:** A control (button, menu item, or shortcut) to re-open the verdict modal after dismissal.\n**Actual:** Clicking \"Dismiss\" closes the modal permanently with no way to reopen it."
+      "description": "**Problem:** Once the verdict modal is dismissed, there's no affordance to bring it back.\n**Expected:** A control (button, menu item, or shortcut) to re-open the verdict modal after dismissal.\n**Actual:** Clicking \"Dismiss\" closes the modal permanently with no way to reopen it.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-07T11:21:34.146Z",
+          "startedAt": "2026-06-07T11:19:01.799Z",
+          "summary": "152.3s · 14→9444 tok",
+          "result": "Pausing for the critic verdict + your accept signal (`✓ Accept Stage`, or chat-accept like \"proceed\" / \"code stage\"). If you want a different surface than option A (chat-composer pill), say so on the verdict pane or in chat and I'll redo analyze."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-07T11:27:27.930Z",
+          "startedAt": "2026-06-07T11:19:01.799Z",
+          "summary": "291.2s · 28→19420 tok",
+          "result": "### Code stage summary\n\n**Files changed:**\n1. **`test/bug-72-reopen-dismissed-verdict.test.js`** (new, 7 cases) — static-grep guards locking the contract: Dismiss snapshot, pill rendering, click-handler restoration, supersede-clear, CSS ruleset, marker comment. 7/7 red against unfixed code → 7/7 green after fix.\n2. **`web/public/app.js`** — three surgical edits inside `_renderVerdictPanel`:\n   - btnDismiss handler: `state.lastDismissedVerdict = review` before the existing nullings.\n   - Early-return path: instead of always hiding the pane when there's no active review, render an `↻ Reopen verdict` pill (with stage badge + itemId) when `state.lastDismissedVerdict` is set. Pill click restores the state and re-renders.\n   - critique-review broadcast handler: `state.lastDismissedVerdict = null` after `state.critiqueReview = msg` so a newer verdict supersedes the snapshot.\n3. **`web/public/styles.css`** — `.verdict-reopen-pill` + 3 sub-class rules. Lavender identity matching `.verdict-intermediate-badge` for critic-surface color coding.\n4. **`test/test.sh`** — wired the new 7-case test next to bug-71.\n\n**No server-side changes** — confirmed in analyze: `rec._lastCritique` and `item.meta.lastCriticReview` both survive Dismiss already.\n\n**Done-criteria check:**\n- ✅ Production source edited per the analyzed plan; no scope creep.\n- ✅ Regression test would have caught the original problem (red 7/7 → green 7/7).\n- ✅ Test passes locally; wired into test.sh.\n\n[stage: code done]\n\nPausing for the code-stage critic verdict + your accept signal. The diff is small (3 client-side files: app.js handler/render edits + styles.css ruleset + test). If the critic 503s, the code is reviewable directly: pill HTML at app.js around `_renderVerdictPanel`, click handler immediately below, Dismiss snapshot at `btnDismiss` handler."
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-07T11:31:17.211Z",
+          "startedAt": "2026-06-07T11:19:01.799Z",
+          "summary": "60.1s · 6→3939 tok",
+          "result": "Yes — that toast means the server detected my `[stage: code done]` sentinel and kicked off the Gemini call; the verdict pane is supposed to appear once the critic returns (usually within 30s, sometimes longer on pro). If you waited ~60s and nothing showed up, that's a real bug.\n\n**Most likely causes, in rough order:**\n\n1. **Critic 503/error swallowed silently.** Pro is on a different endpoint than flash but still has capacity dips. Normally an error verdict pane WOULD render with isError:true + the ↻ Retry button — but if the broadcast got filtered or the panel was hidden by a state race, you'd see nothing.\n\n2. **`bug-61` dropped the verdict as a phantom-unresolved.** This guard at `app.js:7540-7556` silently drops incoming intermediate critique-reviews when `state.critiqueReview` is already set + unresolved. Given the *stage-accept* misclassification bug we've been seeing all session (the repeated `[stage-accepted: code→code]` and `[stage-accept]` synthetic prompts), it's plausible some bogus prior signal left phantom state that ate the new verdict.\n\n3. **Critic actually still running.** Gemini 2.5 *pro* takes much longer than flash — 30-60s on the heavy code-stage prompt is normal. If you didn't wait long enough, that explains it cleanly.\n\n4. **Server-side detected the sentinel was dropped per bug-61.** When stageState is already `awaiting_verdict` or `awaiting_accept`, the server PHYSICALLY drops a 2nd sentinel and logs `[stage-sentinel] dropping` — but it still emits the \"Code sentinel received\" toast first? That would be a contract violation worth flagging.\n\n**What I'd like to do:**\n\n1. **Capture this as a `/bug` plan item now** — \"code-stage critic verdict pane never appears after 'Code sentinel received' toast.\" That gives us a stable artifact + lets me write the regression test once we trace the cause.\n2. **Pull recent server logs** via `./scripts/collect-logs.sh` to confirm whether the Gemini call returned + the broadcast fired. That tells us \"client droppe"
+        }
+      ]
+    },
+    {
+      "id": "bug-73",
+      "text": "Code-stage critic verdict pane never appears after 'Code sentinel received' toast — server confirms sentinel detection and critic fire, but the verdict pane never renders client-side. Observed 2026-06-07 mid-session on bug-72 code-stage critique (right after the gemini-2.5-pro switch landed). Hypotheses: (1) critic 503 error verdict silently dropped by client filter, (2) bug-61 phantom-unresolved guard ate the new broadcast — likely related to the repeated stray [stage-accepted: code→code] / [stage-accept] synthetic prompts firing all session (see also: stage-accept-on-closed-run bug), (3) Gemini 2.5 pro simply slower than expected (~30-60s on heavy prompts). Need: server-log evidence (Gemini call return value, broadcast firing, sentinel-drop log) + a regression test asserting the critique-review broadcast reaches the client and renders within N seconds of the sentinel.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-07T11:32:47.906Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "bug-74",
+      "text": "Chat parser misclassifies non-accept text as a stage-accept signal, firing synthetic prompts on closed runs. Repro this session: dozens of stray '[stage-accepted: code→code]' (note: malformed same-stage→same-stage arrow — the synthetic template at attach.js:2840 expects distinct stages) and '[stage-accept] User accepted the analyze stage' messages arrived through the chat after bug-71 ran to completion, none triggered by an actual user accept button click. Likely either: (a) the chat-accept phrase parser at attach.js classifying ordinary words ('proceed', 'accept', etc.) in ordinary conversation as accept signals, or (b) a stale verdict-pane state on a closed run still WebSocket-attached and firing synthetic accept clicks. Expected: accept signals fire only on actual user actions (button click or unambiguous chat-accept phrase like 'accept' / 'accept stage' on a line by itself, scoped to an active stage). Stage transitions on closed runs should be no-ops with logging. Add a regression test that simulates a chat message containing 'accept' inside a sentence ('I accept that this is hard') and confirms NO synthetic dispatch fires.",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-07T11:32:47.906Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
     }
   ],
   "updatedAt": "2026-06-07T15:36:10.713Z"
