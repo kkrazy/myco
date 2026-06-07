@@ -3225,6 +3225,20 @@ test_chat_window() {
   # note ("can't re-ask critic on a skipped stage — make changes and
   # re-emit [stage: X done] or click ✓ Accept Stage").
   node_test_result test/bug-75-ask-critic-scoped-to-current-stage.test.js "test/bug-75-ask-critic-scoped-to-current-stage.test.js (6 cases)"
+  # bug-71 (critic-retry user-question preservation): the user's follow-
+  # up question typed into the verdict pane's textarea (bug-52 / bug-53
+  # wiring) silently dropped on ↻ Retry after a critic-model error
+  # (Gemini 503 / rate-limit). Root cause: triggerGeminiCritique cached
+  # diff / claudeOutput / changedEntries on rec._lastCritique but NOT
+  # userPrompt; the verdict pane re-renders the textarea EMPTY on every
+  # critique-review broadcast; the ↻ Retry click read the empty textarea
+  # and POSTed userPrompt:''. retryLastCritique forwarded the empty
+  # value → critic re-fired without the original question. Fix:
+  # triggerGeminiCritique now caches userPrompt in rec._lastCritique;
+  # retryLastCritique falls back to last.userPrompt when opts.userPrompt
+  # is empty (explicit non-empty still wins so a user can re-ask with
+  # a different question).
+  node_test_result test/bug-71-critic-retry-preserves-userprompt.test.js "test/bug-71-critic-retry-preserves-userprompt.test.js (4 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

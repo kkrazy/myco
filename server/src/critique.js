@@ -266,6 +266,14 @@ async function triggerGeminiCritique(sessionId, session, item, diff, claudeOutpu
       // td-33 r2: cache the changed-entries list so a Retry uses the
       // same file-context enrichment as the original fire.
       changedEntries: opts && Array.isArray(opts.changedEntries) ? opts.changedEntries : [],
+      // bug-71: cache the user's follow-up question so retryLastCritique
+      // can fall back to it when the ↻ Retry click sends an empty
+      // textarea (the verdict pane re-renders fresh on every critique-
+      // review broadcast → textarea is empty on error verdicts even
+      // though the client sees the `💬 You asked:` block above it).
+      // Without this slot, a rate-limit / 503 error verdict silently
+      // dropped the original question on retry — see bug-71 plan item.
+      userPrompt: userFollowupRaw,
       firedAt: new Date().toISOString(),
     };
     sessionsMod.saveStore();
@@ -615,11 +623,24 @@ async function retryLastCritique(sessionId, session, opts = {}) {
     }
     return false;
   }
+  // bug-71: resolve userPrompt with cache-fallback semantics.
+  // Explicit non-empty opts.userPrompt wins (so a user can re-ask
+  // with a DIFFERENT question by typing into the textarea before
+  // clicking ↻ Retry / 💬 Ask Critic). Empty / missing falls back
+  // to the cached last.userPrompt — that's the bug-71 fix: when the
+  // critic errors (rate-limit / 503), the verdict pane re-renders
+  // with an empty textarea, the ↻ Retry click POSTs userPrompt:'',
+  // and pre-fix the original question silently dropped. The cache
+  // is the only surviving source of truth.
+  const optsHasUserPrompt = opts && typeof opts.userPrompt === 'string' && opts.userPrompt.trim().length > 0;
+  const resolvedUserPrompt = optsHasUserPrompt
+    ? opts.userPrompt
+    : (typeof last.userPrompt === 'string' ? last.userPrompt : '');
   await triggerGeminiCritique(sessionId, session, last.itemSnapshot, last.diff, last.claudeOutput, {
     isIntermediate: last.isIntermediate,
     stage: last.stage,
     isRetry: true,
-    userPrompt: opts && typeof opts.userPrompt === 'string' ? opts.userPrompt : '',
+    userPrompt: resolvedUserPrompt,
     // td-33 r2: pass through the cached changedEntries so retries
     // get the same file-context enrichment as the original fire.
     changedEntries: Array.isArray(last.changedEntries) ? last.changedEntries : [],

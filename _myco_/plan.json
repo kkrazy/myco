@@ -5732,15 +5732,99 @@
       "addedAt": "2026-06-07T09:08:44.803Z",
       "addedBy": "kkrazy",
       "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "b92dec08beec",
+          "user": "claude",
+          "text": "✓ Analyze stage is done. I'm pausing here per the 3-stage discipline — waiting for the critic verdict + your accept signal (`✓ Accept Stage` … · 216.5s · $1.6873 · 44↓/13682↑",
+          "ts": "2026-06-07T10:13:20.182Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-07T10:09:41.729Z"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "when there is an error in the critic model due to rate limit or other reasonse, the retry lost the user questions.",
+        "rewritten": true,
+        "stageState": {
+          "stage": "analyze",
+          "status": "awaiting_accept",
+          "updatedAt": "2026-06-07T10:13:34.303Z",
+          "history": [
+            {
+              "stage": "analyze",
+              "status": "in_progress",
+              "ts": "2026-06-07T10:09:41.753Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-07T10:13:15.119Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_accept",
+              "ts": "2026-06-07T10:13:34.303Z"
+            }
+          ]
+        },
+        "lastCriticReview": {
+          "kind": "critique-review",
+          "itemId": "bug-71",
+          "hasDisagreement": false,
+          "isError": false,
+          "isIntermediate": true,
+          "isRetry": true,
+          "stage": "analyze",
+          "critique": "✓ AGREED\nThe plan accurately identifies the root cause of the `userPrompt` being dropped on retry: it's not persisted in the `_lastCritique` cache. The proposed surgical fix directly addresses this by adding the `userPrompt` to the cache and implementing a server-side fallback to retrieve it if the client sends an empty prompt on retry. The verification steps are appropriate and will effectively prove the fix.",
+          "diff": "",
+          "criticName": "Gemini-2.5-Flash",
+          "criticId": "gemini",
+          "userPrompt": "",
+          "specialties": [
+            {
+              "id": "general",
+              "name": "General QA",
+              "isError": false,
+              "isAgreed": true
+            }
+          ],
+          "broadcastAt": "2026-06-07T10:13:34.288Z"
+        }
+      },
+      "description": "**Problem:** When the critic model fails (e.g., rate limit), the retry path loses the original user question.\n**Expected:** Retry after a critic-model error preserves and resubmits the original user question.\n**Actual:** The user question is lost on retry, so the retried call runs without it.\n**Context:** Triggered by critic model errors including rate-limit responses and other failure modes.",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-07T10:13:20.182Z",
+          "startedAt": "2026-06-07T10:09:41.729Z",
+          "summary": "216.5s · 44→13682 tok",
+          "result": "Analyze stage is done. I'm pausing here per the 3-stage discipline — waiting for the critic verdict + your accept signal (`✓ Accept Stage` button, or \"accept\" / \"proceed\" / \"code stage\" in chat) before moving to the code stage. If you want me to look at anything specific in the analyze plan first, type it into the verdict pane's `💬 Ask Critic` textarea."
+        }
+      ]
+    },
+    {
+      "id": "bug-72",
+      "text": "No way to reopen verdict modal after clicking \"Dismiss\"",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-07T10:16:58.582Z",
+      "addedBy": "kkrazy",
+      "source": "user",
       "voters": [],
       "comments": [],
       "meta": {
         "rewriteRequested": "long",
-        "originalText": "when there is an error in the critic model due to rate limit or other reasonse, the retry lost the user questions.",
+        "originalText": "should have a way to bring up the verdict modal again if I click \"dismiss\"",
         "rewritten": true
       },
-      "description": "**Problem:** When the critic model fails (e.g., rate limit), the retry path loses the original user question.\n**Expected:** Retry after a critic-model error preserves and resubmits the original user question.\n**Actual:** The user question is lost on retry, so the retried call runs without it.\n**Context:** Triggered by critic model errors including rate-limit responses and other failure modes."
+      "description": "**Problem:** Once the verdict modal is dismissed, there's no affordance to bring it back.\n**Expected:** A control (button, menu item, or shortcut) to re-open the verdict modal after dismissal.\n**Actual:** Clicking \"Dismiss\" closes the modal permanently with no way to reopen it."
     }
   ],
-  "updatedAt": "2026-06-07T09:08:50.768Z"
+  "updatedAt": "2026-06-07T10:17:04.110Z"
 }
