@@ -8030,6 +8030,28 @@ function _renderVerdictPanel() {
       `<textarea id="verdict-user-prompt-input" class="verdict-user-prompt-input" placeholder="e.g. did you check the case where the user is offline? did you consider rate limits on the retry button?" rows="2" maxlength="2048"></textarea>` +
     `</div>`;
 
+  // bug-69: when this verdict is a retry that carried the user's
+  // follow-up question (via the bug-53 Ask Critic button), render a
+  // distinct "💬 You asked:" block above the critic's verdict body
+  // so the user has a clear visual record of what they asked + what
+  // the critic answered. Pre-bug-69 the question lived only in the
+  // critic's PROMPT (server-side) — after the retry broadcast came
+  // back, only Gemini's response was rendered + the question was lost.
+  // User-reported: "User follow-up questions in the verdict panel are
+  // hard to read and poorly grouped with the original message."
+  //
+  // Only renders when review.userPrompt is a non-empty string. escHtml
+  // is required — the question is raw user input + must be HTML-safe.
+  // The block sits ABOVE .verdict-critique (visual order: question →
+  // answer matches the user's mental model "I asked, the critic
+  // replied"). fr-98 persistence covers it automatically.
+  const userQuestionHtml = (review.userPrompt && String(review.userPrompt).trim())
+    ? `<div class="verdict-user-question">` +
+        `<div class="verdict-user-question-label">💬 You asked:</div>` +
+        `<div class="verdict-user-question-body">${escHtml(String(review.userPrompt).trim())}</div>` +
+      `</div>`
+    : '';
+
   // bug-50 r2: wrap the contents in .verdict-panel-content so the
   // OUTER .chat-composer-verdict-panel becomes a backdrop wrapper +
   // clicks on the backdrop (not the content) can dismiss. The
@@ -8043,6 +8065,7 @@ function _renderVerdictPanel() {
         </div>
         <div style="font-size:11px;color:#8b949e;font-family:monospace;">${escHtml(review.itemId)}${intermediateBadge}</div>
       </div>
+      ${userQuestionHtml}
       <div class="verdict-critique">${formattedCritique}</div>
       ${userPromptHtml}
       <div class="verdict-actions">

@@ -8895,6 +8895,44 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: #7ee787;
 }
 
+/* bug-69: the user's follow-up question (from the bug-53 Ask Critic
+   textarea) is now surfaced ABOVE the verdict body when a retry-with-
+   prompt verdict lands. Pre-bug-69 the question lived only in the
+   server-side critic PROMPT — the rendered pane showed only Gemini's
+   response, with no record of what the user asked. User-reported:
+   "User follow-up questions in the verdict panel are hard to read and
+    poorly grouped with the original message."
+   Visual treatment: tinted accent background + left-accent border
+   (matches the accent treatment on .agent-card-assistant_text) so the
+   question stands out as a distinct, scannable block. Label chip
+   borrows the .agent-card-claude chip aesthetics. */
+.verdict-user-question {
+  background: rgba(76, 175, 130, .08);
+  border-left: 3px solid var(--accent, #4cb582);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 6px 0 10px 0;
+  font-size: 12px;
+}
+.verdict-user-question-label {
+  display: inline-block;
+  background: rgba(76, 175, 130, .18);
+  color: rgba(76, 175, 130, 1);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  margin-bottom: 6px;
+}
+.verdict-user-question-body {
+  color: #c9d1d9;
+  font-style: italic;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .verdict-critique {
   font-size: 12px;
   color: #c9d1d9;

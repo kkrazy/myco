@@ -448,6 +448,17 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
   // fr-95: `specialties` carries per-specialty isAgreed/isError so a
   // future client can render per-section badges; today's pane just
   // displays the concatenated markdown body.
+  // bug-69: userPrompt is the user's follow-up question (from the
+  // verdict pane's textarea). Pre-bug-69 the question was used in the
+  // critic's PROMPT only (userFollowupBlock at line ~353) but never
+  // surfaced in the broadcast — so the rendered pane showed Gemini's
+  // response with no record of what the user asked. User-reported:
+  // "User follow-up questions in the verdict panel are hard to read
+  // and poorly grouped with the original message." Including the
+  // userPrompt in the broadcast lets the client render a
+  // ".verdict-user-question" block ABOVE the verdict body, visually
+  // pairing the question with the critic's answer. fr-98 persistence
+  // covers it automatically (the whole broadcastPayload is persisted).
   const broadcastPayload = {
     kind: 'critique-review',
     itemId: item.id,
@@ -460,6 +471,7 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
     diff: diff,
     criticName: critic.name,
     criticId: critic.id,
+    userPrompt: userFollowup || '',     // bug-69: surface the user's follow-up question in the pane
     specialties: sectionVerdicts.map(({ specialty, isError: e, isAgreed: a }) => ({
       id: specialty.id,
       name: specialty.name,

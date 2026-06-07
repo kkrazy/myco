@@ -3187,6 +3187,30 @@ test_chat_window() {
   #     the X accept — try typing 'continue' to nudge" chat note so a
   #     wedged SDK queue is recoverable.
   node_test_result test/bug-68-stage-accept-dispatch.test.js "test/bug-68-stage-accept-dispatch.test.js (27 cases)"
+  # bug-69: verdict panel renders follow-up questions unreadably
+  # alongside original message. Pre-fix the user's follow-up question
+  # (from the bug-53 Ask Critic textarea) was used in the critic's
+  # PROMPT only — the rendered pane showed Gemini's response with no
+  # record of what the user asked. User-reported: "User follow-up
+  # questions in the verdict panel are hard to read and poorly grouped
+  # with the original message."
+  #
+  # Three coupled fixes locked here:
+  #   1. critique.js: broadcastPayload now includes a userPrompt field
+  #      sourced from the existing userFollowup variable (2048-char cap
+  #      preserved).
+  #   2. app.js _renderVerdictPanel: renders .verdict-user-question
+  #      block above .verdict-critique when review.userPrompt is non-
+  #      empty. escHtml for safety. Visual order: question → answer
+  #      matches user's mental model.
+  #   3. styles.css: .verdict-user-question + label + body rules —
+  #      tinted accent background + left-accent border (matches the
+  #      .agent-card-assistant_text treatment) + chip-styled label.
+  #
+  # fr-98 persistence covers the new field automatically — the whole
+  # broadcastPayload is persisted at item.meta.lastCriticReview, so
+  # the question replays on cross-device + post-restart attach.
+  node_test_result test/bug-69-verdict-panel-followup-rendering.test.js "test/bug-69-verdict-panel-followup-rendering.test.js (11 cases)"
   # bug-75 (plan-item bug-69 — file uses bug-75 because
   # bug-69-test-sh-portability.test.sh already exists with unrelated
   # content): clicking 💬 Ask Critic on a critic-SKIPPED verdict must
