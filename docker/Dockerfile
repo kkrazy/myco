@@ -62,6 +62,13 @@ COPY --from=builder /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/l
 COPY --from=builder /usr/local/bin/claude /usr/local/bin/claude
 COPY server/src ./server/src
 COPY web/public ./web/public
+# bug-81: ship the scripts/ dir so docker-entrypoint.sh can register
+# scripts/git-credential-myco.sh as the global git credential.helper.
+# Without this, the entrypoint logs a "credential helper missing"
+# warning at boot and git push falls back to the broken-by-design
+# interactive prompt → "could not read Username" → push fails.
+COPY scripts ./scripts
+RUN chmod +x /app/scripts/*.sh 2>/dev/null || true
 # User manual served by the in-app book-icon modal. Lives at the
 # project root for git/docs visibility; copied into /app/ so the
 # server's GET /USER_MANUAL.md route can read it from inside the

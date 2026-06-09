@@ -5994,7 +5994,26 @@
         "rewritten": true
       },
       "description": "**Problem:** Sidebar lists the same session twice — once under its bare name and once under a `<session directory>/<session name>` path.\n**Expected:** Each session appears once in the sidebar.\n**Actual:** `my-kkrazy-4xf7dcac/omni-cache` is rendered as a separate entry even though it is the same session as `omni-cache`."
+    },
+    {
+      "id": "bug-81",
+      "text": "Git push ignores token login and config-set token",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-09T14:01:08.020Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "not using the token login or the token set in config to push the code",
+        "rewritten": true
+      },
+      "description": "**Problem:** Pushing code does not use the configured authentication token, causing push failures or unexpected credential prompts.\n**Expected:** Push operations authenticate using the token from `token login` or the token set in config.\n**Actual:** Neither the token login nor the config-set token is used when pushing code."
     }
   ],
-  "updatedAt": "2026-06-09T08:37:56.585Z"
+  "updatedAt": "2026-06-09T14:01:14.087Z"
 }

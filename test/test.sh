@@ -3302,6 +3302,21 @@ test_chat_window() {
   # against the helper, the cleanup scan, the boot-time loadStore
   # cleanup, and the importExistingTranscripts skip end-to-end.
   node_test_result test/bug-80-no-nested-session-duplicates.test.js "test/bug-80-no-nested-session-duplicates.test.js (11 cases)"
+  # bug-81 (git credential bridge): pre-fix `git push` ignored tokens
+  # set via /setpat or OAuth — the myco token store at
+  # /data/git-tokens.json was disjoint from git's credential resolution
+  # chain (credential.helper config → ~/.git-credentials → interactive
+  # prompt). Fix: scripts/git-credential-myco.sh implements git's
+  # credential-fill protocol on stdin/stdout, derives myco-user from
+  # cwd (matches /wks/<user>/<session-id>/…), looks up the token with
+  # the same per-repo→user-level precedence as server/src/git-tokens.js,
+  # and emits `username=x-access-token`+`password=<token>` on found.
+  # docker/docker-entrypoint.sh registers it as git's global
+  # credential.helper. Dockerfile gains a COPY scripts/ layer.
+  # 12 cases — static guards on the helper, the entrypoint
+  # registration, and runtime asserts spawning the helper with
+  # synthesized stdin against a tmp token store.
+  node_test_result test/bug-81-git-credential-bridge.test.js "test/bug-81-git-credential-bridge.test.js (12 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

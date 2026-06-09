@@ -117,6 +117,31 @@ else
     git config --global --unset url."https://gitee.com/".insteadOf 2>/dev/null || true
 fi
 
+# bug-81: register the git credential helper that bridges myco's token
+# store (/data/git-tokens.json — managed by server/src/git-tokens.js)
+# to git's credential-fill protocol. Without this, `git push` (or any
+# HTTPS git operation) ignores tokens set via /setpat / OAuth — git
+# falls through to interactive prompt which has no terminal in this
+# container, producing "could not read Username for 'https://github.com'"
+# failures. The helper script derives the myco-user from cwd, picks
+# per-repo PAT first then user-level token, and emits the credential
+# lines git expects. Out-of-session cwds get a clean no-op (safe
+# fallthrough). See scripts/git-credential-myco.sh for the full
+# protocol implementation.
+#
+# `git config --global` writes to /root/.gitconfig which is bind-
+# mounted from $STATE_DIR/home (per CLAUDE.md Deployment §3), so the
+# registration survives container swaps without re-running this line.
+# The `|| true` guards against the unlikely failure (e.g. read-only
+# /root) — the user-visible breakage is no worse than pre-bug-81.
+GIT_CRED_HELPER_PATH="/app/scripts/git-credential-myco.sh"
+if [ -x "$GIT_CRED_HELPER_PATH" ]; then
+    git config --global credential.helper "$GIT_CRED_HELPER_PATH" 2>/dev/null || true
+    echo "[entrypoint] bug-81: registered git credential helper -> $GIT_CRED_HELPER_PATH" >&2
+else
+    echo "[entrypoint] bug-81: WARNING — credential helper missing or not executable at $GIT_CRED_HELPER_PATH" >&2
+fi
+
 # Start Caddy in background
 caddy run --config /etc/caddy/Caddyfile &
 
