@@ -3379,7 +3379,7 @@ test_chat_window() {
   # motion honored for the fade-in. 13 cases — static guards across
   # index.html + app.js + styles.css covering markup, helper, listener
   # wiring, scope checks, blocklist, close affordances, CSS rules.
-  node_test_result test/fr-99-diagram-dblclick-lightbox.test.js "test/fr-99-diagram-dblclick-lightbox.test.js (15 cases)"
+  node_test_result test/fr-99-diagram-dblclick-lightbox.test.js "test/fr-99-diagram-dblclick-lightbox.test.js (19 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

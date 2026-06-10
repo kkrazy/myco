@@ -676,6 +676,34 @@ function _findEnlargeableRoot(target) {
   return null;
 }
 
+// fr-99 follow-up (2026-06-10): zoom state for the lightbox. Reset on
+// every open so a fresh diagram starts at 1× (fit-to-card). Wheel
+// events on the content card adjust this and the cloned element's
+// width %; existing overflow:auto on the card gives scroll/pan when
+// the diagram exceeds the viewport.
+const DIAGRAM_LIGHTBOX_MIN_ZOOM = 0.25;
+const DIAGRAM_LIGHTBOX_MAX_ZOOM = 8;
+const DIAGRAM_LIGHTBOX_ZOOM_STEP = 1.15;       // multiplicative per wheel tick
+let _diagramLightboxZoom = 1;
+
+function _applyDiagramLightboxZoom() {
+  const lightbox = document.getElementById('diagram-lightbox');
+  if (!lightbox) return;
+  const child = lightbox.querySelector('.diagram-lightbox-content > svg, .diagram-lightbox-content > img');
+  if (!child) return;
+  // Use width % so existing CSS overflow:auto on the content card
+  // handles pan-scrolling when zoomed past 100%. SVGs with viewBox
+  // honor width: N% by scaling internally + preserving aspect.
+  child.style.width = (100 * _diagramLightboxZoom) + '%';
+  child.style.height = 'auto';
+  // Update cursor cue: grab when zoom > 1 (overflow likely → pannable
+  // via the card's scrollbars), default otherwise.
+  const content = lightbox.querySelector('.diagram-lightbox-content');
+  if (content) {
+    content.style.cursor = _diagramLightboxZoom > 1 ? 'grab' : 'default';
+  }
+}
+
 function _openDiagramLightbox(srcElement) {
   if (!srcElement) return;
   const lightbox = document.getElementById('diagram-lightbox');
@@ -703,6 +731,13 @@ function _openDiagramLightbox(srcElement) {
   }
   content.innerHTML = '';
   content.appendChild(clone);
+  // Reset zoom for the fresh diagram + reset scroll position so the
+  // user lands at the top-left (relevant if a previous open left the
+  // card scrolled).
+  _diagramLightboxZoom = 1;
+  content.scrollTop = 0;
+  content.scrollLeft = 0;
+  _applyDiagramLightboxZoom();
   lightbox.hidden = false;
 }
 
@@ -758,6 +793,42 @@ function _bindDiagramLightboxClose() {
   // × button.
   const closeBtn = lightbox.querySelector('.diagram-lightbox-close');
   if (closeBtn) closeBtn.addEventListener('click', _closeDiagramLightbox);
+  // fr-99 follow-up (2026-06-10): mouse wheel to zoom. User-requested:
+  // "add capability to enlarge the diagram by scrolling mouse."
+  // Scope: wheel events INSIDE .diagram-lightbox-content. preventDefault
+  // takes over the default page-scroll so the wheel drives zoom only
+  // while the lightbox is open. Cursor-toward zoom keeps the point
+  // under the cursor stationary — feels natural for inspecting a
+  // specific node of a flowchart. When zoomed past 100%, the existing
+  // overflow:auto on the content card gives scroll/pan via the
+  // scrollbars (cursor changes to grab as a discoverability cue).
+  const content = lightbox.querySelector('.diagram-lightbox-content');
+  if (content) {
+    content.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      // Determine zoom direction. deltaY < 0 = scroll-up = zoom in;
+      // deltaY > 0 = scroll-down = zoom out. Same convention as
+      // browser Ctrl+wheel and most image viewers.
+      const factor = e.deltaY < 0 ? DIAGRAM_LIGHTBOX_ZOOM_STEP : 1 / DIAGRAM_LIGHTBOX_ZOOM_STEP;
+      const prevZoom = _diagramLightboxZoom;
+      _diagramLightboxZoom = Math.max(
+        DIAGRAM_LIGHTBOX_MIN_ZOOM,
+        Math.min(DIAGRAM_LIGHTBOX_MAX_ZOOM, prevZoom * factor)
+      );
+      if (_diagramLightboxZoom === prevZoom) return;  // clamped — no-op
+      // Anchor on cursor: keep the point under the cursor in the same
+      // viewport position before + after the zoom. The math: the
+      // scroll position needs to grow by (mouse_offset_in_content) ×
+      // (new_zoom/old_zoom − 1).
+      const rect = content.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left + content.scrollLeft;
+      const cursorY = e.clientY - rect.top + content.scrollTop;
+      const ratio = _diagramLightboxZoom / prevZoom;
+      _applyDiagramLightboxZoom();
+      content.scrollLeft = cursorX * ratio - (e.clientX - rect.left);
+      content.scrollTop = cursorY * ratio - (e.clientY - rect.top);
+    }, { passive: false });    // passive:false required for preventDefault
+  }
 }
 
 // ESC key — close the lightbox if it's open. A document-level keydown

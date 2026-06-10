@@ -237,6 +237,51 @@ t('styles.css: prefers-reduced-motion suppresses any fade-in animation', () => {
   // If no animation, this passes trivially.
 });
 
+// ── 3.5 Scroll-to-zoom (2026-06-10 follow-up) ──
+
+t('app.js: wheel listener exists on .diagram-lightbox-content for scroll-to-zoom', () => {
+  // User-requested: "add capability to enlarge the diagram by
+  // scrolling mouse." Plain wheel inside the lightbox content drives
+  // a zoom factor; preventDefault stops the page-scroll fallthrough.
+  assert.ok(/addEventListener\(\s*['"]wheel['"]/.test(APP_JS),
+    'fr-99 scroll-to-zoom: a wheel event listener must exist for the diagram-lightbox content card.');
+});
+
+t('app.js: wheel handler calls preventDefault to take over page scroll', () => {
+  // Without preventDefault, the wheel event would ALSO scroll the
+  // page underneath the modal — confusing UX. The listener must use
+  // { passive: false } so preventDefault actually works (modern
+  // browsers reject preventDefault on passive listeners).
+  const at = APP_JS.search(/addEventListener\(\s*['"]wheel['"]/);
+  assert.ok(at > -1);
+  const block = APP_JS.slice(at, at + 1500);
+  assert.ok(/preventDefault\s*\(\s*\)/.test(block),
+    'fr-99 scroll-to-zoom: the wheel handler must call e.preventDefault() so the page underneath doesn\'t also scroll.');
+  assert.ok(/passive\s*:\s*false/.test(block),
+    'fr-99 scroll-to-zoom: the wheel listener must be registered with { passive: false } — modern browsers require it for preventDefault on wheel events.');
+});
+
+t('app.js: zoom state has named min/max/step constants (no magic numbers)', () => {
+  // The user-visible behavior depends on these values; tests against
+  // them stay durable through naming changes.
+  assert.ok(/DIAGRAM_LIGHTBOX_MIN_ZOOM/.test(APP_JS),
+    'fr-99 scroll-to-zoom: a DIAGRAM_LIGHTBOX_MIN_ZOOM constant must exist so the floor is greppable + reviewable.');
+  assert.ok(/DIAGRAM_LIGHTBOX_MAX_ZOOM/.test(APP_JS),
+    'fr-99 scroll-to-zoom: a DIAGRAM_LIGHTBOX_MAX_ZOOM constant must exist for the ceiling.');
+  assert.ok(/DIAGRAM_LIGHTBOX_ZOOM_STEP/.test(APP_JS),
+    'fr-99 scroll-to-zoom: a DIAGRAM_LIGHTBOX_ZOOM_STEP constant must exist — multiplicative factor per wheel tick.');
+});
+
+t('app.js: zoom resets to 1 on each open', () => {
+  // A fresh diagram should open at 1× (fit-to-card). Without a reset,
+  // double-clicking a second diagram would inherit the prior diagram\'s
+  // zoom which is confusing.
+  const at = APP_JS.search(/function\s+_openDiagramLightbox\s*\(/);
+  const body = sliceFn(APP_JS, at);
+  assert.ok(/_diagramLightboxZoom\s*=\s*1\b/.test(body),
+    'fr-99 scroll-to-zoom: _openDiagramLightbox must reset _diagramLightboxZoom = 1 on every open so a fresh diagram lands at fit-to-card.');
+});
+
 // ── 4. Provenance marker ──
 
 t('a "fr-99" comment marker appears in app.js, styles.css, and index.html', () => {
