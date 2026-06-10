@@ -428,6 +428,98 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   }
 }
 
+/* fr-99: shared diagram lightbox. Triggered by dblclick on a
+   Mermaid/SVG/PNG diagram inside #chat-messages or #files-view-body.
+   Covers the viewport with a dark backdrop; the cloned diagram lives
+   in .diagram-lightbox-content centered + capped at 90vw × 90vh.
+   Backdrop click + × button + ESC dismiss. */
+.diagram-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;     /* above chat composer, verdict modal, and the rest */
+  background: rgba(0, 0, 0, .85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  cursor: zoom-out;   /* indicate backdrop click closes */
+  animation: fr-99-lightbox-fade-in .15s ease-out;
+}
+.diagram-lightbox[hidden] {
+  display: none;
+}
+.diagram-lightbox-content {
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
+  cursor: default;
+}
+.diagram-lightbox-content > svg,
+.diagram-lightbox-content > img {
+  display: block;
+  max-width: 100%;
+  max-height: 86vh;
+  height: auto;
+  width: auto;
+}
+.diagram-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  background: rgba(255, 255, 255, .08);
+  border: 1px solid rgba(255, 255, 255, .2);
+  color: #f0f6fc;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.diagram-lightbox-close:hover {
+  background: rgba(255, 255, 255, .18);
+  border-color: rgba(255, 255, 255, .35);
+}
+.diagram-lightbox-hint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, .55);
+  font-size: .75rem;
+  letter-spacing: .02em;
+  pointer-events: none;
+}
+@keyframes fr-99-lightbox-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* fr-99: accessibility — honor prefers-reduced-motion by suppressing
+   the fade-in animation. Per CLAUDE.md Best Practices §1 + bug-78 /
+   bug-84 precedent. */
+@media (prefers-reduced-motion: reduce) {
+  .diagram-lightbox {
+    animation: none;
+  }
+}
+
+/* fr-99: enlargeable cursor cue on hover — diagrams in chat + file
+   viewer get a zoom-in cursor so the dblclick affordance is
+   discoverable. The cursor reverts to default on non-enlargeable
+   content (avatars, icons, etc. are blocklisted in the JS handler). */
+#chat-messages .conv-mermaid,
+#chat-messages .conv-mermaid svg,
+#files-view-body svg:not(.ft-svg):not(.chrome-icon),
+#files-view-body img,
+#chat-messages img:not(.avatar):not(.session-avatar):not(.chat-avatar) {
+  cursor: zoom-in;
+}
+
 .empty { padding: 16px; color: var(--muted); font-size: .85rem; }
 
 /* Delete (×) button on a card. Hidden by default. Revealed on hover for

@@ -3366,6 +3366,20 @@ test_chat_window() {
   # client render, CSS rule + runtime asserts on the helper across
   # all stageState + lastCriticReview shapes.
   node_test_result test/bug-84-pending-verdict-sidebar-badge.test.js "test/bug-84-pending-verdict-sidebar-badge.test.js (12 cases)"
+  # fr-99 (diagram dblclick lightbox): Mermaid/SVG/PNG diagrams in
+  # chat pane + file viewer rendered too small with no quick way to
+  # zoom in. Single shared #diagram-lightbox modal at body level;
+  # delegated dblclick listener on document scopes to #chat-messages
+  # OR #files-view-body and matches .conv-mermaid / svg / img via the
+  # _findEnlargeableRoot helper. Avatars + chrome icons explicitly
+  # blocklisted. Cloned element fills .diagram-lightbox-content
+  # (max-width:90vw, max-height:90vh); inline width/height attrs
+  # stripped so CSS scales to fit. Close via × button, backdrop click
+  # (event.target === lightbox-root), or ESC key. prefers-reduced-
+  # motion honored for the fade-in. 13 cases — static guards across
+  # index.html + app.js + styles.css covering markup, helper, listener
+  # wiring, scope checks, blocklist, close affordances, CSS rules.
+  node_test_result test/fr-99-diagram-dblclick-lightbox.test.js "test/fr-99-diagram-dblclick-lightbox.test.js (13 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

@@ -647,6 +647,124 @@ async function renderMermaidInContainer(container) {
   } catch {}
 }
 
+// fr-99: dblclick → enlarge any Mermaid/SVG/PNG diagram inside the
+// chat pane or file viewer. Opens the shared #diagram-lightbox modal
+// with a CLONE of the source element. Strips inline width/height so
+// CSS (.diagram-lightbox-content max-width:90vw/max-height:90vh + the
+// cloned svg/img max-width:100%) scales the diagram to fit the
+// viewport. The original stays in place — keeps scroll position +
+// cross-device sync intact.
+//
+// Walks up from the dblclick target to find the enlargeable root:
+//   · A child <path>/<rect>/etc. inside an <svg> → returns the <svg>
+//   · A child of .conv-mermaid → returns the inner <svg>
+//   · An <img> → returns the img itself
+// Anything else returns null (no-op).
+function _findEnlargeableRoot(target) {
+  if (!target || target.nodeType !== 1) return null;
+  // Walk up to an <svg> root, .conv-mermaid svg, or img.
+  const svg = target.closest('svg');
+  if (svg) return svg;
+  const mermaidWrap = target.closest('.conv-mermaid');
+  if (mermaidWrap) {
+    const inner = mermaidWrap.querySelector('svg');
+    if (inner) return inner;
+  }
+  if (target.tagName === 'IMG' || target.closest('img')) {
+    return target.tagName === 'IMG' ? target : target.closest('img');
+  }
+  return null;
+}
+
+function _openDiagramLightbox(srcElement) {
+  if (!srcElement) return;
+  const lightbox = document.getElementById('diagram-lightbox');
+  const content = lightbox && lightbox.querySelector('.diagram-lightbox-content');
+  if (!lightbox || !content) return;
+  // Clone so the inline render survives. Deep clone preserves SVG
+  // children (paths, text, etc.) AND <img> attributes.
+  const clone = srcElement.cloneNode(true);
+  // Strip inline sizing so the CSS cap takes over. Mermaid SVGs ship
+  // with explicit `width=NNNpx height=NNNpx` attrs that would otherwise
+  // overflow the viewport.
+  clone.removeAttribute('width');
+  clone.removeAttribute('height');
+  if (clone.style) {
+    clone.style.width = '';
+    clone.style.height = '';
+    clone.style.maxWidth = '100%';
+    clone.style.maxHeight = '90vh';
+  }
+  content.innerHTML = '';
+  content.appendChild(clone);
+  lightbox.hidden = false;
+}
+
+function _closeDiagramLightbox() {
+  const lightbox = document.getElementById('diagram-lightbox');
+  if (!lightbox) return;
+  lightbox.hidden = true;
+  const content = lightbox.querySelector('.diagram-lightbox-content');
+  if (content) content.innerHTML = '';
+}
+
+// Delegated dblclick listener. Scope is enforced to inside
+// #chat-messages or #files-view-body (chat pane + file viewer — the
+// two surfaces in the user's request). Avatars + chrome icons are
+// blocklisted so accidental dblclick on a session avatar or chrome
+// SVG doesn't open a giant version.
+document.addEventListener('dblclick', (event) => {
+  const target = event.target;
+  if (!target || target.nodeType !== 1) return;
+  // Scope check: must live in chat pane or file viewer.
+  const scope = target.closest('#chat-messages, #files-view-body');
+  if (!scope) return;
+  // Blocklist: avatars, session chrome, the resize handles, chip
+  // tooltips. Any class containing "avatar" or "icon" (case-insens),
+  // OR the explicit chrome classes, is skipped.
+  if (target.closest('.avatar, .session-avatar, .chat-avatar, [class*="-icon"], .files-tree-resize-handle, .chatpane-resize')) {
+    return;
+  }
+  const enlargeable = _findEnlargeableRoot(target);
+  if (!enlargeable) return;
+  event.preventDefault();
+  _openDiagramLightbox(enlargeable);
+});
+
+// fr-99: backdrop + × close affordances. Folded into the canonical
+// boot block at the end of this file (search "DOMContentLoaded" →
+// bindLoginUi etc.) to avoid registering a second early
+// DOMContentLoaded listener that would shadow the boot block in
+// static-grep tests (plan-open-only-toggle's `src.indexOf` lookup
+// finds the FIRST occurrence — a 2nd early one breaks its check).
+// The helper is callable from anywhere; the boot block invokes it
+// after DOMContentLoaded has fired.
+function _bindDiagramLightboxClose() {
+  const lightbox = document.getElementById('diagram-lightbox');
+  if (!lightbox) return;
+  // Backdrop click — only close when the user clicked the lightbox
+  // root itself (the dark backdrop). Clicks inside .diagram-lightbox-
+  // content (the cloned diagram) must NOT close — the user wants to
+  // inspect the detail.
+  lightbox.addEventListener('click', (e) => {
+    if (e.target === lightbox) _closeDiagramLightbox();
+  });
+  // × button.
+  const closeBtn = lightbox.querySelector('.diagram-lightbox-close');
+  if (closeBtn) closeBtn.addEventListener('click', _closeDiagramLightbox);
+}
+
+// ESC key — close the lightbox if it's open. A document-level keydown
+// is the simplest mechanism; the hidden-attribute check makes it a
+// no-op when the lightbox isn't showing.
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const lightbox = document.getElementById('diagram-lightbox');
+  if (lightbox && !lightbox.hidden) {
+    _closeDiagramLightbox();
+  }
+});
+
 function renderConvMessage(m) {
   if (m.role === 'title') {
     const div = document.createElement('div');
@@ -13569,6 +13687,13 @@ document.addEventListener('DOMContentLoaded', () => {
   bindPlanOpenOnlyToggle();
   bindPlanTypeFilters();
   bindPlanSearch();
+  // fr-99: wire the lightbox backdrop + × close affordances (markup
+  // lives at body level, but the listeners need the DOM to be ready).
+  // Folded here rather than a separate early DOMContentLoaded listener
+  // so the plan-open-only-toggle static guard's
+  // `src.indexOf("addEventListener('DOMContentLoaded'")` lookup keeps
+  // finding THIS canonical boot block first.
+  _bindDiagramLightboxClose();
 });
 
 // Plan tab "Open only" toggle. Default OFF (show all items) so the

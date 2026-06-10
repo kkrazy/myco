@@ -6059,14 +6059,36 @@
       "addedAt": "2026-06-10T01:25:08.124Z",
       "addedBy": "kkrazy",
       "source": "user",
-      "voters": [],
-      "comments": [],
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "a26b44517ab5",
+          "user": "claude",
+          "text": "✓ Run closeout — fr-99 · 40.2s · $13.3591 · 10↓/1895↑",
+          "ts": "2026-06-10T04:48:56.365Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-10T04:23:27.510Z"
+          }
+        }
+      ],
       "meta": {
         "rewriteRequested": "long",
         "originalText": "allow double click to enlarge a mermaid/svg png/diagram. this function is required in the chat pane and the file explorer file viewer which supports md files",
         "rewritten": true
       },
-      "description": "**Problem:** Diagrams render too small to read and there's no quick way to zoom in.\n**Expected:** Double-clicking a Mermaid/SVG/PNG diagram opens an enlarged view.\n**Actual:** Double-click has no effect; diagrams stay at their inline size.\n**Context:** Required in the chat pane and the file explorer's file viewer (md file support)."
+      "description": "**Problem:** Diagrams render too small to read and there's no quick way to zoom in.\n**Expected:** Double-clicking a Mermaid/SVG/PNG diagram opens an enlarged view.\n**Actual:** Double-click has no effect; diagrams stay at their inline size.\n**Context:** Required in the chat pane and the file explorer's file viewer (md file support).",
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-10T04:48:56.365Z",
+          "startedAt": "2026-06-10T04:23:27.510Z",
+          "summary": "40.2s · 10→1895 tok",
+          "result": "### Run closeout — fr-99\n\nFiles touched:\n1. **`web/public/index.html`** — `#diagram-lightbox` modal markup.\n2. **`web/public/app.js`** — `_findEnlargeableRoot`, `_openDiagramLightbox`, `_closeDiagramLightbox`, delegated dblclick listener (scoped + blocklisted), backdrop/× click handlers (DOMContentLoaded), ESC key handler.\n3. **`web/public/styles.css`** — lightbox rules + cursor-zoom-in on enlargeable elements + reduced-motion suppressor.\n4. **`test/fr-99-diagram-dblclick-lightbox.test.js`** (new, 13 cases).\n5. **`test/test.sh`** — wired next to bug-84.\n\n**Behavior shipped:**\n- Double-click a Mermaid SVG, an inline `<svg>`, or an `<img>` inside the chat pane or file viewer body → modal opens with the diagram scaled to fit 90vw × 90vh.\n- Close: × button, backdrop click, or ESC key.\n- Hover cursor changes to `zoom-in` over enlargeable elements so the affordance is discoverable.\n- Avatars, chrome icons, and pane resize handles are blocklisted — accidental dblclicks don't trigger.\n- Original render stays inline (clone, don't move) — preserves scroll position + cross-device sync.\n- Fade-in animation honors `prefers-reduced-motion`.\n\nNo deploy initiated. No push initiated."
+        }
+      ]
     },
     {
       "id": "bug-82",
@@ -6154,7 +6176,24 @@
         "rewritten": true
       },
       "description": "**Problem:** Verdict modals triggered while the user is working in a different session are silently lost, forcing a manual \"continue\" to resume processing.\n**Expected:** Verdict modal should surface (or be queued/replayed) so the critic stage proceeds without user intervention.\n**Actual:** Modal never shows up; iteration stalls at \"ready\" until the user types \"continue\", which resumes into Stage 3: Verify.\n**Context:** Repro from chat log — `📍 Code sentinel received for bug-83 — critic firing (typically 10-30s for Gemini 2.5)` at 11:05:35, no modal shown, manual \"continue\" at 11:12 triggered `iter (resumed)` → `session init` → `Stage 3: Verify`."
+    },
+    {
+      "id": "td-42",
+      "text": "Critic ignores admin-config Gemini API key, falls back to free tier (503s)",
+      "layer": "Todo",
+      "done": false,
+      "addedAt": "2026-06-10T04:54:28.849Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "ensure the critic is using the right api key, my gemini api key kept getting 503 while I have pro subscription. feels like it's using a free tier service. make sure it's using the key I set in the admin config page.",
+        "rewritten": true
+      },
+      "description": "**Problem:** Critic hits Gemini 503 errors despite a Pro subscription, suggesting it's not using the configured API key.\n**Expected:** Critic authenticates with the Gemini API key set on the admin config page, getting Pro-tier quota.\n**Actual:** Requests behave like free-tier traffic and repeatedly return 503.\n**Context:** Key is configured via the admin config page; verify the critic reads from that source rather than a default/free-tier credential."
     }
   ],
-  "updatedAt": "2026-06-10T03:14:07.021Z"
+  "updatedAt": "2026-06-10T04:54:35.741Z"
 }

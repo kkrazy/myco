@@ -824,6 +824,20 @@
     <script src="/vendor/codemirror.bundle.js"></script>
     <script src="/vendor/rough.umd.js"></script>
   </template>
+  <!-- fr-99: shared diagram lightbox. Mermaid SVGs / inline SVGs / PNG
+       <img> tags in #chat-messages or #files-view-body open here on
+       dblclick. Single shared modal for both surfaces — keeps the
+       markup minimal and the state simple. Close affordances: × button,
+       backdrop click, ESC key. The cloned element fills .diagram-
+       lightbox-content (capped at 90vw × 90vh via CSS); inline width/
+       height attrs are stripped on clone so the CSS cap takes over
+       (mermaid SVGs ship with explicit width that would otherwise
+       overflow). -->
+  <div id="diagram-lightbox" class="diagram-lightbox" hidden role="dialog" aria-modal="true" aria-label="Enlarged diagram">
+    <div class="diagram-lightbox-content"></div>
+    <button type="button" class="diagram-lightbox-close" aria-label="Close enlarged diagram">×</button>
+    <div class="diagram-lightbox-hint" aria-hidden="true">ESC or click outside to close</div>
+  </div>
   <script src="app.js?v=261"></script>
 </body>
 </html>
