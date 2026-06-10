@@ -6135,7 +6135,24 @@
         "rewritten": true
       },
       "description": "**Problem:** The \"general final QA\" step runs too early in the pipeline, repeatedly reporting that the diff doesn't solve the problem because the code hasn't been implemented yet.\n**Expected:** Final QA should only fire after implementation is complete, so its verdict reflects the actual finished diff.\n**Actual:** QA executes pre-implementation and emits false-negative \"doesn't solve the problem\" verdicts against an empty/partial diff.\n**Context:** Investigate session history to gather facts (ordering of QA vs. implementation steps, triggers, timing) needed to pinpoint the root cause."
+    },
+    {
+      "id": "bug-84",
+      "text": "Verdict modal dropped when fired during another active session",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-10T03:13:58.298Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "verdict modal fired while I am working in another session would lost (never show up), I have to send \"continue\" to trigger further processing. the folloiwng is the message in chat: 📍 Code sentinel received for bug-83 — critic firing (typically 10-30s for Gemini 2.5).\n\n11:05:35\n▸\n× 2\nready\nkkrazy11:12 AM\ncontinue\n\n11:12:39\n▸\n× 2\niter (resumed)\n11:12:42\n▸\n× 1\nsession init\n11:12:46\nmyco\nStage 3: Verify",
+        "rewritten": true
+      },
+      "description": "**Problem:** Verdict modals triggered while the user is working in a different session are silently lost, forcing a manual \"continue\" to resume processing.\n**Expected:** Verdict modal should surface (or be queued/replayed) so the critic stage proceeds without user intervention.\n**Actual:** Modal never shows up; iteration stalls at \"ready\" until the user types \"continue\", which resumes into Stage 3: Verify.\n**Context:** Repro from chat log — `📍 Code sentinel received for bug-83 — critic firing (typically 10-30s for Gemini 2.5)` at 11:05:35, no modal shown, manual \"continue\" at 11:12 triggered `iter (resumed)` → `session init` → `Stage 3: Verify`."
     }
   ],
-  "updatedAt": "2026-06-10T01:48:25.093Z"
+  "updatedAt": "2026-06-10T03:14:07.021Z"
 }

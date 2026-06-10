@@ -3333,6 +3333,21 @@ test_chat_window() {
   # that wire 3 stub "devices" each and assert all receive the
   # broadcast.
   node_test_result test/bug-82-cross-device-chat-accept-resolve.test.js "test/bug-82-cross-device-chat-accept-resolve.test.js (5 cases)"
+  # bug-83 (final critique only after verify): bug-64's deferred-final-
+  # critique was designed for the legacy single-intermediate case. With
+  # the 3-stage methodology (analyze/code/verify), the analyze-turn's
+  # turn_result deferred the final critique using analyze-turn data
+  # (no implementation yet). On user-accept of analyze, the deferred
+  # fired with stale data → "doesn't solve the problem" false negative.
+  # Fix: attach.js critique-gate now suppresses (returns without
+  # storing or firing) when ssCheck.stage !== 'verify'. Legacy runs
+  # (no stageState) short-circuit via `ssCheck && ...` and preserve
+  # pre-bug-83 behavior. The verify-stage turn_result still uses
+  # bug-64's defer-on-awaiting-* logic, which now stores fresh
+  # implementation-complete data. 5 cases — static guards + adjacency
+  # checks on the legacy short-circuit + the resolveCritique fire
+  # path's unchanged contract.
+  node_test_result test/bug-83-final-critique-only-after-verify.test.js "test/bug-83-final-critique-only-after-verify.test.js (5 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

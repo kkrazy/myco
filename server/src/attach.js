@@ -601,6 +601,36 @@ function _registerExternalSession(sessionId, session) {
                       // is single-slot (we never have >1 unresolved
                       // intermediate thanks to bug-61's drop guard).
                       const ssCheck = stageStateMod.getStageState(item);
+                      // bug-83: the 3-stage methodology (analyze →
+                      // code → verify) introduces a hole in bug-64's
+                      // defer semantics: bug-64 was designed for the
+                      // legacy single-intermediate case. With three
+                      // intermediates in series, an analyze-turn
+                      // turn_result would defer the final critique
+                      // (capturing the analyze-turn diff, which has no
+                      // implementation yet), and the user's accept of
+                      // analyze would fire that stale-data critique →
+                      // "doesn't solve the problem" false negative.
+                      // User-reported (bug-83): "general final QA fires
+                      // before implementation lands, falsely flagging
+                      // unsolved diffs."
+                      //
+                      // Fix: only DEFER (and only fire later) when
+                      // we're at the LAST stage (verify). For
+                      // analyze/code turn_results, suppress entirely
+                      // — the multi-stage flow guarantees there will
+                      // be a verify-stage turn_result later with the
+                      // complete implementation diff, and THAT turn's
+                      // gate will produce the correct deferred (or
+                      // fire-now) outcome. Legacy single-shot runs
+                      // (no stageState) reach triggerGeminiCritique
+                      // below via the `ssCheck && …` short-circuit
+                      // (ssCheck is null → both guards false → fire
+                      // immediately), preserving pre-bug-83 behavior.
+                      if (ssCheck && ssCheck.stage !== 'verify') {
+                        console.log(`[bug-83] suppressing final critique for ${active.itemId} — current stageState is ${ssCheck.stage}.${ssCheck.status}, not at verify stage yet. Waiting for the verify-turn turn_result so the critique sees the complete implementation diff.`);
+                        return;                     // queue stays paused; next turn_result will re-evaluate
+                      }
                       if (ssCheck && (ssCheck.status === 'awaiting_verdict' || ssCheck.status === 'awaiting_accept')) {
                         console.log(`[bug-64] deferring final critique for ${active.itemId} — current stageState is ${ssCheck.stage}.${ssCheck.status}; will fire on resolve`);
                         rec._deferredFinalCritique = {

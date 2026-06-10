@@ -67,8 +67,13 @@ t('attach.js: turn_result IIFE checks stageState BEFORE triggerGeminiCritique', 
   const at = src.search(/\[bug-64\] deferring final critique/);
   assert.ok(at > -1, 'attach.js must contain the bug-64 deferring log line — the marker for the server-side defer guard.');
   // The block must read stageStateMod.getStageState BEFORE storing
-  // the deferred payload.
-  const before = src.slice(Math.max(0, at - 1500), at);
+  // the deferred payload. Widened from 1500 → 4000 chars (§10.b
+  // anti-fragility — bug-83 added ~20 lines of suppression-guard
+  // comment between the getStageState call and the [bug-64] log line;
+  // a future addition could push further). The contract this test
+  // locks is unchanged: getStageState must be read before the defer
+  // log line within the same IIFE.
+  const before = src.slice(Math.max(0, at - 4000), at);
   assert.ok(/stageStateMod\.getStageState/.test(before),
     'attach.js bug-64 defer must read stageStateMod.getStageState(item) before deciding to defer (bug-64).');
 });
