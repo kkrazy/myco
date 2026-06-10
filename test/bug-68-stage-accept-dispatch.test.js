@@ -167,10 +167,15 @@ t('_maybeHandleChatAccept verify branch calls _postAcceptStagePrompt(accept-veri
   // the postAccept call within that branch.
   const verifyAt = body.search(/if\s*\(\s*stage\s*===\s*['"]verify['"]\s*\)/);
   assert.ok(verifyAt > -1, "verify branch (if (stage === 'verify')) must exist.");
-  // Look for the postAccept call somewhere after the verify branch
-  // entry — bounded window so it doesn't pick up the intermediate
-  // branch's call.
-  const verifyBlock = body.slice(verifyAt, verifyAt + 1500);
+  // Locate the verify branch by anchoring on the next branch's
+  // entry comment instead of a fixed-width window (avoids the
+  // §10.b "hand-picked N" anti-pattern — bug-82 added 15 lines of
+  // cross-device-resolve emit to the verify branch, which would have
+  // pushed _postAcceptStagePrompt past a fixed 1500-char window).
+  const interStart = body.indexOf('// Intermediate stage', verifyAt);
+  assert.ok(interStart > verifyAt,
+    "the verify branch must be terminated by the intermediate-stage comment marker.");
+  const verifyBlock = body.slice(verifyAt, interStart);
   assert.ok(/_postAcceptStagePrompt\s*\(/.test(verifyBlock),
     "_maybeHandleChatAccept's verify branch must call _postAcceptStagePrompt — otherwise the chat-accept-verify clears server state but claude sits idle (bug-68 root cause).");
   assert.ok(/reason\s*:\s*['"]accept-verify['"]/.test(verifyBlock),

@@ -3317,6 +3317,22 @@ test_chat_window() {
   # registration, and runtime asserts spawning the helper with
   # synthesized stdin against a tmp token store.
   node_test_result test/bug-81-git-credential-bridge.test.js "test/bug-81-git-credential-bridge.test.js (12 cases)"
+  # bug-82 (cross-device chat-accept resolve broadcast): the
+  # button-click verdict-resolve path correctly broadcast
+  # critique-resolved cross-device (bug-54), but the parallel
+  # chat-accept surface (_maybeHandleChatAccept in attach.js, added
+  # by bug-70) mirrored the stage transition + the
+  # _postAcceptStagePrompt synthetic-prompt dispatch but never emitted
+  # critique-resolved. Result: typing "accept" left every attached
+  # device's verdict pane open (including the chat-acceptor's own).
+  # Fix: both branches of _maybeHandleChatAccept (verify + intermediate)
+  # now session.emit a critique-resolved state-update. Reason strings
+  # 'chat-accept-verify' / 'chat-accept-stage' distinguish the surface
+  # from the button path's 'accept-verify' / 'accept-stage' in logs.
+  # 5 cases — 3 static guards on the two emit sites + 2 runtime tests
+  # that wire 3 stub "devices" each and assert all receive the
+  # broadcast.
+  node_test_result test/bug-82-cross-device-chat-accept-resolve.test.js "test/bug-82-cross-device-chat-accept-resolve.test.js (5 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

@@ -6103,7 +6103,39 @@
         "rewritten": true
       },
       "description": "**Problem:** Users can't quickly inspect file contents from the chat pane or the changed files list.\n**Expected:** Double-clicking any file entry — in the chat pane or the changed files pane — opens the file viewer showing its content.\n**Actual:** Double-click is not wired up on these file entries, so there's no fast path to view file content.\n**Context:** Applies to all file references regardless of which pane they appear in (chat pane, changed files)."
+    },
+    {
+      "id": "bug-83",
+      "text": "General final QA fires before implementation lands, falsely flagging unsolved diffs",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-10T01:48:18.010Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "34e8436fa138",
+          "user": "kkrazy",
+          "text": "since it's fired too early, causing no verdict modal when the code is done, it shows the following instead with a verdict modal: [stage-accept] User accepted the analyze stage. Please proceed to the code stage.  09:45:18 ▸ × 1 turn · [stage-accept] User accepted the analyze stage. Please proce 09:45:18 ▶ turn [stage-accept] User accepted the analyze stage. Please proceed to the code stage. myco09:45 AM → Code accepted — claude was prompted to proceed to the code stage.",
+          "ts": "2026-06-10T01:49:56.015Z"
+        },
+        {
+          "id": "611d3f1195ff",
+          "user": "kkrazy",
+          "text": "another missed verdict modal with the following message: Behavior shipped:  Type \"accept\" / \"looks good\" / \"ship it\" / etc. → server emits critique-resolved cross-device. Every connected client's verdict pane clears in sync. Reuses the bug-54 client handler — zero client change. No deploy initiated. No push initiated.",
+          "ts": "2026-06-10T01:52:22.155Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the \"general final QA\" is fired too early before the code is implemented, which keep indicting the diff doesn't solve the problem. look into the session history to gather facts which would help solve this bug",
+        "rewritten": true
+      },
+      "description": "**Problem:** The \"general final QA\" step runs too early in the pipeline, repeatedly reporting that the diff doesn't solve the problem because the code hasn't been implemented yet.\n**Expected:** Final QA should only fire after implementation is complete, so its verdict reflects the actual finished diff.\n**Actual:** QA executes pre-implementation and emits false-negative \"doesn't solve the problem\" verdicts against an empty/partial diff.\n**Context:** Investigate session history to gather facts (ordering of QA vs. implementation steps, triggers, timing) needed to pinpoint the root cause."
     }
   ],
-  "updatedAt": "2026-06-10T01:37:42.332Z"
+  "updatedAt": "2026-06-10T01:48:25.093Z"
 }

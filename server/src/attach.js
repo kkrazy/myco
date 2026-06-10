@@ -2277,6 +2277,22 @@ function _maybeHandleChatAccept(sessionId, session, user, text) {
       console.error(`[bug-70] chat-accept (verify) clearActiveRunItem failed: ${err.message}`);
       return false;
     }
+    // bug-82: broadcast critique-resolved to ALL attached devices so
+    // every connected client clears its verdict pane. The button-click
+    // resolve path (critique.js resolveCritique → bug-54) already does
+    // this; the chat-accept path was the missing parallel surface.
+    // Without this emit, both the chat-acceptor's own device AND every
+    // other attached device's verdict pane stayed open until the next
+    // critique-review or a manual dismiss. The bug-54 client handler
+    // (app.js critique-resolved → state.critiqueReview = null) clears
+    // on any kind:'critique-resolved' payload, so the reuse is
+    // server-side-only. Reason 'chat-accept-verify' distinguishes the
+    // surface from the button path's 'accept-verify' in audit logs.
+    session.emit('state-update', {
+      kind: 'critique-resolved',
+      itemId: active.itemId,
+      reason: 'chat-accept-verify',
+    });
     const note = {
       user: ASSISTANT_USER,
       text: `✓ accepted — plan-item run for **${active.itemId}** closed.`,
@@ -2326,6 +2342,17 @@ function _maybeHandleChatAccept(sessionId, session, user, text) {
   } catch (err) {
     console.error(`[bug-70] chat-accept deferred-critique fire failed: ${err.message}`);
   }
+  // bug-82: same cross-device resolve broadcast as the verify branch.
+  // Mirrors critique.js resolveCritique's broadcast surface so every
+  // attached device clears its verdict pane on a chat-typed accept —
+  // not just the device that submitted the chat. Reason
+  // 'chat-accept-stage' distinguishes the chat surface from the
+  // button path's 'accept-stage' for audit logs.
+  session.emit('state-update', {
+    kind: 'critique-resolved',
+    itemId: active.itemId,
+    reason: 'chat-accept-stage',
+  });
   const note = {
     user: ASSISTANT_USER,
     text: `✓ accepted — advancing **${active.itemId}** to **${next}** stage.`,
@@ -3083,6 +3110,10 @@ module.exports = {
   attachViewerWebSocket,
   handleChatMessage,
   _registerExternalSession,
+  // bug-82: exported for the regression test that wires multiple stub
+  // "devices" to a session and asserts the chat-accept handler
+  // broadcasts critique-resolved to all of them.
+  _maybeHandleChatAccept,
   handleMenuPick,
   handleMenuToggle,
   handleMenuSubmit,
