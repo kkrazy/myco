@@ -282,6 +282,43 @@ t('app.js: zoom resets to 1 on each open', () => {
     'fr-99 scroll-to-zoom: _openDiagramLightbox must reset _diagramLightboxZoom = 1 on every open so a fresh diagram lands at fit-to-card.');
 });
 
+// ── 3.6 Drag-to-pan (2026-06-11 bug-86 follow-up) ──
+
+t('app.js: pointerdown / pointermove / pointerup listeners exist on the lightbox content card', () => {
+  // User-requested: "should allow drag to see different parts of the
+  // enlarged diagram." Standard image-viewer drag-to-pan via pointer
+  // events.
+  assert.ok(/addEventListener\(\s*['"]pointerdown['"]/.test(APP_JS),
+    'fr-99 drag-to-pan: a pointerdown listener must be wired on .diagram-lightbox-content.');
+  assert.ok(/addEventListener\(\s*['"]pointermove['"]/.test(APP_JS),
+    'fr-99 drag-to-pan: a pointermove listener must adjust scrollLeft/scrollTop during the drag.');
+  assert.ok(/addEventListener\(\s*['"]pointerup['"]/.test(APP_JS),
+    'fr-99 drag-to-pan: a pointerup listener must end the drag + release pointer capture.');
+});
+
+t('app.js: drag-to-pan is gated on zoom > 1 (no overflow at 1x → nothing to pan)', () => {
+  // The pointerdown handler must short-circuit when zoom <= 1 so
+  // accidental clicks on a non-zoomed diagram don\'t register as a
+  // drag start (would still no-op visually, but the cursor change
+  // would be confusing).
+  const at = APP_JS.search(/addEventListener\(\s*['"]pointerdown['"]/);
+  assert.ok(at > -1);
+  const block = APP_JS.slice(at, at + 600);
+  assert.ok(/_diagramLightboxZoom\s*<=?\s*1/.test(block),
+    'fr-99 drag-to-pan: pointerdown must short-circuit when _diagramLightboxZoom <= 1. Without the gate, clicking on a fit-to-card diagram would still try to start a drag.');
+});
+
+t('app.js: drag uses setPointerCapture so the gesture survives leaving the lightbox edges', () => {
+  // Without pointer capture, moving the cursor past the lightbox edge
+  // (or releasing outside) would lose the pointerup event and leave
+  // the drag stuck. setPointerCapture sticks the gesture to the
+  // element regardless of where the cursor goes.
+  assert.ok(/setPointerCapture\s*\(/.test(APP_JS),
+    'fr-99 drag-to-pan: must use setPointerCapture so the drag survives the cursor leaving the lightbox boundary.');
+  assert.ok(/releasePointerCapture\s*\(/.test(APP_JS),
+    'fr-99 drag-to-pan: must call releasePointerCapture on pointerup so the captured pointer is freed.');
+});
+
 // ── 4. Provenance marker ──
 
 t('a "fr-99" comment marker appears in app.js, styles.css, and index.html', () => {

@@ -802,6 +802,14 @@ function _bindDiagramLightboxClose() {
   // specific node of a flowchart. When zoomed past 100%, the existing
   // overflow:auto on the content card gives scroll/pan via the
   // scrollbars (cursor changes to grab as a discoverability cue).
+  //
+  // bug-86 follow-up #2 (2026-06-11): click + drag to pan when zoomed.
+  // User-requested: "should allow drag to see different parts of the
+  // enlarged diagram." Standard image-viewer convention. Drag is
+  // gated on zoom > 1 (no overflow at 1x → nothing to pan). Pointer-
+  // capture so the user can drag past the lightbox edges without
+  // losing the gesture. preventDefault on pointerdown so the SVG's
+  // text content doesn't get selected mid-drag.
   const content = lightbox.querySelector('.diagram-lightbox-content');
   if (content) {
     content.addEventListener('wheel', (e) => {
@@ -828,6 +836,42 @@ function _bindDiagramLightboxClose() {
       content.scrollLeft = cursorX * ratio - (e.clientX - rect.left);
       content.scrollTop = cursorY * ratio - (e.clientY - rect.top);
     }, { passive: false });    // passive:false required for preventDefault
+
+    // bug-86 follow-up #2 (2026-06-11): drag-to-pan when zoomed past 1x.
+    let dragState = null;
+    content.addEventListener('pointerdown', (e) => {
+      if (_diagramLightboxZoom <= 1) return;        // nothing to pan at 1x
+      if (e.button != null && e.button !== 0) return;  // primary click only
+      e.preventDefault();
+      dragState = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startScrollLeft: content.scrollLeft,
+        startScrollTop: content.scrollTop,
+        pointerId: e.pointerId,
+      };
+      content.style.cursor = 'grabbing';
+      try { content.setPointerCapture(e.pointerId); } catch {}
+    });
+    content.addEventListener('pointermove', (e) => {
+      if (!dragState) return;
+      e.preventDefault();
+      // Invert: dragging right should reveal content to the right →
+      // scrollLeft DECREASES (scroll position moves left). So delta is
+      // (start - current).
+      content.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
+      content.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
+    });
+    const endDrag = (e) => {
+      if (!dragState) return;
+      try { content.releasePointerCapture(dragState.pointerId); } catch {}
+      dragState = null;
+      // Restore the zoom-aware cursor (grab if still zoomed, default
+      // otherwise — _applyDiagramLightboxZoom handles this).
+      _applyDiagramLightboxZoom();
+    };
+    content.addEventListener('pointerup', endDrag);
+    content.addEventListener('pointercancel', endDrag);
   }
 }
 
