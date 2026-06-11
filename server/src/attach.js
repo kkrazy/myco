@@ -66,6 +66,18 @@ const ASSISTANT_CHAT_CONTEXT = 20;
 // (1 KB chat-history + 16 KB agent-replay) — still well under the
 // round-3 unified 256 KB.
 const INITIAL_AGENT_REPLAY_BYTES = 16 * 1024;
+// bug-86 (option B, 2026-06-10): minimum assistant_text events guaranteed
+// on initial agent-replay attach, even when the byte budget would
+// otherwise cut them off. User-reported on omni-cache session "kept
+// losing the myco response in the chat pane" — logs showed
+// `[agent-replay] initial byte-trim 838 → 11 events (15362 bytes, budget
+// 16384)` and `[agent-replay-diag] initial shipped 1 assistant_text(s)`.
+// A single tool_use/tool_result can be 5+ KB, so the 16 KB budget often
+// fits only 1 assistant_text. This floor guarantees the user sees the
+// last N claude replies on every fresh attach regardless of how chatty
+// the intermediate tool calls were. 5 mirrors the chat-history floor
+// from sessions.js.
+const INITIAL_AGENT_REPLAY_MIN_ASSISTANT_TEXTS = 5;
 const DEFAULT_AGENT_REPLAY_BYTES = 16 * 1024;
 
 // sessionId → AgentSession (or any session-shaped object registered via
@@ -1510,6 +1522,13 @@ function _shipAgentReplay(session, ws, sessionId, maxBytes, phase, afterSeq) {
     return;
   }
   // Byte-trim (bug-9 round 3, parametrized by phase).
+  // bug-86 (option B): on top of the byte budget, GUARANTEE at least N
+  // recent assistant_text events. Without this floor, a chatty tool-use
+  // sequence between two claude replies (5+ KB of tool_use/tool_result
+  // events) can push the prior assistant_text past the 16 KB budget;
+  // the user sees the modal "kept losing the myco response." We compute
+  // BOTH floors (byte budget + assistant_text count) and take the
+  // earlier one.
   let trimmed = events;
   if (events.length && maxBytes > 0) {
     let bytes = 0;
@@ -1521,9 +1540,26 @@ function _shipAgentReplay(session, ws, sessionId, maxBytes, phase, afterSeq) {
       bytes += sz;
       keepFromIdx = i;
     }
+    // bug-86 (option B): walk further back to capture min N assistant_text
+    // events if the byte-budget tail didn't already include them.
+    if (INITIAL_AGENT_REPLAY_MIN_ASSISTANT_TEXTS > 0 && phase === 'initial') {
+      let asstCount = 0;
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i] && events[i].type === 'assistant_text') {
+          asstCount++;
+          if (asstCount >= INITIAL_AGENT_REPLAY_MIN_ASSISTANT_TEXTS) {
+            if (i < keepFromIdx) keepFromIdx = i;
+            break;
+          }
+        }
+      }
+      // If asstCount < N here, we've simply included all assistant_texts
+      // the buffer has — same "at most N" semantics as the chat-history
+      // floor.
+    }
     if (keepFromIdx > 0) {
       trimmed = events.slice(keepFromIdx);
-      console.log(`[agent-replay] ${sessionId} ${phase} byte-trim ${events.length} → ${trimmed.length} events (${bytes} bytes, budget ${maxBytes})`);
+      console.log(`[agent-replay] ${sessionId} ${phase} byte-trim ${events.length} → ${trimmed.length} events (${bytes} bytes, budget ${maxBytes}, asst-floor=${INITIAL_AGENT_REPLAY_MIN_ASSISTANT_TEXTS})`);
     }
   }
   try { ws.send(JSON.stringify({ t: 'agent-replay', events: trimmed })); } catch {}

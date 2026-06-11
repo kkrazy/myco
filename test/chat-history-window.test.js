@@ -53,13 +53,17 @@ function seedSession(sid, n) {
 
 console.log('── bug-9: windowed getChatHistory + getChatHistoryLength ──');
 
-t('INITIAL_CHAT_HISTORY_BYTES is exported and equals 8 KB', () => {
-  // Round 5 was 1 KB; 2026-05-17 bumped to 8 KB (user-requested)
-  // so the first paint shows ~30-50 messages of context instead of
-  // 5-8. The user explicitly wants the latest conversation visible
-  // at the bottom on init, so a bigger initial window pays for itself.
-  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 8 * 1024,
-    'initial WS chat-history frame must cap at 8 KB so first paint shows recent context');
+t('INITIAL_CHAT_HISTORY_BYTES is exported and equals 64 KB', () => {
+  // Round 5 was 1 KB; 2026-05-17 bumped to 8 KB (user-requested);
+  // 2026-06-10 bumped to 64 KB (user-requested after omni-cache
+  // investigation — claude responses are now multi-KB by default,
+  // an 8 KB budget fit only ~3 recent replies on initial reattach
+  // and the user perceived this as "kept losing the myco response").
+  // 64 KB lets ~24+ recent replies fit with negligible first-paint
+  // impact. Initial chat-history is still strictly a TAIL —
+  // older history loads on demand via /chat/history?before=.
+  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 64 * 1024,
+    'initial WS chat-history frame must cap at 64 KB so first paint shows recent context — user-reported on omni-cache, fixed 2026-06-10');
 });
 
 t('DEFAULT_CHAT_HISTORY_BYTES is exported and equals 16 KB', () => {

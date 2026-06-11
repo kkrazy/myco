@@ -178,8 +178,15 @@ t('getChatHistory({includeAgent:true}) surfaces fromAgent rows', () => {
   assert.strictEqual(sessionsMod.getChatHistoryLength(sid, { includeAgent: true }), 3);
 });
 
-t('initial-attach byte budget is small (1 KB) + backfill is 16 KB', () => {
-  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 8 * 1024);
+t('initial-attach byte budget is 64 KB (was 8 KB pre-2026-06-10) + backfill is 16 KB', () => {
+  // 2026-06-10: user-reported on omni-cache session "kept losing the
+  // myco response in the chat pane" — claude responses are now
+  // multi-KB by default; 8 KB fit only ~3 recent replies on initial
+  // reattach. Bumped 8x to 64 KB so ~24+ recent replies fit on first
+  // paint with negligible first-paint impact (~10-20 ms on modern
+  // bandwidth). Initial chat-history is still strictly a TAIL —
+  // older history loads on demand via /chat/history?before=.
+  assert.strictEqual(sessionsMod.INITIAL_CHAT_HISTORY_BYTES, 64 * 1024);
   assert.strictEqual(sessionsMod.DEFAULT_CHAT_HISTORY_BYTES, 16 * 1024);
 });
 

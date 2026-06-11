@@ -3380,6 +3380,20 @@ test_chat_window() {
   # index.html + app.js + styles.css covering markup, helper, listener
   # wiring, scope checks, blocklist, close affordances, CSS rules.
   node_test_result test/fr-99-diagram-dblclick-lightbox.test.js "test/fr-99-diagram-dblclick-lightbox.test.js (19 cases)"
+  # bug-86 (option B follow-up to omni-cache investigation 2026-06-10):
+  # guarantee at least N recent assistant_text events / fromAgent chat
+  # rows on initial replay even when the byte budget would cut them
+  # off. User-reported "kept losing the myco response in the chat pane"
+  # — logs showed agent-replay byte-trim 838 → 11 events with only 1
+  # assistant_text. Fix: floor constants
+  # INITIAL_CHAT_HISTORY_MIN_ASSISTANT_TEXTS (sessions.js) +
+  # INITIAL_AGENT_REPLAY_MIN_ASSISTANT_TEXTS (attach.js), both = 5.
+  # getChatHistory takes opts.minAssistantTexts; _shipAgentReplay walks
+  # events looking for assistant_text type and expands the
+  # byte-trimmed window if fewer than N are in it. Phase-gated to
+  # 'initial' so catch-up (afterSeq) is unaffected. 8 cases — 5 static
+  # guards on the wiring + 3 runtime asserts on the floor semantics.
+  node_test_result test/bug-86-min-assistant-texts-floor.test.js "test/bug-86-min-assistant-texts-floor.test.js (8 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

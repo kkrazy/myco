@@ -1447,8 +1447,28 @@ const MAX_CHAT_MESSAGES = 100000;
 // 2026-05-17 user-set: 8 KB initial chat-history (was 1 KB). Gives
 // the user roughly 30-50 messages at first paint instead of 5-8 —
 // enough to see the recent conversation context without scroll-up.
-const INITIAL_CHAT_HISTORY_BYTES = 8 * 1024;
+// 2026-06-10 user-set: 64 KB (was 8 KB). User-reported on omni-cache
+// session "kept losing the myco response in the chat pane" — root
+// cause investigation (logs `[chat-history] initial sent 49 of 220`
+// + `assistant_text (2838 chars)`): claude responses are now
+// multi-KB by default; an 8 KB budget fits only ~3 large replies on
+// initial reattach, so each page-reload / session-switch + back / tab
+// resume dropped most context from view. 64 KB (8x) lets ~24+ recent
+// claude replies fit on first paint with negligible first-paint
+// impact (~10-20 ms on modern bandwidth). Initial chat-history is
+// still strictly a TAIL — older history loads via the "load older"
+// button (/chat/history?before=). rec.chat persistence is unchanged.
+const INITIAL_CHAT_HISTORY_BYTES = 64 * 1024;
 const DEFAULT_CHAT_HISTORY_BYTES = 16 * 1024;
+// bug-86 (option B, 2026-06-10): minimum assistant_text bubbles guaranteed
+// on initial chat-history attach, even when the byte budget would
+// otherwise cut them off. Companion to the 64K budget bump (option A) —
+// option A makes the typical case better (most claude replies are 2-3KB);
+// option B handles the pathological case (a single 80KB ./test/test.sh
+// reply would have eaten the whole budget). 5 is enough for the user
+// to see ~half a conversation's recent context with claude on first
+// paint.
+const INITIAL_CHAT_HISTORY_MIN_ASSISTANT_TEXTS = 5;
 
 // Legacy alias — some callsites + tests still reference the old
 // LIMIT constant. Keep it as a small fixed count (used by the
@@ -1533,9 +1553,20 @@ function getChatHistory(sessionId, opts) {
   // least one message so a single oversized row doesn't return an
   // empty window (it just costs whatever it costs — the user still
   // gets to see the most recent activity).
+  //
+  // bug-86 (option B, 2026-06-10): on top of the byte budget, optionally
+  // GUARANTEE at least N recent assistant_text bubbles in the result.
+  // Companion to the 64K initial-budget bump (option A): even if a single
+  // assistant_text reply is >64K (rare but possible — full ./test/test.sh
+  // output, long planning docs), the user still gets the last N replies
+  // on first paint. Walks tail → head counting assistant_texts; finds
+  // the earliest index that captures N of them; takes the EARLIER of
+  // (byte-budget floor, assistantFloor) as the slice point. The user-
+  // reported "kept losing the myco response" framed this: persistence
+  // is fine; the question is which slice ships on reattach.
+  let keepFromIdx = filtered.length;
   if (typeof opts.maxBytes === 'number' && opts.maxBytes > 0 && filtered.length) {
     let bytes = 0;
-    let keepFromIdx = filtered.length;
     for (let i = filtered.length - 1; i >= 0; i--) {
       let sz;
       try { sz = JSON.stringify(filtered[i]).length; } catch { sz = 0; }
@@ -1543,6 +1574,32 @@ function getChatHistory(sessionId, opts) {
       bytes += sz;
       keepFromIdx = i;
     }
+  }
+  // bug-86: assistant_text floor. Both fromTranscript AND fromAgent are
+  // claude replies (different persistence backstops — see comment above
+  // about filter logic). Count both kinds toward the guarantee.
+  if (typeof opts.minAssistantTexts === 'number' && opts.minAssistantTexts > 0 && filtered.length) {
+    let asstCount = 0;
+    for (let i = filtered.length - 1; i >= 0; i--) {
+      const m = filtered[i];
+      if (m && m.meta && (m.meta.fromAgent === true || m.meta.fromTranscript === true)) {
+        asstCount++;
+        if (asstCount >= opts.minAssistantTexts) {
+          // i is the earliest assistant_text in the guaranteed set —
+          // take the earlier of (byte floor, assistant floor) so both
+          // constraints are satisfied.
+          if (i < keepFromIdx) keepFromIdx = i;
+          break;
+        }
+      }
+    }
+    // If fewer than N assistant_texts exist in the whole history,
+    // asstCount < opts.minAssistantTexts — and we naturally end up
+    // including all of them (or whatever the byte budget already
+    // covered). That's fine: "guarantee N" reads as "up to N if
+    // they exist."
+  }
+  if (keepFromIdx < filtered.length) {
     filtered = filtered.slice(keepFromIdx);
   }
   if (typeof opts.limit === 'number' && opts.limit > 0 && filtered.length > opts.limit) {
@@ -1782,6 +1839,7 @@ Object.assign(module.exports, {
   DEFAULT_CHAT_HISTORY_LIMIT,
   DEFAULT_CHAT_HISTORY_BYTES,
   INITIAL_CHAT_HISTORY_BYTES,
+  INITIAL_CHAT_HISTORY_MIN_ASSISTANT_TEXTS,
   // exposed for summarizer + share-info
   loadStore,
   saveStore,
