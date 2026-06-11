@@ -3394,6 +3394,19 @@ test_chat_window() {
   # 'initial' so catch-up (afterSeq) is unaffected. 8 cases — 5 static
   # guards on the wiring + 3 runtime asserts on the floor semantics.
   node_test_result test/bug-86-min-assistant-texts-floor.test.js "test/bug-86-min-assistant-texts-floor.test.js (8 cases)"
+  # bug-86 (plan-item dispatch — distinct from the internal "bug-86"
+  # tag on chat-history floor work above): fr-99 diagram-lightbox zoom
+  # capped at viewport because the cloned svg/img child rule had
+  # max-width:100% + max-height:86vh — those override the JS wheel
+  # handler's inline width:NNN% (browser computes effective_width =
+  # min(inline, max-*)). Fix: remove the child's max-width + max-height
+  # so the inline width wins; keep width:100% as the baseline (still
+  # needed for SVGs without intrinsic width — fr-99 patch 2026-06-10
+  # rationale); rely on the parent's overflow:auto + 90vw/90vh caps for
+  # viewport protection and pan-via-scrollbars. 7 cases — 4 static
+  # guards on the CSS contract + 2 on parent invariants + provenance
+  # marker check.
+  node_test_result test/bug-86-plan-zoom-past-viewport.test.js "test/bug-86-plan-zoom-past-viewport.test.js (7 cases)"
   # fr-92: mobile users can't access composer history since touch
   # devices have no arrow keys. Add a touchstart + touchend listener
   # on #chat-input that detects vertical swipes (|dy| >= 30px in

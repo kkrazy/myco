@@ -6212,7 +6212,26 @@
         "rewritten": true
       },
       "description": "**Problem:** `/setpat` fails to set tokens for known sub-projects and has no sensible default for the main project.\n**Expected:** `/setpat <token>` (no `<target>`) sets the main project's token; `/setpat @<target> <token>` auto-recognizes the target (e.g. `@omni-cache`) and stores its token.\n**Actual:** `/setpat @omni-cache c5e6081bc4a6f1799fd733cdd8ff9357 --` returns `(unknown @target @omni-cache. Known targets: @myco.)` and there is no defaulting path when `<target>` is omitted.\n**Context:** Repro in myco chat: `/setpat @omni-cache c5e6081bc4a6f1799fd733cdd8ff9357 --`."
+    },
+    {
+      "id": "bug-86",
+      "text": "Diagram zoom capped at viewport size; allow enlarging beyond screen",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-11T03:16:35.754Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "fr-99 implementation need to be revisited to allow enlarge the diagram to see the details. right now it only allow enlarge to fit the screen size, need to enlarge to bigger than the screen/view port size",
+        "rewritten": true
+      },
+      "description": "**Problem:** FR-99 diagram zoom is capped at the viewport, so users cannot enlarge enough to read fine details.\n**Expected:** Diagram can be enlarged beyond the screen/viewport size, with scrolling/panning to inspect details.\n**Actual:** Zoom is limited to fit-to-screen, preventing further enlargement.\n**Context:** Revisit FR-99 implementation."
     }
   ],
-  "updatedAt": "2026-06-10T07:23:15.876Z"
+  "updatedAt": "2026-06-11T03:16:43.737Z"
 }
