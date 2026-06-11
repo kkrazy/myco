@@ -116,6 +116,27 @@
 
 1. **Always use Mermaid diagrams** for any architecture, flow, sequence, or state diagrams. Never use ASCII art boxes or plain-text diagrams.
 
+2. **For `classDiagram`, color nodes with direct `style ClassName fill:...` per node — NOT `classDef` + `class`.** The flowchart-style apply syntax (`classDef tierName fill:#xxx` then `class Foo,Bar tierName`) does NOT work in `classDiagram` blocks: `class` is the keyword that DEFINES a class there, so the trailing token gets parsed as a typedef qualifier, not as a style-class apply, and the node renders monochrome. Empirically verified 2026-06-11 against mermaid 11.14.0 (the version myco vendors at `web/public/vendor/mermaid.min.js`).
+
+   **Use:**
+   ```
+   classDiagram
+     class Session { +String id }
+     class PlanItem { +String id }
+     style Session  fill:#1f77b4,color:#fff,stroke:#fff,stroke-width:2px
+     style PlanItem fill:#17becf,color:#000,stroke:#fff,stroke-width:2px
+   ```
+
+   **Don't use** (silently breaks coloring in classDiagram):
+   ```
+   classDiagram
+     class Session { +String id }
+     classDef persistence fill:#1f77b4,color:#fff,stroke:#fff
+     class Session persistence     %% ← parsed as redefinition, not styling
+   ```
+
+   For flowcharts, `classDef` + `class` works fine — only `classDiagram` has this parsing quirk. Two alternate forms also work in `classDiagram`: `cssClass "ClassA,ClassB" tierName` (mermaid-classDiagram-specific apply syntax) and `class Foo:::tierName { ... }` (inline `:::` shorthand at the definition site). The bare `style ClassName ...` is the clearest and works in mermaid 9+.
+
 ## Chat persistence & cross-device consistency
 
 The chat surface is the central conversational record of a session and MUST behave identically regardless of which device or browser tab the user attaches from. The contract has three pillars:
