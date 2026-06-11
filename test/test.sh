@@ -3379,7 +3379,7 @@ test_chat_window() {
   # motion honored for the fade-in. 13 cases — static guards across
   # index.html + app.js + styles.css covering markup, helper, listener
   # wiring, scope checks, blocklist, close affordances, CSS rules.
-  node_test_result test/fr-99-diagram-dblclick-lightbox.test.js "test/fr-99-diagram-dblclick-lightbox.test.js (22 cases)"
+  node_test_result test/fr-99-diagram-dblclick-lightbox.test.js "test/fr-99-diagram-dblclick-lightbox.test.js (26 cases)"
   # bug-86 (option B follow-up to omni-cache investigation 2026-06-10):
   # guarantee at least N recent assistant_text events / fromAgent chat
   # rows on initial replay even when the byte budget would cut them

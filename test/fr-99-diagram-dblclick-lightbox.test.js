@@ -303,7 +303,12 @@ t('app.js: drag-to-pan is gated on zoom > 1 (no overflow at 1x → nothing to pa
   // would be confusing).
   const at = APP_JS.search(/addEventListener\(\s*['"]pointerdown['"]/);
   assert.ok(at > -1);
-  const block = APP_JS.slice(at, at + 600);
+  // Widened 600 → 2000 chars (§10.b anti-fragility) — the pinch-to-zoom
+  // follow-up added pointer-tracking + 2-pointer pinch setup before the
+  // single-pointer drag block, pushing the zoom gate further into the
+  // handler. The contract (gate exists somewhere in the pointerdown
+  // handler) is unchanged; only the literal position drifted.
+  const block = APP_JS.slice(at, at + 2000);
   assert.ok(/_diagramLightboxZoom\s*<=?\s*1/.test(block),
     'fr-99 drag-to-pan: pointerdown must short-circuit when _diagramLightboxZoom <= 1. Without the gate, clicking on a fit-to-card diagram would still try to start a drag.');
 });
@@ -317,6 +322,44 @@ t('app.js: drag uses setPointerCapture so the gesture survives leaving the light
     'fr-99 drag-to-pan: must use setPointerCapture so the drag survives the cursor leaving the lightbox boundary.');
   assert.ok(/releasePointerCapture\s*\(/.test(APP_JS),
     'fr-99 drag-to-pan: must call releasePointerCapture on pointerup so the captured pointer is freed.');
+});
+
+// ── 3.7 Pinch-to-zoom on mobile (2026-06-11 bug-86 follow-up #3) ──
+
+t('app.js: tracks multiple pointers via a Map for pinch detection', () => {
+  // User-requested: "Enlarged image should support enlarge on mobile
+  // via mobile stretch." Pointer Events API delivers each finger as a
+  // separate pointer; we must track them all so we can detect the
+  // 2-finger pinch and compute distance.
+  assert.ok(/activePointers\s*=\s*new Map\(\)|new\s+Map\(\)/.test(APP_JS),
+    'fr-99 pinch-to-zoom: must use a Map (or equivalent multi-pointer tracker) so 2 simultaneous touch pointers can both be tracked. A single boolean / dragState alone can\'t detect pinch.');
+});
+
+t('app.js: pinch computes distance between two pointers + applies as zoom ratio', () => {
+  // The pinch math: ratio = newDist / oldDist, applied to startZoom
+  // gives the new zoom factor. Hypot is the standard distance
+  // computation.
+  assert.ok(/Math\.hypot\s*\(/.test(APP_JS),
+    'fr-99 pinch-to-zoom: must use Math.hypot (or sqrt(dx² + dy²) equivalent) to compute distance between the two touch pointers. The ratio of new/old distance drives the zoom factor.');
+});
+
+t('app.js: pinch is gated on activePointers.size === 2', () => {
+  // Single-finger touch should fall through to drag-to-pan; only when
+  // a SECOND finger touches down does pinch mode kick in. Releasing
+  // either finger ends the pinch.
+  assert.ok(/activePointers\.size\s*===?\s*2|activePointers\.size\s*>=?\s*2/.test(APP_JS),
+    'fr-99 pinch-to-zoom: pinch logic must be gated on activePointers.size === 2 so a single-finger touch still drives drag-to-pan.');
+});
+
+t('styles.css: .diagram-lightbox-content sets touch-action:none so the browser doesn\'t hijack pinch', () => {
+  // Without touch-action:none, mobile Safari + Chrome intercept the
+  // 2-finger pinch for PAGE zoom (not in-element zoom). The JS pinch
+  // handler would never see the gesture.
+  const at = STYLES_CSS.search(/\.diagram-lightbox-content\s*\{/);
+  assert.ok(at > -1);
+  const block = STYLES_CSS.slice(at, at + 2000);
+  assert.ok(/touch-action\s*:\s*none/.test(block),
+    'fr-99 pinch-to-zoom: .diagram-lightbox-content must set touch-action:none so the browser yields touch gestures to the JS pointer-events handler. Without it, pinch goes to page-zoom on mobile.');
 });
 
 // ── 4. Provenance marker ──

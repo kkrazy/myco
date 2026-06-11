@@ -466,6 +466,14 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
   cursor: default;
   box-sizing: border-box;
+  /* bug-86 follow-up #3 (2026-06-11): pinch-to-zoom on mobile.
+     touch-action:none disables the browser's default touch gestures
+     (page zoom, scroll, double-tap-zoom) inside the content card so
+     the JS pointer-events handler owns the pinch + pan gestures
+     cleanly. Pinch becomes our zoom; single-finger drag becomes our
+     pan. Without this, mobile Safari/Chrome intercept the two-finger
+     pinch for page zoom and the user can't zoom the diagram. */
+  touch-action: none;
 }
 .diagram-lightbox-content > svg,
 .diagram-lightbox-content > img {

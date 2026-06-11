@@ -838,10 +838,40 @@ function _bindDiagramLightboxClose() {
     }, { passive: false });    // passive:false required for preventDefault
 
     // bug-86 follow-up #2 (2026-06-11): drag-to-pan when zoomed past 1x.
+    // bug-86 follow-up #3 (2026-06-11): pinch-to-zoom on mobile via
+    // simultaneous 2-pointer tracking (`event.pointerType === 'touch'`
+    // delivers each finger as a separate pointer). When 2 pointers are
+    // active, compute distance between them; the ratio of new/old
+    // distance drives the zoom factor; midpoint anchors the zoom (the
+    // touch-equivalent of cursor-anchored desktop wheel zoom). When
+    // only 1 pointer is active, fall back to the existing drag-to-pan.
+    // touch-action:none on the content (CSS) keeps the browser from
+    // hijacking the pinch for page zoom.
     let dragState = null;
+    const activePointers = new Map();        // pointerId → {x, y}
+    let pinchState = null;                   // {startDist, startZoom, midX, midY} or null
+    const _dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    const _midpoint = (p1, p2) => ({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
+
     content.addEventListener('pointerdown', (e) => {
-      if (_diagramLightboxZoom <= 1) return;        // nothing to pan at 1x
-      if (e.button != null && e.button !== 0) return;  // primary click only
+      // Track every pointer for pinch detection.
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // If 2 pointers now → pinch mode; cancel any single-finger drag
+      // that might have started a frame ago.
+      if (activePointers.size === 2) {
+        const [p1, p2] = [...activePointers.values()];
+        pinchState = {
+          startDist: _dist(p1, p2),
+          startZoom: _diagramLightboxZoom,
+          mid: _midpoint(p1, p2),
+        };
+        dragState = null;                    // cancel pan-in-progress
+        content.style.cursor = '';           // grabbing makes no sense mid-pinch
+        return;
+      }
+      // Single pointer: drag-to-pan if zoomed past 1x.
+      if (_diagramLightboxZoom <= 1) return;
+      if (e.button != null && e.button !== 0) return;
       e.preventDefault();
       dragState = {
         startX: e.clientX,
@@ -854,16 +884,52 @@ function _bindDiagramLightboxClose() {
       try { content.setPointerCapture(e.pointerId); } catch {}
     });
     content.addEventListener('pointermove', (e) => {
+      // Always update the tracked position so pinch math sees latest.
+      if (activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      // Pinch — 2 pointers active.
+      if (pinchState && activePointers.size === 2) {
+        e.preventDefault();
+        const [p1, p2] = [...activePointers.values()];
+        const newDist = _dist(p1, p2);
+        if (newDist <= 0 || pinchState.startDist <= 0) return;
+        const ratio = newDist / pinchState.startDist;
+        const targetZoom = Math.max(
+          DIAGRAM_LIGHTBOX_MIN_ZOOM,
+          Math.min(DIAGRAM_LIGHTBOX_MAX_ZOOM, pinchState.startZoom * ratio)
+        );
+        if (targetZoom === _diagramLightboxZoom) return;
+        const prevZoom = _diagramLightboxZoom;
+        _diagramLightboxZoom = targetZoom;
+        // Anchor on midpoint between fingers (touch-equivalent of
+        // cursor-anchored desktop wheel zoom). Same math as the wheel
+        // handler: keep the midpoint stationary in the viewport.
+        const rect = content.getBoundingClientRect();
+        const midX = pinchState.mid.x - rect.left + content.scrollLeft;
+        const midY = pinchState.mid.y - rect.top + content.scrollTop;
+        const zoomRatio = _diagramLightboxZoom / prevZoom;
+        _applyDiagramLightboxZoom();
+        content.scrollLeft = midX * zoomRatio - (pinchState.mid.x - rect.left);
+        content.scrollTop = midY * zoomRatio - (pinchState.mid.y - rect.top);
+        return;
+      }
+      // Single-pointer pan.
       if (!dragState) return;
       e.preventDefault();
-      // Invert: dragging right should reveal content to the right →
-      // scrollLeft DECREASES (scroll position moves left). So delta is
-      // (start - current).
       content.scrollLeft = dragState.startScrollLeft - (e.clientX - dragState.startX);
       content.scrollTop = dragState.startScrollTop - (e.clientY - dragState.startY);
     });
     const endDrag = (e) => {
-      if (!dragState) return;
+      activePointers.delete(e.pointerId);
+      // End pinch when pointer count drops below 2.
+      if (activePointers.size < 2 && pinchState) {
+        pinchState = null;
+      }
+      if (!dragState) {
+        _applyDiagramLightboxZoom();         // restore cursor
+        return;
+      }
       try { content.releasePointerCapture(dragState.pointerId); } catch {}
       dragState = null;
       // Restore the zoom-aware cursor (grab if still zoomed, default

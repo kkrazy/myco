@@ -3768,7 +3768,7 @@
       "id": "bug-38",
       "text": "Hide explicit turn-result row by merging into adjacent expandable chrome batch",
       "layer": "Bug",
-      "done": false,
+      "done": true,
       "addedAt": "2026-05-28T00:12:54.190Z",
       "addedBy": "kkrazy",
       "source": "user",
