@@ -2807,6 +2807,85 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   margin: 4px 0 2px 0;
   padding-left: 2px;
 }
+/* fr-101: plan-item tags strip — chip pills under the body, before
+   the actions row. Wraps when many tags pile up. Chips reuse the
+   --accent border tone so they sit visually adjacent to status chips
+   without overpowering the row. */
+.artifact-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 4px 0;
+  align-items: center;
+  padding-left: 2px;
+}
+.artifact-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--fg, #eee);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.artifact-tag .tag-text {
+  white-space: nowrap;
+}
+.artifact-tag-remove {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  margin-left: 2px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.artifact-tag-remove:hover,
+.artifact-tag-remove:focus {
+  color: var(--fg, #fff);
+  background: rgba(255, 80, 80, 0.25);
+  outline: none;
+}
+.artifact-tag-add-btn {
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.artifact-tag-add-btn:hover,
+.artifact-tag-add-btn:focus {
+  color: var(--fg, #fff);
+  border-color: var(--accent, #4af);
+  outline: none;
+}
+.artifact-tag-add-input {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--accent, #4af);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--fg, #fff);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 96px;
+  outline: none;
+}
+.artifact-tag-add-input::placeholder { color: var(--muted); }
 /* Markdown rendered inside a plan/test item — paragraphs, lists,
    headings, code, blockquotes, mermaid all need block-level layout. */
 .artifact-item-text.artifact-md > :first-child { margin-top: 0; }

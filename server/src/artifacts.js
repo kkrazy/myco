@@ -465,6 +465,23 @@ function readLegacyArchFromFile(rec) {
 const AUTO_EXECUTE_VOTE_THRESHOLD = 2;
 const COMMENT_TEXT_MAX = 1000;
 const COMMENTS_PER_ITEM_MAX = 50;
+// fr-101: plan-item tags. Tags are a freeform string[] on each item —
+// users can attach categorical labels (frontend, auth, mobile-only, …)
+// for at-a-glance filtering / grouping. Normalization is opinionated
+// (trim → lowercase, ascii-allow-only) so 'Frontend' / 'frontend' /
+// 'FRONTEND' all collapse to one canonical tag. Cap matches the spirit
+// of COMMENTS_PER_ITEM_MAX — small ceiling guards plan.json bloat.
+const TAGS_PER_ITEM_MAX = 20;
+const TAG_MAX_LEN = 32;
+const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+function normalizeTag(raw) {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim().toLowerCase();
+  if (!t) return null;
+  if (t.length > TAG_MAX_LEN) return null;
+  if (!TAG_PATTERN.test(t)) return null;
+  return t;
+}
 
 function emptyArtifact(type) {
   if (type === 'arch') return { markdown: '', updatedAt: null };
@@ -531,6 +548,9 @@ function findItem(rec, type, itemId) {
 function ensureVoterAndCommentFields(item) {
   if (!Array.isArray(item.voters)) item.voters = [];
   if (!Array.isArray(item.comments)) item.comments = [];
+  // fr-101: lazy-init tags too, so legacy plan items materialize the
+  // field on first read without a separate schema migration step.
+  if (!Array.isArray(item.tags)) item.tags = [];
 }
 
 function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
@@ -1066,6 +1086,67 @@ function register(app, deps) {
     persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
     broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
     res.json({ ok: true, comment, item });
+  });
+
+  // fr-101: plan-item tags — add. Cross-user collaborative by design
+  // (same 'authed' tier as vote+comment): any signed-in user can tag
+  // a plan item without needing owner/admin status. Idempotent — if
+  // the (normalized) tag is already on the item, returns ok without
+  // mutating. Caps at TAGS_PER_ITEM_MAX to prevent plan.json bloat.
+  app.post('/sessions/:id/artifact/tag', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'authed');
+    if (!ctx) return;
+    const itemId = String((req.body && req.body.itemId) || req.query.itemId || '');
+    const rawTag = String((req.body && req.body.tag) || req.query.tag || '');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const tag = normalizeTag(rawTag);
+    if (!tag) {
+      return res.status(400).json({
+        error: `invalid tag (must be 1-${TAG_MAX_LEN} chars, [a-z0-9][a-z0-9_-]*)`,
+      });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    const item = findItem(ctx.rec, 'plan', itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    if (item.tags.includes(tag)) {
+      return res.json({ ok: true, item, action: 'noop' });
+    }
+    if (item.tags.length >= TAGS_PER_ITEM_MAX) {
+      return res.status(400).json({
+        error: `too many tags on this item (max ${TAGS_PER_ITEM_MAX})`,
+      });
+    }
+    item.tags.push(tag);
+    persistArtifact(ctx.rec, 'plan', ctx.rec.artifacts.plan);
+    broadcastArtifact(ctx.id, 'plan', ctx.rec.artifacts.plan);
+    res.json({ ok: true, item, action: 'added', tag });
+  });
+
+  // fr-101: plan-item tags — remove. 'authed' tier (same as add) so
+  // any signed-in user can clean up tags. Missing-tag is a 200 no-op
+  // (not 404) so the UI doesn't need to track which tags are real
+  // before firing a delete (handles double-click + race conditions).
+  app.delete('/sessions/:id/artifact/tag', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'authed');
+    if (!ctx) return;
+    const itemId = String(req.query.itemId || '');
+    const rawTag = String(req.query.tag || '');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const tag = normalizeTag(rawTag);
+    if (!tag) return res.status(400).json({ error: 'invalid tag' });
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    const item = findItem(ctx.rec, 'plan', itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    const before = item.tags.length;
+    item.tags = item.tags.filter((t) => t !== tag);
+    const action = item.tags.length < before ? 'removed' : 'noop';
+    if (action === 'removed') {
+      persistArtifact(ctx.rec, 'plan', ctx.rec.artifacts.plan);
+      broadcastArtifact(ctx.id, 'plan', ctx.rec.artifacts.plan);
+    }
+    res.json({ ok: true, item, action, tag });
   });
 
   // fr-48: run-queue routes. Per-session queue of plan items for

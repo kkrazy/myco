@@ -6231,7 +6231,26 @@
         "rewritten": true
       },
       "description": "**Problem:** FR-99 diagram zoom is capped at the viewport, so users cannot enlarge enough to read fine details.\n**Expected:** Diagram can be enlarged beyond the screen/viewport size, with scrolling/panning to inspect details.\n**Actual:** Zoom is limited to fit-to-screen, preventing further enlargement.\n**Context:** Revisit FR-99 implementation."
+    },
+    {
+      "id": "fr-101",
+      "text": "Plan item view: support tags with quick add/delete",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-12T04:19:47.175Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "the plan item view should support tags and allow quick add/delete tags",
+        "rewritten": true
+      },
+      "description": "**Problem:** Users can't categorize or filter plan items because the plan item view has no tag support.\n**Expected:** Plan item view displays tags and offers an inline control to quickly add or delete tags without leaving the view.\n**Actual:** No tag UI exists on the plan item view; tags can't be attached, shown, or removed."
     }
   ],
-  "updatedAt": "2026-06-11T03:16:43.737Z"
+  "updatedAt": "2026-06-12T04:19:53.465Z"
 }

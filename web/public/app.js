@@ -10632,6 +10632,30 @@ function renderArtifact(type, artifact) {
         ${closeBtn}
         ${editBtn}
       </div>`;
+    // fr-101: plan-item tags strip. Renders existing it.tags (lazy-init
+    // server-side via ensureVoterAndCommentFields), a × button per chip,
+    // and an inline “+ tag” affordance that toggles into a small input.
+    // Gated on supportsVoting (plan-only) AND !state.readOnly (true
+    // view-only sessions get a clean read-only chip strip). The handlers
+    // below (artifact-tag-remove, artifact-tag-add-btn,
+    // artifact-tag-add-input) wire to POST/DELETE
+    // /sessions/:id/artifact/tag.
+    const tags = Array.isArray(it.tags) ? it.tags : [];
+    const tagsStrip = supportsVoting ? (() => {
+      const canEditTags = !state.readOnly;
+      const chips = tags.map((tag) => {
+        const removeBtn = canEditTags
+          ? `<button class="artifact-tag-remove" data-id="${escHtml(it.id)}" data-tag="${escHtml(tag)}" title="Remove tag" aria-label="Remove tag ${escHtml(tag)}">×</button>`
+          : '';
+        return `<span class="artifact-tag" data-tag="${escHtml(tag)}"><span class="tag-text">${escHtml(tag)}</span>${removeBtn}</span>`;
+      }).join('');
+      const addAffordance = canEditTags
+        ? `<button class="artifact-tag-add-btn" data-id="${escHtml(it.id)}" title="Add a tag">+ tag</button>` +
+          `<input type="text" class="artifact-tag-add-input" data-id="${escHtml(it.id)}" maxlength="32" placeholder="tag" hidden />`
+        : '';
+      if (!chips && !addAffordance) return '';
+      return `<div class="artifact-item-tags" data-id="${escHtml(it.id)}">${chips}${addAffordance}</div>`;
+    })() : '';
     // Plan/test items render their body as markdown so multi-line
     // text, code fences, lists, and mermaid diagrams all show up
     // properly. Was escHtml inside a span — that wrapper element
@@ -10651,6 +10675,7 @@ function renderArtifact(type, artifact) {
         ${_planItemDetailsHtml(it)}
       </div>
       ${byLine}
+      ${tagsStrip}
       ${actionsRow}
       ${commentsBlock}
     </li>`;
@@ -10748,6 +10773,30 @@ function renderArtifact(type, artifact) {
   });
   body.querySelectorAll('.artifact-comment-delete').forEach((btn) => {
     btn.addEventListener('click', () => onArtifactCommentDelete(type, btn.dataset.id, btn.dataset.cid));
+  });
+  // fr-101: plan-item tags wiring. Three delegated listeners:
+  //   - .artifact-tag-remove → DELETE /artifact/tag
+  //   - .artifact-tag-add-btn → reveal the input + focus it
+  //   - .artifact-tag-add-input → Enter / blur posts the tag and resets
+  // No client-side re-render: the server broadcasts state-update
+  // kind:'artifact' (existing pathway used by vote/comment), so the
+  // chip strip updates the same way the vote counts do.
+  body.querySelectorAll('.artifact-tag-remove').forEach((btn) => {
+    btn.addEventListener('click', () => onArtifactTagRemove(btn.dataset.id, btn.dataset.tag));
+  });
+  body.querySelectorAll('.artifact-tag-add-btn').forEach((btn) => {
+    btn.addEventListener('click', () => onArtifactTagAddToggle(btn));
+  });
+  body.querySelectorAll('.artifact-tag-add-input').forEach((input) => {
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); onArtifactTagAddSubmit(input); }
+      else if (ev.key === 'Escape') { onArtifactTagAddCancel(input); }
+    });
+    input.addEventListener('blur', () => {
+      // Submit on blur if there's content; otherwise just collapse the input.
+      if (input.value && input.value.trim()) onArtifactTagAddSubmit(input);
+      else onArtifactTagAddCancel(input);
+    });
   });
   // fr-6: id-chip click copies the deep link (`<origin><pathname>#<id>`)
   // to the clipboard AND updates location.hash in place, so the URL bar
@@ -11049,6 +11098,83 @@ async function onArtifactCommentDelete(type, itemId, commentId) {
     await loadArtifact(type);
   } catch (err) {
     console.error('[fr-46] comment-delete threw:', err);
+  }
+}
+
+// fr-101: plan-item tag handlers.
+//   - onArtifactTagRemove → DELETE /artifact/tag
+//   - onArtifactTagAddToggle → swap +tag button for the input + focus
+//   - onArtifactTagAddSubmit → POST /artifact/tag, then collapse input
+//   - onArtifactTagAddCancel → collapse input back to +tag button
+// All operate on the plan artifact only (the server endpoint is
+// hard-coded to type=plan). Re-render is driven by the server's
+// state-update kind:'artifact' broadcast, not by a client-side rebuild.
+async function onArtifactTagRemove(itemId, tag) {
+  const sid = state.activeId;
+  if (!sid || !itemId || !tag) return;
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/tag?itemId=${encodeURIComponent(itemId)}&tag=${encodeURIComponent(tag)}`,
+      { method: 'DELETE' }
+    );
+    if (!res || !res.ok) {
+      const errData = res ? await res.json().catch(() => ({})) : {};
+      console.error('[fr-101] tag-remove failed:', res && res.status, errData.error);
+      return;
+    }
+    // Optional fast-path: reload artifact if the broadcast missed.
+    await loadArtifact('plan');
+  } catch (err) {
+    console.error('[fr-101] tag-remove threw:', err);
+  }
+}
+
+function onArtifactTagAddToggle(btn) {
+  // Find the sibling input within the same .artifact-item-tags container.
+  const container = btn.closest('.artifact-item-tags');
+  if (!container) return;
+  const input = container.querySelector('.artifact-tag-add-input');
+  if (!input) return;
+  btn.hidden = true;
+  input.hidden = false;
+  input.value = '';
+  input.focus();
+}
+
+function onArtifactTagAddCancel(input) {
+  const container = input.closest('.artifact-item-tags');
+  if (!container) return;
+  const btn = container.querySelector('.artifact-tag-add-btn');
+  input.hidden = true;
+  input.value = '';
+  if (btn) btn.hidden = false;
+}
+
+async function onArtifactTagAddSubmit(input) {
+  const sid = state.activeId;
+  const itemId = input.dataset.id;
+  const tag = (input.value || '').trim();
+  if (!sid || !itemId || !tag) { onArtifactTagAddCancel(input); return; }
+  // Optimistically collapse the input — the server broadcast / next
+  // loadArtifact will render the new chip.
+  onArtifactTagAddCancel(input);
+  try {
+    const res = await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/artifact/tag`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ itemId, tag }),
+      }
+    );
+    if (!res || !res.ok) {
+      const errData = res ? await res.json().catch(() => ({})) : {};
+      console.error('[fr-101] tag-add failed:', res && res.status, errData.error);
+      return;
+    }
+    await loadArtifact('plan');
+  } catch (err) {
+    console.error('[fr-101] tag-add threw:', err);
   }
 }
 
