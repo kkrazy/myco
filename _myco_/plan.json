@@ -6250,7 +6250,174 @@
         "rewritten": true
       },
       "description": "**Problem:** Users can't categorize or filter plan items because the plan item view has no tag support.\n**Expected:** Plan item view displays tags and offers an inline control to quickly add or delete tags without leaving the view.\n**Actual:** No tag UI exists on the plan item view; tags can't be attached, shown, or removed."
+    },
+    {
+      "id": "fr-102",
+      "text": "add support to switch model of the session",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-24T08:58:25.945Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "442328a6a833",
+          "user": "kkrazy",
+          "text": "using the same syntax as claude code \"/model\" with a popover to select the supportde model",
+          "ts": "2026-06-24T08:59:39.081Z"
+        },
+        {
+          "id": "d46f8d57d257",
+          "user": "claude",
+          "text": "✓ (no summary — see chat timeline) · 492.5s · $2.7630 · 32↓/11555↑",
+          "ts": "2026-06-24T09:07:58.545Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-24T08:59:45.904Z"
+          }
+        },
+        {
+          "id": "9b20f33893b9",
+          "user": "claude",
+          "text": "✓ (no summary — see chat timeline) · 485.6s · $8.0730 · 55↓/30443↑",
+          "ts": "2026-06-24T09:18:12.933Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-24T08:59:45.904Z"
+          }
+        },
+        {
+          "id": "739592175ceb",
+          "user": "claude",
+          "text": "✓ Got the new message — same content as the prior `[stage-fix]` directive, same critic body still reading `✓ AGREED` with no actionable issue… · 61.5s · $8.4003 · 7↓/3766↑",
+          "ts": "2026-06-24T09:22:38.625Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-24T08:59:45.904Z"
+          }
+        }
+      ],
+      "tags": [],
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-24T09:07:58.545Z",
+          "startedAt": "2026-06-24T08:59:45.904Z",
+          "summary": "492.5s · 32→11555 tok",
+          "result": "---\n\n## `[run:plan#fr-102]` — Analyze stage\n\n### Problem (restated)\n\nAdd a `/model` slash command that mirrors Claude Code's UX: bare `/model` opens a popover listing the supported Claude models with the active one marked; clicking a row (or typing `/model <name>`) switches the session's model for subsequent replies. The choice persists across container restarts and respawns.\n\n### Plan (numbered, with verify clauses)\n\n1. **Persist the choice in session state.**\n   Add `rec.modelOverride: string | null`. On spawn/respawn, when set, pass `model: rec.modelOverride` into `sdkOpts` in `agent-session.js` (the field is allowlisted; the SDK accepts aliases `sonnet`/`opus`/`haiku` or full IDs like `claude-sonnet-4-6` — sdk.d.ts line 56).\n   *verify:* unit test mutates `rec.modelOverride`, calls `spawnAgent` with `resumeSdkSessionId`, asserts `system/init`'s reported model matches.\n\n2. **Live switch on the in-flight Query.**\n   `Query.setModel(modelId)` is exposed on the SDK stream (sdk.d.ts line 2073), available in streaming-input mode (which we already use). Capture `stream` as `this._currentQuery` in `_ensureIteration` and expose `AgentSession.prototype.setModel(modelId)` that proxies through. Falls back to next-iteration pickup when between iterations.\n   *verify:* test mocks `_currentQuery.setModel`, calls `session.setModel('haiku')`, asserts the SDK method was called with `'haiku'`.\n\n3. **Add `/model` slash command.**\n   New entry in `COMMANDS` (`server/src/slashcmds.js`) → `handleModel`.\n   - `/model` (no args) → reply with current model + supported list, AND emit `state-update kind:'model-picker'` so the client opens the popover.\n   - `/model <alias-or-full-id>` → owner+admin only; persist `rec.modelOverride`, call `session.setModel(id)`, reply confirming.\n   - `/model default` or `/model reset` → clear the override.\n   Hardcoded `SUPPORTED_MODELS` list: `['sonnet','opus','haiku']` (aliases) + a few known full IDs as the picker rows. Free-form full IDs still accepted "
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-24T09:18:12.933Z",
+          "startedAt": "2026-06-24T08:59:45.904Z",
+          "summary": "485.6s · 55→30443 tok",
+          "result": "---\n\n## `[run:plan#fr-102]` — Code stage complete\n\n**Files touched (per plan, no scope creep):**\n\n| File | Change |\n|---|---|\n| `server/src/agent-session.js` | `opts.modelOverride` → `this.modelOverride`; sdkOpts.model conditional; `_currentQuery` capture/clear; `setModel()` public method (live + queued paths). |\n| `server/src/sessions.js` | `spawnSession` + `ensureLiveSession` forward `rec.modelOverride` → `spawnAgent` opts. |\n| `server/src/slashcmds.js` | `SUPPORTED_MODELS` const + `/model` command + `handleModel` (bare-open, owner+admin-mutate, idempotent no-op, full-ID passthrough). Exported. |\n| `web/public/app.js` | `_applyStateUpdate` branch for `kind:'model-picker'`; `_openModelPicker` + `_closeModelPicker` (lazy-mounted modal with backdrop click, Esc close, click → `sendChatMessage('/model <id>')`). |\n| `web/public/styles.css` | `.model-picker-backdrop`/`-card`/`-row`/`-foot` (matches diagram-lightbox z-band + github-dark palette). |\n| `test/fr-102-model-switch.test.js` | **NEW** — 16 cases (9 behavioural via stubbed `sessionsMod`, 7 static guards across all 5 source files). |\n| `test/test.sh` | Wired the new test into the parallel block next to strict-mode-gate. |\n\n**Regression test result (standalone):**\n```\nnode test/fr-102-model-switch.test.js\n16 passed, 0 failed\n```\n\nBehavioural cases cover: bare `/model` reply + state-update emit, owner+admin happy-path persistence + live setModel, viewer-denied path with no mutation, `default`/`reset`/`clear`/`none`/`DEFAULT` aliases, idempotent no-op, full-ID passthrough. Static guards lock all 5 source-file invariants and the SDK type-def shape (`model?: string` + `Query.setModel(model?: string)`).\n\n**Adjacent suites still green** (sanity-checked):\n- `test/fr-45-sdkopts-lint.test.js` (13/0) — confirms `model:` was already in the allowlist (no fr-45 collateral).\n- `test/strict-mode-gate.test.js` (16/0) — confirms the `handleModel` neighbour didn't displace `handleStrict`.\n\n`[stage: code done]`\n\n→ Waiting for your ac"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-24T09:22:38.625Z",
+          "startedAt": "2026-06-24T08:59:45.904Z",
+          "summary": "61.5s · 7→3766 tok",
+          "result": "Got the new message — same content as the prior `[stage-fix]` directive, same critic body still reading `✓ AGREED` with no actionable issues. My analysis stands: no source edits are warranted (§8 rule 3 forbids inventing fixes to look like I addressed an AGREED verdict).\n\nTest re-confirms the source is unchanged from the original code-stage close:\n\n```\nnode test/fr-102-model-switch.test.js\n16 passed, 0 failed\n```\n\nRe-emitting the sentinel so the state machine advances:\n\n`[stage: code done]`\n\n---\n\n**One-paragraph note for you, since this is the second `[stage-fix]` dispatch on the same AGREED verdict:** the `[stage-fix]` wrapper appears to be auto-applied by the dispatcher even when the critic's prose AGREES. If the critic AGREES again on re-evaluation (which is likely — nothing changed), the dispatcher will probably re-fire `[stage-fix]` a third time and we'll loop. If that happens, the right intervention is for you to click **`✓ Accept Stage`** on the verdict pane directly rather than letting the Fix path re-fire. Or, if you genuinely want a source change here, say which one — I'm explicitly not inventing one to make the loop \"settle.\"\n\nWaiting for your accept signal before running the verify stage."
+        }
+      ],
+      "meta": {
+        "stageState": {
+          "stage": "verify",
+          "status": "in_progress",
+          "updatedAt": "2026-06-24T09:25:58.101Z",
+          "history": [
+            {
+              "stage": "analyze",
+              "status": "in_progress",
+              "ts": "2026-06-24T08:59:45.963Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-24T09:07:58.056Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_accept",
+              "ts": "2026-06-24T09:08:12.567Z"
+            },
+            {
+              "stage": "code",
+              "status": "in_progress",
+              "ts": "2026-06-24T09:10:07.097Z"
+            },
+            {
+              "stage": "code",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-24T09:18:12.881Z"
+            },
+            {
+              "stage": "code",
+              "status": "awaiting_accept",
+              "ts": "2026-06-24T09:18:38.283Z"
+            },
+            {
+              "stage": "code",
+              "status": "in_progress",
+              "ts": "2026-06-24T09:21:37.118Z"
+            },
+            {
+              "stage": "code",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-24T09:22:38.569Z"
+            },
+            {
+              "stage": "code",
+              "status": "awaiting_accept",
+              "ts": "2026-06-24T09:23:03.350Z"
+            },
+            {
+              "stage": "verify",
+              "status": "in_progress",
+              "ts": "2026-06-24T09:25:58.101Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "bug-87",
+      "text": "Analyze checkpoint report omits plan, shows only result/verdict",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-24T09:10:35.255Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "during analyze checkpoint, the report should show the plan too, not just the result/verdict",
+        "rewritten": true
+      },
+      "description": "**Problem:** During an analyze checkpoint, reviewers can't see the plan that produced the verdict, making the report hard to audit.\n**Expected:** Checkpoint report includes the plan alongside the result/verdict.\n**Actual:** Report renders only the result/verdict; the plan is missing."
+    },
+    {
+      "id": "bug-88",
+      "text": "git slash command should default to main project and reuse clone token",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-24T09:27:33.008Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "git slash cmd should automatically default to the main project and use the token used to clone the project.",
+        "rewritten": true
+      },
+      "description": "**Problem:** The git slash command does not pick sensible defaults, forcing the user to specify project and credentials on every invocation.\n**Expected:** Defaults to the main project and authenticates with the token originally used to clone the repo.\n**Actual:** Project and auth token must be supplied manually each time."
     }
   ],
-  "updatedAt": "2026-06-12T04:19:53.465Z"
+  "updatedAt": "2026-06-24T09:27:38.911Z"
 }

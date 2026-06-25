@@ -9794,6 +9794,116 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   transform: scale(1.15);
 }
 
+/* ─── fr-102: /model picker popover ─────────────────────────────────── */
+/* Modal-style chooser opened by the /model slash command. Matches the
+   verdict-pane chrome (dark backdrop, rounded card, github-dark palette).
+   Z-index is the same band as the diagram lightbox so the picker is
+   ABOVE the chat composer + the standard chat content but below any
+   blocking connection overlay. */
+.model-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, .75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.model-picker-backdrop[hidden] {
+  display: none;
+}
+.model-picker-card {
+  width: min(520px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  padding: 18px 20px 14px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
+  color: #e6edf3;
+}
+.model-picker-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.model-picker-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.model-picker-close {
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .15);
+  color: #f0f6fc;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.model-picker-close:hover {
+  background: rgba(255, 255, 255, .14);
+}
+.model-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.model-picker-row {
+  display: grid;
+  grid-template-columns: 24px 100px 1fr;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #e6edf3;
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.model-picker-row:hover {
+  background: #1f242c;
+  border-color: #58a6ff;
+}
+.model-picker-row.active {
+  border-color: #2ea043;
+  background: rgba(46, 160, 67, .08);
+}
+.model-picker-mark {
+  color: #2ea043;
+  font-weight: 700;
+  font-size: 1rem;
+}
+.model-picker-name {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .92rem;
+}
+.model-picker-desc {
+  color: #8b949e;
+  font-size: .82rem;
+  line-height: 1.35;
+}
+.model-picker-foot {
+  font-size: .78rem;
+  color: #8b949e;
+  border-top: 1px solid #21262d;
+  padding-top: 8px;
+}
+.model-picker-foot code {
+  background: rgba(110, 118, 129, .15);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+}
 
 
 

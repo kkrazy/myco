@@ -749,6 +749,87 @@ function _closeDiagramLightbox() {
   if (content) content.innerHTML = '';
 }
 
+// fr-102: model-picker popover. Opened by the server's
+// state-update kind:'model-picker' frame after a bare /model command.
+// Renders a small modal with one row per supported model + a "default"
+// row. Click → sendChatMessage('/model <id>') (or /model default).
+// Esc / × / backdrop click → close. No DOM is built until the first
+// open; the picker root is lazy-mounted on document.body.
+function _openModelPicker(currentId, supported) {
+  let pop = document.getElementById('model-picker');
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = 'model-picker';
+    pop.className = 'model-picker-backdrop';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Choose model for this session');
+    pop.innerHTML = `
+      <div class="model-picker-card" role="document">
+        <div class="model-picker-head">
+          <span class="model-picker-title">Choose model</span>
+          <button class="model-picker-close" type="button" title="Close (Esc)" aria-label="Close">×</button>
+        </div>
+        <div class="model-picker-list"></div>
+        <div class="model-picker-foot">
+          Free-form full IDs are accepted via <code>/model &lt;claude-…&gt;</code>.
+        </div>
+      </div>
+    `;
+    document.body.appendChild(pop);
+    pop.addEventListener('click', (e) => {
+      if (e.target === pop) _closeModelPicker();    // backdrop click
+    });
+    pop.querySelector('.model-picker-close').addEventListener('click', _closeModelPicker);
+    pop.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); _closeModelPicker(); }
+    });
+  }
+  const list = pop.querySelector('.model-picker-list');
+  if (list) {
+    const rows = [];
+    // First row: "default" (clears the override).
+    const isDefault = !currentId;
+    rows.push(
+      `<button type="button" class="model-picker-row${isDefault ? ' active' : ''}" data-id="">` +
+      `<span class="model-picker-mark">${isDefault ? '✓' : ''}</span>` +
+      `<span class="model-picker-name">default</span>` +
+      `<span class="model-picker-desc">SDK picks the model (no per-session override).</span>` +
+      `</button>`
+    );
+    for (const m of (supported || [])) {
+      const active = currentId && currentId === m.id;
+      rows.push(
+        `<button type="button" class="model-picker-row${active ? ' active' : ''}" data-id="${escHtml(m.id)}">` +
+        `<span class="model-picker-mark">${active ? '✓' : ''}</span>` +
+        `<span class="model-picker-name">${escHtml(m.label || m.id)}</span>` +
+        `<span class="model-picker-desc">${escHtml(m.desc || '')}</span>` +
+        `</button>`
+      );
+    }
+    list.innerHTML = rows.join('');
+    list.querySelectorAll('.model-picker-row').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id') || '';
+        // Empty data-id → /model default (clear override).
+        sendChatMessage(id ? `/model ${id}` : '/model default');
+        _closeModelPicker();
+      });
+    });
+  }
+  pop.hidden = false;
+  // Tabindex on the backdrop so keydown(Escape) fires without a focused
+  // child. Focus the close button as a sensible default focus target.
+  pop.tabIndex = -1;
+  setTimeout(() => {
+    try { pop.focus(); } catch {}
+  }, 0);
+}
+
+function _closeModelPicker() {
+  const pop = document.getElementById('model-picker');
+  if (pop) pop.hidden = true;
+}
+
 // Delegated dblclick listener. Scope is enforced to inside
 // #chat-messages or #files-view-body (chat pane + file viewer — the
 // two surfaces in the user's request). Avatars + chrome icons are
@@ -7866,6 +7947,16 @@ function _applyStateUpdate(msg) {
     // strip at the top of the chat pane.
     state.runQueue = msg.state || { entries: [], paused: false, counts: {} };
     _renderRunQueueStrip();
+    return;
+  }
+  if (msg.kind === 'model-picker') {
+    // fr-102: /model command opens a picker popover with one row per
+    // supported model. msg.current is the current override (or null →
+    // SDK default); msg.supported is the canonical list from the
+    // server's SUPPORTED_MODELS const. Click → sendChatMessage('/model <id>')
+    // which re-enters handleModel and either reports "no change" or
+    // persists the new override. Esc or backdrop click closes.
+    _openModelPicker(msg.current || null, Array.isArray(msg.supported) ? msg.supported : []);
     return;
   }
   if (msg.kind === 'critique-review') {

@@ -1128,7 +1128,14 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   // session root wrapper. claudeMdRoot computed above mirrors the
   // same choice.
   const agentCwd = resolveAgentCwd(record);
-  const session = spawnAgent(id, { cwd: agentCwd, cols, rows, user });
+  // fr-102: forward rec.modelOverride at spawn so a record seeded with
+  // a non-default model (via /model before the first turn) takes effect
+  // on iteration 1. The bare-spawn case (no override seeded yet) passes
+  // null and the SDK uses its default model.
+  const session = spawnAgent(id, {
+    cwd: agentCwd, cols, rows, user,
+    modelOverride: record.modelOverride || null,
+  });
   ptyMod._registerExternalSession(id, session);
   return { id, cwd: record.cwd, mode };
 }
@@ -1228,6 +1235,11 @@ async function ensureLiveSession(sessionId) {
     resumeSdkSessionId: rec.sdkSessionId || null,
     // fr-26: re-seed git identity on respawn.
     user: rec.user || null,
+    // fr-102: re-seed the model override so a session that picked a
+    // non-default model keeps it across container restarts / reaper
+    // re-spawns. Without this, every respawn would silently revert to
+    // the SDK default while rec.modelOverride sat stale on disk.
+    modelOverride: rec.modelOverride || null,
   });
   ptyMod._registerExternalSession(sessionId, session);
   console.log(`[ensureLive] respawned agent for ${sessionId} cwd=${liveCwd} resume=${rec.sdkSessionId || 'none'}`);

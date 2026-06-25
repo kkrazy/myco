@@ -34,6 +34,20 @@ const REMOTE_LABEL_BY_LAYER = {
   Todo:    ['todo'],
 };
 
+// fr-102: supported Claude models shown in the /model picker. The list
+// is intentionally short (the three family aliases plus a couple of
+// recent full IDs from sdk.d.ts comments) — free-form full IDs are
+// still accepted by handleModel so the slash command doesn't go stale
+// every time Anthropic ships a new variant. Single source of truth:
+// both the picker popover (web/public/app.js) and the slash-command
+// validator (handleModel) read from this list. Kept in default-first
+// order so the popover marks the implicit default cleanly.
+const SUPPORTED_MODELS = [
+  { id: 'sonnet', label: 'Sonnet',  desc: 'Family alias — Anthropic\'s balanced model. Default for most flows.' },
+  { id: 'opus',   label: 'Opus',    desc: 'Family alias — most capable; higher latency and cost.' },
+  { id: 'haiku',  label: 'Haiku',   desc: 'Family alias — fastest and cheapest; good for short turns.' },
+];
+
 // Registered commands. Aliases share a handler.
 const COMMANDS = [
   {
@@ -216,6 +230,15 @@ const COMMANDS = [
     summary: 'Run a git subcommand in the session workspace. Output is returned as-is. Owner+admin only.',
     usage: '/git status · /git log --oneline -10 · /git clone https://… · /git fetch origin',
     handler: handleGit,
+  },
+  // fr-102: switch the Claude model used for this session. Bare /model
+  // opens a picker popover; /model <id> sets it; /model default clears.
+  // Owner+admin can set; everyone can read (mirrors /strict).
+  {
+    names: ['model'],
+    summary: 'Switch the Claude model for this session (sonnet / opus / haiku / full ID). Owner+admin to change.',
+    usage: '/model · /model <sonnet|opus|haiku|claude-…> · /model default',
+    handler: handleModel,
   },
   {
     names: ['help'],
@@ -1797,6 +1820,104 @@ function handleShare(ctx) {
 // can flip (admins inherit per fr-39). When ON, handleChatMessage
 // blocks any claude-bound chat message that lacks a [run:plan#<id>]
 // marker, with a one-shot reply explaining how to unblock.
+// fr-102: /model — switch the Claude model used for this session.
+//
+//  /model                    → reply with current model + list, emit
+//                              state-update kind:'model-picker' so the
+//                              chat-pane opens the popover.
+//  /model <id>               → owner+admin only; persist rec.modelOverride,
+//                              call session.setModel for the live switch.
+//  /model default | reset    → clear the override (revert to SDK default).
+//
+// The owner+admin gate matches /strict's ladder — model choice is a
+// per-session configuration concern, not destructive in isolation, so
+// admins inherit it. Free-form full IDs are accepted (no client-side
+// whitelist) to dodge the staleness problem; the SDK validates the
+// name server-side and a typo surfaces in the next system/init event.
+function handleModel(ctx) {
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/model: session not found)');
+    return;
+  }
+  const arg = String((ctx && ctx.args) || '').trim();
+  const current = rec.modelOverride || null;
+  const currentLabel = current || '(default — SDK chooses)';
+
+  if (!arg) {
+    // Bare /model — reply with status + supported aliases, AND fire a
+    // state-update so the live chat pane opens the picker popover.
+    // Anyone attached can read; the picker enforces the owner+admin
+    // gate on click via the existing reply path (the click sends
+    // `/model <id>` which lands in this same handler).
+    const lines = [];
+    lines.push(`**Current model:** \`${currentLabel}\``);
+    lines.push('');
+    lines.push('**Supported aliases:**');
+    for (const m of SUPPORTED_MODELS) {
+      const mark = (current && current === m.id) ? '✓ ' : '  ';
+      lines.push(`${mark}\`${m.id}\` — ${m.desc}`);
+    }
+    lines.push('');
+    lines.push('Use `/model <alias>` to switch, or `/model default` to revert. Full IDs (e.g. `claude-sonnet-4-6`) also accepted.');
+    ctx.reply(lines.join('\n'));
+    if (ctx.session && typeof ctx.session.emit === 'function') {
+      ctx.session.emit('state-update', {
+        kind: 'model-picker',
+        current,
+        supported: SUPPORTED_MODELS,
+      });
+    }
+    return;
+  }
+
+  // Mutating branches — gate on owner+admin.
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    ctx.reply(`(/model <id> is owner-or-admin only. Session owner is @${rec.user}. Bare \`/model\` (read-only) is open to everyone.)`);
+    return;
+  }
+
+  const argLc = arg.toLowerCase();
+  const isClear = argLc === 'default' || argLc === 'reset' || argLc === 'none' || argLc === 'clear';
+  const next = isClear ? null : arg;
+
+  // Idempotent — no-op chat noise if the user re-picks the current.
+  const sameAsCurrent = (next === current) || (!next && !current);
+  if (sameAsCurrent) {
+    ctx.reply(`(model is already \`${currentLabel}\` — no change.)`);
+    return;
+  }
+
+  // Persist the new override on the session record.
+  rec.modelOverride = next;
+  sessionsMod.saveStore();
+
+  // Live switch via the AgentSession's setModel (best-effort — falls
+  // back to next-iteration sdkOpts.model if the live Query is null).
+  const session = ctx.session;
+  if (session && typeof session.setModel === 'function') {
+    Promise.resolve(session.setModel(next)).catch((err) => {
+      console.error(`[fr-102] /model live setModel rejected: ${err && err.message ? err.message : err}`);
+    });
+  }
+
+  // Broadcast the new state so any open picker pane re-renders the
+  // checkmark on the right row without needing a /model re-fetch.
+  if (session && typeof session.emit === 'function') {
+    session.emit('state-update', {
+      kind: 'model-picker',
+      current: next,
+      supported: SUPPORTED_MODELS,
+    });
+  }
+
+  ctx.reply(
+    next
+      ? `✓ Model set to \`${next}\`. Takes effect on the next reply.`
+      : `✓ Model override cleared. Next reply uses the SDK default.`
+  );
+}
+
 function handleStrict(ctx) {
   const sessionsMod = require('./sessions');
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
@@ -2238,6 +2359,11 @@ module.exports = {
   parseCommand,
   listCommands,
   ASSISTANT_USER,
+  // fr-102: exported so the picker UI + test/fr-102 can share one
+  // source of truth for the supported-models list.
+  SUPPORTED_MODELS,
+  // fr-102: exposed for unit testing in isolation.
+  handleModel,
   // Exposed for artifacts.js refresh hook + future callers.
   mergePlanItems,
   dedupePlanItems,

@@ -25,7 +25,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { sliceFn } = require('./_lib/fn-body');
+const { sliceFn, fnBody } = require('./_lib/fn-body');
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -48,9 +48,21 @@ t('web/public/app.js: clarify popover renders a #chat-clarify-copy button betwee
   // Locate the popover innerHTML template + verify the order:
   // input → copy → send → close (Copy is a side-action, Send stays
   // the primary action).
-  const at = app.search(/pop\.innerHTML\s*=\s*`/);
-  assert.ok(at > -1, 'popover innerHTML template must exist.');
-  const tmpl = app.slice(at, at + 2500);
+  //
+  // CLAUDE.md §10b fix (fr-102 regression): pre-fr-102 the test
+  // anchored on the first `pop.innerHTML = ` template in app.js
+  // because there was only one. fr-102 added a second one (the
+  // model-picker template inside _openModelPicker) that sits
+  // EARLIER in the file, so the bare search picked that up and
+  // sliced 2500 bytes from it — the clarify-popover ids weren't in
+  // that window → false-positive red. The lasting fix is to anchor
+  // on the function that owns this template (_openClarifyPopover)
+  // and slice its actual body via the §10b helper.
+  const body = fnBody(app, /function\s+_openClarifyPopover\s*\(/);
+  assert.ok(body, '_openClarifyPopover function body must be locatable.');
+  const at = body.search(/pop\.innerHTML\s*=\s*`/);
+  assert.ok(at > -1, 'popover innerHTML template must exist inside _openClarifyPopover.');
+  const tmpl = body.slice(at);
   const inputIdx = tmpl.indexOf('id="chat-clarify-input"');
   const copyIdx = tmpl.indexOf('id="chat-clarify-copy"');
   const sendIdx = tmpl.indexOf('id="chat-clarify-send"');

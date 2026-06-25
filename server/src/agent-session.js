@@ -161,9 +161,22 @@ class AgentSession extends EventEmitter {
     // when respawning an AgentSession after a server restart so the
     // SDK conversation picks up where the prior process left off.
     this.sdkSessionId = opts.resumeSdkSessionId || null;
+    // fr-102: per-session model override. When set (string), passed to
+    // the SDK as sdkOpts.model. Accepts an alias ('sonnet'/'opus'/'haiku')
+    // or a full ID ('claude-sonnet-4-6'). null/undefined → SDK default.
+    // Sourced from rec.modelOverride by sessions.spawnSession +
+    // ensureLiveSession so the choice survives container restarts /
+    // re-spawns. Mutated live by AgentSession.setModel() which also
+    // calls Query.setModel on the in-flight stream (no respawn needed).
+    this.modelOverride = opts.modelOverride || null;
     // Latest model + tool list reported by system/init; useful for the
     // attach-snapshot a freshly-connecting client should see.
     this._initSnapshot = null;
+    // fr-102: handle to the in-flight SDK Query (set after query() returns
+    // in _ensureIteration). Used by setModel() to call Query.setModel
+    // for a live model switch (streaming-input mode, sdk.d.ts:2073).
+    // Cleared to null when the iteration ends.
+    this._currentQuery = null;
     // bug-21 fix (parallel canUseTool fires): pendingMenus is a
     // Map<hash, menu> rather than a single slot. With parallel tool
     // calls the SDK fires canUseTool for BOTH tools before either is
@@ -435,6 +448,11 @@ class AgentSession extends EventEmitter {
         },
       };
       if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
+      // fr-102: per-session model override. When unset, the SDK uses its
+      // default; when set, it accepts an alias ('sonnet'/'opus'/'haiku')
+      // or full ID ('claude-sonnet-4-6'). The SDK validates this server-
+      // side — invalid names surface in system/init error events.
+      if (this.modelOverride) sdkOpts.model = this.modelOverride;
 
       // fr-45: lint sdkOpts keys against the SDK's documented Options
       // type. Logs (does not throw) on unknown keys — silent-typo
@@ -446,6 +464,12 @@ class AgentSession extends EventEmitter {
       let stream, initErr = null;
       try {
         stream = query({ prompt: this._msgQueue, options: sdkOpts });
+        // fr-102: stash the Query handle so setModel() can call
+        // Query.setModel on the live stream. Streaming-input mode is
+        // required (we use AsyncMessageQueue, so we qualify). The
+        // _currentQuery slot is cleared at iteration end so a stale
+        // handle from a dead stream can't be invoked.
+        this._currentQuery = stream;
       } catch (err) {
         initErr = err;
       }
@@ -623,6 +647,11 @@ class AgentSession extends EventEmitter {
     this._iterating = false;
     this._msgQueue = null;
     this._abortController = null;
+    // fr-102: clear the Query handle so setModel() falls back to the
+    // "between iterations" path (which mutates this.modelOverride for
+    // the next iteration's sdkOpts.model). Calling setModel on a dead
+    // stream would 400.
+    this._currentQuery = null;
     if (this.alive) this.emit('idle');
     // fr-86: deferred-restart hook. If /clear new fired while a turn
     // was in flight, requestRestart() set this._pendingRestart=true
@@ -743,6 +772,33 @@ class AgentSession extends EventEmitter {
   // where we left off (modulo any tool that was mid-execution when the
   // abort fired — claude code's hook/permission system handles partial
   // results gracefully).
+  // fr-102: switch the session's model. Two paths:
+  //   1. Live path — when an iteration is running (this._currentQuery
+  //      is set) call Query.setModel on the live stream so the very
+  //      next assistant turn uses the new model.
+  //   2. Persistence path — always mutate this.modelOverride so the
+  //      next iteration's sdkOpts.model picks up the new value (covers
+  //      the "between iterations" case where there is no live Query).
+  // Caller is responsible for persisting rec.modelOverride to disk.
+  // modelId: alias ('sonnet'/'opus'/'haiku') or full ID; null/undefined
+  // clears the override (reverts to the SDK default).
+  async setModel(modelId) {
+    const next = (modelId && String(modelId).trim()) || null;
+    this.modelOverride = next;
+    if (this._currentQuery && typeof this._currentQuery.setModel === 'function') {
+      try {
+        await this._currentQuery.setModel(next || undefined);
+        console.log(`[fr-102] live setModel(${next || 'default'}) on session ${this.sessionId}`);
+      } catch (err) {
+        console.error(`[fr-102] live setModel failed for ${this.sessionId}: ${err && err.message ? err.message : err}`);
+        // Don't rethrow — the next iteration will pick up
+        // this.modelOverride via sdkOpts.model regardless.
+      }
+    } else {
+      console.log(`[fr-102] queued setModel(${next || 'default'}) on session ${this.sessionId} (no live Query)`);
+    }
+  }
+
   interrupt() {
     if (!this.alive) return;
     if (this._abortController) {

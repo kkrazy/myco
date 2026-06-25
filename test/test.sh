@@ -4146,6 +4146,15 @@ test_chat_window() {
   # BEFORE the claude-dispatch shouldAskAssistant call, and the
   # /strict slash command + owner+admin gate.
   node_test_result test/strict-mode-gate.test.js "test/strict-mode-gate.test.js (16 cases)"
+  # fr-102: per-session Claude-model switch via /model slash command.
+  # Locks: SUPPORTED_MODELS export (sonnet/opus/haiku), /model registration
+  # + owner+admin gate on mutate (open for bare read), rec.modelOverride
+  # persistence path, AgentSession.setModel public method + _currentQuery
+  # capture/clear, sessions.js spawnSession + ensureLiveSession both
+  # forward rec.modelOverride to spawnAgent, and the client picker plumbing
+  # (state-update kind:"model-picker" handler, _openModelPicker function,
+  # .model-picker-* styles).
+  node_test_result test/fr-102-model-switch.test.js "test/fr-102-model-switch.test.js (16 cases)"
   # bug-17: admin grant must propagate to already-attached WSes (the
   # readOnly flag is one-shot at attach time, so rec.admins changes
   # don't reach in-flight viewer connections without a reconnect).
