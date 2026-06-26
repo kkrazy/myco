@@ -4155,6 +4155,15 @@ test_chat_window() {
   # (state-update kind:"model-picker" handler, _openModelPicker function,
   # .model-picker-* styles).
   node_test_result test/fr-102-model-switch.test.js "test/fr-102-model-switch.test.js (16 cases)"
+  # fr-103: chat-mediated refresh of the Claude subscription credential.
+  # Locks: claude-auth.js module surface (startLogin/hasPendingLogin/
+  # getPendingLogin/feedCallback/cancelLogin), `claude auth login
+  # --claudeai` spawn args, mocked subprocess lifecycle (onUrl/onResult),
+  # /login slash command registration + owner+admin gate for mutate,
+  # attach.js handleChatMessage diverts non-slash text from the login
+  # owner to feedCallback BEFORE the slash dispatcher, app.js +
+  # styles.css chat-row affordances for login-prompt + login-callback.
+  node_test_result test/fr-103-login-refresh.test.js "test/fr-103-login-refresh.test.js (19 cases)"
   # bug-17: admin grant must propagate to already-attached WSes (the
   # readOnly flag is one-shot at attach time, so rec.admins changes
   # don't reach in-flight viewer connections without a reconnect).

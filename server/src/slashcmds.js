@@ -240,6 +240,16 @@ const COMMANDS = [
     usage: '/model · /model <sonnet|opus|haiku|claude-…> · /model default',
     handler: handleModel,
   },
+  // fr-103: refresh the Claude subscription credential without leaving
+  // chat. Two-step gate (G2) — bare /login warns, /login confirm spawns
+  // claude auth login --claudeai and surfaces the OAuth URL. The next
+  // chat message from the same user is treated as the callback code.
+  {
+    names: ['login'],
+    summary: 'Refresh the Claude subscription credential. CONTAINER-WIDE — affects all sessions. Owner+admin to run.',
+    usage: '/login (warn) · /login confirm (start) · /login cancel (abort) · /login status',
+    handler: handleLogin,
+  },
   {
     names: ['help'],
     summary: 'List available chat commands',
@@ -1918,6 +1928,134 @@ function handleModel(ctx) {
   );
 }
 
+// fr-103: refresh the Claude subscription credential.
+//
+//  /login                 → warn + show status; require explicit confirm.
+//  /login confirm         → owner+admin only; spawn claude auth login,
+//                           post URL to chat. Next chat message from the
+//                           same user gets piped as the callback code
+//                           (routed in attach.js handleChatMessage BEFORE
+//                           the slash dispatcher fires).
+//  /login cancel          → kill any pending subprocess.
+//  /login status          → quick status (pending / no pending).
+//
+// G2 gate (analyze-stage A4): the confirm step itself is the gate. We
+// don't ALSO require a confirm-within-window mark — the explicit
+// `confirm` argument IS the confirmation. Simpler, no per-session
+// timer to manage, no race window.
+//
+// Container-wide side-effect: refreshing rewrites
+// `~/.claude/.credentials.json`, which the SDK reads per-invocation
+// across EVERY session in this container. The user-facing reply
+// makes that visible.
+function handleLogin(ctx) {
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/login: session not found)');
+    return;
+  }
+  const claudeAuth = require('./claude-auth');
+  const arg = String((ctx && ctx.args) || '').trim().toLowerCase();
+  const session = ctx.session;
+
+  // Always-available read-only branches first.
+  if (arg === 'status') {
+    if (claudeAuth.hasPendingLogin(ctx.sessionId)) {
+      const entry = claudeAuth.getPendingLogin(ctx.sessionId);
+      const ageSec = Math.floor((Date.now() - entry.startTs) / 1000);
+      ctx.reply(`A login flow is in progress (${ageSec}s ago, started by @${entry.owner || 'unknown'}). Reply with the OAuth callback code, or \`/login cancel\` to abort.`);
+    } else {
+      ctx.reply('No login flow in progress. `/login confirm` to start one.');
+    }
+    return;
+  }
+
+  if (arg === 'cancel') {
+    if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+      ctx.reply(`(/login cancel is owner-or-admin only. Session owner is @${rec.user}.)`);
+      return;
+    }
+    const killed = claudeAuth.cancelLogin(ctx.sessionId);
+    ctx.reply(killed
+      ? '✓ Pending login flow cancelled.'
+      : '(no login flow was pending — nothing to cancel.)'
+    );
+    return;
+  }
+
+  // Mutating branches: owner+admin only.
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    ctx.reply(`(/login confirm is owner-or-admin only. Session owner is @${rec.user}. Bare \`/login status\` is open to everyone.)`);
+    return;
+  }
+
+  if (arg !== 'confirm') {
+    // Bare /login (or anything that isn't an alias) — warn.
+    ctx.reply(
+      '⚠ `/login` refreshes the Claude subscription credential for the WHOLE container — every session attached to this myco container will pick up the new credential on its next iteration.\n\n' +
+      'Run `/login confirm` to proceed. You will get back an OAuth URL; paste the callback code as your next chat message. `/login cancel` aborts at any time.'
+    );
+    return;
+  }
+
+  // /login confirm — go.
+  if (claudeAuth.hasPendingLogin(ctx.sessionId)) {
+    ctx.reply('(a login flow is already pending — reply with the callback code, or `/login cancel` first.)');
+    return;
+  }
+
+  let entry;
+  try {
+    entry = claudeAuth.startLogin(ctx.sessionId, {
+      owner: ctx.user,
+      onUrl: (url) => {
+        if (url) {
+          // meta.kind:'login-prompt' lets the chat-pane render the URL
+          // as a clickable link + show an inline "paste code" hint.
+          ctx.reply(
+            `🔑 Open this URL to sign in, then paste the callback code as your next chat message:\n\n${url}\n\n(You have ${Math.floor(claudeAuth.DEFAULT_TIMEOUT_MS / 60000)} minutes. \`/login cancel\` to abort.)`,
+            { meta: { kind: 'login-prompt', url } }
+          );
+        } else {
+          ctx.reply(
+            `(claude auth login printed no URL within ${Math.floor(claudeAuth.URL_WAIT_MS / 1000)}s. ` +
+            'Either the CLI is broken on this host, or it changed its output format. ' +
+            '`/login cancel` to abort.)'
+          );
+        }
+      },
+      onResult: ({ ok, exitCode, stdout, stderr, durationMs }) => {
+        const reply = ok
+          ? `✓ Credential refreshed (took ${(durationMs / 1000).toFixed(1)}s). All sessions in this container will pick up the new auth on their next iteration.`
+          : `✗ Login failed (exit ${exitCode}, ${(durationMs / 1000).toFixed(1)}s).` +
+            (stderr ? `\n\nstderr (tail):\n\`\`\`\n${stderr}\n\`\`\`` : '') +
+            (stdout && !stderr ? `\n\nstdout (tail):\n\`\`\`\n${stdout}\n\`\`\`` : '');
+        if (session && typeof session.emit === 'function') {
+          // emit a state-update so the client clears the login-prompt
+          // input row immediately, even if the chat reply is delayed.
+          session.emit('state-update', { kind: 'login-result', ok, exitCode });
+        }
+        // Use a fresh reply rather than ctx.reply (the slash-dispatch
+        // closure may have been garbage-collected by the time the
+        // subprocess exits). Append via sessionsMod directly.
+        const replyMsg = {
+          user: ASSISTANT_USER,
+          text: reply,
+          ts: new Date().toISOString(),
+        };
+        sessionsMod.appendChatMessage(ctx.sessionId, replyMsg);
+        if (session && typeof session.emit === 'function') {
+          session.emit('chat', replyMsg);
+        }
+      },
+    });
+  } catch (err) {
+    ctx.reply(`(/login confirm: failed to spawn — ${err && err.message ? err.message : err})`);
+    return;
+  }
+  ctx.reply('Starting `claude auth login --claudeai`… the OAuth URL will arrive in a moment.');
+}
+
 function handleStrict(ctx) {
   const sessionsMod = require('./sessions');
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
@@ -2364,6 +2502,8 @@ module.exports = {
   SUPPORTED_MODELS,
   // fr-102: exposed for unit testing in isolation.
   handleModel,
+  // fr-103: exposed for unit testing /login parse + gate logic.
+  handleLogin,
   // Exposed for artifacts.js refresh hook + future callers.
   mergePlanItems,
   dedupePlanItems,

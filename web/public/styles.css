@@ -9905,5 +9905,29 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: .78rem;
 }
 
+/* ─── fr-103: /login chat-row affordances ─────────────────────────── */
+/* login-prompt: the "🔑 Open this URL…" assistant row. Subtle accent
+   makes it stand out from claude's normal replies without being loud
+   (a real OAuth URL warrants attention but the row is in chat, not a
+   modal). */
+.chat-msg.chat-msg-login-prompt {
+  border-left: 3px solid #d29922;             /* github-dark warning amber */
+  background: rgba(210, 153, 34, .06);
+  padding-left: 12px;
+}
+.chat-msg.chat-msg-login-prompt a {
+  color: #f0c674;                              /* a touch warmer than default link */
+  word-break: break-all;
+}
+
+/* login-callback: the user's pasted code, echoed back. Muted so it
+   reads as a system-y trace ("this went to a subprocess, not to
+   claude") rather than a normal chat bubble. */
+.chat-msg.chat-msg-login-callback {
+  opacity: .65;
+  font-style: italic;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .85rem;
+}
 
 

@@ -2229,6 +2229,48 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     if (acceptHandled) return;
   }
 
+  // fr-103: chat-mediated /login callback routing. When a login flow is
+  // pending for this session, the NEXT chat message from the login owner
+  // is the OAuth callback code — pipe it to the subprocess's stdin
+  // instead of dispatching it normally. /login cancel / /login status
+  // still need to flow through the slash dispatcher, so we only divert
+  // NON-slash text from the login owner. Other users' chat continues to
+  // route normally (so the session doesn't go dark for everyone while
+  // someone runs /login).
+  try {
+    const claudeAuth = require('./claude-auth');
+    const pending = claudeAuth.getPendingLogin(sessionId);
+    if (pending && pending.owner === user && !text.startsWith('/') && text.trim()) {
+      // Echo the user's text into the chat record (the SDK doesn't see
+      // it — we're piping to a subprocess instead) so cross-device
+      // catch-up still shows what they typed. Stamp meta.kind so the
+      // client knows not to expect a claude reply for this row.
+      const userMsg = {
+        user,
+        text,
+        ts: new Date().toISOString(),
+        meta: { kind: 'login-callback' },
+      };
+      sessionsMod.appendChatMessage(sessionId, userMsg);
+      session.emit('chat', userMsg);
+      const piped = claudeAuth.feedCallback(sessionId, text);
+      if (!piped) {
+        const replyMsg = {
+          user: ASSISTANT_USER,
+          text: '(login subprocess no longer accepting input — the flow may have already completed or failed. `/login status` to check.)',
+          ts: new Date().toISOString(),
+        };
+        sessionsMod.appendChatMessage(sessionId, replyMsg);
+        session.emit('chat', replyMsg);
+      }
+      return;
+    }
+  } catch (err) {
+    console.error(`[fr-103] login-callback routing failed: ${err.message}`);
+    // Fall through to normal handling so a broken /login plumbing
+    // doesn't black-hole every chat message.
+  }
+
   if (text.startsWith('/')) {
     const rec = sessionsMod.loadStore().sessions[sessionId];
     const absCwd = rec && rec.absCwd;

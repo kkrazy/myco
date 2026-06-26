@@ -5742,6 +5742,15 @@ function renderChatMessage(m, isActiveMenu) {
   if (isMention) cls += ' chat-msg-mention';
   if (isBroadcast) cls += ' chat-msg-mention-all';
   if (isMentionToMe) cls += ' chat-msg-mention-me';
+  // fr-103: /login flow markings. login-prompt is the server's "here's
+  // the OAuth URL" message — highlight subtly so it stands out from
+  // claude's normal replies. login-callback is the user's pasted code,
+  // echoed back so cross-device clients see what was sent; render
+  // muted to signal "this didn't go to claude, it went to a
+  // subprocess." Markdown rendering already turns the bare https URL
+  // into a clickable link, so no special HTML is needed beyond a class.
+  if (m.meta && m.meta.kind === 'login-prompt') cls += ' chat-msg-login-prompt';
+  if (m.meta && m.meta.kind === 'login-callback') cls += ' chat-msg-login-callback';
   // For menu broadcasts, the inline buttons below ARE the picker; the
   // chat body just sets the scene with the question. Override the text
   // body to a minimal "lead + question" form regardless of what the
