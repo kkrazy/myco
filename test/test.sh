@@ -4191,6 +4191,14 @@ test_chat_window() {
   # (giteeLogin + gitee/<owner>/<repo>.login), listAllPats/listRepos
   # skip the sidecars, /setgiteelogin slash command + owner+admin gate.
   node_test_result test/bug-91-credential-helper-provider-username.test.js "test/bug-91-credential-helper-provider-username.test.js (20 cases)"
+  # fr-105: auto-derive + store the gitee login from /setpat's validated
+  # fetchUser response, so /setgiteelogin becomes optional in the common
+  # case where the token was set via /setpat. Locks: gitee path stores
+  # profile.login via setGiteeLogin, guarded on getGiteeLogin returning
+  # null (operator-set values sacred), github path skipped, defensive
+  # against empty login + setter failure, reply mentions the auto-store
+  # only when it fires.
+  node_test_result test/fr-105-auto-derive-gitee-login.test.js "test/fr-105-auto-derive-gitee-login.test.js (8 cases)"
   # bug-17: admin grant must propagate to already-attached WSes (the
   # readOnly flag is one-shot at attach time, so rec.admins changes
   # don't reach in-flight viewer connections without a reconnect).

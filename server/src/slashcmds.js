@@ -1469,6 +1469,34 @@ async function handleSetPat(ctx) {
     ctx.reply(`(could not save token: ${err.message})`);
     return;
   }
+  // fr-105: auto-derive + store the gitee login from the token we just
+  // validated. Gitee's HTTPS auth requires the credential username to
+  // match the token's owning account (unlike github which ignores it).
+  // Bug-91 introduced the storage slot (rec.giteeLogin) + the
+  // /setgiteelogin slash command — but that's an EXTRA step the user
+  // has to know to take. Since fetchUser already returned profile.login,
+  // we can just persist it here so the credential helper picks it up
+  // automatically on the next push. Guarded on getGiteeLogin returning
+  // null (nothing stored yet) so an operator-set value from an earlier
+  // explicit /setgiteelogin is NEVER clobbered.
+  //
+  // Gitee-only: github's helper output is unconditionally
+  // `username=x-access-token` (github's convention), so there's no
+  // reason to touch giteeLogin for a github /setpat.
+  let autoStoredGiteeLogin = null;
+  if (host.provider === 'gitee' && profile && profile.login) {
+    try {
+      const existing = gitHosts.getGiteeLogin(ctx.user);
+      if (!existing) {
+        gitHosts.setGiteeLogin(ctx.user, profile.login);
+        autoStoredGiteeLogin = profile.login;
+      }
+    } catch (err) {
+      // Non-fatal — the PAT is already saved. Log and move on so the
+      // user still sees the ✓ Saved confirmation.
+      console.error(`[fr-105] auto-store gitee login failed for ${ctx.user}: ${err.message}`);
+    }
+  }
   const scopeLabel = target ? `@${target.name} (${host.owner}/${host.repo})` : `${host.owner}/${host.repo}`;
   // fr-82: when an alias is set, the user picks it explicitly per
   // command via `--as <alias>`. Spell that out so the user knows
@@ -1476,9 +1504,17 @@ async function handleSetPat(ctx) {
   const aliasReplyTail = alias
     ? ` under alias **\`${alias}\`**. Use it with \`/fr ${target ? '@' + target.name : ''} --as ${alias} <text>\`.`
     : `. \`/fr\`, \`/bug\`, \`/td\`, \`/feature\` will use it.`;
+  // fr-105: mention the auto-store in the reply ONLY when it fired.
+  // The bare confirmation stays byte-identical to bug-91-era for the
+  // github path + the "operator already set a login" path (so those
+  // callers see no reply-shape change).
+  const giteeLoginTail = autoStoredGiteeLogin
+    ? ` Also saved gitee login **\`${autoStoredGiteeLogin}\`** so \`git push\` / \`git fetch\` work via the credential helper without a separate \`/setgiteelogin\` step.`
+    : '';
   ctx.reply(
     `✓ Saved ${host.provider} PAT for ${scopeLabel} ` +
-    `(validated as ${host.provider}:${profile.login})` + aliasReplyTail,
+    `(validated as ${host.provider}:${profile.login})` + aliasReplyTail +
+    giteeLoginTail,
   );
 }
 
@@ -2661,6 +2697,9 @@ module.exports = {
   handleCritic,
   // bug-91: exposed for unit testing /setgiteelogin parse + gate logic.
   handleSetGiteeLogin,
+  // fr-105: exposed for unit testing the auto-derive-gitee-login
+  // behavior added to /setpat.
+  handleSetPat,
   // Exposed for artifacts.js refresh hook + future callers.
   mergePlanItems,
   dedupePlanItems,
