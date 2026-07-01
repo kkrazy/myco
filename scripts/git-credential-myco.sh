@@ -135,10 +135,51 @@ if (!token && userEntry[provider]) token = userEntry[provider];
 
 if (!token) { emit(); process.exit(0); }
 
-// 6. Emit the credential lines. x-access-token is the conventional
-//    username for both classic and fine-grained GitHub PATs — git
-//    ignores it and the token becomes the actual auth.
-process.stdout.write("username=x-access-token\n");
+// 6. Resolve the emitted username per provider.
+//
+//    bug-91 fix: pre-fix the helper unconditionally wrote
+//    "username=x-access-token" for EVERY provider. That works for
+//    github (which ignores the username and accepts x-access-token as
+//    the sentinel), but gitee validates the username against the
+//    tokens owning account and rejects mismatches with
+//    "The token username invalid" -> 403.
+//
+//    Post-fix branching:
+//      github -> "x-access-token" (unchanged; the GitHub convention)
+//      gitee  -> per-repo login override -> user-level login override -> mycoUser
+//
+//    The overrides live at:
+//      store[user]["gitee/<owner>/<repo>.login"]  (per-repo)
+//      store[user].giteeLogin                     (user-level)
+//    Populated by the /setgiteelogin slash command; mirrors
+//    getGiteeLogin() in server/src/git-tokens.js.
+let username;
+if (provider === "github") {
+  username = "x-access-token";
+} else if (provider === "gitee") {
+  let login = null;
+  // Per-repo login override (if we resolved owner + repo above).
+  if (parts.length >= 2) {
+    const perRepoLoginKey = "gitee/" + parts[0] + "/" + parts[1] + ".login";
+    if (typeof userEntry[perRepoLoginKey] === "string" && userEntry[perRepoLoginKey]) {
+      login = userEntry[perRepoLoginKey];
+    }
+  }
+  // User-level login override.
+  if (!login && typeof userEntry.giteeLogin === "string" && userEntry.giteeLogin) {
+    login = userEntry.giteeLogin;
+  }
+  // Final fallback: the myco-user. Matches the common case where the
+  // operator uses the same login on gitee as their myco account.
+  if (!login) login = mycoUser;
+  username = login;
+} else {
+  // Unknown provider (host mapped above but code path here should not
+  // fire — the provider gate at step 3 already returned). Defensive.
+  emit(); process.exit(0);
+}
+
+process.stdout.write("username=" + username + "\n");
 process.stdout.write("password=" + token + "\n");
 ' 2>/dev/null || true
 

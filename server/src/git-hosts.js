@@ -445,4 +445,9 @@ module.exports = {
   setRepoToken: gitTokens.setRepoToken,
   setUserToken: gitTokens.setUserToken,
   listRepos: gitTokens.listRepos,
+  // bug-91: gitee-login storage passthrough for the /setgiteelogin
+  // slash command.
+  getGiteeLogin: gitTokens.getGiteeLogin,
+  setGiteeLogin: gitTokens.setGiteeLogin,
+  setGiteeRepoLogin: gitTokens.setGiteeRepoLogin,
 };

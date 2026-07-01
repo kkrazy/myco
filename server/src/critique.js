@@ -283,6 +283,40 @@ async function triggerGeminiCritique(sessionId, session, item, diff, claudeOutpu
   const criticId = (rec && rec.criticModel) || process.env.MYCO_CRITIC_MODEL || 'gemini';
   const critic = getCritic(criticId);
 
+  // bug-90: graceful degradation — when the operator has disabled the
+  // critic for this session (via /critic off or the 🔕 Disable critic
+  // button on a previous error verdict), short-circuit BEFORE we touch
+  // the network. Reuse the existing synthetic-skip plumbing
+  // (_broadcastSyntheticSkipVerdict in attach.js) so the verdict pane
+  // renders with an ✓ Accept button and the state machine transitions
+  // to awaiting_accept naturally. No Gemini call, no retry-loop traps.
+  //
+  // The 'critic-disabled' reason renders as "🔕 Critic disabled" in
+  // the verdict body (NOT a synthetic AGREED — see A4 in bug-90's
+  // analyze stage). The audit trail can see this stage was accepted
+  // because the operator turned the critic off, not because the diff
+  // was empty.
+  if (critic && critic.disabled === true) {
+    console.log(`[bug-90] critic short-circuit — sessionId=${sessionId}, criticId=${criticId}, itemId=${item && item.id}, stage=${stage || 'final'}`);
+    try {
+      const attachMod = require('./attach');
+      attachMod._broadcastSyntheticSkipVerdict(sessionId, session, {
+        stage: stage || 'verify',
+        itemId: item && item.id,
+        reason: 'critic-disabled',
+      });
+      // Match the !isError branch below — transition to awaiting_accept
+      // so the user can Accept via chat or the button on the synthetic
+      // verdict pane. Without this, the state stays at awaiting_verdict
+      // (set on sentinel detection) and accept is silently no-op'd.
+      const transitionStage = stage || 'verify';
+      attachMod._transitionStageState(sessionId, session, item && item.id, transitionStage, 'awaiting_accept');
+    } catch (err) {
+      console.error(`[bug-90] critic-disabled short-circuit failed: ${err.message}`);
+    }
+    return;
+  }
+
   // bug-65: the basePrompt now lives in
   // server/src/critics/prompts/base.md and is loaded via the
   // criticPrompts loader. The framing has shifted from "elite QA
@@ -562,7 +596,15 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
           `If you can't see the pane (e.g. on a non-chat tab, or attached after the broadcast), ` +
           `click **▶ Run** on the plan item in the Plan tab to re-dispatch the full run. ` +
           `If the error persists, check the server log for the underlying cause ` +
-          `(Gemini 503 / quota / malformed response).`,
+          `(Gemini 503 / quota / malformed response).\n\n` +
+          // bug-90: graceful-degradation hint — give the user a one-shot
+          // path forward when retries aren't fixing it. Clicking 🔕
+          // Disable critic on the verdict pane (or typing /critic off
+          // in chat) sets rec.criticModel='none' and the next stage-
+          // done short-circuits to a synthetic skip verdict with an
+          // ✓ Accept button.
+          `**Stuck on retries?** Click **🔕 Disable critic** on the verdict pane, or type \`/critic off\` in chat, ` +
+          `to disable the critic for the rest of this session and proceed without it.`,
         ts: new Date().toISOString(),
         meta: { kind: 'bug-68-critique-error', stage: stage || 'final', itemId: item.id },
       };

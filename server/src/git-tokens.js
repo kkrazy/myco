@@ -180,6 +180,94 @@ function setUserToken(user, provider, token) {
   _persist();
 }
 
+// ── bug-91: gitee login storage ────────────────────────────────────────────
+//
+// Gitee's HTTPS auth requires the ACTUAL gitee account login as the
+// credential username (github, by contrast, ignores the username and
+// accepts the sentinel "x-access-token"). We store the operator's
+// gitee login here so the credential helper (scripts/git-credential-
+// myco.sh) can emit the right username per provider.
+//
+// Storage shape (non-breaking sidecar keys next to existing token keys):
+//   store[user].giteeLogin                     - user-level default
+//   store[user]["gitee/<owner>/<repo>.login"]  - per-repo override
+//
+// The `.login` suffix (NOT `#login`) sidesteps the fr-82 alias
+// convention which uses `#` — a per-repo login of "login" would
+// otherwise be ambiguous with an alias literally named "login".
+//
+// Lookup precedence in the helper:
+//   per-repo login → user-level login → myco-user (best-effort default)
+//
+// listAllPats + listRepos + listAliases skip these keys so they don't
+// pollute the PAT inventory. The `_isLoginKey` helper below is the
+// single source of truth for "is this key a login field, not a token."
+
+function _isLoginKey(key) {
+  // Bare user-level login: exact string.
+  if (key === 'giteeLogin' || key === 'githubLogin') return true;
+  // Per-repo login: <provider>/<owner>/<repo>.login. The `.login`
+  // suffix on a repo-shaped key is the marker.
+  return /^(github|gitee)\/[^/]+\/.+\.login$/.test(key);
+}
+
+// Read the gitee login for a repo push. When (owner, repo) are supplied
+// the per-repo override wins; otherwise the user-level login (or null).
+// Callers that want the full "resolved for the helper" behavior should
+// use the shell helper's own resolution chain, which additionally falls
+// back to the myco-user — this getter deliberately does NOT fall back
+// there so callers can distinguish "explicitly set" from "derived".
+function getGiteeLogin(user, owner, repo) {
+  if (!user) return null;
+  const store = _load();
+  const entry = store[user];
+  if (!entry || typeof entry !== 'object') return null;
+  if (owner && repo) {
+    const perRepoKey = `gitee/${owner}/${repo}.login`;
+    if (typeof entry[perRepoKey] === 'string' && entry[perRepoKey]) {
+      return entry[perRepoKey];
+    }
+  }
+  if (typeof entry.giteeLogin === 'string' && entry.giteeLogin) {
+    return entry.giteeLogin;
+  }
+  return null;
+}
+
+// Set the user-level gitee login (persists as store[user].giteeLogin).
+// Empty / whitespace login → delete the slot (lets an operator clear
+// it and fall back to myco-user).
+function setGiteeLogin(user, login) {
+  if (!user) throw new Error('user required');
+  const trimmed = String(login || '').trim();
+  const store = _load();
+  if (!store[user] || typeof store[user] !== 'object') store[user] = {};
+  if (!trimmed) {
+    delete store[user].giteeLogin;
+  } else {
+    store[user].giteeLogin = trimmed;
+  }
+  _persist();
+}
+
+// Set a per-repo gitee login (persists as store[user]["gitee/<owner>/<repo>.login"]).
+// Empty → delete the slot. Owner + repo are required. Provider is
+// always "gitee" — github doesn't need a per-repo login (it uses the
+// sentinel "x-access-token" username unconditionally).
+function setGiteeRepoLogin(user, owner, repo, login) {
+  if (!user || !owner || !repo) throw new Error('user, owner, repo all required');
+  const trimmed = String(login || '').trim();
+  const key = `gitee/${owner}/${repo}.login`;
+  const store = _load();
+  if (!store[user] || typeof store[user] !== 'object') store[user] = {};
+  if (!trimmed) {
+    delete store[user][key];
+  } else {
+    store[user][key] = trimmed;
+  }
+  _persist();
+}
+
 // ── Inspect ─────────────────────────────────────────────────────────────────
 
 // fr-87: Config page helpers. The web Config modal calls listAllPats
@@ -224,6 +312,8 @@ function listAllPats(user) {
   for (const key of Object.keys(entry)) {
     // Skip the user-level slots themselves; only collect repo-shaped keys.
     if (key === 'github' || key === 'gitee') continue;
+    // bug-91: skip gitee-login sidecar keys (user-level + per-repo).
+    if (_isLoginKey(key)) continue;
     const m = key.match(/^([a-z]+)\/([^/]+)\/(.+?)(?:#(.+))?$/);
     if (!m) continue;
     const provider = _normalizeProvider(m[1]);
@@ -285,6 +375,9 @@ function listRepos(user) {
   if (!entry || typeof entry !== 'object') return [];
   const out = [];
   for (const key of Object.keys(entry)) {
+    // bug-91: skip gitee-login sidecar keys (they are repo-shaped
+    // but hold a login string, not a token).
+    if (_isLoginKey(key)) continue;
     const m = key.match(/^([a-z]+)\/([^/]+)\/(.+)$/);
     if (!m) continue;
     const provider = _normalizeProvider(m[1]);
@@ -308,8 +401,15 @@ module.exports = {
   listAllPats,
   removeRepoToken,
   removeUserToken,
+  // bug-91: gitee-login storage. The credential helper reads from
+  // these; slash commands write to them.
+  getGiteeLogin,
+  setGiteeLogin,
+  setGiteeRepoLogin,
   KNOWN_PROVIDERS,
   _resetCacheForTest,
   _tokensFile: () => TOKENS_FILE,
   _legacyTokensFile: () => LEGACY_GH_TOKENS_FILE,
+  // bug-91: exposed for unit-testing the sidecar-key predicate.
+  _isLoginKey,
 };

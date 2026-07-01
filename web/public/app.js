@@ -8470,8 +8470,17 @@ function _renderVerdictPanel() {
     // move on (queue isn't paused on error per the server-side
     // gate, so dismissing just clears the panel and they're back
     // to a clean state).
+    //
+    // bug-90: 🔕 Disable critic — persistent escape hatch. Dismiss
+    // clears the CURRENT error panel only; on the NEXT stage-done
+    // sentinel the critic fires again and may error again, looping
+    // the user. 🔕 Disable critic POSTs rec.criticModel='none' so
+    // subsequent stages short-circuit to a synthetic skip verdict
+    // (✓ Accept Stage button) without ever calling the critic model.
+    // Re-enable via /critic on in chat.
     actionsHtml = askCriticBtn +
       `<button class="verdict-btn verdict-btn-retry" title="Re-fire the critique against the same diff (use this on Gemini 503 / network errors)">↻ Retry</button>` +
+      `<button class="verdict-btn verdict-btn-disable-critic" title="Disable the critic for the rest of this session. Subsequent stage-done sentinels will skip the critic and show an ✓ Accept Stage button on a synthetic verdict pane. /critic on in chat to re-enable.">🔕 Disable critic</button>` +
       `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss the error panel and continue without a critic verdict (queue is not paused on critic errors)">✗ Dismiss</button>`;
   } else if (isIntermediate) {
     // bug-56: intermediate (stage-checkpoint) verdict pane now
@@ -8733,6 +8742,45 @@ function _renderVerdictPanel() {
       console.warn('[bug-57] run/done broadcast failed:', err && err.message || err);
     });
   };
+
+  // bug-90: 🔕 Disable critic — persistent escape hatch on error verdicts.
+  // POSTs rec.criticModel='none' so subsequent stage-done sentinels
+  // short-circuit to a synthetic skip verdict (✓ Accept Stage button)
+  // instead of re-firing the broken critic. After the POST, the panel
+  // dismisses locally; the server's state-update kind:'critic-model-
+  // changed' broadcast updates any open config admin panel on every
+  // attached device. /critic on in chat to re-enable.
+  const btnDisableCritic = panel.querySelector('.verdict-btn-disable-critic');
+  if (btnDisableCritic) {
+    btnDisableCritic.addEventListener('click', () => {
+      btnDisableCritic.disabled = true;
+      btnDisableCritic.textContent = '🔕 Disabling…';
+      authedFetch(`/sessions/${encodeURIComponent(state.activeId)}/critic`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelId: 'none' }),
+      }).then((r) => {
+        if (r && r.ok) {
+          // Dismiss locally — the server's broadcast doesn't auto-close
+          // the pane (other clients may want to see the error verdict
+          // before the operator decided to disable). Mirror the dismiss
+          // flow for cross-device parity.
+          state.awaitingVerdict = false;
+          state.critiqueReview = null;
+          _renderVerdictPanel();
+          _broadcastCritiqueResolved('disable-critic');
+        } else {
+          btnDisableCritic.disabled = false;
+          btnDisableCritic.textContent = '🔕 Disable critic';
+          console.error('[bug-90] POST /critic failed', r && r.status);
+        }
+      }).catch((err) => {
+        btnDisableCritic.disabled = false;
+        btnDisableCritic.textContent = '🔕 Disable critic';
+        console.error('[bug-90] POST /critic threw', err);
+      });
+    });
+  }
 
   const btnDismiss = panel.querySelector('.verdict-btn-dismiss');
   if (btnDismiss) {

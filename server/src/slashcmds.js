@@ -162,6 +162,17 @@ const COMMANDS = [
     usage: '/setpat <token>',
     handler: handleSetPat,
   },
+  // bug-91: store the operator's gitee account login so the git
+  // credential helper (scripts/git-credential-myco.sh) can emit the
+  // correct username= line on push/fetch. Gitee validates the username
+  // against the token's owning account (unlike github, which ignores
+  // it), so a hard-coded 'x-access-token' produces a misleading 403.
+  {
+    names: ['setgiteelogin'],
+    summary: 'Save your gitee account login so `git push` / `git fetch` against gitee work through the credential helper (owner+admin).',
+    usage: '/setgiteelogin <login>   e.g. /setgiteelogin kkrazy   (or /setgiteelogin --clear to remove)',
+    handler: handleSetGiteeLogin,
+  },
   {
     names: ['admin'],
     summary: 'Grant/revoke admin on this session (owner only). Admins inherit everything except delete + grant/revoke.',
@@ -249,6 +260,18 @@ const COMMANDS = [
     summary: 'Refresh the Claude subscription credential. CONTAINER-WIDE — affects all sessions. Owner+admin to run.',
     usage: '/login (warn) · /login confirm (start) · /login cancel (abort) · /login status',
     handler: handleLogin,
+  },
+  // bug-90: enable/disable the critic for this session — graceful
+  // degradation when the critic model errors. /critic off persists
+  // rec.criticModel='none' so subsequent stage-done sentinels short-
+  // circuit to a synthetic skip verdict (no Gemini call). /critic on
+  // restores 'gemini'. Owner+admin to mutate; anyone reads /critic
+  // status (mirrors /strict + /model).
+  {
+    names: ['critic'],
+    summary: 'Enable/disable the critic for this session. Use /critic off when the critic model keeps erroring.',
+    usage: '/critic · /critic status · /critic off · /critic on',
+    handler: handleCritic,
   },
   {
     names: ['help'],
@@ -1459,6 +1482,67 @@ async function handleSetPat(ctx) {
   );
 }
 
+// bug-91: /setgiteelogin — save the operator's gitee account login so
+// the git credential helper (scripts/git-credential-myco.sh) emits the
+// correct username= line. Pre-bug-91 the helper hard-coded
+// "username=x-access-token" for every provider — fine for github (which
+// ignores the username), but gitee validates it against the token's
+// owning account and rejects mismatches with a misleading 403.
+//
+//  /setgiteelogin <login>       → owner+admin; persist user-level login
+//  /setgiteelogin --clear       → owner+admin; delete the stored login,
+//                                 fall back to the myco-user default
+//
+// Per-repo overrides aren't exposed via slash command (yet) — hand-edit
+// /data/git-tokens.json for the exotic case where different repos need
+// different logins. §8 rule 3: no speculative multi-arg surface.
+async function handleSetGiteeLogin(ctx) {
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/setgiteelogin: session not found)');
+    return;
+  }
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    ctx.reply(`(/setgiteelogin is owner-or-admin only. Session owner is @${rec.user}.)`);
+    return;
+  }
+  const args = String((ctx && ctx.args) || '').trim();
+  if (!args) {
+    const current = gitHosts.getGiteeLogin(ctx.user) || `(unset — helper falls back to \`${ctx.user}\`)`;
+    ctx.reply(
+      `Current gitee login for @${ctx.user}: **\`${current}\`**\n\n` +
+      `Usage: \`/setgiteelogin <login>\` — sets your gitee account login (e.g. \`kkrazy\`).\n` +
+      `\`/setgiteelogin --clear\` — remove the stored login, fall back to your myco-user (\`${ctx.user}\`).\n\n` +
+      `The credential helper (\`scripts/git-credential-myco.sh\`) uses this as the \`username=\` line ` +
+      `when git pushes/fetches gitee.com over HTTPS. Without it, pushes fail with the misleading 403 ` +
+      `\`The token username invalid\` even though the token itself is valid.`
+    );
+    return;
+  }
+  if (args === '--clear' || args === '-c' || args === 'clear') {
+    try { gitHosts.setGiteeLogin(ctx.user, ''); }
+    catch (err) { ctx.reply(`(could not clear gitee login: ${err.message})`); return; }
+    ctx.reply(`✓ Cleared stored gitee login for @${ctx.user}. The credential helper will fall back to your myco-user (\`${ctx.user}\`).`);
+    return;
+  }
+  // Basic sanity — gitee login is `[a-zA-Z0-9_-]{2,32}` in practice.
+  // Reject inputs that obviously aren't a login (spaces, URL fragments,
+  // paste-a-token-by-mistake attempts).
+  if (!/^[a-zA-Z0-9._-]{2,50}$/.test(args)) {
+    ctx.reply(
+      `(that doesn't look like a gitee login — expected letters/digits/dot/hyphen/underscore, 2–50 chars. ` +
+      `If you meant to store a PAT, use \`/setpat <token>\` instead.)`
+    );
+    return;
+  }
+  try { gitHosts.setGiteeLogin(ctx.user, args); }
+  catch (err) { ctx.reply(`(could not save gitee login: ${err.message})`); return; }
+  ctx.reply(
+    `✓ Saved gitee login **\`${args}\`** for @${ctx.user}. ` +
+    `Subsequent \`git push\` / \`git fetch\` against gitee.com will use this as the credential helper's \`username=\` line.`
+  );
+}
+
 // /decide <n> — answer the currently-pending dialog by sending its option
 // number to the running Claude PTY. The dialog was previously detected by
 // the MenuInterceptor in pty.js, which posted its options into the chat as
@@ -2056,6 +2140,75 @@ function handleLogin(ctx) {
   ctx.reply('Starting `claude auth login --claudeai`… the OAuth URL will arrive in a moment.');
 }
 
+// bug-90: enable/disable the critic for this session.
+//
+//  /critic               → same as /critic status — read current state.
+//  /critic status        → reply with the current critic model + how
+//                          to flip it. Open to everyone.
+//  /critic off           → owner+admin only; persist rec.criticModel='none',
+//                          emit state-update 'critic-model-changed' so any
+//                          open config admin panel re-renders.
+//  /critic on            → owner+admin only; persist rec.criticModel='gemini'
+//                          (the system default; if you prefer codex/custom,
+//                          set it via the config admin panel which writes
+//                          the same field).
+//
+// The 'none' value is recognised by getCritic() (server/src/critics/index.js)
+// and triggerGeminiCritique short-circuits when critic.disabled === true.
+// State machine transitions to awaiting_accept directly via the synthetic
+// skip-verdict path, so the verdict pane gets an ✓ Accept Stage button
+// and the user can advance.
+function handleCritic(ctx) {
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) {
+    ctx.reply('(/critic: session not found)');
+    return;
+  }
+  const arg = String((ctx && ctx.args) || '').trim().toLowerCase();
+  const current = rec.criticModel || 'gemini';
+  const isDisabled = current === 'none';
+  const session = ctx.session;
+
+  // Status branch — open to all users.
+  if (!arg || arg === 'status') {
+    ctx.reply(
+      isDisabled
+        ? `🔕 Critic is **disabled** for this session. Stage-done sentinels short-circuit to a synthetic skip verdict (no Gemini call). \`/critic on\` to re-enable (owner+admin).`
+        : `🎯 Critic is **enabled** for this session (model: \`${current}\`). \`/critic off\` to disable when the critic keeps erroring (owner+admin).`
+    );
+    return;
+  }
+
+  if (arg !== 'on' && arg !== 'off') {
+    ctx.reply('Usage: `/critic status` (read) · `/critic off` (disable, owner+admin) · `/critic on` (re-enable, owner+admin).');
+    return;
+  }
+
+  // Mutating branches — owner+admin gate.
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    ctx.reply(`(/critic on/off is owner-or-admin only. Session owner is @${rec.user}. Bare \`/critic status\` is open to everyone.)`);
+    return;
+  }
+
+  const next = arg === 'off' ? 'none' : 'gemini';
+  if (next === current) {
+    ctx.reply(`(critic is already \`${current}\` — no change.)`);
+    return;
+  }
+  rec.criticModel = next;
+  sessionsMod.saveStore();
+  // Broadcast the new state so any open config admin panel re-renders
+  // the dropdown without needing a refresh.
+  if (session && typeof session.emit === 'function') {
+    session.emit('state-update', { kind: 'critic-model-changed', modelId: next });
+  }
+  ctx.reply(
+    next === 'none'
+      ? '✓ Critic **disabled** for this session. Subsequent stage-done sentinels will skip the critic and show an ✓ Accept Stage button on the synthetic verdict pane. `/critic on` to re-enable.'
+      : '✓ Critic **enabled** for this session (model: `gemini`). Next stage-done sentinel will fire the real critic again.'
+  );
+}
+
 function handleStrict(ctx) {
   const sessionsMod = require('./sessions');
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
@@ -2504,6 +2657,10 @@ module.exports = {
   handleModel,
   // fr-103: exposed for unit testing /login parse + gate logic.
   handleLogin,
+  // bug-90: exposed for unit testing /critic parse + gate logic.
+  handleCritic,
+  // bug-91: exposed for unit testing /setgiteelogin parse + gate logic.
+  handleSetGiteeLogin,
   // Exposed for artifacts.js refresh hook + future callers.
   mergePlanItems,
   dedupePlanItems,

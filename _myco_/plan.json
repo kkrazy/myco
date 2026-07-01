@@ -6417,7 +6417,213 @@
         "rewritten": true
       },
       "description": "**Problem:** The git slash command does not pick sensible defaults, forcing the user to specify project and credentials on every invocation.\n**Expected:** Defaults to the main project and authenticates with the token originally used to clone the repo.\n**Actual:** Project and auth token must be supplied manually each time."
+    },
+    {
+      "id": "fr-103",
+      "text": "allow /login to refresh claude subscription login",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-26T02:47:57.273Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "tags": []
+    },
+    {
+      "id": "bug-89",
+      "text": "/git slash command should auto-select PAT from config based on remote host",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-26T06:34:53.920Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [],
+      "comments": [
+        {
+          "id": "60304773bedd",
+          "user": "kkrazy",
+          "text": "make sure the following error is taken into account: The shared credential helper hardcodes username=x-access-token — correct for GitHub, but Gitee rejects it (\"token username invalid\"). Gitee HTTPS auth needs the real account username (kkrazy) paired with the token. I won't touch the shared helper (/app/scripts/) or git config; instead I'll do a one-shot push using the token from the store with the correct gitee username.",
+          "ts": "2026-06-26T06:37:45.887Z"
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "slashcmd /git should automatically find the corresponding PAT in the config based on the remote (either gitee/gitcode) for operations require authentication",
+        "rewritten": true
+      },
+      "description": "**Problem:** Authenticated `/git` operations don't pick the right PAT for the active remote, forcing manual token handling.\n**Expected:** `/git` inspects the remote URL (gitee vs gitcode) and automatically uses the matching PAT from config for any operation requiring authentication.\n**Actual:** No remote-to-PAT mapping is applied; the command does not resolve credentials per remote host.",
+      "tags": []
+    },
+    {
+      "id": "fr-104",
+      "text": "Auto-create td/fr/bug for sizeable work and kick off execution from it",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-06-27T00:59:18.961Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "31af57e9a142",
+          "user": "kkrazy",
+          "text": "This might require change the default Claude.md",
+          "ts": "2026-06-27T00:59:53.635Z"
+        },
+        {
+          "id": "fe4c583f4e68",
+          "user": "claude",
+          "text": "✓ I have enough context. Writing the analyze. · 125.9s · $2.6534 · 9↓/7548↑",
+          "ts": "2026-06-27T01:02:05.802Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-27T00:59:58.379Z"
+          }
+        },
+        {
+          "id": "9e48df685612",
+          "user": "claude",
+          "text": "✓ All adjacent template/§9 suites green. Code criteria met. · 163.7s · $4.8878 · 16↓/10323↑",
+          "ts": "2026-06-27T01:08:53.678Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-27T00:59:58.379Z"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "for any sizeable work, automatically add td/fr/bug and kick off the work using the td/fr/bug",
+        "rewritten": true,
+        "stageState": {
+          "stage": "analyze",
+          "status": "awaiting_verdict",
+          "updatedAt": "2026-06-27T01:02:05.687Z",
+          "history": [
+            {
+              "stage": "analyze",
+              "status": "in_progress",
+              "ts": "2026-06-27T00:59:58.433Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-27T01:02:05.687Z"
+            }
+          ]
+        }
+      },
+      "description": "**Problem:** Sizeable work items skip the td/fr/bug scaffolding, so execution starts without a tracked artifact.\n**Expected:** When a plan item is non-trivial, automatically generate the appropriate td/fr/bug and start the work driven by that artifact.\n**Actual:** td/fr/bug must be created manually, and work often kicks off without one.",
+      "tags": [],
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-27T01:02:05.802Z",
+          "startedAt": "2026-06-27T00:59:58.379Z",
+          "summary": "125.9s · 9→7548 tok",
+          "result": "I have enough context. Writing the analyze.\n\n---\n\n## `[run:plan#fr-104]` — Analyze stage\n\n### Problem (restated)\n\nToday's flow: a chat turn with no `[run:plan#X]` marker bypasses §9's stage discipline entirely (§9's own scope text on template line 336-340 explicitly excludes \"bare conversational turns\"). The user observes this gap: when they type *\"add a sidebar resize handle\"* in chat, I start editing immediately — no plan item gets created, no §9 stages fire, and there's no tracked artifact for post-hoc review.\n\nYou want: when an incoming chat turn looks **sizeable** (multi-file, new module, multi-step), I should **first** create the matching plan item (td / fr / bug) via the existing `mcp__myco__add_plan_items` MCP tool, then immediately drive the work as a `[run:plan#<new-id>]` dispatch — so §9's analyze→code→verify gates apply automatically. Tiny tweaks, questions, slash commands, and turns that already carry a `[run:plan#X]` marker are unaffected.\n\n### What I confirmed\n\n| Surface | Reality |\n|---|---|\n| Template location | `web/public/best-practices-template.md` (517 lines, §0–§9 today) |\n| Injection mechanism | `sessions.js injectBestPracticesIntoClaudeMd` writes the template between sentinel comments into each session's `CLAUDE.md` on **spawn + respawn** (idempotent — no re-inject of an existing block) |\n| Plan-item creation tool claude can call | `mcp__myco__add_plan_items` (in-process MCP, accepts `[{ text, layer, dependsOn? }]`) — same path `/td` `/fr` `/bug` use server-side |\n| Run-marker shape claude would emit | `[run:plan#<id>]` — same regex `attach.js _hasRunMarker` recognises, so §9 fires naturally |\n| Strict-mode interaction (fr-38) | If strict mode is ON, bare turns without a marker are already blocked at the gate. §10 fills the gap for the **strict-OFF default**. No collision. |\n| Existing CLAUDE.md sessions | Won't auto-update — injection is idempotent (a deliberate non-clobber). Newly-spawned sessions get the rule; the user can hand-edit old on"
+        },
+        {
+          "status": "success",
+          "ts": "2026-06-27T01:08:53.678Z",
+          "startedAt": "2026-06-27T00:59:58.379Z",
+          "summary": "163.7s · 16→10323 tok",
+          "result": "All adjacent template/§9 suites green. Code criteria met.\n\n---\n\n## `[run:plan#fr-104]` — Code stage complete\n\n**Files touched (per plan, no scope creep):**\n\n| File | Change |\n|---|---|\n| `web/public/best-practices-template.md` | Appended **§10. Auto-track non-trivial work** with trigger conditions, sizeable/not-sizeable heuristic, layer-pick (bug/fr/td), procedure (mint → \"Captured as `<id>`\" ack → emit `[run:plan#<id>]` → enter §9 analyze), edge cases (strict-mode, dup-avoidance, multi-ask). Updated §9's Scope paragraph to cross-reference §10 so a reader of §9 doesn't conclude bare turns are exempt full stop. |\n| `test/fr-104-auto-track-nontrivial.test.js` | **NEW** — 9 static-grep guards: §10 heading + fr-104 reference, three trigger conditions, sizeable/not-sizeable heuristics present, procedure (tool name + ack shape + run-marker), layer-pick word triggers, strict-mode coverage, dup-avoidance, §9 Scope cross-reference, and sessions.js injection plumbing still wired. |\n| `test/test.sh` | Wired the new test next to fr-103. |\n\n**Regression test result (standalone):**\n```\nnode test/fr-104-auto-track-nontrivial.test.js\n9 passed, 0 failed\n```\n\n**Adjacent suites still green** (template + injection + §9 — the surfaces my edit touched):\n- `test/best-practices-inject.test.js` (6/0)\n- `test/td-33-r3-stage-discipline-directive.test.js` (8/0) — *important sanity:* its assertion \"§9 limits scope to plan-item dispatches\" stayed green even with my §10 cross-reference (the test phrasing is loose enough to accommodate the exception clause)\n- `test/td-33-stage-aware-critic-and-retry.test.js` (22/0)\n- `test/td-34-stage-directive-user-driven-progression.test.js` (16/0)\n- `test/fr-94-phase-3-async-clone.test.js` (7/0)\n- `test/fr-55-lean-ctx-mcp.test.js` (10/0)\n\n`[stage: code done]`\n\n→ Waiting for your accept signal before verify runs the full `./test/test.sh`.\n\n**Important caveat to flag now:** §10 is a behavioral rule injected into spawned sessions' CLAUDE.md. **Existing sessions wo"
+        },
+        {
+          "status": "aborted",
+          "ts": "2026-06-27T01:15:05.793Z",
+          "summary": "interrupted by Stop"
+        }
+      ]
+    },
+    {
+      "id": "bug-90",
+      "text": "Disable critic gracefully when critic model errors",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-27T02:20:34.402Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [
+        {
+          "id": "df91e49c1008",
+          "user": "claude",
+          "text": "✓ Enough understanding. Writing the analyze. · 137.7s · $4.0908 · 15↓/8153↑",
+          "ts": "2026-06-27T05:05:59.669Z",
+          "meta": {
+            "kind": "run-summary",
+            "runStartedAt": "2026-06-27T05:03:39.676Z"
+          }
+        }
+      ],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "support disable critic in the case of critic model error",
+        "rewritten": true,
+        "stageState": {
+          "stage": "analyze",
+          "status": "awaiting_verdict",
+          "updatedAt": "2026-06-27T05:05:59.555Z",
+          "history": [
+            {
+              "stage": "analyze",
+              "status": "in_progress",
+              "ts": "2026-06-27T05:03:39.730Z"
+            },
+            {
+              "stage": "analyze",
+              "status": "awaiting_verdict",
+              "ts": "2026-06-27T05:05:59.555Z"
+            }
+          ]
+        }
+      },
+      "description": "**Problem:** A critic model error currently breaks the flow instead of degrading gracefully.\n**Expected:** On critic model error, disable the critic and continue execution without it.\n**Actual:** Critic model errors are not handled, leaving no path to bypass the critic.",
+      "tags": [],
+      "runs": [
+        {
+          "status": "success",
+          "ts": "2026-06-27T05:05:59.669Z",
+          "startedAt": "2026-06-27T05:03:39.676Z",
+          "summary": "137.7s · 15→8153 tok",
+          "result": "Enough understanding. Writing the analyze.\n\n---\n\n## `[run:plan#bug-90]` — Analyze stage\n\n### Problem (restated)\n\nWhen the critic model errors (Gemini 503, quota exhaustion, malformed response, missing API key, network blip), today's flow:\n\n1. `triggerGeminiCritique` broadcasts an `isError: true` verdict.\n2. The error path at `critique.js:540` (`if (!isError) { ... awaiting_accept ... }`) deliberately **skips** the `awaiting_accept` transition.\n3. State machine stays at `awaiting_verdict`.\n4. The verdict pane renders only a **↻ Retry** button (no Accept).\n5. The chat-accept handler (`bug-70`) gates on `awaiting_accept`, so typing `accept` is a silent no-op.\n6. If retries keep failing → user is stuck at this stage with no path forward. That's the \"no path to bypass.\"\n\nThe user wants: on critic error, a way to **disable the critic for the rest of the session** and continue. Once disabled, subsequent stage-done sentinels skip the critic call entirely and the user accepts straight to the next stage.\n\n### What I confirmed\n\n| Surface | Reality |\n|---|---|\n| `rec.criticModel` | Per-session config (`'gemini'` default), set via `POST /sessions/:id/critic`, broadcast as `state-update kind:'critic-model-changed'` |\n| Critic registry | `server/src/critics/index.js` — three first-class ids: `gemini` / `codex` / `custom`. `getCritic('anything-else')` falls back to gemini (so passing `'none'` today gives you gemini) |\n| Existing skip plumbing | `_emitCritiqueSkipNote` + `_broadcastSyntheticSkipVerdict` already handle skip cases (no-changes, baseline-wip-only, no-session-rec). On skip, state transitions to `awaiting_accept` directly. **This is the pattern bug-90 should reuse.** |\n| Error gate | `critique.js:540` — `if (!isError)` skips the `awaiting_accept` transition → user stuck on retries |\n| Error UX today | bug-68 chat note + verdict pane with ↻ Retry only; bug-71 cached the user's question for retry, but there's no \"skip\" affordance on error verdicts |\n\n### Scope options\n\n####"
+        },
+        {
+          "status": "aborted",
+          "ts": "2026-06-27T05:59:49.955Z",
+          "summary": "interrupted by Stop"
+        }
+      ]
+    },
+    {
+      "id": "bug-91",
+      "text": "git credential helper hard-codes username=x-access-token, breaking gitee pushes",
+      "layer": "Bug",
+      "done": false,
+      "addedAt": "2026-06-30T23:02:54.739Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "Bug: git credential helper hard-codes username=x-access-token, breaking gitee pushes\nComponent: /app/scripts/git-credential-myco.sh (the myco git credential helper, registered globally via credential.helper at container boot)\n\nSeverity: High — blocks all git push/fetch to gitee.com from inside a session via the normal credential path.\n\nSummary\nThe credential helper always emits username=x-access-token regardless of provider. That username is a GitHub-only convention. Gitee (and the myco egress proxy in front of it) rejects it, so every gitee operation that relies on the helper fails — even though the stored token is valid.\n\nWhat happens\nWith the helper in the chain, gitee returns:\n\nremote: [session-xxxx] The token username invalid\nfatal: unable to access 'https://gitee.com/kkrazy/omni-cache.git/': error 403\nRoot cause\nIn the helper's node body, the username is hard-coded:\n\n// 6. Emit the credential lines. x-access-token is the conventional\n//    username for both classic and fine-grained GitHub PATs ...\nprocess.stdout.write(\"username=x-access-token\\n\");\nprocess.stdout.write(\"password=\" + token + \"\\n\");\nThe comment is GitHub-specific. For gitee, the username must be the actual account name (here kkrazy), not x-access-token.\n\nProof / workaround\nThe exact same stored token (/data/git-tokens.json → kkrazy.gitee) succeeds when paired with the right username and sent via URL (which bypasses the helper):\n\ngit push \"https://kkrazy:<gitee_token>@gitee.com/kkrazy/omni-cache.git\" <branch>\n# -> 9c4bd7d..61c9351  feat/tbp-v2-stage-1 -> feat/tbp-v2-stage-1  (success)\nSo the token is valid; only the username the helper supplies is wrong.\n\nA second contributing gotcha: setting an inline -c credential.helper='...' does not override the global helper — git runs all configured helpers and the global one (emitting x-access-token) wins. Overriding requires resetting the list first (-c credential.helper= -c credential.helper='...'), or using URL creds.\n\nExpected behavior\nThe helper should emit a provider-appropriate username:\n\ngitee.com → the gitee account username (e.g. the repo owner / token owner, kkrazy).\ngithub.com → x-access-token is fine.\nThe username should come from the token store / myco-user mapping rather than being hard-coded.\n\nSuggested fix\nIn the provider-resolution block, branch the emitted username by provider — e.g. keep x-access-token for GitHub, but for gitee emit the gitee account login (store it alongside the token in /data/git-tokens.json, or derive it from the myco-user). Don't hard-code a single username for all providers.\n\nImpact\nUntil fixed, gitee pushes/fetches via the standard helper path fail with a misleading \"token username invalid\" (it looks like a bad/expired token, but the token is valid). Users must work around it with explicit URL credentials.",
+        "rewritten": true
+      },
+      "description": "**Problem:** `/app/scripts/git-credential-myco.sh` emits `username=x-access-token` for every provider, so all gitee pushes/fetches via the standard helper path fail with a misleading \"token username invalid\" 403 even though the stored token is valid.\n**Expected:** Helper emits a provider-appropriate username — `x-access-token` for github.com, the actual gitee account login (e.g. `kkrazy`) for gitee.com — sourced from the token store / myco-user mapping rather than hard-coded.\n**Actual:** Node body unconditionally writes `username=x-access-token\\n`; gitee rejects it with `remote: [session-xxxx] The token username invalid` → `fatal: ... error 403`.\n**Context:** Severity High — blocks all gitee ops through the global `credential.helper` registered at container boot. Proof the token is valid: `git push \"https://kkrazy:<gitee_token>@gitee.com/kkrazy/omni-cache.git\" <branch>` succeeds (bypasses helper). Secondary gotcha: inline `-c credential.helper='...'` does not override the global helper — git runs all configured helpers and the global one wins; override requires resetting the list first (`-c credential.helper= -c credential.helper='...'`) or using URL creds. Suggested fix: branch emitted username by provider in the provider-resolution block; store the gitee login alongside the token in `/data/git-tokens.json` or derive from myco-user.",
+      "tags": []
     }
   ],
-  "updatedAt": "2026-06-24T09:27:38.911Z"
+  "updatedAt": "2026-06-30T23:03:03.320Z"
 }

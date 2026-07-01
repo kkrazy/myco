@@ -2833,13 +2833,29 @@ function _broadcastSyntheticSkipVerdict(sessionId, session, opts) {
     'no-changes':       'no file changes were detected at this checkpoint',
     'baseline-wip-only': 'all dirty paths were already modified before this run started (baseline WIP)',
     'empty-diff':       'files changed but the diff was empty (new files git can\'t diff, binaries, or readDiff errors)',
+    // bug-90: the operator turned the critic off for this session via
+    // /critic off (or the 🔕 Disable critic button on a prior error
+    // verdict). The body below uses a distinct title ("🔕 Critic disabled")
+    // so the audit trail can see this stage was accepted without a real
+    // review — NOT a synthetic AGREED that would mislead post-hoc.
+    'critic-disabled':  'the critic has been disabled for this session — /critic on to re-enable',
   }[reason] || 'no reviewable changes were attributable to this stage';
-  const critiqueBody =
-    `## ✓ AGREED — critic skipped\n\n` +
-    `The **${stage}** stage produced no reviewable changes; ${reasonExplain}. ` +
-    `Nothing to flag.\n\n` +
-    `**To proceed:** click **✓ Accept Stage** below, or type \`accept\` in chat.\n\n` +
-    `*If you intended this stage to produce changes, click **⚡ Ask Claude to Fix Stage** to redo it, or make the changes manually and re-emit* \`[stage: ${stage} done]\`*.*`;
+  // bug-90: title + body shift when the operator turned the critic off.
+  // The other skip reasons keep the legacy "✓ AGREED — critic skipped"
+  // title because they DO represent "nothing to review" — those skips
+  // are diff-driven, not policy-driven. critic-disabled is policy.
+  const isPolicyDisabled = reason === 'critic-disabled';
+  const critiqueBody = isPolicyDisabled
+    ? `## 🔕 Critic disabled\n\n` +
+      `The critic was turned off for this session — ${reasonExplain}. ` +
+      `Stage **${stage}** is being accepted WITHOUT a critic review.\n\n` +
+      `**To proceed:** click **✓ Accept Stage** below, or type \`accept\` in chat.\n\n` +
+      `*To re-enable the critic for the rest of this session, type* \`/critic on\` *in chat (or use the config admin panel).*`
+    : `## ✓ AGREED — critic skipped\n\n` +
+      `The **${stage}** stage produced no reviewable changes; ${reasonExplain}. ` +
+      `Nothing to flag.\n\n` +
+      `**To proceed:** click **✓ Accept Stage** below, or type \`accept\` in chat.\n\n` +
+      `*If you intended this stage to produce changes, click **⚡ Ask Claude to Fix Stage** to redo it, or make the changes manually and re-emit* \`[stage: ${stage} done]\`*.*`;
   const broadcastPayload = {
     kind: 'critique-review',
     itemId,

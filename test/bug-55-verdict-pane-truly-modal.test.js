@@ -134,22 +134,27 @@ t('app.js: exactly 7 state.critiqueReview wipe sites (4 final + 2 intermediate s
   //   bug-54 fix: 5 sites (4 final buttons + 1 critique-resolved WS handler).
   //   bug-56 fix: 7 sites (+ 2 intermediate-state buttons:
   //               ✓ Accept Stage and ⚡ Ask Claude to Fix Stage).
+  //   bug-90 fix: 8 sites (+ 1 disable-critic button click handler on
+  //               error verdicts — POSTs rec.criticModel='none' and
+  //               dismisses the pane locally on success).
   // The bug-55 contract (no backdrop/Esc dismissal) is still
-  // satisfied because none of the 7 sites belong to a backdrop click
+  // satisfied because none of the 8 sites belong to a backdrop click
   // or Esc handler.
   const wipeSites = (src.match(/state\.critiqueReview\s*=\s*null/g) || []).length;
-  assert.strictEqual(wipeSites, 7,
-    `expected exactly 7 state.critiqueReview = null sites (4 final buttons + 2 intermediate stage buttons + 1 critique-resolved WS handler). Got ${wipeSites}. If higher, the backdrop path may have crept back in OR another sync surface was added without updating this guard.`);
+  assert.strictEqual(wipeSites, 8,
+    `expected exactly 8 state.critiqueReview = null sites (4 final buttons + 2 intermediate stage buttons + 1 critique-resolved WS handler + 1 bug-90 disable-critic button). Got ${wipeSites}. If higher, the backdrop path may have crept back in OR another sync surface was added without updating this guard.`);
 });
 
-t('app.js: exactly 7 state.awaitingVerdict = false sites — matching the 7 critiqueReview wipes', () => {
+t('app.js: exactly 8 state.awaitingVerdict = false sites — matching the 8 critiqueReview wipes', () => {
   const src = _read('web/public/app.js');
   const awaitingSites = (src.match(/state\.awaitingVerdict\s*=\s*false/g) || []).length;
   // bug-56 follow-up: same count bump as critiqueReview — the
   // intermediate Accept Stage + Fix Stage handlers clear both
   // together.
-  assert.strictEqual(awaitingSites, 7,
-    `expected exactly 7 state.awaitingVerdict = false sites (4 final buttons + 2 intermediate stage buttons + 1 critique-resolved WS handler). Got ${awaitingSites}.`);
+  // bug-90 follow-up: + 1 (disable-critic button handler clears both
+  // after a successful POST /critic).
+  assert.strictEqual(awaitingSites, 8,
+    `expected exactly 8 state.awaitingVerdict = false sites (4 final buttons + 2 intermediate stage buttons + 1 critique-resolved WS handler + 1 bug-90 disable-critic button). Got ${awaitingSites}.`);
 });
 
 // ── 4. Marker comment + supersession note ──

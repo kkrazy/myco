@@ -165,16 +165,26 @@ t('web/public/app.js: ↻ Retry / 💬 Ask Critic do NOT call _broadcastCritique
   //   1 helper declaration
   // + 4 final-state buttons (bug-54: dismiss, discard, fix, accept)
   // + 2 intermediate-state buttons (bug-56: accept-stage, fix-stage)
-  // = 7 occurrences.
+  // + 1 error-state 🔕 Disable critic button (bug-90 — legit resolve
+  //                path; dismisses the pane after a successful POST
+  //                /critic { modelId: 'none' } and broadcasts
+  //                _broadcastCritiqueResolved('disable-critic') so
+  //                other attached devices clear their pane too)
+  // = 8 occurrences.
   // ↻ Retry and 💬 Ask Critic still must NOT call this (they re-fire
   // the critique, producing a new critique-review broadcast).
   // bug-56 follow-up: count bumped from 5 to 7 when bug-56 added the
   // intermediate ✓ Accept Stage + ⚡ Ask Claude to Fix Stage buttons
   // — both legitimately broadcast critique-resolved for cross-device
   // sync (the bug-54 surface still works; just two more callers).
+  // bug-90 follow-up: count bumped from 7 to 8 when bug-90 added the
+  // 🔕 Disable critic button on error verdict panes. Same rationale
+  // as bug-56's bump — it's a legitimate resolver that needs cross-
+  // device sync so a second attached device doesn't stare at a stale
+  // error verdict pane after the operator disabled the critic here.
   const occurrences = (src.match(/_broadcastCritiqueResolved/g) || []).length;
-  assert.strictEqual(occurrences, 7,
-    `expected exactly 7 _broadcastCritiqueResolved references (1 helper decl + 4 final-state callers + 2 intermediate-stage callers). Got ${occurrences}. If higher, ↻ Retry or 💬 Ask Critic may have crept in — they should NOT call resolve.`);
+  assert.strictEqual(occurrences, 8,
+    `expected exactly 8 _broadcastCritiqueResolved references (1 helper decl + 4 final-state callers + 2 intermediate-stage callers + 1 bug-90 disable-critic error-state caller). Got ${occurrences}. If higher, ↻ Retry or 💬 Ask Critic may have crept in — they should NOT call resolve.`);
 });
 
 // ── 4. Marker comments anchor future restyles ──

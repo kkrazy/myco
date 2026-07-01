@@ -337,7 +337,10 @@ accept signal before advancing to the next stage**.
 message containing `[run:plan#<id>]`, including ▶ Run button
 clicks). It does NOT apply to bare conversational turns —
 clarifications, /td quick captures, etc. — where the work is too
-small to benefit from stage gating.
+small to benefit from stage gating. **Exception (fr-104):** if §10
+auto-promotes a sizeable bare turn into a plan item, that item then
+flows through this section like any normal dispatch — see §10 for
+the promotion rule.
 
 ### The three stages + their done-criteria
 
@@ -510,6 +513,139 @@ lives in this template.
   The user said they shouldn't have to type `continue` / `proceed`
   / `code` as a separate keyword after an accept. They did NOT say
   the accept signal itself is optional. Silence means wait.
+
+## 10. Auto-track non-trivial work — promote sizeable chat turns to a plan item before starting (fr-104)
+
+When a user chat turn lands work that should be tracked but the user
+didn't pre-mint a plan item (no `[run:plan#<id>]` marker, no `/fr` /
+`/td` / `/bug` quick capture), claude **MUST** mint one before
+editing — and then drive the work as if the user had dispatched it.
+This closes the gap §9 explicitly leaves open ("does NOT apply to
+bare conversational turns") so every sizeable change has a tracked
+artifact + critic gates + an audit trail in `_myco_/plan.json`.
+
+### Trigger (all three must hold)
+
+1. The turn comes from a real user (not a `[stage-accept]` /
+   `[stage-fix]` echo from the dispatcher, not a system reminder).
+2. No `[run:plan#<id>]` marker is present in the turn.
+3. The work looks **sizeable** per the heuristic below.
+
+### Sizeable — promote
+
+Promote when ANY of these hold:
+
+- Likely > 1 file edit, OR a new file / new module / new module
+  surface.
+- The work is multi-step in a way that benefits from §9 staging
+  (the user describes a sequence: "do A then B then verify Z";
+  "implement X, then add a test, then deploy").
+- Open-ended scope language: "add a feature for…", "this is
+  broken, fix it", "should we refactor…", "let's redesign…".
+- The user's prose names a deliverable noun (a slash command, a
+  panel, an endpoint, a refactor, a migration, a release).
+
+### NOT sizeable — skip the promotion, just answer
+
+DO NOT promote (these stay as bare conversational turns):
+
+- Single-line / single-file tweaks: typo fixes, comment edits,
+  trivial CSS adjustments, "rename foo to bar in one file."
+- Pure read/explain — "what does X do?", "show me Y", "where is
+  Z?". No mutating tool calls expected.
+- Slash commands the user already typed (`/model`, `/login`,
+  `/clear`, `/fr`, `/td`, `/bug`, `/help`, `/decide`, etc.) —
+  those have their own paths.
+- Clarifications, status questions, "how do I", "did the deploy
+  land", "is this still running".
+- Quick acknowledgments / chitchat / corrections to the prior
+  turn ("oh wait, ignore that").
+- Turns that already carry a `[run:plan#<id>]` marker (already
+  tracked).
+
+If you're 50/50, **don't promote** — bias toward the user being
+in control. They can `/fr <text>` after the fact, or rerun the
+turn with a marker, if they wanted tracking.
+
+### Layer pick (td / fr / bug)
+
+Word-driven heuristic, not a classifier:
+
+| User language | Layer |
+|---|---|
+| "fix X", "broken Y", "Z is wrong", "regression in W" | **bug** |
+| "add X", "implement Y", "new feature", "support Z" | **fr** |
+| "do X", "refactor Y", "clean up Z", "consider W", "investigate" | **td** |
+
+Mismatches are recoverable — the user can `/merge` items into the
+right layer afterwards. Don't agonize.
+
+### Procedure (do these IN ORDER, before any source edit)
+
+1. **Mint the plan item** via `mcp__myco__add_plan_items` (the
+   in-process MCP tool every session gets):
+
+   ```
+   mcp__myco__add_plan_items({
+     items: [{
+       text: "<restated problem in YOUR words, 1–2 sentences>",
+       layer: "<Feature|Todo|Bug>"
+     }]
+   })
+   ```
+
+   The server returns the new `id` (e.g. `fr-105`, `td-42`,
+   `bug-91`).
+
+2. **Acknowledge in one line, then enter analyze in the SAME
+   reply.** Use this exact shape so other agents + the audit
+   trail can recognize the promotion:
+
+   ```
+   📌 Captured as `<id>` — sizeable work, auto-tracking. Entering analyze for [run:plan#<id>].
+   ```
+
+   The bracketed `[run:plan#<id>]` is mandatory — it's what
+   activates §9 and stamps `_activeRunItem` server-side.
+
+3. **Immediately proceed into §9's analyze stage** — restate the
+   problem, write the numbered plan with verify clauses, list
+   assumptions, emit `[stage: analyze done]`. From here on you
+   are in a normal §9 flow and every rule there applies.
+
+### Edge cases
+
+- **User said "small change" but it looks big to you.** Promote
+  anyway and explain in the analyze restatement why you read it
+  as bigger. The user can dismiss the new item via `/skip <id>`
+  if they disagree.
+- **Strict-mode is ON (fr-38).** §10 never fires in strict mode —
+  the fr-38 gate already blocks bare turns without a marker.
+  That's the correct behavior; the operator opted in.
+- **Multiple sizeable asks in one turn ("add X and also fix Y").**
+  Mint two items in one `add_plan_items` call; pick the first as
+  the dispatch and mention the second in the analyze plan as a
+  follow-up that will dispatch separately. Don't try to stage
+  both in one §9 run.
+- **The user already minted an item this turn via `/fr <text>`.**
+  Don't double-mint. The `/fr` slash command already returned
+  the id; just emit `[run:plan#<id>]` for THAT id and enter
+  analyze.
+- **An item that obviously already exists.** Scan
+  `rec.artifacts.plan.items` (server-side, via the artifacts
+  read path) for a recent matching item before minting a
+  duplicate. If unsure, mint — duplicates are easier to merge
+  than missed work is to recover.
+
+### Why this matters
+
+Pre-fr-104, sizeable changes shipped without a plan item, which
+meant: no §9 stages, no critic checkpoints, no Plan-tab entry,
+no audit trail for the post-mortem six months later. The user
+flagged this directly: *"Sizeable work items skip the td/fr/bug
+scaffolding, so execution starts without a tracked artifact."*
+§10 closes that loop by making the plan-item the **default
+container** for non-trivial work, not the exception.
 
 ---
 

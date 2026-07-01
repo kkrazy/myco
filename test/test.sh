@@ -4164,6 +4164,33 @@ test_chat_window() {
   # owner to feedCallback BEFORE the slash dispatcher, app.js +
   # styles.css chat-row affordances for login-prompt + login-callback.
   node_test_result test/fr-103-login-refresh.test.js "test/fr-103-login-refresh.test.js (19 cases)"
+  # fr-104: auto-track non-trivial work — promote sizeable bare chat turns
+  # into a plan item BEFORE editing source, so §9 stages apply. The
+  # behavior lives in web/public/best-practices-template.md §10 (injected
+  # into each session's CLAUDE.md on spawn). The test locks the template
+  # surface: §10 heading present, triggers + heuristic + procedure +
+  # layer-pick + edge cases documented, §9 cross-references §10, and the
+  # sessions.js injection plumbing is still wired.
+  node_test_result test/fr-104-auto-track-nontrivial.test.js "test/fr-104-auto-track-nontrivial.test.js (9 cases)"
+  # bug-90: graceful degradation when the critic model errors. Locks the
+  # 'none' critic registry entry (4 critics total, getCritic('none') returns
+  # the no-op plugin not the gemini fallback), critique.js short-circuit
+  # branch (BEFORE basePrompt construction, calls _broadcastSyntheticSkipVerdict
+  # with critic-disabled reason, transitions awaiting_accept), attach.js
+  # _broadcastSyntheticSkipVerdict distinct "🔕 Critic disabled" title
+  # (not fake AGREED — A4), bug-68 error chat note mentions /critic off (A5),
+  # /critic slash command + owner+admin gate + status-open-to-all, app.js
+  # 🔕 Disable critic button on error verdicts + POST wire, styles.css.
+  node_test_result test/bug-90-critic-disable.test.js "test/bug-90-critic-disable.test.js (14 cases)"
+  # bug-91: git-credential-myco.sh hard-coded username=x-access-token for
+  # every provider, breaking gitee pushes (gitee validates the username
+  # against the token's owning account and returns a misleading 403
+  # otherwise). Locks: the helper branches by provider (github still
+  # x-access-token; gitee resolves per-repo login -> user-level login ->
+  # myco-user), non-breaking sidecar storage in git-tokens.json
+  # (giteeLogin + gitee/<owner>/<repo>.login), listAllPats/listRepos
+  # skip the sidecars, /setgiteelogin slash command + owner+admin gate.
+  node_test_result test/bug-91-credential-helper-provider-username.test.js "test/bug-91-credential-helper-provider-username.test.js (20 cases)"
   # bug-17: admin grant must propagate to already-attached WSes (the
   # readOnly flag is one-shot at attach time, so rec.admins changes
   # don't reach in-flight viewer connections without a reconnect).
