@@ -4199,6 +4199,24 @@ test_chat_window() {
   # against empty login + setter failure, reply mentions the auto-store
   # only when it fires.
   node_test_result test/fr-105-auto-derive-gitee-login.test.js "test/fr-105-auto-derive-gitee-login.test.js (8 cases)"
+  # fr-106: slash commands (/git, /feature, /setpat, /dedupe, ...) run
+  # from the main project dir (resolveAgentCwd) by default instead of
+  # the session workspace wrapper. Pre-fr-106 the attach.js slash-command
+  # dispatcher set ctx.absCwd = rec.absCwd, forcing users to type
+  # /git -C '<mainProject>' every time. Post-fix ctx.absCwd matches the
+  # SDK's own cwd for Claude tools. Locks: resolveAgentCwd semantics
+  # (mainProject-set + not-pending → subdir; unset / clone-pending →
+  # workspace root), sessions.js export, attach.js dispatcher shape,
+  # handleGit execFile still passes a cwd.
+  node_test_result test/fr-106-slash-cmd-project-cwd.test.js "test/fr-106-slash-cmd-project-cwd.test.js (10 cases)"
+  # fr-107: file-explorer inline preview for HTML/PDF/SVG/images/audio/video.
+  # Locks: new GET /file/raw route (auth-gated, safeJoin, Content-Disposition
+  # inline, no-store, nosniff, MIME table), client _previewKindForExt table,
+  # openFileInViewer branches BEFORE the /file JSON fetch, HTML+SVG render
+  # via sandbox="" iframe (script-execution neutralized), image via <img>,
+  # audio/video via native tags with controls, header preview-toggle only
+  # for text-sourced kinds (binary hides it).
+  node_test_result test/fr-107-file-explorer-preview.test.js "test/fr-107-file-explorer-preview.test.js (15 cases)"
   # bug-17: admin grant must propagate to already-attached WSes (the
   # readOnly flag is one-shot at attach time, so rec.admins changes
   # don't reach in-flight viewer connections without a reconnect).

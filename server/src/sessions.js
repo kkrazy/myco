@@ -1810,6 +1810,13 @@ Object.assign(module.exports, {
   listWorkspaceDirs,
   listSessions,
   spawnSession,
+  // fr-106: exported for the slash-command dispatcher in attach.js so
+  // slash commands (/git, /feature, /setpat, etc.) inherit the same
+  // project-dir cwd the SDK uses for Claude's tools. Pre-fr-106 the
+  // dispatcher used rec.absCwd directly, so /git ran from the session
+  // workspace wrapper even when rec.mainProject designated a project
+  // subdir — forcing users to type /git -C 'main project' every time.
+  resolveAgentCwd,
   // bug-80: exported for the regression test + future audit/cleanup
   // tools that want to surface "is this session enclosed by another?"
   // or run an ad-hoc cleanup.

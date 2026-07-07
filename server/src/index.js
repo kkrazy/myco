@@ -1086,6 +1086,82 @@ app.get('/sessions/:id/file', async (req, res) => {
   } catch (e) { fileApiError(res, e); }
 });
 
+// fr-107: stream a file inline for browser rendering (HTML iframe,
+// PDF viewer, <img>, <audio>, <video>). Same auth + containment as
+// /file/download — the ONLY differences are:
+//   * Content-Type is MIME-guessed from the extension so the browser
+//     picks the right renderer (application/pdf, image/png, text/html,
+//     etc.) instead of application/octet-stream
+//   * Content-Disposition: inline — so the browser embeds the response
+//     in the requesting iframe/img/audio/video instead of prompting a
+//     save dialog
+// Client-side sandboxing (`<iframe sandbox="">` for HTML/SVG) is what
+// contains the risk of user-controlled HTML executing scripts against
+// myco's origin; the server just streams bytes with the right MIME.
+app.get('/sessions/:id/file/raw', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const relPath = req.query.path;
+  if (!relPath) return res.status(400).json({ error: 'path required' });
+  let abs;
+  try {
+    abs = await filesApi.safeJoin(ctx.root, relPath);
+  } catch (e) { return fileApiError(res, e); }
+  let st;
+  try {
+    st = await require('fs/promises').stat(abs);
+  } catch (e) {
+    if (e.code === 'ENOENT') return res.status(404).json({ error: 'not found' });
+    if (e.code === 'EACCES' || e.code === 'EPERM') return res.status(403).json({ error: 'permission denied' });
+    return res.status(500).json({ error: e.message });
+  }
+  if (!st.isFile()) return res.status(400).json({ error: 'not a regular file' });
+  const path = require('path');
+  const ext = (path.extname(String(relPath)) || '').toLowerCase().replace(/^\./, '');
+  // Small MIME table for the types fr-107 knows how to preview inline.
+  // Anything outside the table falls back to application/octet-stream —
+  // safe default; the browser will decline to render inline and the
+  // client-side dispatch shouldn't have called us in the first place.
+  const MIME_BY_EXT = {
+    // HTML / SVG — client must serve these inside a sandboxed iframe
+    // (script-execution neutered) since content is user-controlled.
+    html: 'text/html; charset=utf-8',
+    htm:  'text/html; charset=utf-8',
+    svg:  'image/svg+xml',
+    // PDF — browser's built-in PDF viewer takes over.
+    pdf:  'application/pdf',
+    // Images — safe via <img> tag (scripts inside don't run).
+    png:  'image/png',
+    jpg:  'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif:  'image/gif',
+    webp: 'image/webp',
+    // Audio.
+    mp3:  'audio/mpeg',
+    wav:  'audio/wav',
+    ogg:  'audio/ogg',
+    m4a:  'audio/mp4',
+    // Video.
+    mp4:  'video/mp4',
+    webm: 'video/webm',
+    mov:  'video/quicktime',
+  };
+  const mime = MIME_BY_EXT[ext] || 'application/octet-stream';
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Content-Length', String(st.size));
+  res.setHeader('Content-Disposition', 'inline');
+  // No-store so a subsequent edit + preview shows the new bytes
+  // without a hard refresh (matches the existing /file JSON route's
+  // implicit no-cache behavior).
+  res.setHeader('Cache-Control', 'no-store');
+  // Belt-and-braces X-Content-Type-Options so an attacker can't
+  // convince a strict browser to sniff HTML out of a purported PDF.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.sendFile(abs, (err) => {
+    if (err && !res.headersSent) res.status(500).json({ error: err.message });
+  });
+});
+
 // fr-9: download a file from the session workspace as an attachment.
 // Same auth + containment as the read route, but streams raw bytes
 // (binary-safe) with Content-Disposition: attachment;filename=… so

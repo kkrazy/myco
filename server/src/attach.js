@@ -2273,7 +2273,21 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
 
   if (text.startsWith('/')) {
     const rec = sessionsMod.loadStore().sessions[sessionId];
-    const absCwd = rec && rec.absCwd;
+    // fr-106: slash commands run from the project dir (resolveAgentCwd),
+    // not the session workspace wrapper. Pre-fr-106 this line was
+    // `const absCwd = rec && rec.absCwd;` — so /git, /feature, /setpat,
+    // /dedupe etc. ran from the session-root even when rec.mainProject
+    // designated a project subdir (fr-94). That forced users to type
+    // /git -C 'main project' on every invocation. Post-fr-106 the
+    // ctx.absCwd matches the SDK's cwd (Claude's own tools already
+    // anchor here), so `/git status` sees the correct .git/ dir.
+    //
+    // resolveAgentCwd handles both:
+    //   * no mainProject set                    → rec.absCwd (unchanged)
+    //   * mainProject set + clone not pending   → rec.absCwd/rec.mainProject
+    //   * mainProject set + clone still pending → rec.absCwd (safe fallback
+    //                                              until clone completes)
+    const absCwd = rec ? sessionsMod.resolveAgentCwd(rec) : null;
     const ctx = {
       user,
       sessionId,

@@ -6623,7 +6623,58 @@
       },
       "description": "**Problem:** `/app/scripts/git-credential-myco.sh` emits `username=x-access-token` for every provider, so all gitee pushes/fetches via the standard helper path fail with a misleading \"token username invalid\" 403 even though the stored token is valid.\n**Expected:** Helper emits a provider-appropriate username — `x-access-token` for github.com, the actual gitee account login (e.g. `kkrazy`) for gitee.com — sourced from the token store / myco-user mapping rather than hard-coded.\n**Actual:** Node body unconditionally writes `username=x-access-token\\n`; gitee rejects it with `remote: [session-xxxx] The token username invalid` → `fatal: ... error 403`.\n**Context:** Severity High — blocks all gitee ops through the global `credential.helper` registered at container boot. Proof the token is valid: `git push \"https://kkrazy:<gitee_token>@gitee.com/kkrazy/omni-cache.git\" <branch>` succeeds (bypasses helper). Secondary gotcha: inline `-c credential.helper='...'` does not override the global helper — git runs all configured helpers and the global one wins; override requires resetting the list first (`-c credential.helper= -c credential.helper='...'`) or using URL creds. Suggested fix: branch emitted username by provider in the provider-resolution block; store the gitee login alongside the token in `/data/git-tokens.json` or derive from myco-user.",
       "tags": []
+    },
+    {
+      "id": "fr-105",
+      "text": "Auto-derive and store the gitee login from /setpat's validated fetchUser response, so /setgiteelogin becomes optional for the common case where the gitee token was set via /setpat. When handleSetPat calls gitHosts.fetchUser and the provider is gitee, mirror profile.login into rec's giteeLogin slot (guarded against overwriting an existing operator-set value). The credential helper then finds the login automatically without any extra user action.",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-07-01T01:30:03.757Z",
+      "addedBy": "claude",
+      "source": "user",
+      "voters": [],
+      "comments": []
+    },
+    {
+      "id": "fr-106",
+      "text": "Run slash commands (incl. /git) from the main project dir by default",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-07-01T22:53:53.648Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "make the slash cmd current dir the main project dir including the /git so that i don't have to using /git -C 'main project'",
+        "rewritten": true
+      },
+      "description": "**Problem:** Slash commands execute from the wrong cwd, forcing `/git -C 'main project'` on every invocation.\n**Expected:** Slash commands (including `/git`) use the main project dir as their current directory automatically.\n**Actual:** cwd isn't the main project dir, so `/git` and other slash commands require an explicit `-C 'main project'` override.",
+      "tags": []
+    },
+    {
+      "id": "fr-107",
+      "text": "Add preview support for HTML/PDF in file explorer",
+      "layer": "Feature",
+      "done": false,
+      "addedAt": "2026-07-07T01:18:38.207Z",
+      "addedBy": "kkrazy",
+      "source": "user",
+      "voters": [
+        "kkrazy"
+      ],
+      "comments": [],
+      "meta": {
+        "rewriteRequested": "long",
+        "originalText": "add preview support for HTML/PDF etc in the file explorer",
+        "rewritten": true
+      },
+      "description": "**Problem:** File explorer cannot preview common document formats, forcing users to open files externally.\n**Expected:** Selecting an HTML, PDF, or similar file in the explorer renders an inline preview.\n**Actual:** No preview is available for HTML/PDF and other rich file types.",
+      "tags": []
     }
   ],
-  "updatedAt": "2026-06-30T23:03:03.320Z"
+  "updatedAt": "2026-07-07T01:18:43.339Z"
 }

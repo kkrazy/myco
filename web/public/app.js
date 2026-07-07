@@ -12863,9 +12863,66 @@ function renderFileTreeIcon(entry) {
   return `<span class="ft-ic ${cls}">${FT_SVG.file}</span>`;
 }
 
-async function openFileInViewer(relPath) {
+// fr-107: map a file extension to the preview kind the file explorer
+// should render inline. Returns null for anything that should use the
+// existing text/code renderer. The keys mirror the MIME_BY_EXT table
+// in server/src/index.js's /file/raw route — keep them in sync.
+//
+// text-sourced kinds (`html`, `svg`) let the header expose a
+// ⧉ Source toggle so users can flip to the code view of the raw
+// markup. binary-only kinds (`pdf`, `image`, `audio`, `video`) hide
+// the toggle — there's no useful "source" for binary bytes.
+function _previewKindForExt(ext) {
+  ext = String(ext || '').toLowerCase().replace(/^\./, '');
+  if (ext === 'html' || ext === 'htm') return 'html';
+  if (ext === 'svg') return 'svg';        // text-sourced (XML)
+  if (ext === 'pdf') return 'pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
+  if (['mp3', 'wav', 'ogg', 'm4a'].includes(ext)) return 'audio';
+  if (['mp4', 'webm', 'mov'].includes(ext)) return 'video';
+  return null;
+}
+
+// fr-107: `text-sourced` preview kinds keep raw source viewable via
+// the header ⧉ Source toggle; `binary-only` kinds don't.
+function _previewKindIsTextSourced(kind) {
+  return kind === 'html' || kind === 'svg';
+}
+
+async function openFileInViewer(relPath, opts) {
   if (!state.activeId) return;
   const id = state.activeId;
+  // fr-107: preview-kind branch. When the file's ext maps to a preview
+  // kind AND the caller didn't explicitly request source mode
+  // (opts.forceSource — used by the ⧉ Source toggle), skip the /file
+  // JSON call entirely and render the preview via /file/raw. The
+  // /file/raw route serves the same bytes with a MIME-guessed
+  // Content-Type + Content-Disposition: inline so browser embeds work.
+  const ext = (relPath.split('.').pop() || '').toLowerCase();
+  const previewKind = (opts && opts.forceSource) ? null : _previewKindForExt(ext);
+  if (previewKind) {
+    // Preview-mode fast path: no /file JSON round-trip, no line-count
+    // decoding, no highlight.js pass. Just an iframe / img / audio /
+    // video pointing at the raw endpoint.
+    state.files.viewing = {
+      path: relPath,
+      mtimeMs: null,          // preview mode doesn't need the mtime pin (no edit surface)
+      content: '',
+      binary: !_previewKindIsTextSourced(previewKind),
+      cards: [],
+      selection: null,
+      pending: null,
+      commentDraft: null,
+      wrap: false,
+      size: null,
+      // fr-107: previewKind drives the header toggle affordances +
+      // the render dispatch below. null = classic code viewer path.
+      previewKind,
+    };
+    showFileViewerPane(relPath);
+    _renderPreviewByKind(previewKind, relPath);
+    return;
+  }
   const url = `/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(relPath)}`;
   let res;
   try { res = await authedFetch(url); }
@@ -12879,6 +12936,11 @@ async function openFileInViewer(relPath) {
     cards: [], selection: null, pending: null, commentDraft: null,
     wrap: /\.(md|markdown|txt|log)$/i.test(relPath),
     size: body.size,
+    // fr-107: track that this is source-mode of a preview-capable file
+    // so the header can offer a ⌗ Preview button to flip back.
+    // opts.forceSource is set by the toggle in _renderViewerHeader.
+    previewKind: null,
+    previewCapableExt: (opts && opts.forceSource) ? _previewKindForExt(ext) : null,
   };
 
   showFileViewerPane(relPath);
@@ -12919,6 +12981,85 @@ async function openFileInViewer(relPath) {
       renderFileViewerWithCards(state.files.viewing.content, body.path, cards);
     }
   }).catch(() => {});
+}
+
+// fr-107: dispatch preview-kind → render helper. Each renderer wipes
+// #files-view-body and inserts a single element (iframe / img / audio /
+// video) sized to fill the pane via CSS (.file-preview-* classes in
+// styles.css). No line-numbered code, no highlight.js — the browser's
+// native renderer does the work.
+function _renderPreviewByKind(kind, relPath) {
+  const body = document.getElementById('files-view-body');
+  if (!body) return;
+  body.innerHTML = '';
+  const id = state.activeId;
+  const rawUrl = `/sessions/${encodeURIComponent(id)}/file/raw?path=${encodeURIComponent(relPath)}`;
+  if (kind === 'html' || kind === 'svg') {
+    _renderIframePreview(body, rawUrl, kind);
+  } else if (kind === 'pdf') {
+    _renderPdfPreview(body, rawUrl);
+  } else if (kind === 'image') {
+    _renderImagePreview(body, rawUrl);
+  } else if (kind === 'audio') {
+    _renderMediaPreview(body, rawUrl, 'audio');
+  } else if (kind === 'video') {
+    _renderMediaPreview(body, rawUrl, 'video');
+  }
+}
+
+// fr-107: HTML + SVG preview via sandboxed iframe. `sandbox=""` (empty
+// allow list) neutralizes scripts, form submits, top-level navigation,
+// and cross-origin fetches — so a hostile HTML file can't exfiltrate
+// the myco session cookie or trigger an XSS pop-up.
+//
+// SVG is served with Content-Type: image/svg+xml, which browsers
+// render as an image inside the iframe. Scripts inside the SVG
+// (via <script> or event attributes) are neutralized the same way as
+// HTML scripts because the iframe sandbox blocks them.
+function _renderIframePreview(body, rawUrl, kind) {
+  const iframe = document.createElement('iframe');
+  iframe.className = 'file-preview-iframe';
+  iframe.setAttribute('sandbox', '');     // empty allow list — max lockdown
+  iframe.setAttribute('title', `${kind} preview`);
+  iframe.src = rawUrl;
+  body.appendChild(iframe);
+}
+
+// fr-107: PDF preview via iframe. Browsers ship a built-in PDF viewer
+// that takes over on Content-Type: application/pdf. The iframe here is
+// NOT sandboxed — the browser's PDF viewer runs in its own trusted
+// process anyway, and sandbox="" would block the viewer's UI controls.
+function _renderPdfPreview(body, rawUrl) {
+  const iframe = document.createElement('iframe');
+  iframe.className = 'file-preview-iframe file-preview-pdf';
+  iframe.setAttribute('title', 'PDF preview');
+  iframe.src = rawUrl;
+  body.appendChild(iframe);
+}
+
+// fr-107: image preview via <img>. Browsers don't execute scripts
+// inside images (even SVG scripts — but we route SVG through the iframe
+// path above to be extra safe with XML script handling in the file
+// explorer). Object-fit: contain via CSS.
+function _renderImagePreview(body, rawUrl) {
+  const img = document.createElement('img');
+  img.className = 'file-preview-image';
+  img.setAttribute('alt', 'file preview');
+  img.src = rawUrl;
+  body.appendChild(img);
+}
+
+// fr-107: audio / video preview via native <audio> / <video> tag with
+// browser controls. The `preload="metadata"` hint tells the browser to
+// pull just enough bytes to size the seek bar without prefetching the
+// whole file.
+function _renderMediaPreview(body, rawUrl, tag) {
+  const el = document.createElement(tag);
+  el.className = `file-preview-media file-preview-${tag}`;
+  el.setAttribute('controls', '');
+  el.setAttribute('preload', 'metadata');
+  el.src = rawUrl;
+  body.appendChild(el);
 }
 
 // Floating "Connecting" / "Reconnecting" card over the terminal area.
@@ -13006,6 +13147,51 @@ function renderViewerHeader(relPath) {
   document.getElementById('files-edit').hidden = !editable || inEdit;
   document.getElementById('files-edit-save').hidden = !inEdit;
   document.getElementById('files-edit-cancel').hidden = !inEdit;
+  // fr-107: Preview ↔ Source toggle. Visible when the current file is
+  // preview-capable AND text-sourced (html / svg). Binary-only kinds
+  // (pdf / image / audio / video) hide the toggle entirely — showing
+  // random bytes as "source" is useless. In preview mode the button
+  // says "⧉ Source" (flip to code view); in source mode of a preview-
+  // capable file it says "⌗ Preview" (flip back to render).
+  const toggle = document.getElementById('files-preview-toggle');
+  if (toggle) {
+    const inPreview = !!(v && v.previewKind);
+    const isPreviewCapableTextSource = !!(v && !v.previewKind && v.previewCapableExt &&
+      _previewKindIsTextSourced(v.previewCapableExt));
+    const canTogglePreview = inPreview && _previewKindIsTextSourced(v.previewKind);
+    const showToggle = canTogglePreview || isPreviewCapableTextSource;
+    toggle.hidden = !showToggle;
+    if (showToggle) {
+      if (inPreview) {
+        toggle.title = 'View source';
+        toggle.setAttribute('aria-label', 'View source');
+        toggle.textContent = '⧉';
+      } else {
+        toggle.title = 'View preview';
+        toggle.setAttribute('aria-label', 'View preview');
+        toggle.textContent = '⌗';
+      }
+      // Re-bind click on every render so the closure captures the
+      // current `relPath`. Idempotent — old listener is dropped by
+      // replacing the button via cloneNode.
+      const fresh = toggle.cloneNode(true);
+      toggle.parentNode.replaceChild(fresh, toggle);
+      fresh.addEventListener('click', () => {
+        const currentPath = v && v.path;
+        if (!currentPath) return;
+        if (inPreview) {
+          // Flip to source: re-open with forceSource=true so the /file
+          // JSON path fires and the code viewer renders.
+          openFileInViewer(currentPath, { forceSource: true });
+        } else {
+          // Flip back to preview: re-open without forceSource so the
+          // ext-dispatch at the top of openFileInViewer routes to the
+          // preview kind.
+          openFileInViewer(currentPath);
+        }
+      });
+    }
+  }
 }
 
 // Collapse / expand the files-tree-pane on desktop so the viewer

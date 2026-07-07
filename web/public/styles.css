@@ -9949,4 +9949,69 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: .85rem;
 }
 
+/* ─── fr-107: file-explorer inline preview (HTML/PDF/image/audio/video) ─── */
+/* Preview elements sit inside #files-view-body which the code-viewer
+   normally fills with a scrollable code column. Preview mode fills the
+   pane edge-to-edge with the iframe / img / audio / video element. */
+.file-preview-iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 60vh;
+  border: 0;
+  background: #ffffff;                /* light backdrop so HTML/SVG on transparent
+                                         backgrounds are readable in dark mode */
+}
+/* PDF viewer benefits from a slightly different backdrop (browsers'
+   own PDF viewers ship dark chrome; the iframe backdrop shows through
+   the letterbox area). */
+.file-preview-pdf {
+  background: #2b2b2b;
+}
+.file-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 200px);    /* leave room for header + optional action bar */
+  margin: 24px auto;
+  object-fit: contain;
+  background:
+    linear-gradient(45deg, #21262d 25%, transparent 25%) 0 0 / 20px 20px,
+    linear-gradient(-45deg, #21262d 25%, transparent 25%) 0 0 / 20px 20px,
+    linear-gradient(45deg, transparent 75%, #21262d 75%) 10px 10px / 20px 20px,
+    linear-gradient(-45deg, transparent 75%, #21262d 75%) 10px 10px / 20px 20px,
+    #161b22;                          /* checkerboard so transparent PNGs are visible */
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+.file-preview-media {
+  display: block;
+  margin: 24px auto;
+  max-width: 100%;
+}
+.file-preview-audio {
+  width: min(560px, 92%);
+}
+.file-preview-video {
+  max-height: calc(100vh - 200px);
+  background: #000;
+  border-radius: 6px;
+}
+/* Preview ↔ Source toggle button. Sizing + affordance matches the
+   sibling copy/wrap/edit chrome buttons in the file-view header
+   (icon-only, subtle border, hover accent). */
+#files-preview-toggle {
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .15);
+  color: #f0f6fc;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  transition: background .12s ease, border-color .12s ease;
+}
+#files-preview-toggle:hover {
+  background: rgba(255, 255, 255, .14);
+  border-color: rgba(255, 255, 255, .3);
+}
 
