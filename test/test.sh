@@ -4217,6 +4217,17 @@ test_chat_window() {
   # audio/video via native tags with controls, header preview-toggle only
   # for text-sourced kinds (binary hides it).
   node_test_result test/fr-107-file-explorer-preview.test.js "test/fr-107-file-explorer-preview.test.js (15 cases)"
+  # bug-92: fr-107's file-explorer preview endpoints returned 401
+  # {"error":"unauthorized"} on real deploys — iframe/img/audio/video
+  # tag requests don't carry the Bearer header that authedFetch sets,
+  # only cookies. Fix: append ?token=<state.token> to the raw URL via
+  # a new _rawUrlWithToken helper mirroring _withShareToken. Server-side
+  # userFromRequest already accepts the query-token fallback (auth.js).
+  # Locks: helper behavior (?/& join, encoding, share-token precedence,
+  # defensive on undefined state), the fix-site wrap in _renderPreviewByKind
+  # BEFORE any downstream render call, and the server contract that the
+  # client-side fix depends on.
+  node_test_result test/bug-92-file-raw-auth-token.test.js "test/bug-92-file-raw-auth-token.test.js (10 cases)"
   # bug-17: admin grant must propagate to already-attached WSes (the
   # readOnly flag is one-shot at attach time, so rec.admins changes
   # don't reach in-flight viewer connections without a reconnect).

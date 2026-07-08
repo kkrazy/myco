@@ -171,6 +171,35 @@ function _withShareToken(url) {
   return `${url}${sep}s=${encodeURIComponent(state.shareToken)}`;
 }
 
+// bug-92: append the Bearer session token as a `?token=<X>` query
+// parameter for URLs that will be consumed by <iframe>, <img>,
+// <audio>, or <video> tag src attributes. Those tag requests do NOT
+// carry the Authorization header that authedFetch sets — only cookies
+// travel automatically — so an auth-gated endpoint (fileApiPreamble)
+// would return 401 without the token in the URL.
+//
+// Server-side compat: userFromRequest in server/src/auth.js already
+// accepts `?token=<X>` as a fallback when the Authorization header is
+// missing (line 114 as of 2026-07). Same pattern the /auth/check
+// route uses for its client-side probes.
+//
+// Precedence: share-token guests keep using _withShareToken (?s=…)
+// unchanged. Signed-in users get ?token=<state.token>. When both are
+// present the share-token wins (guest flows shouldn't leak the
+// operator's Bearer token).
+//
+// Trade-off: the Bearer token appears in browser history + server
+// access logs. Acceptable for rotatable 30-day session tokens that
+// revoke on sign-out. Not acceptable for API keys or long-lived
+// credentials — do NOT reuse this helper for those.
+function _rawUrlWithToken(url) {
+  if (state && state.shareToken) return _withShareToken(url);
+  const tok = (state && state.token) || '';
+  if (!tok) return url;
+  const sep = String(url).indexOf('?') === -1 ? '?' : '&';
+  return `${url}${sep}token=${encodeURIComponent(tok)}`;
+}
+
 // Composer context chips: detectable @-mentions in the textarea are
 // surfaced as deletable pills above the input. Helps the user see
 // what's attached at a glance instead of squinting at inline text.
@@ -12993,7 +13022,15 @@ function _renderPreviewByKind(kind, relPath) {
   if (!body) return;
   body.innerHTML = '';
   const id = state.activeId;
-  const rawUrl = `/sessions/${encodeURIComponent(id)}/file/raw?path=${encodeURIComponent(relPath)}`;
+  // bug-92: iframe/img/audio/video src does NOT carry the Bearer
+  // header that authedFetch sets — those tags only send cookies. The
+  // /file/raw route is auth-gated (fileApiPreamble → 401 without
+  // credentials). _rawUrlWithToken appends `?token=<state.token>` so
+  // the request lands authenticated. Server accepts `?token=` as an
+  // Authorization fallback (auth.js userFromRequest, line 114).
+  const rawUrl = _rawUrlWithToken(
+    `/sessions/${encodeURIComponent(id)}/file/raw?path=${encodeURIComponent(relPath)}`
+  );
   if (kind === 'html' || kind === 'svg') {
     _renderIframePreview(body, rawUrl, kind);
   } else if (kind === 'pdf') {
