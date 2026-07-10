@@ -1,11 +1,24 @@
 {
   "name": "myco-monorepo",
+  "version": "0.1.0",
+  "description": "myco — combined CLI + chat backed by a rules-enforcing model proxy. Root package doubles as the install-from-github entrypoint (bin.myco → cli/index.js); see cli/ for the standalone @myco/cli publish shape.",
   "private": true,
   "workspaces": [
     "cli"
   ],
+  "bin": {
+    "myco": "./cli/index.js"
+  },
+  "files": [
+    "cli/index.js",
+    "cli/src/",
+    "cli/share/",
+    "cli/README.md",
+    "cli/package.json"
+  ],
   "dependencies": {
-    "highlight.js": "^11.11.1"
+    "highlight.js": "^11.11.1",
+    "ws": "^8.14.2"
   },
   "devDependencies": {
     "playwright": "^1.50.0",

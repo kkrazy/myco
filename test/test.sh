@@ -4232,6 +4232,15 @@ test_chat_window() {
   # package-lock.json + Dockerfile still COPY server/package.json), and
   # preserves existing root deps + build:editor script verbatim.
   node_test_result test/fr-110-npm-workspaces.test.js "test/fr-110-npm-workspaces.test.js (15 cases)"
+  # fr-111: root package.json doubles as an installable CLI so
+  # `npm install -g github:kkrazy/myco#<sha>` produces a working `myco`
+  # binary on PATH. Locks the new fields (bin.myco, files array, ws in
+  # deps, version, description), asserts fr-110 invariants held
+  # (workspaces still ["cli"], private true, name myco-monorepo,
+  # existing deps + scripts preserved), guards against version drift
+  # between root and cli/package.json's ws, and confirms cli/index.js
+  # dispatch + lazy-ws pattern remain unchanged.
+  node_test_result test/fr-111-root-installable-cli.test.js "test/fr-111-root-installable-cli.test.js (21 cases)"
   # bug-92: fr-107's file-explorer preview endpoints returned 401
   # {"error":"unauthorized"} on real deploys — iframe/img/audio/video
   # tag requests don't carry the Bearer header that authedFetch sets,
