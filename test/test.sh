@@ -4233,6 +4233,15 @@ test_chat_window() {
   # install-CLI shape intact + cli/index.js dispatch preserved + server
   # boundary held).
   node_test_result test/fr-112-drop-workspaces.test.js "test/fr-112-drop-workspaces.test.js (18 cases)"
+  # fr-113: pure Lacy Shell 5-rule classifier at cli/src/classifier.js.
+  # Deterministic shell-vs-chat routing for the input line, ready to be
+  # wired into the fr-114 bash PROMPT_COMMAND hook. Locks rule ordering
+  # (rule 2 reserved runs before rule 1 command-v, rule 4a `?` before 4b
+  # NL-in-rest), rule id surfacing on every branch, the four NL sets
+  # (articles/pronouns/question/modal) as case-insensitive matches, the
+  # projectShellWords override hook point for fr-115+ skills injection,
+  # and helper exports (isNaturalLanguageWord, tokenize) for composition.
+  node_test_result test/fr-113-lacy-classifier.test.js "test/fr-113-lacy-classifier.test.js (44 cases)"
   # fr-111: root package.json doubles as an installable CLI so
   # `npm install -g github:kkrazy/myco#<sha>` produces a working `myco`
   # binary on PATH. Locks the new fields (bin.myco, files array, ws in

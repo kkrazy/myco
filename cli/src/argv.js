@@ -11,8 +11,9 @@
 //   - Return shape is tiny + stable: { command, ...options }.
 //   - Unknown / malformed args land on 'usage' with a human-readable
 //     `error` field so index.js can print it before exiting non-zero.
-//   - Later phases (fr-110 classifier, fr-111 tool calls, fr-112 chat)
-//     add new commands here; existing shapes stay backward-compatible.
+//   - Later phases (fr-113 classifier, fr-114 prompt hook, fr-115 tool
+//     calls) add new commands here; existing shapes stay backward-
+//     compatible.
 
 'use strict';
 
@@ -24,7 +25,7 @@ const COMMANDS = {
   USAGE:   'usage',
 };
 
-// fr-110+: as we add more shell targets (zsh, fish, pwsh, nushell), just
+// fr-114+: as we add more shell targets (fish, pwsh, nushell), just
 // extend this set. Everything else in the CLI reads through the set so
 // error messages stay consistent.
 const INTEGRATE_TARGETS = new Set(['bash', 'zsh']);
@@ -100,7 +101,7 @@ function parseArgv(argv) {
 
 // Human-readable help text. Emitted by both `myco --help` and `myco`
 // (no args). Kept short — this is the CLI's front door, not a manpage.
-// fr-110+: extend as we add commands.
+// fr-114+: extend as we add commands.
 function helpText(binName /* 'myco' */) {
   const bin = binName || 'myco';
   return [
@@ -113,11 +114,11 @@ function helpText(binName /* 'myco' */) {
     `  ${bin} integrate --bash         Print the .bashrc line to source for bash integration`,
     `  ${bin} integrate --zsh          Print the .zshrc line to source for zsh integration`,
     '',
-    'Coming next (planned):',
-    `  fr-110  Lacy-style 5-rule classifier (shell vs chat routing)`,
-    `  fr-111  Server /v1/tools/* endpoints (get_rules, get_skills, ...)`,
-    `  fr-112  Streaming chat client (WebSocket + markdown rendering)`,
-    `  fr-113  VSCode extension bridge (workspace-aware features)`,
+    'Recent + upcoming (planned):',
+    `  fr-113  Lacy-style 5-rule classifier (shell vs chat routing) — this release`,
+    `  fr-114  Bash prompt hook (color-tinted green/magenta on the input line)`,
+    `  fr-115  Server /v1/tools/* endpoints (get_rules, get_skills, ...)`,
+    `  fr-116  Streaming chat client (WebSocket + markdown rendering)`,
     '',
     'Home: https://github.com/kkrazy/myco',
   ].join('\n');
