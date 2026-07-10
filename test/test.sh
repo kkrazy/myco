@@ -4242,6 +4242,20 @@ test_chat_window() {
   # projectShellWords override hook point for fr-115+ skills injection,
   # and helper exports (isNaturalLanguageWord, tokenize) for composition.
   node_test_result test/fr-113-lacy-classifier.test.js "test/fr-113-lacy-classifier.test.js (44 cases)"
+  # fr-114: bash prompt hook wires the fr-113 classifier into
+  # share/myco.bash so the accepted input line gets a green (shell) /
+  # magenta (chat) tint before it runs. Static-tests the wiring:
+  # every JS rule-set entry (BASH_RESERVED_WORDS + NL_ARTICLES +
+  # NL_PRONOUNS + NL_QUESTION + NL_MODAL, 46 words total) appears
+  # literally in the bash mirror — a drift guard against future JS
+  # edits landing without the bash counterpart. Also locks the Enter
+  # hijack (bind -x on \C-m gated by an interactive-shell check), the
+  # ANSI color codes (32m green + 35m magenta + 0m reset), the rule
+  # ordering (rule 2 reserved before rule 1 command-v; rule 4a ? before
+  # rule 4b NL-in-rest), the fr-109 sourcing contract (idempotency,
+  # MYCO_INTEGRATE_VERSION bump), the zsh stub UNCHANGED (fr-114 scope
+  # guard), and the argv.js helpText refresh.
+  node_test_result test/fr-114-bash-prompt-hook.test.js "test/fr-114-bash-prompt-hook.test.js (29 cases)"
   # fr-111: root package.json doubles as an installable CLI so
   # `npm install -g github:kkrazy/myco#<sha>` produces a working `myco`
   # binary on PATH. Locks the new fields (bin.myco, files array, ws in
