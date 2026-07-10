@@ -4225,13 +4225,14 @@ test_chat_window() {
   # unknown-command exit-2), and the invariants that fr-109 does NOT
   # clobber the pre-fr-109 `myco attach <id>` WebSocket client.
   node_test_result test/fr-109-cli-skeleton.test.js "test/fr-109-cli-skeleton.test.js (33 cases)"
-  # fr-110: root repo as npm workspace (cli-only). Locks the root
-  # package.json shape (name=myco-monorepo, private=true, workspaces=["cli"]),
-  # explicitly guards against Scope B creep (server NOT in workspaces →
-  # canary asserting ensure_server_deps still probes server/node_modules/.
-  # package-lock.json + Dockerfile still COPY server/package.json), and
-  # preserves existing root deps + build:editor script verbatim.
-  node_test_result test/fr-110-npm-workspaces.test.js "test/fr-110-npm-workspaces.test.js (15 cases)"
+  # fr-112 supersedes fr-110: dropped `workspaces` from root package.json
+  # because npm 8+ excluded workspace paths from the root install even
+  # when listed in `files`, breaking `npm install -g github:kkrazy/myco#<sha>`
+  # (the very thing fr-111 was meant to enable). fr-110's test file is
+  # deleted; fr-112 locks the current invariant (workspaces absent + fr-111
+  # install-CLI shape intact + cli/index.js dispatch preserved + server
+  # boundary held).
+  node_test_result test/fr-112-drop-workspaces.test.js "test/fr-112-drop-workspaces.test.js (18 cases)"
   # fr-111: root package.json doubles as an installable CLI so
   # `npm install -g github:kkrazy/myco#<sha>` produces a working `myco`
   # binary on PATH. Locks the new fields (bin.myco, files array, ws in

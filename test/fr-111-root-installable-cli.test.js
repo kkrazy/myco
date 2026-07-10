@@ -96,9 +96,9 @@ t('root package.json: description mentions the install-from-github role', () => 
 // ──────────────────────────────────────────────────────────────────
 // Group B: fr-110 invariants held (no regression from that slice).
 
-t('fr-110 invariant: workspaces still ["cli"] (Scope A boundary held)', () => {
-  assert.deepStrictEqual(rootPkg.workspaces, ['cli'],
-    'workspaces must still be exactly ["cli"] — server has NOT been added; fr-110 Scope A boundary held');
+t('fr-112 supersedes fr-110: workspaces field REMOVED from root (conflicted with bin/files at install time)', () => {
+  assert.ok(!('workspaces' in rootPkg),
+    'root package.json must NOT declare a `workspaces` field — fr-112 removed it because npm 8+ excludes workspace paths from the root package\'s install even when listed in `files`, which broke `npm install -g github:...` (the very thing fr-111 was meant to enable). See fr-112 test for the current invariant.');
 });
 
 t('fr-110 invariant: private is still true (blocks accidental publish; does not block install-from-git)', () => {

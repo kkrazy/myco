@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "description": "myco — combined CLI + chat backed by a rules-enforcing model proxy. Root package doubles as the install-from-github entrypoint (bin.myco → cli/index.js); see cli/ for the standalone @myco/cli publish shape.",
   "private": true,
-  "workspaces": [
-    "cli"
-  ],
   "bin": {
     "myco": "./cli/index.js"
   },
