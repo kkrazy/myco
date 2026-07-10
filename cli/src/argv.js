@@ -116,9 +116,10 @@ function helpText(binName /* 'myco' */) {
     '',
     'Recent + upcoming (planned):',
     `  fr-113  Lacy-style 5-rule classifier (shell vs chat routing)`,
-    `  fr-114  Bash prompt hook (color-tinted green/magenta on Enter) — this release`,
-    `  fr-115  Server /v1/tools/* endpoints (get_rules, get_skills, ...)`,
-    `  fr-116  Streaming chat client (WebSocket + markdown rendering)`,
+    `  fr-114  Bash prompt hook (color-tinted green/magenta on Enter)`,
+    `  fr-115  Zsh port of the prompt hook (zle widget on ^M) — this release`,
+    `  fr-116  Server /v1/tools/* endpoints (get_rules, get_skills, ...)`,
+    `  fr-117  Streaming chat client (WebSocket + markdown rendering)`,
     '',
     'Home: https://github.com/kkrazy/myco',
   ].join('\n');

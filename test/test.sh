@@ -4256,6 +4256,18 @@ test_chat_window() {
   # MYCO_INTEGRATE_VERSION bump), the zsh stub UNCHANGED (fr-114 scope
   # guard), and the argv.js helpText refresh.
   node_test_result test/fr-114-bash-prompt-hook.test.js "test/fr-114-bash-prompt-hook.test.js (29 cases)"
+  # fr-115: zsh port of the fr-114 bash prompt hook. share/myco.zsh
+  # went from a 21-line fr-109 stub to a ~130-line active hijack that
+  # wires the fr-113 classifier into a zle widget bound to Enter (^M)
+  # for both emacs and vi-insert modes. Same 5 rules, same drift guard
+  # (every JS BASH_RESERVED_WORDS + NL_* entry — 46 words total — must
+  # appear literally in share/myco.zsh), same ANSI green/magenta color
+  # feedback, same fr-109 sourcing contract. Also bumps
+  # MYCO_INTEGRATE_VERSION in share/myco.bash to match — the marker now
+  # tracks the RELEASE (fr-115), not the file. fr-114 test widened its
+  # exact-match on "fr-114" to a fr-1XX range so subsequent bumps
+  # don't need lockstep test edits.
+  node_test_result test/fr-115-zsh-prompt-hook.test.js "test/fr-115-zsh-prompt-hook.test.js (31 cases)"
   # fr-111: root package.json doubles as an installable CLI so
   # `npm install -g github:kkrazy/myco#<sha>` produces a working `myco`
   # binary on PATH. Locks the new fields (bin.myco, files array, ws in

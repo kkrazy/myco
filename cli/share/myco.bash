@@ -27,7 +27,11 @@ if [ -n "$MYCO_INTEGRATE_LOADED" ]; then
   return 2>/dev/null || true
 fi
 MYCO_INTEGRATE_LOADED=1
-export MYCO_INTEGRATE_VERSION="fr-114"
+# fr-115: version marker reflects the current release, not the file.
+# Both share/myco.bash and share/myco.zsh set this to the same value —
+# the version tracks "what myco features are wired up on this shell,"
+# which advances as a whole regardless of which shell you use.
+export MYCO_INTEGRATE_VERSION="fr-115"
 
 # ────────────────────────────────────────────────────────────────
 # Rule 2 — bash reserved words. MIRRORS cli/src/classifier.js:BASH_RESERVED_WORDS.
@@ -170,7 +174,7 @@ _myco_accept_line() {
       ;;
     chat)
       printf '\r\e[K\e[35m%s\e[0m\n' "$line"
-      printf '\e[2m→ this looks like a chat message (fr-116 will route to `myco chat`)\e[0m\n'
+      printf '\e[2m→ this looks like a chat message (fr-117 will route to `myco chat`)\e[0m\n'
       ;;
   esac
 

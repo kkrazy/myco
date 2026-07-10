@@ -64,9 +64,14 @@ t('fr-109 contract: MYCO_INTEGRATE_LOADED=1 set on first load', () => {
     'MYCO_INTEGRATE_LOADED must be set to 1 after the guard check — this is what makes re-source safe');
 });
 
-t('fr-114 marker: MYCO_INTEGRATE_VERSION bumped to "fr-114"', () => {
-  assert.ok(/export\s+MYCO_INTEGRATE_VERSION="fr-114"/.test(bashSrc),
-    'MYCO_INTEGRATE_VERSION must announce fr-114 — the fr-109 stub had "fr-109-stub"; the bump is the version fingerprint');
+t('fr-114 marker: MYCO_INTEGRATE_VERSION is a fr-1XX release label (widened by fr-115)', () => {
+  // fr-115 widened this from an exact `"fr-114"` match to a range so
+  // that every subsequent release bump (fr-115, fr-116, …) doesn't
+  // require touching the fr-114 test. The marker now reflects the
+  // current RELEASE, not the file — both bash and zsh advance in
+  // lockstep. See fr-115 analyze note A5.
+  assert.ok(/export\s+MYCO_INTEGRATE_VERSION="fr-1\d\d"/.test(bashSrc),
+    'MYCO_INTEGRATE_VERSION must announce a fr-1XX release label — the fr-109 stub had "fr-109-stub"; every release since bumps this in lockstep with cli/share/myco.zsh');
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -213,17 +218,25 @@ t('rule ordering: trailing `?` check runs BEFORE the NL-in-rest loop', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────
-// Group F: zsh stub UNCHANGED (fr-114 scope guard — zsh port deferred).
+// Group F: bash + zsh version marker convergence (post-fr-115).
+// The two zsh-scope-guards this group originally held ("zsh stub still
+// says fr-109" + "zsh stub is short") were valid ONLY inside the
+// fr-114 window. fr-115 is exactly the slice that ported zsh, so those
+// assertions no longer apply. In their place: verify the two shells
+// share a version marker so no one accidentally desyncs them.
 
-t('scope guard: zsh stub still says "fr-109 stub" — fr-114 does NOT touch zsh', () => {
-  assert.ok(/fr-109/.test(zshSrc),
-    'share/myco.zsh must still be the fr-109 stub — fr-114 scope was bash-only. The zsh port lands in a later slice.');
+t('post-fr-115: zsh mirror is ALSO active (no longer the fr-109 stub) — sibling to bash', () => {
+  assert.ok(!/fr-109-stub/.test(zshSrc),
+    'share/myco.zsh must have moved past the fr-109-stub marker — fr-115 activated it. If this is still the fr-109 stub, something regressed the zsh port.');
 });
 
-t('scope guard: zsh stub is short (< 40 lines) — no accidental porting', () => {
-  const lineCount = zshSrc.split('\n').length;
-  assert.ok(lineCount < 40,
-    `share/myco.zsh must remain a short stub (got ${lineCount} lines) — if this grew, fr-114 accidentally touched the zsh side. Roll back or split the slice.`);
+t('post-fr-115: bash and zsh share the same MYCO_INTEGRATE_VERSION release marker', () => {
+  const bashVer = bashSrc.match(/MYCO_INTEGRATE_VERSION="(fr-1\d\d)"/);
+  const zshVer  = zshSrc.match(/MYCO_INTEGRATE_VERSION="(fr-1\d\d)"/);
+  assert.ok(bashVer, 'bash file must set MYCO_INTEGRATE_VERSION to fr-1XX');
+  assert.ok(zshVer, 'zsh file must set MYCO_INTEGRATE_VERSION to fr-1XX');
+  assert.strictEqual(bashVer[1], zshVer[1],
+    `MYCO_INTEGRATE_VERSION must match between bash and zsh (got bash=${bashVer[1]}, zsh=${zshVer[1]}). Version tracks the RELEASE, not the file — bump both together.`);
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -247,12 +260,15 @@ t('comment header: no stale "fr-110 will replace" placeholder left over', () => 
 // ──────────────────────────────────────────────────────────────────
 // Group H: argv.js helpText refreshed to reflect fr-114 as this release.
 
-t('argv.js helpText: fr-114 labeled "this release"', () => {
-  assert.ok(/fr-114.*Bash prompt hook.*this release/.test(argvSrc),
-    'argv.js helpText must mark fr-114 as "this release" — the user-visible roadmap shifts with each phase');
+t('argv.js helpText: fr-114 (bash prompt hook) still listed on the roadmap', () => {
+  // Widened by fr-115: fr-114 no longer wears the "this release" flag
+  // (fr-115 does now), but the label must still appear in the roadmap
+  // so users understand what fr-114 delivered.
+  assert.ok(/fr-114.*Bash prompt hook/.test(argvSrc),
+    'argv.js helpText must retain the fr-114 "Bash prompt hook" line — dropping it would erase user-visible history of what shipped');
 });
 
-t('argv.js helpText: fr-115 + fr-116 are still labeled as upcoming (planned)', () => {
+t('argv.js helpText: fr-115 + fr-116 still on the roadmap', () => {
   assert.ok(/fr-115/.test(argvSrc) && /fr-116/.test(argvSrc),
     'argv.js helpText must retain fr-115 + fr-116 labels — dropping them would strand the roadmap');
 });
