@@ -4225,6 +4225,13 @@ test_chat_window() {
   # unknown-command exit-2), and the invariants that fr-109 does NOT
   # clobber the pre-fr-109 `myco attach <id>` WebSocket client.
   node_test_result test/fr-109-cli-skeleton.test.js "test/fr-109-cli-skeleton.test.js (33 cases)"
+  # fr-110: root repo as npm workspace (cli-only). Locks the root
+  # package.json shape (name=myco-monorepo, private=true, workspaces=["cli"]),
+  # explicitly guards against Scope B creep (server NOT in workspaces →
+  # canary asserting ensure_server_deps still probes server/node_modules/.
+  # package-lock.json + Dockerfile still COPY server/package.json), and
+  # preserves existing root deps + build:editor script verbatim.
+  node_test_result test/fr-110-npm-workspaces.test.js "test/fr-110-npm-workspaces.test.js (15 cases)"
   # bug-92: fr-107's file-explorer preview endpoints returned 401
   # {"error":"unauthorized"} on real deploys — iframe/img/audio/video
   # tag requests don't carry the Bearer header that authedFetch sets,

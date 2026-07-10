@@ -1,4 +1,9 @@
 {
+  "name": "myco-monorepo",
+  "private": true,
+  "workspaces": [
+    "cli"
+  ],
   "dependencies": {
     "highlight.js": "^11.11.1"
   },
