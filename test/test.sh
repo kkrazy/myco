@@ -4217,6 +4217,14 @@ test_chat_window() {
   # audio/video via native tags with controls, header preview-toggle only
   # for text-sourced kinds (binary hides it).
   node_test_result test/fr-107-file-explorer-preview.test.js "test/fr-107-file-explorer-preview.test.js (15 cases)"
+  # fr-109: bash-installable @myco/cli skeleton — Phase 1 of fr-108.
+  # Locks the npm-publish surface (package.json bin/engines/files),
+  # the pure argv parser (parseArgv + COMMANDS + INTEGRATE_TARGETS),
+  # the share/myco.bash and share/myco.zsh idempotency guards, the
+  # end-to-end smoke (--version, --help, integrate --bash|--zsh,
+  # unknown-command exit-2), and the invariants that fr-109 does NOT
+  # clobber the pre-fr-109 `myco attach <id>` WebSocket client.
+  node_test_result test/fr-109-cli-skeleton.test.js "test/fr-109-cli-skeleton.test.js (33 cases)"
   # bug-92: fr-107's file-explorer preview endpoints returned 401
   # {"error":"unauthorized"} on real deploys — iframe/img/audio/video
   # tag requests don't carry the Bearer header that authedFetch sets,
