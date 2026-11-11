@@ -128,6 +128,7 @@ GitHub/Gitee/CodeHub token 的用户都可登录（"开放模式"）。清掉或
    7.156.115.217  api.code-agent.rnd.huawei.com
    7.237.97.68    models.ascend.huawei.com
    100.94.164.16  registry-cbu.huawei.com
+   7.221.105.132  kwe-g.codehub.huawei.com
    ```
 4. `docker.io` 被 HIS 代理阻断 → **base 镜像 `node:26-alpine` 拉不到**，buildkit
    解 `FROM node:26-alpine` 时代 `i/o timeout`。用华为云 SWR 镜像源拉（§4.0 脚本 / §4.0b step 0）。
@@ -280,13 +281,14 @@ docker run -d --name myco-local --restart unless-stopped \
   --add-host=api.code-agent.rnd.huawei.com:7.156.115.217 \
   --add-host=models.ascend.huawei.com:7.237.97.68 \
   --add-host=registry-cbu.huawei.com:100.94.164.16 \
+  --add-host=kwe-g.codehub.huawei.com:7.221.105.132 \
   -p 443:443 -p 80:80 \
   -v /data/s00791175/Delm/mycoFile/state/home:/root \
   -v /data/s00791175/Delm/mycoFile/state/wks:/wks \
   -v /data/s00791175/Delm/mycoFile/state/Caddyfile:/etc/caddy/Caddyfile:ro \
   -v /data/s00791175/Delm/mycoFile/state:/data \
-  -e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115 \
-  -e no_proxy=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115 \
+  -e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115 \
+  -e no_proxy=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115 \
   -e HTTP_PROXY=http://p_atlas:<PASSWORD>@10.195.176.39:8081 \
   -e http_proxy=http://p_atlas:<PASSWORD>@10.195.176.39:8081 \
   -e HTTPS_PROXY=http://p_atlas:<PASSWORD>@10.195.176.39:8081 \
@@ -300,7 +302,9 @@ docker run -d --name myco-local --restart unless-stopped \
 > 是 live 凭证，勿写进 git，从 state `.env` 取（`@` 编码为 `%40`）。
 >
 > **no_proxy 必须直连、不走代理的项**：`api.code-agent.rnd.huawei.com`（默认网关）、
-> `codehub-dg-g.huawei.com`（CodeHub git）、`7.216.246.115`（DS-V4 网关 IP——**必须加**，
+> `codehub-dg-g.huawei.com`（CodeHub git）、`kwe-g.codehub.huawei.com`（KWE CodeHub
+> git，2026-11-11 实测：不加则 clone 报 `CONNECT tunnel failed, response 504`）、
+> `7.216.246.115`（DS-V4 网关 IP——**必须加**，
 > 否则该内网 IP 走 HIS 代理→HTTP 504）。任何新增内网网关 IP/域名，都要同步加进
 > `--add-host` 和 `no_proxy`。
 
@@ -391,6 +395,7 @@ tr "\0" "\n" </proc/1/environ > /tmp/env1 && cd /app && set -a && . /tmp/env1 &&
 | `Not logged in · Please run /login` | 进程环境缺 API 配置 | 确认 `.env` + 重启容器（§2/§4.1） |
 | `fetch failed` / `Could not resolve host` | 容器 DNS 解析不了域名 | 用 `--add-host` 重建，把内网域名映射进容器（§4.2） |
 | `CodeHub: getaddrinfo ENOTFOUND codehub-dg-g.huawei.com` | 容器缺该域名 hosts 映射 | 加 `--add-host=codehub-dg-g.huawei.com:7.202.25.45`（§4.2） |
+| `kwe-g.codehub.huawei.com` clone 报 `CONNECT tunnel failed, response 504` | 该域名缺 hosts 映射且走了企业代理 | 加 `--add-host=kwe-g.codehub.huawei.com:7.221.105.132` 并把域名加进 `no_proxy`，重建容器（§4.2） |
 | DS 网关（`7.216.246.115:14000`）504 / 连不上 | `7.216.246.115` 不在 no_proxy | 加进 `NO_PROXY`/`no_proxy` 并重建（§4.2） |
 | HTTP 504（HIS Proxy 拦截页） | 请求走了企业代理 | 内网域名/IP 加进 `no_proxy` / `MYCO_ENTERPRISE_NO_PROXY` |
 | `/harness run` 报 `python3: not found` | 镜像是不含 harness 的增量层 | 改在带 harness 的全量/增量基上跑（§4.0/§4.4） |

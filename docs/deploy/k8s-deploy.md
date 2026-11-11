@@ -25,12 +25,13 @@
 > 172.19.152.237 proxy.huawei.com
 > 7.156.115.217  api.code-agent.rnd.huawei.com
 > 7.237.97.68    models.ascend.huawei.com
+> 7.221.105.132  kwe-g.codehub.huawei.com
 > ```
 >
 > ⚠️ `codehub-dg-g.huawei.com` 的 IP 以 252 宿主 `/etc/hosts` 实时值为准
 > （2026-10 实测曾从 `7.202.25.45` 变为 `100.95.29.121`，见 §9 排查表）。
 > 容器内直连域名必须同时进 `NO_PROXY`/`no_proxy`：
-> `api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115`
+> `api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115`
 > （docker 版完整 `-e` 写法见 docker.md §"宿主 run 命令"）。
 
 ---
@@ -233,7 +234,7 @@ rsync -a /data/s00791175/Delm/mycoFile/state/wks/  root@7.242.106.252:/data/myco
 1. `NO_PROXY` / `no_proxy` 追加集群网段：
    `7.242.106.252,7.242.106.110,7.242.109.33,10.244.0.0/16,10.96.0.0/12,.svc,.cluster.local`
    并**确认内网直连域名在列**（缺了会走代理被拦截，表现为 HTTP 504/`fetch failed`）：
-   `localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115`
+   `localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115`
 2. 确认 `HOST=127.0.0.1`、`PORT=3000`（deployment 模板会显式设置这两个，
    `.env` 里不写也行）
 3. **内网网关 IP 检查**（重点）：`.env` / `state/gateways.json` 里的内网网关
@@ -475,7 +476,7 @@ helm -n myco uninstall myco
 | 镜像拉取 `denied` | 仓库需认证 | §5 建 docker-registry Secret + `--set imagePullSecrets[0].name` |
 | `Not logged in` / `fetch failed` | env 缺 ANTHROPIC_* 或 hosts 缺映射 | §6 ②③ 排查；更新 `.env` 后重跑 helm 命令 |
 | agent 弹权限确认窗（docker 版不弹） | `.env` 缺 `MYCO_ALLOW_ALL=1`（docker 版已设、k8s 迁移时漏了） | 在 `/data/myco/state/.env` 补 `MYCO_ALLOW_ALL=1` 后重跑 helm 命令（见 §4 第 0 条）；改完全局放行后主会话/single-agent 也不弹 |
-| HTTP 504（HIS Proxy 拦截页） | 内网 IP 走了代理 | 把目标 IP/域名加进 `.env` 的 `NO_PROXY`/`no_proxy` 再重跑 helm；基准集合：`api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115` |
+| HTTP 504（HIS Proxy 拦截页） | 内网 IP 走了代理 | 把目标 IP/域名加进 `.env` 的 `NO_PROXY`/`no_proxy` 再重跑 helm；基准集合：`api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115` |
 | 80 端口冲突 | 252 上还跑着 docker 版 myco | `docker stop myco-local`（在 252 上，如有） |
 | Pod 反复 CrashLoopBackOff + `bind: address already in use` | hostNetwork 抢 80 失败（252 上别的进程占了） | 252 上 `ss -lntp \| grep :80 ` 找到占用者处理 |
 | PV 一直 Available、PVC Pending | StorageClass `volumeBindingMode=WaitForFirstConsumer`——没 Pod 消费就不绑 | 正常现象，Deployment 就绪后自动 Bound；一直不绑则查 nodeSelector 是否指向 252 的**实际 hostname** |
