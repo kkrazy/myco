@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- interactive-widget=resizes-content keeps the chat input above the
+       on-screen keyboard on iOS 17+/Android Chrome 108+ instead of
+       requiring manual scroll. viewport-fit=cover lets the layout flow
+       under notches; safe-area-inset-* values supply the actual
+       padding. user-scalable=no kills the pinch-zoom that interferes
+       with code blocks; we counter accidental zoom-prevention damage
+       with explicit font-size:16px on inputs (Safari ≤14 zooms when
+       <16px). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="myco" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0d0d0d" />
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no, url=no" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/png" href="/hetu.png?v=2" />
+  <link rel="apple-touch-icon" href="/hetu.png?v=2" />
+  <title>myco</title>
+  <link rel="stylesheet" href="styles.css?v=284" />
+  <link rel="stylesheet" href="/vendor/github-dark.min.css" />
+  <!-- bug-39: vendored KaTeX (offline) loaded asynchronously in app.js to improve page-load speed -->
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <header>
+        <h1>&lt;/myco&gt;</h1>
+        <button id="btn-collapse" title="Collapse">‹</button>
+        <button id="btn-spawn" title="New session">+</button>
+        <!-- fr-87 r4 + fr-91 r3: gear icon is THE single Config
+             affordance, opening the Config modal. Pre-r4 there were
+             TWO icons: #btn-admin (gear) opened the standalone
+             #admin-wrap pane, and #btn-config (user-cog, added by
+             bug-44) opened the Config modal. fr-87 r4 made the gear
+             the sole entry and orphaned the standalone pane.
+             fr-91 r3 (per user: "one admin UI for all users but
+             display different section based on user role") DELETED
+             the orphaned #admin-wrap entirely. All admin/env config
+             now lives in the Config modal's #config-admin-env-form
+             section, gated by the existing /api/admin/config 200
+             probe so non-admins see only the user-facing sections. -->
+
+        <button id="btn-admin" title="Config" hidden aria-label="Config">
+          <svg class="sidebar-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <!-- User-manual link. Opens an in-app modal that fetches
+             /USER_MANUAL.md and renders it via marked. lucide-style
+             book-open icon matches the chrome icons' visual language. -->
+        <button id="btn-manual" title="User manual" aria-label="User manual">
+          <svg class="sidebar-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+        </button>
+      </header>
+      <ul id="session-list"></ul>
+      <!-- Mobile-only slogan — sits below the session cards in the
+           sidebar (mobile sidebar = full-screen home). Hidden on
+           desktop where the slogan lives in the main pane.
+           CSS handles the show/hide. -->
+      <div id="sidebar-slogan" aria-hidden="true">Reliable Vibe Coding</div>
+      <div id="status-bar">
+        <span id="status-indicator"></span>
+        <span id="status-text">mycod running</span>
+        <span id="user-stamp" title="Logged-in user"></span>
+        <span id="build-stamp" title="Build timestamp"></span>
+      </div>
+    </aside>
+
+    <button id="btn-expand" title="Show sessions" hidden>☰</button>
+
+    <main id="terminal-pane">
+      <!-- Chrome cluster: Lucide-style inline SVG icons (stroke 1.75,
+           24x24 viewBox, currentColor stroke). Monochrome, scalable,
+           consistent line-weight across the cluster. Each <svg> is
+           the button's only child + .chrome-icon-svg class drives
+           sizing (CSS rule sets 18×18). -->
+      <button id="btn-files" title="Files" hidden aria-label="Files">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      </button>
+      <button id="btn-plan" class="artifact-toggle" data-type="plan" title="Plan" hidden aria-label="Plan">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h4"/></svg>
+      </button>
+      <button id="btn-arch" class="artifact-toggle" data-type="arch" title="Arch — architecture &amp; conventions from this session" hidden aria-label="Architecture">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      </button>
+      <button id="btn-test" class="artifact-toggle" data-type="test" title="Test — verification plan from this session" hidden aria-label="Tests">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6.5L3.5 19A2 2 0 0 0 5.25 22h13.5A2 2 0 0 0 20.5 19L15 8.5V2"/><path d="M8 2h8"/><path d="M6.5 14h11"/></svg>
+      </button>
+      <button id="btn-chat" title="Back to chat (main view)" hidden aria-label="Home">
+        <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </button>
+      <div id="no-session" aria-label="Mycelium">
+        <!-- Subtle background slogan — myco's tagline. Visible only
+             when no session is selected; once a session opens, the
+             chatpane (z:30) covers this. The slogan is intentionally
+             oversized + low-contrast so it reads as ambient brand,
+             not a call-to-action. The smaller line below it is the
+             literal call to action. -->
+        <div class="ns-slogan" aria-hidden="true">Reliable Vibe Coding</div>
+        <div class="ns-hint">Select a session</div>
+      </div>
+      <div id="myco-waiting" hidden aria-label="myco is thinking">
+        <span class="mw-dot"></span>
+        <span class="mw-dot"></span>
+        <span class="mw-dot"></span>
+      </div>
+      <!-- "Connecting…" feedback during the agent-mode WS handshake.
+           Anchored directly under #terminal-pane (Phase 9 step 3 dropped
+           #terminal-wrap; conn-overlay's CSS positions it absolutely so
+           the parent only needs to be position:relative). -->
+      <div id="conn-overlay" hidden>
+        <div class="conn-pill">
+          <span class="conn-spinner"></span>
+          <div class="conn-labels">
+            <span class="conn-text">Connecting</span>
+            <span class="conn-sub">Establishing session…</span>
+          </div>
+        </div>
+      </div>
+      <div id="chatpane" class="chat-main-view" hidden>
+        <!-- Drag handle on the chatpane's LEFT edge (desktop-only). The
+             chatpane is anchored to the right edge of #terminal-pane;
+             dragging left grows it, dragging right shrinks it. Width
+             persisted in localStorage. -->
+        <div id="chatpane-resize" title="Drag to resize"></div>
+        <!-- Presence chips: shows the avatars of everyone currently
+             attached to this session (owner + guest viewers). Hidden
+             when only 1 user is attached (just self — no point
+             showing a chip cluster of size 1). _renderPresence(users)
+             rebuilds the chip set on every t:'presence' WS frame. -->
+        <div id="chatpane-presence" class="chatpane-presence" hidden></div>
+        <!-- Read-only banner: shown for guests / share-token viewers.
+             applyReadOnly() unhides this + sets the owner login. The
+             chat input stays enabled because guests can still post
+             discussion replies + add plan items via /td /fr /bug;
+             the server-side handleChatMessage blocks claude-routing. -->
+        <div id="readonly-banner" class="chatpane-readonly-banner" hidden>
+          <span class="ro-label">👁 Read-only — owner:</span>
+          <span class="ro-owner"></span>
+          <span class="ro-hint">· /td /fr /bug to add plan items · @user to discuss</span>
+        </div>
+        <div id="chat-empty" class="chat-empty">Type to chat with claude · <code>@user</code> / <code>@all</code> <span class="ce-arrow">→</span> discuss · <code>/help</code> <span class="ce-arrow">→</span> commands</div>
+        <div id="chat-hud-task" class="chat-hud-task" hidden></div>
+        <div id="chat-messages"></div>
+        <!-- Slim status row: spinner+label on the left, token meter
+             on the right. Stop lives in the composer's actions row
+             below (alongside Send) so users see both at once —
+             always-visible Send + Stop only when claude is running.
+             Hidden when claude is idle. -->
+        <div id="claude-typing" class="claude-typing" hidden>
+          <span class="claude-typing-dots"><span></span><span></span><span></span></span>
+          <span class="claude-typing-label"></span>
+          <span id="token-meter" class="token-meter" hidden></span>
+        </div>
+        <!-- Composer card — TWO-row layout: textarea on top, actions
+             row below. Both Send and Stop live in the actions row;
+             Send is always visible, Stop is visible only while
+             claude is running (.composer-running). The taller
+             multi-row form gives each button room to breathe;
+             swapping Send→Stop in a single slot looked cramped and
+             stole the always-visible Send affordance. #chat-
+             autocomplete nests INSIDE so its `bottom: calc(100% +
+             4px)` anchors above the composer card. -->
+        <div id="composer-verdict-pane" class="chat-composer-verdict-panel" hidden></div>
+        <form id="chat-form" class="composer" autocomplete="off">
+          <div id="chat-autocomplete" hidden></div>
+          <!-- Context chips: deletable pills for @-mentions currently
+               present in the textarea. Built fresh on every `input`
+               event from the parsed user / slash tokens. Click ×
+               removes that @user from the input value. Hidden when
+               the textarea has no detected mentions. -->
+          <div id="composer-chips" class="composer-chips" hidden></div>
+          <textarea id="chat-input" rows="1" placeholder="Message claude · Enter sends · Shift+Enter newline" autocomplete="off"></textarea>
+          <div class="composer-actions">
+            <button type="button" id="claude-stop" class="composer-btn composer-btn-stop" title="Interrupt the in-flight claude turn (Esc)" aria-label="Stop (Esc)">
+              <svg class="composer-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+              <span class="composer-btn-label">Stop</span>
+              <kbd class="composer-btn-kbd">Esc</kbd>
+            </button>
+            <!-- Voice input — Web Speech API (SpeechRecognition).
+                 Hidden via JS when the browser doesn't expose it.
+                 Click toggles recording; interim transcript streams
+                 into the textarea live, final goes once silence
+                 break is detected by the engine. -->
+            <button type="button" id="chat-mic" class="composer-btn composer-btn-mic" title="Voice input — in progress · coming soon" aria-label="Voice input (in progress)" aria-pressed="false" aria-disabled="true" disabled hidden>
+              <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 19v3"/></svg>
+              <span class="composer-btn-label">Speak</span>
+            </button>
+            <!-- fr-84: open the in-browser freehand drawing modal.
+                 Saved diagrams are inserted into the chat input as
+                 markdown image links and rendered inline for every
+                 attached viewer. Lucide pen-tool icon. -->
+            <button type="button" id="chat-diagram" class="composer-btn composer-btn-diagram" title="Draw a diagram and insert it into chat" aria-label="Draw a diagram">
+              <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15.707 21.293-2-2a1 1 0 0 1 0-1.414l8.586-8.586a1 1 0 0 1 1.414 0l2 2a1 1 0 0 1 0 1.414l-8.586 8.586a1 1 0 0 1-1.414 0"/><path d="M18 13 13 8"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+              <span class="composer-btn-label">Draw</span>
+            </button>
+            <select id="composer-critic-select" class="composer-critic-select" title="Choose which critic model audits your task completion">
+              <!-- fr-88 r10: short option labels. Pre-r10 every option
+                   was "⚖️ Critic: <Model>" (~110-120px wide closed) —
+                   user asked to show just "Critic" when nothing is
+                   picked + just the model name once a choice is made.
+                   The disabled-selected placeholder shows "⚖️ Critic"
+                   on fresh sessions; the WS critic-model-changed
+                   handler (app.js ~7054) populates the chosen option
+                   on sessions that already have a persisted critic. -->
+              <option value="" disabled selected>⚖️ Critic</option>
+              <option value="gemini">⚖️ Gemini</option>
+              <option value="codex">⚖️ Codex</option>
+              <option value="custom">⚖️ Hosted</option>
+            </select>
+            <button type="submit" id="chat-send" class="composer-btn composer-btn-send" title="Send (Enter)" aria-label="Send">
+              <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+              <span class="composer-btn-label">Send</span>
+            </button>
+          </div>
+        </form>
+      </div>
+      <div id="plan-wrap" class="artifact-main-view" hidden aria-label="Plan">
+        <!-- User feedback: "remove the plan header and the refresh
+             button." Title was redundant (chrome cluster's Plan
+             icon already identifies the tab) + Refresh dropped from
+             the UI. Server-side state-update WS frames still auto-
+             refresh the plan on session activity; manual re-extract
+             is still reachable via the /refresh slash command.
+             aria-label="Plan" preserves the region's name for
+             assistive tech (screen readers) since the visible title
+             span is gone. -->
+        <!-- fr-56: type filter + fuzz search row. Chips persist across
+             reloads (localStorage.myco_plan_type_filter); search resets
+             on reload (fresh slate). Intersected with the Open only
+             toggle (moved here from the header so all filter controls
+             sit together) by _filterPlanItems. -->
+        <div class="artifact-subheader" id="plan-filter-row">
+          <div class="plan-type-filters" role="group" aria-label="Filter plan items by type">
+            <!-- fr-77 r14: filter chips use Lucide-style SVGs (chrome cluster
+                 family) instead of platform-specific emoji so they pick up
+                 currentColor + active-state tints + render identically. -->
+
+            <label class="plan-type-chip" data-type="Bug" title="Show / hide Bug items">
+              <input type="checkbox" id="plan-filter-bug" checked />
+              <span><svg class="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg> Bug</span>
+            </label>
+            <label class="plan-type-chip" data-type="Feature" title="Show / hide Feature items">
+              <input type="checkbox" id="plan-filter-feature" checked />
+              <span><svg class="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg> Feature</span>
+            </label>
+            <label class="plan-type-chip" data-type="Todo" title="Show / hide Todo items">
+              <input type="checkbox" id="plan-filter-todo" checked />
+              <span><svg class="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Todo</span>
+            </label>
+          </div>
+          <!-- Open only checkbox — same place as the other filter chips
+               so all "narrow what's shown" controls live together.
+               Was inside .artifact-header above; moved here per user
+               feedback so the filter row is the single filter UI. -->
+          <label class="artifact-toggle-bp plan-open-only-inline" title="Hide done items so only open bugs / features / todos are visible">
+            <input type="checkbox" id="plan-open-only-toggle" />
+            <span>Open only</span>
+          </label>
+          <input type="search" id="plan-search" class="plan-search-input"
+                 placeholder="Search plan items…" autocomplete="off"
+                 aria-label="Search plan items by text or id" />
+        </div>
+        <div class="artifact-body" id="artifact-body-plan">
+          <div class="artifact-empty">No todos yet. Click <strong>Refresh</strong> to extract them from the latest session activity. Check a todo's box (or hit ▶ Run) to dispatch it to Claude — findings land as a comment on the item.</div>
+        </div>
+        <!-- fr-77 r3: bottom "Changed files" section. Moved here from
+             the Files view per user request: the Plan view is the
+             single home for "what's in flight" context. Each row in
+             the list is click-to-expand-inline (renders the unified
+             diff text under the row); click again to collapse. The
+             header refresh button re-fetches git status on demand;
+             the collapse chevron hides the whole section. The desc
+             rows (mentions from diff + last 5 commit subjects, fr-77
+             r2) sit above the file list, hidden when both empty. -->
+        <div id="plan-changed-files-section">
+          <!-- fr-77 r4: drag the handle at the very top to resize the
+               section vertically. Double-click to reset to the CSS
+               default (40vh). Height is persisted in localStorage
+               (myco_plan_changed_h) so the choice survives reloads. -->
+          <div id="plan-changed-files-resize" class="pcf-resize-handle"
+               role="separator" aria-orientation="horizontal"
+               aria-label="Drag to resize the Changed-files section. Double-click to reset."
+               title="Drag to resize · double-click to reset"></div>
+          <header id="plan-changed-files-header">
+            <span id="plan-changed-files-title">Changed files</span>
+            <span id="plan-changed-files-count" aria-live="polite"></span>
+            <!-- fr-77 r12: bulk accept/reject buttons. Owner-only — hidden
+                 by JS when state.readOnly is true. accept-all stages every
+                 changed file; reject-all reverts all worktree changes +
+                 deletes untracked. Reject-all asks for confirmation first. -->
+            <button id="plan-changed-files-accept-all" class="pcf-bulk-btn pcf-accept" title="Stage all changed files (git add)" aria-label="Accept all">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Accept all</span>
+            </button>
+            <button id="plan-changed-files-reject-all" class="pcf-bulk-btn pcf-reject" title="Revert all changes + delete untracked files" aria-label="Reject all">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <span>Reject all</span>
+            </button>
+            <button id="plan-changed-files-refresh" title="Refresh changed files" aria-label="Refresh changed files">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+            </button>
+            <button id="plan-changed-files-collapse" title="Collapse changed files" aria-label="Collapse changed files">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+          </header>
+          <div id="plan-changed-files-desc" hidden></div>
+          <ul id="plan-changed-files-list"></ul>
+          <div id="plan-changed-files-msg" hidden></div>
+        </div>
+      </div>
+      <div id="arch-wrap" class="artifact-main-view" hidden>
+        <div class="artifact-header">
+          <span class="artifact-title">Arch — guidelines and decisions</span>
+          <label class="artifact-toggle-bp" title="Inject the myco best-practices template at the top of this pane">
+            <input type="checkbox" id="bp-toggle" checked />
+            <span>Best practices</span>
+          </label>
+          <button class="artifact-refresh" data-type="arch" title="Re-extract from the latest session activity">↻ Refresh</button>
+        </div>
+        <div class="artifact-body" id="artifact-body-arch">
+          <div class="artifact-empty">No architecture notes yet. Click <strong>Refresh</strong> to extract them from the latest session activity.</div>
+        </div>
+      </div>
+      <div id="test-wrap" class="artifact-main-view" hidden>
+        <div class="artifact-header">
+          <span class="artifact-title">Test — verification plan</span>
+          <button class="artifact-refresh" data-type="test" title="Re-extract from the latest session activity">↻ Refresh</button>
+        </div>
+        <div class="artifact-body" id="artifact-body-test">
+          <div class="artifact-empty">No test plans yet. Click <strong>Refresh</strong> to extract them from the latest session activity.</div>
+        </div>
+      </div>
+      <div id="files-wrap" hidden>
+        <div id="files-tree-pane">
+          <header id="files-header">
+            <!-- Lucide-style SVG icons to match the main chrome cluster:
+                 stroke 1.75, 24x24 viewBox, currentColor, round caps. -->
+            <button id="files-tree-back" hidden title="Up" aria-label="Up one level">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <span id="files-crumb"></span>
+            <button id="files-tree-collapse" title="Collapse the tree to give the file viewer more room" aria-label="Collapse tree pane">
+              <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg>
+            </button>
+          </header>
+          <ul id="files-tree"></ul>
+          <div id="files-tree-msg" hidden></div>
+          <!-- fr-77 r3: the "Changed files" section + its description rows
+               moved to the Plan view (see #plan-changed-files-section in
+               #plan-wrap above). The Files view stays focused on tree
+               browsing; click-to-open-diff is now click-to-expand-inline
+               on the Plan-view list. -->
+        </div>
+        <!-- bug-78: drag handle for resizing #files-tree-pane horizontally.
+             Mirrors the bindChatpaneResize pattern (handle is a sibling
+             of the pane it resizes, not a child, so the pane can stay
+             overflow-hidden without clipping the cursor target). Hidden
+             on the collapsed-strip state + on mobile via CSS. JS wiring
+             lives in bindFilesTreeResize(). -->
+        <div id="files-tree-resize" class="files-tree-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize file tree pane" title="Drag to resize · double-click to reset"></div>
+        <div id="files-view-pane" hidden>
+          <!-- bug-33: header is two stacked rows so the breadcrumb path
+               gets its own row and isn't crammed against the action
+               icons. Row 1 holds back-button + breadcrumb (the "nav +
+               context" row, kept under the floating chrome buttons via
+               the 92px right padding). Row 2 holds the edit/save/cancel/
+               wrap/copy action buttons; the row auto-hides via :has when
+               every button is hidden (default state for non-editable
+               files / fresh open). -->
+          <header id="files-view-header">
+            <div class="files-view-header-row files-view-header-nav">
+              <button id="files-view-back" title="Back to tree" aria-label="Back to tree">
+                <svg class="ft-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+              <span id="files-view-crumbs"></span>
+            </div>
+            <div class="files-view-header-row files-view-header-actions">
+              <!-- Owner-only edit affordances. JS hides these for viewers
+                   (state.viewerMode === true). Edit swaps the rendered
+                   body for a textarea; Save POSTs to /file/edit; Cancel
+                   reverts to the rendered view without writing. -->
+              <!-- fr-83: Lucide SVG icons (stroke 1.75, 24×24 viewBox,
+                   currentColor) so this action cluster matches the
+                   top-right chrome cluster (#btn-plan / #btn-files /
+                   #btn-chat). Icon-only with title tooltip — same
+                   accessibility pattern as the chrome cluster. -->
+              <button id="files-edit" title="Edit this file (owner only)" aria-label="Edit" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+              </button>
+              <button id="files-edit-save" title="Save changes" aria-label="Save" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>
+              </button>
+              <button id="files-edit-cancel" title="Cancel edit" aria-label="Cancel" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+              <button id="files-wrap-toggle" title="Toggle wrap" aria-label="Toggle line wrap" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 16-2 2 2 2"/><path d="M3 18h7"/></svg>
+              </button>
+              <button id="files-copy" title="Copy" aria-label="Copy" hidden>
+                <svg class="chrome-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              </button>
+              <!-- fr-107: Preview ↔ Source toggle for files the explorer
+                   knows how to preview inline (HTML, SVG, PDF, images,
+                   audio, video). Only shown when the current file is
+                   preview-capable; label + icon flip based on the
+                   viewer's current mode. See renderViewerHeader in
+                   app.js for the show/hide + label logic. -->
+              <button id="files-preview-toggle" title="Toggle Preview / Source" aria-label="Toggle Preview / Source" hidden></button>
+            </div>
+          </header>
+          <div id="files-action-bar" hidden>
+            <div class="files-action-row">
+              <span id="files-action-label">L—</span>
+              <button class="files-action-btn" data-action="explain">Explain</button>
+              <button class="files-action-btn" data-action="bugs">Find bugs</button>
+              <button class="files-action-btn" data-action="comment">Add comment</button>
+              <button id="files-action-clear" title="Clear selection">×</button>
+            </div>
+            <div class="files-ask-row">
+              <input id="files-ask-input" type="text" placeholder="Ask about this code…" autocomplete="off" />
+              <button id="files-ask-send" type="button" title="Ask (Enter)" aria-label="Ask">→</button>
+            </div>
+          </div>
+          <div id="files-view-body"></div>
+          <div id="files-view-msg" hidden></div>
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- login modal: GitHub OAuth + PAT, both gated by the invitation allowlist -->
+  <div id="login-modal" hidden>
+    <div id="login-dialog">
+      <h2>Sign in to myco</h2>
+      <p class="login-hint">Access is limited to invited GitHub users.</p>
+      <!-- GitHub OAuth disabled for now (coming soon); use the PAT
+           form below. Anchor keeps href empty + aria-disabled so a
+           click + keyboard activation are both no-ops, and the label
+           is struck through with a "Soon" badge so the state is
+           visually obvious. -->
+      <a id="login-github" href="#" class="disabled-soon" aria-disabled="true" tabindex="-1" onclick="return false;">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2.1c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.7.4-1.3.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2.9-.3 2-.4 3-.4s2.1.1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/>
+        </svg>
+        <span><s>Sign in with GitHub</s></span>
+        <span class="soon-badge" aria-label="coming soon">Soon</span>
+      </a>
+      <div class="login-divider"><span>or use a Personal Access Token</span></div>
+      <form id="login-pat-form" autocomplete="off">
+        <input id="login-pat" type="password" placeholder="GitHub token (ghp_…) or Gitee token…" autocomplete="off" spellcheck="false" />
+        <button id="login-pat-submit" type="submit">Sign in with token</button>
+      </form>
+      <p class="login-hint login-fineprint">
+        Create a <a href="https://github.com/settings/tokens/new?scopes=repo,read:user&amp;description=myco" target="_blank" rel="noopener">GitHub PAT</a> (scopes: <code>repo</code>, <code>read:user</code>) or a <a href="https://gitee.com/profile/personal_access_tokens" target="_blank" rel="noopener">Gitee PAT</a> (scope: <code>issues</code>). The token is stashed for <code>/feature</code> and <code>/bug</code>.
+      </p>
+      <div id="login-error" hidden></div>
+    </div>
+  </div>
+
+  <!-- spawn modal -->
+  <div id="spawn-modal" hidden>
+    <div id="spawn-dialog">
+      <h2>New session</h2>
+      <div id="spawn-workspace">Workspace: <code id="spawn-ws-path">…</code></div>
+      <label>Display name (optional)
+        <input id="spawn-cwd" type="text" placeholder="e.g. 'rust experiment' (the actual folder is auto-named after the session id)" autocomplete="off" maxlength="80" title="Friendly label shown in the sessions list. The session always runs in /wks/<you>/<session-id>/." />
+      </label>
+      <!-- fr-94 Phase 1: main-project field. A single text input that
+           the server sniffs: URL-shaped (https://, git@, etc.) →
+           git clone into a subdir named after the repo; plain text →
+           mkdir a fresh empty subdir with that name. Empty → no main
+           project, _myco_/ falls back to legacy auto-detect at runtime.
+           The value drives rec.mainProject which resolveMycoDir(rec)
+           reads to anchor every _myco_/ access (plan.json, critic.md,
+           events.jsonl, diagrams). -->
+      <!-- fr-94 Phase 3 r1: main project is REQUIRED. Every new
+           session must designate one main project up front so
+           _myco_/ has a canonical home from the first event. Legacy
+           sessions with no rec.mainProject keep working via Phase 2's
+           lazy auto-migration; the required-field gate applies only
+           to NEW spawns. -->
+      <label>Main project (required — git URL or new folder name)
+        <input id="spawn-main-project" type="text" required placeholder="e.g. https://github.com/owner/repo OR 'my-rust-app'" autocomplete="off" maxlength="200" title="Sets the session's main project. URL → git clone. Plain text → new empty folder. Both anchor _myco_/ (plan, critic rules, diagrams) at <main-project>/_myco_/. Required field — every new session must designate one main project." />
+      </label>
+      <div id="spawn-suggestions"></div>
+      <!-- Phase 9 retired the PTY driver toggle. Every new session is
+           agent-mode (Claude Agent SDK). The legacy checkbox is gone
+           from the markup; the JS lookup in app.js stays defensive
+           (optional-chain) for cached pages that still render the
+           old shell. -->
+      <input id="spawn-mode-pty" type="hidden" value="" />
+      <div id="spawn-error" hidden></div>
+      <div id="spawn-actions">
+        <button id="spawn-cancel">Cancel</button>
+        <button id="spawn-ok">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- fr-87: Config modal. Opens when the user clicks the @login chip
+       in the status bar. Per-user surface for PAT management — never
+       renders raw token values; only metadata (last4) returned by
+       GET /config/pats. Sign-out moved INSIDE this modal (was a
+       confirm() prompt on the chip click, displaced by fr-87). -->
+  <div id="config-modal" hidden>
+    <div id="config-dialog">
+      <div id="config-header">
+        <h2 id="config-title">Config</h2>
+        <button id="config-close" title="Close">&times;</button>
+      </div>
+      <section class="config-section" id="config-pats-section">
+        <h3>Personal access tokens</h3>
+        <p class="config-section-hint">Stored per-user on this myco
+          instance. Shown with the last 4 characters only — paste a
+          new value to replace. Used by /feature, /bug, /restore, and
+          claude's git tool when working with private repos.</p>
+        <div id="config-pats-empty" class="config-empty" hidden>
+          You have no PATs stored. Add one below or use
+          <code>/setpat &lt;token&gt;</code> from a session.
+        </div>
+        <div id="config-pats-list"></div>
+        <div id="config-pats-add">
+          <h4>Add a per-repo PAT</h4>
+          <div class="config-pat-form">
+            <select id="config-pat-provider">
+              <option value="github">github</option>
+              <option value="gitee">gitee</option>
+            </select>
+            <input id="config-pat-owner" type="text" placeholder="owner (e.g. kkrazy)" autocomplete="off" />
+            <input id="config-pat-repo" type="text" placeholder="repo (e.g. myco)" autocomplete="off" />
+            <input id="config-pat-alias" type="text" placeholder="alias (optional)" autocomplete="off" />
+            <input id="config-pat-token" type="password" placeholder="paste token" autocomplete="off" spellcheck="false" />
+            <button id="config-pat-save">Add PAT</button>
+          </div>
+        </div>
+      </section>
+      <!-- fr-87 r2: Admin merge section. Hidden by default; revealed
+           in openConfigModal when GET /api/admin/config returns 200
+           (the server's requireAdmin gate from f71495f decides). The
+           IDs use a `config-admin-` prefix so they don't collide with
+           the standalone admin pane's same-named inputs (#input-
+           anthropic-key etc., which still exist in #admin-wrap for
+           the legacy entry via #btn-admin). The standalone pane is
+           NOT retired this round — both entries continue to work;
+           the merge is just so an admin doesn't have to bounce
+           between modal and pane. -->
+      <section class="config-section" id="config-admin-section" hidden>
+        <h3>Admin — system-wide</h3>
+        <p class="config-section-hint">You have admin access on this
+          instance. These settings affect all users + persist to
+          <code>$STATE_DIR/.env</code> and
+          <code>allowed-github-users.txt</code>.</p>
+
+        <h4>Allowlist (invited GitHub logins)</h4>
+        <div id="config-admin-allowlist-list"></div>
+        <div class="config-admin-allowlist-form">
+          <input id="config-admin-allowlist-input" type="text"
+                 placeholder="github login (e.g. alice)" autocomplete="off" />
+          <button id="config-admin-allowlist-add">Add</button>
+        </div>
+
+        <h4>Server env config</h4>
+        <form id="config-admin-env-form" autocomplete="off" onsubmit="return false;">
+          <!-- fr-91 r3: Test buttons sit as block-level siblings of the
+               input inside .config-admin-field. Clicking probes the
+               respective live API and renders the result in the
+               .test-key-status span below. The 4 buttons use stable ids
+               (btn-test-anthropic/gemini/openai/critic); _bindApiKeyTestButtons
+               in app.js wires their click handlers when the admin
+               section opens. -->
+          <div class="config-admin-field">
+            <label for="config-admin-anthropic-key">ANTHROPIC_API_KEY</label>
+            <input type="password" id="config-admin-anthropic-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-anthropic" class="btn-test-key" title="Probe Anthropic API">Test</button>
+            <span id="test-status-anthropic" class="test-key-status"></span>
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-gemini-key">GEMINI_API_KEY</label>
+            <input type="password" id="config-admin-gemini-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-gemini" class="btn-test-key" title="Probe Gemini API">Test</button>
+            <span id="test-status-gemini" class="test-key-status"></span>
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-openai-key">OPENAI_API_KEY</label>
+            <input type="password" id="config-admin-openai-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-openai" class="btn-test-key" title="Probe OpenAI API">Test</button>
+            <span id="test-status-openai" class="test-key-status"></span>
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-critic-endpoint">CUSTOM_CRITIC_ENDPOINT</label>
+            <input type="text" id="config-admin-critic-endpoint"
+                   placeholder="e.g. http://localhost:11434/v1" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-critic-key">CUSTOM_CRITIC_KEY</label>
+            <input type="password" id="config-admin-critic-key"
+                   placeholder="•••• (unchanged if blank)" autocomplete="new-password" />
+            <button type="button" id="btn-test-critic" class="btn-test-key" title="Probe Custom Critic endpoint">Test</button>
+            <span id="test-status-critic" class="test-key-status"></span>
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-critic-model">CUSTOM_CRITIC_MODEL</label>
+            <input type="text" id="config-admin-critic-model"
+                   placeholder="e.g. llama3" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-http-proxy">HTTP_PROXY</label>
+            <input type="text" id="config-admin-http-proxy"
+                   placeholder="e.g. http://10.0.0.1:8080" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-https-proxy">HTTPS_PROXY</label>
+            <input type="text" id="config-admin-https-proxy"
+                   placeholder="e.g. http://proxy.example.com:8080" />
+          </div>
+          <div class="config-admin-field">
+            <label for="config-admin-no-proxy">NO_PROXY</label>
+            <input type="text" id="config-admin-no-proxy"
+                   placeholder="e.g. 127.0.0.1,localhost,.local" />
+          </div>
+          <button id="config-admin-env-save" type="button">Save env config</button>
+        </form>
+      </section>
+      <section class="config-section" id="config-account-section">
+        <h3>Account</h3>
+        <button id="config-signout">Sign out</button>
+      </section>
+      <div id="config-error" hidden></div>
+    </div>
+  </div>
+
+  <!-- fr-50: file-edit conflict modal. Shown when a Save (PUT /file)
+       comes back with 409 ERR_MTIME_CONFLICT — the file changed on
+       disk since the user opened it (another collaborator, a claude
+       Bash tool edit, etc.). Three choices preserve user agency:
+       Reload (lose your edits), Force overwrite (clobber the disk
+       version with your edits), Cancel (stay in edit mode, do
+       nothing). Body shows the bytes-different summary so the user
+       has context on what they'd be clobbering. -->
+  <div id="file-conflict-modal" hidden>
+    <div id="file-conflict-dialog">
+      <h2>⚠ File changed on disk</h2>
+      <p id="file-conflict-body">
+        <code id="file-conflict-path">…</code> was modified on disk after
+        you opened it. Saving now would overwrite those external changes.
+      </p>
+      <div id="file-conflict-actions">
+        <button id="file-conflict-reload" title="Discard your edits + load the current disk version">
+          ↻ Reload from disk
+        </button>
+        <button id="file-conflict-force" title="Save anyway, overwriting the external changes">
+          ⚠ Force overwrite
+        </button>
+        <button id="file-conflict-cancel" title="Close this dialog, stay in edit mode">
+          ✕ Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- fr-84: in-browser freehand diagram modal. Opens from the
+       composer "Draw" button. Pure-SVG canvas, 5 tools (pen / rect /
+       ellipse / line / text), 4 colors, 3 stroke widths, undo +
+       clear + save + cancel. Saved diagrams POST to
+       /sessions/:id/diagrams and the URL is inserted as a markdown
+       image into the chat composer. Zero new vendor weight — uses
+       browser-native SVG + mouse/touch events. -->
+  <div id="diagram-modal" hidden role="dialog" aria-label="Draw diagram" aria-modal="true">
+    <div id="diagram-dialog">
+      <header id="diagram-header">
+        <h2 id="diagram-title">Draw diagram</h2>
+        <div id="diagram-toolbar" role="toolbar" aria-label="Drawing tools">
+          <!-- Tools (fr-84 r2: +select, +arrow, +diamond → 8 total) -->
+          <div class="diagram-tools" role="group" aria-label="Tool">
+            <button type="button" class="diagram-tool" data-tool="select" title="Select (click + drag, Shift-click to add, drag to rubber-band, Del removes)" aria-label="Select">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.5 9 21l3-8 8-3z"/></svg>
+            </button>
+            <button type="button" class="diagram-tool active" data-tool="pen" title="Pen (freehand)" aria-label="Pen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="rect" title="Rectangle" aria-label="Rectangle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="ellipse" title="Ellipse" aria-label="Ellipse">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="6"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="diamond" title="Diamond" aria-label="Diamond">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 22 12 12 22 2 12"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="line" title="Line" aria-label="Line">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="20" y2="4"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="arrow" title="Arrow" aria-label="Arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="20" x2="18" y2="6"/><polyline points="11 6 18 6 18 13"/></svg>
+            </button>
+            <button type="button" class="diagram-tool" data-tool="text" title="Text" aria-label="Text">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/></svg>
+            </button>
+          </div>
+          <!-- Colors -->
+          <div class="diagram-colors" role="group" aria-label="Color">
+            <button type="button" class="diagram-color active" data-color="#e6edf3" style="background:#e6edf3" title="White" aria-label="White"></button>
+            <button type="button" class="diagram-color" data-color="#79c0ff" style="background:#79c0ff" title="Blue" aria-label="Blue"></button>
+            <button type="button" class="diagram-color" data-color="#7ee787" style="background:#7ee787" title="Green" aria-label="Green"></button>
+            <button type="button" class="diagram-color" data-color="#ff7b72" style="background:#ff7b72" title="Red" aria-label="Red"></button>
+          </div>
+          <!-- Stroke widths -->
+          <div class="diagram-widths" role="group" aria-label="Stroke width">
+            <button type="button" class="diagram-width" data-width="2" title="Thin" aria-label="Thin"><span style="height:2px"></span></button>
+            <button type="button" class="diagram-width active" data-width="3" title="Medium" aria-label="Medium"><span style="height:3px"></span></button>
+            <button type="button" class="diagram-width" data-width="5" title="Thick" aria-label="Thick"><span style="height:5px"></span></button>
+          </div>
+          <!-- Actions -->
+          <div class="diagram-actions" role="group" aria-label="Actions">
+            <button type="button" id="diagram-undo" title="Undo last shape (Ctrl+Z)" aria-label="Undo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.7 2.9L3 13"/></svg>
+            </button>
+            <button type="button" id="diagram-clear" title="Clear canvas (confirms)" aria-label="Clear">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            </button>
+            <button type="button" id="diagram-cancel" title="Discard + close (Esc)" aria-label="Cancel">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+            <button type="button" id="diagram-save" title="Insert into chat (Ctrl+Enter)" aria-label="Save">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>
+              <span class="diagram-save-label">Insert</span>
+            </button>
+          </div>
+        </div>
+      </header>
+      <div id="diagram-canvas-host">
+        <!-- viewBox stays in 1000x600 design units; CSS scales to fit.
+             SVG-native draw layer that mouse/touch events target. -->
+        <svg id="diagram-canvas" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+          <!-- fr-84 r2: arrowhead def for the Arrow tool. context-stroke
+               lets the marker inherit the line's stroke color so a red
+               arrow has a red arrowhead automatically. -->
+          <defs>
+            <marker id="diagram-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
+            </marker>
+          </defs>
+          <rect id="diagram-bg" x="0" y="0" width="1000" height="600" fill="#0d1117"/>
+          <g id="diagram-layer"></g>
+          <!-- Rubber-band rect used by the Select tool. Hidden until a
+               drag starts. Outside #diagram-layer so it doesn't get
+               serialized into saved SVGs or hit by undo. -->
+          <rect id="diagram-rubber" x="0" y="0" width="0" height="0" fill="rgba(80,120,200,.12)" stroke="rgba(80,120,200,.6)" stroke-width="1" stroke-dasharray="4 3" pointer-events="none" visibility="hidden"/>
+        </svg>
+      </div>
+      <div id="diagram-status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <!-- User-manual modal. Sidebar's book-open icon fetches
+       /USER_MANUAL.md and renders it via marked into the body. -->
+  <div id="manual-modal" hidden>
+    <div id="manual-dialog">
+      <header id="manual-header">
+        <h2>User manual</h2>
+        <button id="manual-close" title="Close (Esc)" aria-label="Close">×</button>
+      </header>
+      <div id="manual-body" class="markdown-body">Loading…</div>
+    </div>
+  </div>
+
+  <!-- log panel -->
+  <div id="log-panel" hidden>
+    <div id="log-panel-header">
+      <h2>Server Logs</h2>
+      <button id="log-panel-close">&times;</button>
+    </div>
+    <div id="log-entries"></div>
+  </div>
+
+  <!-- Permission / AskUserQuestion modal. Hidden by default; shown by
+       _renderPermModal whenever state.pendingMenuQueue has entries and
+       the user hasn't explicitly dismissed it. Routes every click back
+       through `sendMenuPick(n, hash)` — the hash uniquely identifies
+       the menu (derived from the SDK toolUseID), so multiple parallel
+       canUseTool requests (e.g., subagent tool calls in parallel)
+       resolve to the right pending promise on the server. -->
+  <div id="perm-modal" class="perm-modal" hidden>
+    <!-- bug-31: backdrop no longer carries data-perm-defer="1". Outside-
+         click was the most common ACCIDENTAL dismiss path — once
+         dismissed, the agent stays blocked on the AskUserQuestion
+         Promise but the modal is gone, leaving the user with no
+         obvious way back. Dismiss is now explicit only (X button or
+         Esc key). The chat-pane menu row (rendered with a visible
+         reopen-hint badge per bug-31) is the recovery path. -->
+    <div class="perm-modal-backdrop"></div>
+    <div class="perm-modal-box" role="dialog" aria-modal="true" aria-labelledby="perm-modal-title">
+      <!-- Carousel chips row — one chip per pending request. Only
+           renders for parallel canUseTool batches (>= 2 pending).
+           Click a chip to jump to that request. Currently-shown
+           request is marked .perm-chip-active. -->
+      <div class="perm-modal-chips" id="perm-modal-chips" hidden></div>
+      <div class="perm-modal-head">
+        <button class="perm-modal-nav" data-perm-nav="prev" title="Previous pending" hidden>◀</button>
+        <span class="perm-modal-pager" id="perm-modal-pager"></span>
+        <span class="perm-modal-title" id="perm-modal-title">Permission needed</span>
+        <button class="perm-modal-nav" data-perm-nav="next" title="Next pending" hidden>▶</button>
+        <button class="perm-modal-close" data-perm-defer="1" title="Defer — modal will reopen when you click the chat menu card">×</button>
+      </div>
+      <div class="perm-modal-meta" id="perm-modal-meta"></div>
+      <div class="perm-modal-question" id="perm-modal-question"></div>
+      <div class="perm-modal-opts" id="perm-modal-opts"></div>
+      <div class="perm-modal-hint">
+        <!-- bug-41: removed "click outside to defer" — backdrop is no
+             longer a dismiss affordance (would silently strand the agent
+             on AskUserQuestion). Only Esc or the X button defer; digit
+             keys pick options. -->
+        <kbd>Esc</kbd> or <kbd>×</kbd> defers · digit keys (1, 2, 3…) also pick
+      </div>
+    </div>
+  </div>
+  <script src="/vendor/marked/marked.umd.js"></script>
+  <script src="/vendor/highlight.min.js"></script>
+  <template id="lazy-assets">
+    <link rel="stylesheet" href="/vendor/katex.min.css" />
+    <script src="/vendor/katex.min.js"></script>
+    <script src="/vendor/mermaid.min.js"></script>
+    <script src="/vendor/codemirror.bundle.js"></script>
+    <script src="/vendor/rough.umd.js"></script>
+  </template>
+  <!-- fr-99: shared diagram lightbox. Mermaid SVGs / inline SVGs / PNG
+       <img> tags in #chat-messages or #files-view-body open here on
+       dblclick. Single shared modal for both surfaces — keeps the
+       markup minimal and the state simple. Close affordances: × button,
+       backdrop click, ESC key. The cloned element fills .diagram-
+       lightbox-content (capped at 90vw × 90vh via CSS); inline width/
+       height attrs are stripped on clone so the CSS cap takes over
+       (mermaid SVGs ship with explicit width that would otherwise
+       overflow). -->
+  <div id="diagram-lightbox" class="diagram-lightbox" hidden role="dialog" aria-modal="true" aria-label="Enlarged diagram">
+    <div class="diagram-lightbox-content"></div>
+    <button type="button" class="diagram-lightbox-close" aria-label="Close enlarged diagram">×</button>
+    <div class="diagram-lightbox-hint" aria-hidden="true">Scroll to zoom · ESC or click outside to close</div>
+  </div>
+  <script src="app.js?v=261"></script>
+</body>
+</html>

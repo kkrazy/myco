@@ -1,0 +1,11 @@
+node_modules/
+.git/
+.tls/
+.env
+*.log
+nohup.out
+.DS_Store
+._*
+tmp/
+wks/
+.claude/

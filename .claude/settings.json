@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const pty = require\\('node-pty'\\); const t = pty.spawn\\('tmux', ['list-sessions'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.env.HOME, env: process.env }\\); t.onData\\(d => process.stdout.write\\(d\\)\\); t.onExit\\(\\({exitCode}\\) => { console.log\\('[exit]', exitCode\\); process.exit\\(0\\); }\\);\")",
+      "Bash(pkill -f \"node /Users/kenzhang/wks/myco/server\")"
+    ]
+  }
+}

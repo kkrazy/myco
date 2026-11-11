@@ -1,0 +1,24 @@
+{
+  "name": "myco",
+  "short_name": "myco",
+  "description": "Monitor and control Claude Code sessions",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d0d0d",
+  "theme_color": "#0d0d0d",
+  "icons": [
+    {
+      "src": "/hetu.png?v=2",
+      "sizes": "140x138",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='42' fill='%230d0d0d'/><text x='96' y='130' font-family='-apple-system,system-ui' font-size='110' font-weight='600' text-anchor='middle' fill='%234caf82'>m</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
