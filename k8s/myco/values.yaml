@@ -85,6 +85,8 @@ hostAliases:
     hostnames: ["api.code-agent.rnd.huawei.com"]
   - ip: "7.237.97.68"
     hostnames: ["models.ascend.huawei.com"]
+  - ip: "7.221.105.132"            # 2026-11-11 增补：KWE CodeHub git，缺则 clone 504
+    hostnames: ["kwe-g.codehub.huawei.com"]
 
 # ---- 资源 ----
 resources:

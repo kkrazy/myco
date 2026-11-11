@@ -59,7 +59,8 @@ to map the Huawei intranet domains into the container:
 --add-host=proxy.huawei.com:172.19.152.237 \
 --add-host=apigw-mq.huawei.com:7.194.47.62 \
 --add-host=pb-dgg.sppsws.huawei.com:10.129.3.241 \
---add-host=registry-cbu.huawei.com:100.94.164.16
+--add-host=registry-cbu.huawei.com:100.94.164.16 \
+--add-host=kwe-g.codehub.huawei.com:7.221.105.132
 ```
 
 ### 1.2 Set the proxy
@@ -73,7 +74,7 @@ external requests go through the enterprise proxy:
 -e HTTP_PROXY=http://p_atlas:<password>@10.195.176.39:8081 \
 -e HTTPS_PROXY=http://p_atlas:<password>@10.195.176.39:8081 \
 # no_proxy: intranet direct-connect entries (pass the same values lowercase too)
--e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115
+-e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115
 ```
 
 > ⚠️ Never commit the password to git; take it from `MYCO_ENTERPRISE_PROXY_URL`
@@ -125,12 +126,13 @@ docker run -d --name myco-local --restart unless-stopped \
   --add-host=apigw-mq.huawei.com:7.194.47.62 \
   --add-host=pb-dgg.sppsws.huawei.com:10.129.3.241 \
   --add-host=registry-cbu.huawei.com:100.94.164.16 \
+  --add-host=kwe-g.codehub.huawei.com:7.221.105.132 \
   -p 443:443 -p 80:80 \
   -v /data/<your-tag>/state/home:/root \
   -v /data/<your-tag>/state/wks:/wks \
   -v /data/<your-tag>/state/Caddyfile:/etc/caddy/Caddyfile:ro \
   -v /data/<your-tag>/state:/data \
-  -e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115 \
+  -e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115 \
   -e HTTP_PROXY=http://p_atlas:<password>@10.195.176.39:8081 \
   -e HTTPS_PROXY=http://p_atlas:<password>@10.195.176.39:8081 \
   -e MYCO_DATA=/data -e HOST=127.0.0.1 -e PORT=3000 -e SHELL=/bin/bash \
@@ -262,13 +264,14 @@ docker run -d --name myco-kai --restart unless-stopped \
     --add-host=apigw-mq.huawei.com:7.194.47.62 \
     --add-host=pb-dgg.sppsws.huawei.com:10.129.3.241 \
     --add-host=registry-cbu.huawei.com:100.94.164.16 \
+    --add-host=kwe-g.codehub.huawei.com:7.221.105.132 \
     -p 18443:443 \
     -p 1880:80 \
     -v /data/kc/state/home:/root \
     -v /data/kc/state/wks:/wks \
     -v /data/kc/state/Caddyfile:/etc/caddy/Caddyfile:ro \
     -v /data/kc/state:/data \
-    -e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,7.216.246.115 \
+    -e NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.code-agent.rnd.huawei.com,codehub-dg-g.huawei.com,kwe-g.codehub.huawei.com,7.216.246.115 \
     -e HTTP_PROXY=http://p_atlas:<password>@10.195.176.39:8081 \
     -e HTTPS_PROXY=http://p_atlas:<password>@10.195.176.39:8081 \
     -e MYCO_DATA=/data \

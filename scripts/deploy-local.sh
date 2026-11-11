@@ -145,6 +145,7 @@ recreate_container() {
     --add-host=api.code-agent.rnd.huawei.com:7.156.115.217 \
     --add-host=models.ascend.huawei.com:7.237.97.68 \
     --add-host=registry-cbu.huawei.com:100.94.164.16 \
+    --add-host=kwe-g.codehub.huawei.com:7.221.105.132 \
     -p 443:443 -p 80:80 \
     -v "$STATE_DIR/home:/root" \
     -v "$STATE_DIR/wks:/wks" \
