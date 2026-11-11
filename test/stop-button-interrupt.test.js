@@ -156,9 +156,14 @@ t('static guard: interrupt branch calls session.interrupt() (not just logs)', ()
   const idx2 = src.indexOf('msg.t === "interrupt"');
   const where = idx >= 0 ? idx : idx2;
   assert.ok(where > 0, 'interrupt branch must exist');
-  const window = src.slice(where, where + 600);
-  assert.ok(/session\.interrupt\s*\(/.test(window),
-    'the interrupt branch must call session.interrupt()');
+  // delm-10 inserted a session-busy gate between the branch head and
+  // the interrupt() call (drop the frame when the session isn't
+  // working), so the window needs to span the gate too. The run-n2
+  // stop-vs-run fix (2026-10-22) factored the three copy-pasted gates
+  // into the shared _handleInterrupt helper — the window must reach it.
+  const window = src.slice(where, where + 2000);
+  assert.ok(/session\.interrupt\s*\(/.test(window) || /_handleInterrupt\s*\(/.test(window),
+    'the interrupt branch must call session.interrupt() (directly or via the shared _handleInterrupt helper)');
 });
 
 t('static guard: viewer attach also handles t==="interrupt" (or explicitly blocks viewers)', () => {

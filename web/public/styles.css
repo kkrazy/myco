@@ -20,15 +20,43 @@
   font-display: swap;
 }
 
-:root {
-  --bg: #0d0d0d;
-  --surface: #1a1a1a;
-  --surface-2: #242424;
-  --border: #2a2a2a;
-  --text: #e8e8e8;
-  --muted: #888;
-  --accent: #4caf82;
-  --danger: #ff6b6b;
+/* ============================================================
+   § Theme system — premium hacker palette, one-click dark/light.
+   All colors flow through CSS variables so a single
+   data-theme="light" attribute on <html> recolors the entire app
+   (see applyTheme()/bindThemeToggle() in app.js, persisted in
+   localStorage key `myco_theme` as 'dark' | 'light').
+
+   Dark (default) — "hacker" premium look:
+     deep near-black greens with neon mint accent + cyan secondary,
+     hairline borders, glow shadows. Keep luminance steps tight so
+     panels read as one premium surface stack, not gray mush.
+   Light — clean paper/ink white with the same accent hue darkened
+     for AA contrast on white.
+   Aliases (--bg-elev, --panel, --text-dim) exist so new CSS can use
+   the short names while legacy rules keep --surface/--muted.
+   ============================================================ */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0e0c;              /* app floor — near-black w/ green cast */
+  --bg-elev: #101714;         /* raised floor (input wells, code strips) */
+  --surface: #121a16;         /* primary panel */
+  --surface-2: #1a241f;       /* hover / secondary panel */
+  --panel: #121a16;           /* alias of --surface */
+  --border: #1f2d26;          /* hairline */
+  --border-strong: #2c3f35;
+  --text: #d8ffe9;            /* mint-tinted ink */
+  --text-dim: #7fa595;        /* secondary text */
+  --muted: #7fa595;           /* alias of --text-dim */
+  --accent: #00ff9c;          /* neon mint — brand signal */
+  --accent-2: #23d5ff;        /* cyan — secondary highlight */
+  --accent-dim: #0a3d2a;      /* accent-tinted fill (chips, badges) */
+  --accent-glow: rgba(0, 255, 156, .13);
+  --danger: #ff5c6c;
+  --danger-dim: #3a1420;
+  --sel: rgba(0, 255, 156, .14);  /* selection / focus rings */
+  --shadow-1: 0 2px 14px rgba(0, 0, 0, .45);
+  --link: #23d5ff;
   --sidebar-w: 280px;
   /* Shared height for all pane headers (sidebar, file tree, file viewer,
      chat). Keeps the four banded rows visually aligned when all four are
@@ -38,10 +66,50 @@
   /* Shared size for all chrome buttons (sidebar +/‹, back-to-home ☰,
      files 📁, chat 💬, chat-close ×) so the chrome reads as one set. */
   --chrome-btn-size: 32px;
+  /* Top padding of the chat pane. Derived from the fixed chrome icon
+     band (top offset 10px + button size) plus a tight 6px breathing
+     gap — user report (2026-10-23): the chatpane-topctl-row sat "太远"
+     from the icon row because the old padding reused the TALLER
+     --pane-header-h (52px) value. 10+32+6 = 48px desktop; mobile bumps
+     --chrome-btn-size to 36 so it tracks automatically. */
+  --chatpane-top-pad: calc(10px + var(--chrome-btn-size) + 6px);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+  /* Height of the "功能上新" banner strip at the very top of #app.
+     0 normally; #app.has-whatsnew bumps it so every fixed/absolutely
+     positioned top chrome (sidebar header padding, ☰ / 📁 / 💬
+     buttons, pane-header strips) shifts DOWN uniformly instead of
+     sliding under the banner. See the #app.has-whatsnew grid fix
+     (the old flex-direction:column stacked the sidebar ON TOP of the
+     main pane — the "整体界面混乱" report). */
+  --top-strip: 0px;
+}
+
+/* Light theme — "white" mode. Same token names, paper/ink values.
+   Selected via <html data-theme="light"> (one-click toggle). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6f5;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #eef2f0;
+  --panel: #ffffff;
+  --border: #dde4e1;
+  --border-strong: #c4cfc9;
+  --text: #17211c;
+  --text-dim: #5b6f65;
+  --muted: #5b6f65;
+  --accent: #00a86a;          /* neon mint darkened → AA on white */
+  --accent-2: #0e8fb8;
+  --accent-dim: #d7f5e7;
+  --accent-glow: rgba(0, 168, 106, .10);
+  --danger: #d92c40;
+  --danger-dim: #fbe3e7;
+  --sel: rgba(0, 168, 106, .14);
+  --shadow-1: 0 2px 14px rgba(23, 33, 28, .10);
+  --link: #0e8fb8;
 }
 
 /* Project-wide scrollbar style. One source of truth so every scrollable
@@ -54,15 +122,27 @@
    the `::-webkit-scrollbar*` pseudos. Both branches present together. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(120, 130, 145, .35) transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(120, 130, 145, .35);
+  background: var(--border-strong);
   border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 175, .55); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+::selection { background: var(--sel); color: var(--text); }
+
+/* 用户反馈 (2026-10-22): "所有select都改成白底黑字（或者其他设计），不然
+   字体太不明显了" — historically white-bg black-text; now themed via
+   --bg-elev/--text so light mode keeps the requested white-on-dark-ink
+   readability while dark mode renders an elevated panel tone. <option>
+   rows on Chromium don't inherit color, so both selectors are declared. */
+select,
+select option {
+  background: var(--bg-elev);
+  color: var(--text);
+}
 
 html, body {
   height: 100%;
@@ -80,6 +160,16 @@ html, body {
 }
 
 input, textarea { user-select: text; -webkit-user-select: text; }
+
+/* 下拉框统一主题化（原白底黑字，现随 data-theme 切换）：全局规则覆盖
+   所有 <select>（含未来新增的），<option> 行在 Chromium 上不继承
+   color，必须一起声明。暗色 = 高亮面板底 + 薄荷墨色文字；亮色 =
+   纯白底 + 近黑文字（保持用户要求的 21:1 对比度）。 */
+select,
+select option {
+  background: var(--bg-elev);
+  color: var(--text);
+}
 
 /* Re-enable text selection inside readable content panes (chat history,
    conversation transcript, inline Claude cards). Four things must align:
@@ -127,7 +217,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   align-items: center;
   gap: 10px;
   padding: 8px calc(16px + var(--safe-right)) 8px calc(16px + var(--safe-left));
-  padding-top: calc(8px + var(--safe-top));
+  padding-top: calc(8px + var(--safe-top) + var(--top-strip, 0px));
   min-height: calc(var(--pane-header-h) + var(--safe-top));
   box-sizing: border-box;
   border-bottom: 1px solid var(--border);
@@ -139,7 +229,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 #sidebar h1 { font-size: 1rem; font-weight: 600; color: var(--accent); letter-spacing: .05em; flex: 1; }
 
-#btn-spawn, #btn-collapse, #btn-manual, #btn-admin {
+#btn-spawn, #btn-collapse, #btn-manual, #btn-admin, #btn-theme {
   background: var(--border);
   color: var(--text);
   border: none;
@@ -163,9 +253,9 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
    "vertical bar right beside the config icon" the user reported.
    Future restyles touching these rules: KEEP #btn-config in the
    selector — removing it re-introduces the bug. */
-#btn-spawn:active, #btn-collapse:active, #btn-manual:active, #btn-admin:active, #btn-config:active { transform: scale(.92); }
-#btn-manual:hover, #btn-admin:hover, #btn-config:hover { background: rgba(255, 255, 255, .08); }
-#btn-manual .sidebar-icon-svg, #btn-admin .sidebar-icon-svg, #btn-config .sidebar-icon-svg {
+#btn-spawn:active, #btn-collapse:active, #btn-manual:active, #btn-admin:active, #btn-config:active, #btn-whatsnew:active, #btn-theme:active { transform: scale(.92); }
+#btn-manual:hover, #btn-admin:hover, #btn-config:hover, #btn-whatsnew:hover, #btn-theme:hover { background: var(--accent-glow); }
+#btn-manual .sidebar-icon-svg, #btn-admin .sidebar-icon-svg, #btn-config .sidebar-icon-svg, #btn-whatsnew .sidebar-icon-svg, #btn-theme .sidebar-icon-svg {
   width: 18px;
   height: 18px;
   display: block;
@@ -173,7 +263,100 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 
 /* User-manual modal: full-screen-ish reader, scrollable body, github-
    dark markdown styling matches the file viewer's prose look. */
-#manual-modal {
+/* ── "功能上新" banner ─────────────────────────────────────────────
+   Full-width thin strip at the very top of #app (above both the
+   sidebar and the main pane). Announces the latest docs/whatsnew/*.md
+   version. Dismissing stores the version id in localStorage; a newer
+   version re-shows it. */
+#app.has-whatsnew {
+  /* FIX (整体界面混乱): the old `flex-direction: column` stacked the
+     sidebar ABOVE the main pane — the sidebar went full-width at the
+     top of the page and the chat/terminal was pushed below it,
+     shattering the whole layout whenever the banner appeared. A CSS
+     grid overlay keeps the row layout intact: the banner spans the
+     single top row, sidebar + main pane sit side-by-side in the row
+     below, exactly like the banner-less layout. No DOM change. */
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  /* Shift every fixed/absolutely-positioned top chrome (☰ / 📁 / 💬
+     buttons, pane-header reservations) down below the banner via the
+     --top-strip var they each consume. Must match #whatsnew-banner's
+     fixed height below. */
+  --top-strip: 34px;
+}
+#app.has-whatsnew > #whatsnew-banner {
+  grid-column: 1 / -1;   /* full-width top strip */
+  grid-row: 1;
+}
+#app.has-whatsnew > #sidebar {
+  grid-column: 1;
+  grid-row: 2;
+}
+#app.has-whatsnew > #terminal-pane {
+  grid-column: 2;        /* takes over the full width when sidebar [hidden] */
+  grid-row: 2;
+  /* flex:1 is meaningless inside a grid track — stretch explicitly. */
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+#app.has-whatsnew > #sidebar[hidden] ~ #terminal-pane {
+  grid-column: 1 / -1;   /* sidebar collapsed → main spans full width */
+}
+#whatsnew-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 34px;          /* fixed: --top-strip above must match this */
+  padding: 0 14px;
+  background: linear-gradient(90deg, rgba(122, 162, 247, .16), rgba(122, 162, 247, .05));
+  border-bottom: 1px solid rgba(122, 162, 247, .35);
+  font-size: .85rem;
+  flex-shrink: 0;
+}
+#whatsnew-banner-text {
+  cursor: pointer;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#whatsnew-banner-text:hover { color: #8ab8ff; }
+#whatsnew-banner-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+#whatsnew-banner-close:hover { background: rgba(255, 255, 255, .1); color: var(--text); }
+
+/* Version dropdown in the whatsnew modal header. Sits between the
+   title and the close button (flex order = DOM order). */
+#whatsnew-version-select {
+  /* 白底黑字 (dropdown light-theme): background/color come from the
+     global `select, select option` rule. */
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: .8rem;
+  max-width: 220px;
+  cursor: pointer;
+}
+#whatsnew-version-select:disabled { opacity: .5; cursor: default; }
+
+#manual-modal,
+#whatsnew-modal {
   position: fixed;
   inset: 0;
   z-index: 70;
@@ -183,8 +366,9 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   justify-content: center;
   padding: 20px;
 }
-#manual-dialog {
-  background: #161b22;
+#manual-dialog,
+#whatsnew-dialog {
+  background: var(--surface-2);
   color: var(--text);
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, .08);
@@ -195,7 +379,8 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
   overflow: hidden;
 }
-#manual-header {
+#manual-header,
+#whatsnew-header {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -203,13 +388,15 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   border-bottom: 1px solid rgba(255, 255, 255, .08);
   flex-shrink: 0;
 }
-#manual-header h2 {
+#manual-header h2,
+#whatsnew-header h2 {
   margin: 0;
   font-size: 1.05rem;
   color: var(--accent);
   flex: 1;
 }
-#manual-close {
+#manual-close,
+#whatsnew-close {
   background: transparent;
   border: none;
   color: var(--muted);
@@ -223,49 +410,58 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   align-items: center;
   justify-content: center;
 }
-#manual-close:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
-#manual-body {
+#manual-close:hover, #whatsnew-close:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
+#manual-body,
+#whatsnew-body {
   padding: 18px 24px 28px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   font-size: .92rem;
   line-height: 1.55;
 }
-#manual-body h1, #manual-body h2, #manual-body h3 {
+#manual-body h1, #manual-body h2, #manual-body h3,
+#whatsnew-body h1, #whatsnew-body h2, #whatsnew-body h3 {
   margin-top: 1.4em;
   margin-bottom: .5em;
   color: var(--text);
 }
-#manual-body h1:first-child, #manual-body h2:first-child { margin-top: 0; }
-#manual-body code {
+#manual-body h1:first-child, #manual-body h2:first-child,
+#whatsnew-body h1:first-child, #whatsnew-body h2:first-child { margin-top: 0; }
+#manual-body code,
+#whatsnew-body code {
   background: rgba(255, 255, 255, .08);
   padding: 1px 5px;
   border-radius: 3px;
   font-size: .88em;
 }
-#manual-body pre {
-  background: #0d1117;
+#manual-body pre,
+#whatsnew-body pre {
+  background: var(--bg-elev);
   padding: 12px;
   border-radius: 6px;
   overflow-x: auto;
 }
-#manual-body pre code { background: transparent; padding: 0; }
-#manual-body table {
+#manual-body pre code, #whatsnew-body pre code { background: transparent; padding: 0; }
+#manual-body table,
+#whatsnew-body table {
   border-collapse: collapse;
   margin: 12px 0;
   width: 100%;
 }
-#manual-body th, #manual-body td {
+#manual-body th, #manual-body td,
+#whatsnew-body th, #whatsnew-body td {
   border: 1px solid rgba(255, 255, 255, .12);
   padding: 6px 10px;
   text-align: left;
 }
 #manual-body th { background: rgba(255, 255, 255, .04); }
-#manual-body a { color: #8ab8ff; }
+#whatsnew-body th { background: rgba(255, 255, 255, .04); }
+#manual-body a, #whatsnew-body a { color: #8ab8ff; }
 
 @media (max-width: 900px) {
   #manual-modal { padding: 0; }
-  #manual-dialog {
+  #whatsnew-modal { padding: 0; }
+  #manual-dialog, #whatsnew-dialog {
     width: 100%;
     height: 100%;
     max-height: 100%;
@@ -300,7 +496,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
    within the 52px shared pane header with breathing room above + below. */
 #btn-expand {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + 10px);
   left: calc(env(safe-area-inset-left, 0px) + 10px);
   z-index: 50;
   width: var(--chrome-btn-size); height: var(--chrome-btn-size);
@@ -339,8 +535,39 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .session-item:active { background: rgba(255,255,255,.06); }
 .session-item.active { border-left-color: var(--accent); background: rgba(76,175,130,.08); }
 
+/* Drag-reorder (user ask: session 应该支持鼠标拖动改变顺序). The card
+   is draggable=true (set in _wireSessionDrag); while dragging it dims,
+   and the hovered sibling paints an insertion marker via ::before /
+   ::after on the .drag-above / .drag-below classes — a bright
+   horizontal rule at the drop slot. Overlay-only so layout never
+   shifts; .session-item is position:relative (line ~851). */
+.session-item[draggable="true"] { -webkit-user-drag: element; }
+.session-item.dragging { opacity: .45; }
+.session-item.drag-above::before,
+.session-item.drag-below::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent, #4caf82);
+  box-shadow: 0 0 4px rgba(76, 175, 130, .55);
+  pointer-events: none;
+}
+.session-item.drag-above::before { top: 0; }
+.session-item.drag-below::after { bottom: 0; }
+
 .session-name { display: block; font-size: .9rem; font-weight: 500; }
 .session-cwd  { display: block; font-size: .75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 前端审查: 侧边栏 session 标题/摘要/路径是用户可读文本, 应支持
+   选中复制(卡片本身 draggable 改序不受影响 — drag 需按住拖动,
+   文本选择是普通 click-drag)。 */
+.session-name, .session-cwd, .session-title,
+.session-summary, .session-desc, .session-meta {
+  user-select: text;
+  -webkit-user-select: text;
+}
 
 /* Recent context summary (what's being worked on now). */
 .session-summary {
@@ -428,6 +655,267 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   }
 }
 
+/* delm-10 busy indicator (redesigned 2026-10-22): plain text "working"
+   chip on the session card when the session's agent is actively
+   streaming (s.agentBusy from GET /sessions ← AgentSession.isBusy()).
+   Green accent matches the session-status-active dot so "working"
+   reads as one color family with "active". No leading symbol glyph —
+   the chip breathes softly (background tint pulse) so it's visible at
+   a glance without the old "●" prefix. Honors prefers-reduced-motion. */
+.session-busy-badge {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-size: .6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: #4cd964;
+  background: rgba(76, 217, 100, .12);
+  box-shadow: 0 0 0 1px rgba(76, 217, 100, .45);
+  animation: session-busy-pulse 1.6s ease-in-out infinite;
+}
+@keyframes session-busy-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(76, 217, 100, .45);
+    background: rgba(76, 217, 100, .12);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(76, 217, 100, .22);
+    background: rgba(76, 217, 100, .22);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-busy-badge {
+    animation: none;
+  }
+}
+
+/* delm-10 stale-working-badge fix (redesigned 2026-10-22): plain text
+   "to review" chip. Replaces the "working" badge when the agent
+   FINISHED a turn and the user hasn't opened the session since
+   (GET /sessions → s.agentHasReview = lastDoneAt > agentSeenAt).
+   Amber accent = "needs your attention" without the working chip's
+   urgency; steady (no pulse) — the work is done, this is an
+   inbox-style marker. No leading symbol glyph. Opening the session
+   clears it; no new work = no chip at all. */
+.session-review-badge {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-size: .6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: #ffb340;
+  background: rgba(255, 179, 64, .12);
+  box-shadow: 0 0 0 1px rgba(255, 179, 64, .45);
+}
+
+/* delm-10 queue visibility: badge on session cards with open run-queue
+   entries (pending + running). The queue itself lives server-side on
+   rec.runQueue and survives session switches; this badge keeps it
+   visible from the sidebar (3s poll) so switching sessions never
+   makes queued work "disappear". Steady (non-pulsing) chip — the
+   busy badge already owns the animated slot. */
+.session-queue-badge {
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: middle;
+  font-size: .6rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: #64d2ff;
+  background: rgba(100, 210, 255, .12);
+  box-shadow: 0 0 0 1px rgba(100, 210, 255, .45);
+}
+/* §5.2 RLM visibility. Two surfaces share the purple/blue "RLM" colour
+   (distinct from busy green / queue cyan):
+   .rlm-badge — sidebar session-card chip (rec.rlm from GET /sessions);
+   .rlm-mode-badge — in-row pill for the ATTACHED session, pinned clear
+   of the right-aligned dropdown group in #chatpane-topctl-row on the
+   SAME line as the RLM dropdown (user
+   request 2026-10-23: "🧠 RLM 这个元素靠左和 RLM 下拉框同行").
+   margin-left: auto is what keeps it clear of the right-aligned
+   dropdown group (布局 / RLM selects) — the old margin-right:auto
+   shoved the 布局 dropdown to the row's far LEFT (2026-10-26 report:
+   "RLM图标出现，会把单列双列下拉框挤到左侧"). */
+.rlm-badge {
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: middle;
+  font-size: .6rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: #d8b4fe;
+  background: rgba(168, 85, 247, .16);
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, .55);
+}
+.rlm-mode-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* 2026-10-26 user report: "RLM图标出现，会把单列双列下拉框挤到左侧" —
+     the old margin-right:auto absorbed ALL free space to the badge's
+     right, shoving the 布局 (单列/双列) dropdown to the row's far LEFT.
+     Flip to margin-left:auto: the badge still sits flush against the
+     right-aligned dropdown group (auto space goes to its LEFT) and the
+     dropdowns keep their right edge, regardless of child order. */
+  margin: 0 0 0 2px;
+  margin-left: auto;          /* pin next to the right-aligned dropdowns */
+  padding: 2px 10px;
+  border-radius: 999px;
+  width: fit-content;
+  font-size: .65rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: #f3e8ff;
+  background: linear-gradient(135deg, rgba(168, 85, 247, .85), rgba(99, 102, 241, .85));
+  box-shadow: 0 0 8px rgba(168, 85, 247, .45);
+}
+.rlm-mode-badge[hidden] { display: none; }
+/* 2026-10-29 user request: RLM 关键特性触发情况放固定区域 — the
+   #rlm-stats-chip sits right of the 🧠 pill in the topctl row, same
+   purple family but muted (readout, not a button). Shows REPL 内核
+   calls · 子代理 spawn/回收 · 进化 · 节省上下文 KB, fed live by
+   kind:'rlm-stats' frames. Hidden unless RLM mode is on. */
+.rlm-stats-chip {
+  display: inline-block;
+  vertical-align: middle;
+  padding: 2px 8px;
+  border-radius: 999px;
+  width: fit-content;
+  font-size: .65rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+  color: #e9d5ff;
+  background: rgba(168, 85, 247, .22);
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, .4);
+}
+.rlm-stats-chip[hidden] { display: none; }
+/* RLM switch: session-level on/off selector next to the 🧠 pill.
+   Same purple family, but sized + contrasted for readability (the old
+   0.65rem low-contrast text was illegible in the chat top bar). */
+.rlm-scope-select {
+  margin: 2px 0 0 0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: .8rem;
+  font-weight: 700;
+  /* background/color come from the global `select, select option`
+     rule (theme-aware via --bg-elev/--text). */
+  border: 1px solid rgba(168, 85, 247, .75);
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, .12), 0 1px 6px var(--accent-glow);
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.rlm-scope-select:hover {
+  border-color: rgba(168, 85, 247, 1);
+  box-shadow: 0 0 10px rgba(168, 85, 247, .35);
+}
+.rlm-scope-select[hidden] { display: none; }
+/* Top-right control row: hosts the RLM switch + the team view switch
+   (单列/多列 select) on ONE line. Pre-fix each control was
+   positioned independently in #chatpane — when one was hidden the
+   other sat alone with a blank band above it (user-reported spacing
+   bug). The row collapses entirely (display:none) when BOTH children
+   are hidden, so no blank strip ever remains.
+
+   4th user report (2026-10-22): "RLM下拉框太靠上了，被上面的图标都挡住了，
+   上边界距离文件夹和首页等图标所在行的下边界10px，把RLM下拉框放在最右边".
+   The row must sit BELOW the fixed chrome button cluster (☰ 首页 /
+   📁 files / plan / arch / test / skills / 💬) with a 10px top gap,
+   and the RLM select must be the RIGHTMOST control.
+
+   Geometry (why margin-top: 0 hits the 10px gap exactly): the icons
+   are position:fixed at top: safe+strip+10px and --chrome-btn-size
+   tall, so their band bottom = safe+strip+10+32 = safe+strip+42px.
+   #chatpane's padding-top = safe+strip+--pane-header-h(52px), and
+   this row is the FIRST flow child (order:-1) — so with NO margin
+   the row's top = safe+strip+52px = icons bottom + 10px on desktop.
+   Mobile tracks automatically (--pane-header-h:56, --chrome-btn-size:36
+   → 56−46 = 10px too). Any extra margin-top/padding-top would
+   over-count the gap (the earlier 10px margin + calc stack rendered
+   a ~20px gap). */
+.chatpane-topctl-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  order: -1;                 /* keep it above the messages column flow */
+  flex: 0 0 auto;
+  /* No negative margin-top (that pulled the row UP into the icon band
+     — the遮挡 the user reported), no min-height band, no vertical
+     padding: the row starts exactly at the chatpane's padding edge,
+     i.e. 10px below the icons' bottom edge. A modest margin-BOTTOM
+     (2026-10-23 layout polish) separates the dropdown strip from the
+     chat content below — the user reported the controls sitting
+     flush on the messages with no breathing room. */
+  margin: 0 0 10px 0;
+  /* "把RLM下拉框放在最右边": NO chrome-cluster width reservation on the
+     right — the row hugs the pane's right edge and justify-content:
+     flex-end puts the LAST child (#rlm-scope-select, kept rightmost by
+     _ensureTeamModeSelect's insertBefore) flush right. */
+  padding: 0 calc(env(safe-area-inset-right, 0px) + 10px) 0 0;
+}
+.chatpane-topctl-row[hidden] { display: none; }
+/* Dynamic control-row placement (2026-10-23 user report): the pane's
+   top area was designed to host the run-queue strip (fr-48 reserves
+   the band under the icon cluster for it). With NO queue, the topctl
+   row pinned up there floated alone "离对话框太远" from the input box.
+   #chatpane.no-queue-floating re-orders the row in the pane's flex
+   column so it renders just above the composer — right next to the
+   chat input. When a queue strip appears the class is dropped
+   (toggled by _updateTopctlRowPlacement in app.js) and the row
+   returns to the reserved top band (order:-1), dynamically adapting.
+
+   Why order (not absolute + pixel offsets): #chatpane is a flex
+   column; #chat-messages owns flex:1, so anything ordered AFTER it
+   lands at the bottom of the column — directly adjacent to
+   #claude-typing / #composer-verdict-pane / #chat-form regardless of
+   how tall the composer grows (textarea autosize, context chips,
+   wrapped action buttons). No fragile bottom:NNpx calc to maintain. */
+#chatpane.no-queue-floating .chatpane-topctl-row {
+  /* Default order is -1 (top band). Push past #chat-messages (order 0,
+     flex:1) so the row hugs the composer. Margin flips to top so the
+     10px breathing gap sits between the switches and the input card. */
+  order: 5;
+  margin: 10px 0 0 0;
+}
+/* CRITICAL companion rules (flex `order` is comparative, not absolute):
+   with ONLY the row at order:5 it would render BELOW the order-0
+   composer (#chat-form) + status row (#claude-typing) at the very
+   bottom of the pane — the opposite of "right above the input". These
+   bump the bottom stack above the row so the visual order becomes:
+   messages → topctl row → status row → composer. #composer-verdict-pane
+   is position:absolute (out of flow) but keep it grouped for clarity. */
+#chatpane.no-queue-floating #claude-typing,
+#chatpane.no-queue-floating #chat-form,
+#chatpane.no-queue-floating #composer-verdict-pane {
+  order: 10;
+}
+/* With a queue strip visible the class is absent — the strip occupies
+   the reserved top space and the switches sit directly under the icon
+   band as before (order:-1 flow). */
+/* Mobile: only tighten the right inset so the controls don't clip on
+   narrow panes (the 10px gap below the icons still tracks via the
+   --pane-header-h / --chrome-btn-size pair above). */
+@media (max-width: 900px) {
+  .chatpane-topctl-row { padding-right: 6px; }
+}
 /* fr-99: shared diagram lightbox. Triggered by dblclick on a
    Mermaid/SVG/PNG diagram inside #chat-messages or #files-view-body.
    Covers the viewport with a dark backdrop; the cloned diagram lives
@@ -460,7 +948,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   max-width: 90vw;
   max-height: 90vh;
   overflow: auto;
-  background: #0d1117;
+  background: var(--bg-elev);
   border-radius: 8px;
   padding: 16px;
   box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
@@ -501,7 +989,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   right: 24px;
   background: rgba(255, 255, 255, .08);
   border: 1px solid rgba(255, 255, 255, .2);
-  color: #f0f6fc;
+  color: var(--text);
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -743,8 +1231,9 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   bottom: calc(var(--safe-bottom) + 28px);
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(20, 20, 20, .92);
-  color: #fff;
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
   padding: 10px 18px;
   border-radius: 22px;
   font-size: .88rem;
@@ -778,7 +1267,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #000;
+  background: var(--bg);
   position: relative;        /* anchor for #myco-waiting + other overlays */
 }
 
@@ -1128,7 +1617,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .kbd-native-input {
   flex: 1;
   min-width: 0;
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1234,7 +1723,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .config-pat-value { font-family: var(--mono, monospace); color: var(--muted); }
 .config-pat-actions { display: flex; gap: 6px; }
 .config-pat-actions button {
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1249,10 +1738,17 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   gap: 8px;
   align-items: center;
 }
-.config-pat-form input,
+.config-pat-form input {
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: .85rem;
+}
 .config-pat-form select {
-  background: #2e2e2e;
-  color: var(--text);
+  /* 白底黑字 (dropdown light-theme): background/color come from the
+     global `select, select option` rule. */
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
@@ -1261,7 +1757,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 .config-pat-form #config-pat-token { grid-column: 1 / -1; }
 .config-pat-form #config-pat-save { grid-column: 1 / -1; padding: 8px; cursor: pointer; }
 #config-signout {
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1325,7 +1821,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 .config-admin-allowlist-form input {
   flex: 1;
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1333,7 +1829,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   font-size: .85rem;
 }
 .config-admin-allowlist-form button {
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1354,7 +1850,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   font-family: var(--mono, monospace);
 }
 .config-admin-field input {
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1381,7 +1877,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 }
 
 #spawn-cwd {
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1431,12 +1927,12 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
 #spawn-ok     { background: var(--accent); color: #000; font-weight: 600; }
 
 #spawn-workspace { font-size: .8rem; color: var(--muted); }
-#spawn-workspace code { color: var(--text); background: #2e2e2e; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+#spawn-workspace code { color: var(--text); background: var(--surface-2); padding: 2px 6px; border-radius: 4px; font-family: monospace; }
 
 #spawn-suggestions { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto; }
 
 .dir-chip {
-  background: #2e2e2e; color: var(--text); border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
   border-radius: 12px; padding: 4px 10px; font-size: .8rem; cursor: pointer;
 }
 .dir-chip:hover { border-color: var(--accent); }
@@ -1467,9 +1963,9 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: #24292e;
-  color: #fff;
-  border: 1px solid #444c56;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 12px 14px;
   font-size: 1rem;
@@ -1533,14 +2029,32 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   margin: 0;
 }
 
+.login-provider-row {
+  display: flex;
+  gap: 8px;
+}
+.login-provider-row select {
+  /* 白底黑字 (dropdown light-theme): background/color come from the
+     global `select, select option` rule. */
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 8px;
+  font: 13px 'JetBrains Mono', monospace;
+  min-height: 40px;
+  flex: 0 0 auto;
+}
+.login-provider-row select:focus { outline: none; border-color: var(--accent); }
+
 #login-pat {
-  background: #2e2e2e;
+  background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   font: 13px 'JetBrains Mono', monospace;
   min-height: 40px;
+  flex: 1;
+  min-width: 0;
 }
 #login-pat:focus { outline: none; border-color: var(--accent); }
 #login-pat-submit {
@@ -1707,6 +2221,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
   #btn-plan { right: calc(env(safe-area-inset-right, 0px) + 8px + 2 * (var(--chrome-btn-size) + 6px)); }
   #btn-arch { right: calc(env(safe-area-inset-right, 0px) + 8px + 3 * (var(--chrome-btn-size) + 6px)); }
   #btn-test { right: calc(env(safe-area-inset-right, 0px) + 8px + 4 * (var(--chrome-btn-size) + 6px)); }
+  #btn-skills { right: calc(env(safe-area-inset-right, 0px) + 8px + 5 * (var(--chrome-btn-size) + 6px)); }
   #btn-chat, #btn-files, #btn-plan, #btn-arch, #btn-test {
     /* Bigger SVG inside the larger button looks balanced. */
   }
@@ -1736,7 +2251,9 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     align-content: start;
     column-gap: 10px;
     row-gap: 6px;
-    padding: 10px 14px 100px;
+    /* bottom pad 10px (was 100px) — mobile home folder grid had an
+       oversized gap below the last row of session cards. */
+    padding: 10px 14px 10px;
   }
   .session-item {
     background: var(--surface-2);
@@ -1850,7 +2367,7 @@ button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparen
     width: 100%;
     /* Reserve space at the top so the floating ☰ button (44px + 12px gap)
        doesn't overlap the terminal's first row. */
-    padding-top: calc(var(--safe-top) + 60px);
+    padding-top: calc(var(--safe-top) + var(--top-strip, 0px) + 60px);
   }
 
   /* (#btn-expand size is unified via --chrome-btn-size; no per-button
@@ -2032,7 +2549,13 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
+  /* --chatpane-top-pad (not the taller --pane-header-h): user report
+     (2026-10-23) — the topctl control row sat too far below the fixed
+     chrome icon cluster. The icon band bottom is safe+strip+10+btn
+     (42px desktop); this pad lands the row's top just 6px under it
+     instead of the old 10px gap that --pane-header-h produced. Mobile
+     tracks via --chrome-btn-size (36). */
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + var(--chatpane-top-pad));
   z-index: 30;
   overflow: hidden;
 }
@@ -2559,7 +3082,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   cursor: pointer;
   border: 1px solid var(--border);
   background: var(--bg-elev);
-  color: var(--fg);
+  color: var(--text);
 }
 .plan-merge-apply {
   border-color: rgba(220, 180, 90, .55);
@@ -2762,7 +3285,9 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   color: var(--accent-warm, #d97706);
   border-color: var(--accent-warm, #d97706);
 }
-.artifact-item-text { flex: 1; word-break: break-word; min-width: 0; }
+/* 前端审查: Plan/任务条目正文是核心可读内容, 必须支持选中复制
+   (body 级 user-select:none 会级联进来, 显式夺回)。 */
+.artifact-item-text { flex: 1; word-break: break-word; min-width: 0; user-select: text; -webkit-user-select: text; cursor: text; }
 /* Clamp long item text to ~5 lines; "Show more / less" pill toggles
    the .is-clamped class via _planItemTextExpandToggle in app.js.
    line-clamp on a -webkit-box gives a clean ellipsis at the bottom
@@ -2829,7 +3354,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--fg, #eee);
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .artifact-tag .tag-text {
@@ -2853,7 +3378,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .artifact-tag-remove:hover,
 .artifact-tag-remove:focus {
-  color: var(--fg, #fff);
+  color: var(--text);
   background: rgba(255, 80, 80, 0.25);
   outline: none;
 }
@@ -2869,7 +3394,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .artifact-tag-add-btn:hover,
 .artifact-tag-add-btn:focus {
-  color: var(--fg, #fff);
+  color: var(--text);
   border-color: var(--accent, #4af);
   outline: none;
 }
@@ -2880,7 +3405,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 9999px;
   border: 1px solid var(--accent, #4af);
   background: rgba(0, 0, 0, 0.25);
-  color: var(--fg, #fff);
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   width: 96px;
   outline: none;
@@ -2971,7 +3496,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .artifact-item-id[data-deep-link-id]:hover {
   background: rgba(140, 140, 160, .28);
-  color: var(--fg);
+  color: var(--text);
 }
 .artifact-item-id[data-deep-link-id]:focus-visible {
   outline: 2px solid rgba(100, 170, 255, .7);
@@ -3299,7 +3824,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   padding: 6px 10px;
   font-size: 0.78rem;
   font-weight: 500;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   letter-spacing: 0.03em;
   user-select: none;
   list-style: none;
@@ -3415,18 +3940,102 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .runqueue-cancel,
 .runqueue-resume,
-.runqueue-clear {
+.runqueue-n2-resume,
+.runqueue-clear,
+.runqueue-clear-fin,
+.runqueue-rerun,
+.runqueue-cancel-run {
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
-  border-radius: 4px;
-  padding: 1px 6px;
+  border-radius: 5px;
+  padding: 1px 7px;
   font-size: 11px;
+  line-height: 1.6;
   cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s;
 }
-.runqueue-cancel { padding: 0 4px; }
-.runqueue-resume:hover { color: var(--accent, #4caf50); border-color: var(--accent, #4caf50); }
-.runqueue-clear:hover  { color: #d32f2f; border-color: #d32f2f; }
+/* per-chip icon buttons — no text, just the glyph, so keep them tight */
+.runqueue-cancel,
+.runqueue-rerun,
+.runqueue-cancel-run { padding: 0 5px; }
+.runqueue-rerun:hover,
+.runqueue-resume:hover { color: #4caf50; border-color: #4caf50; background: rgba(76,175,80,.12); }
+/* agent-n2: dual-agent lane — cyan tint to read as "both workers" vs the
+   green single-agent resume. */
+.runqueue-n2-resume { color: #2fb7d3; border-color: rgba(47,183,211,.5); }
+.runqueue-n2-resume:hover { color: #fff; background: rgba(47,183,211,.85); border-color: #2fb7d3; }
+.runqueue-cancel:hover,
+.runqueue-cancel-run:hover { color: #d32f2f; border-color: #d32f2f; background: rgba(211,47,47,.12); }
+.runqueue-clear:hover { color: #d32f2f; border-color: #d32f2f; }
+.runqueue-clear-fin { color: var(--accent, #2f7fd3); border-color: rgba(47,127,211,.45); }
+.runqueue-clear-fin:hover { color: #fff; background: var(--accent, #2f7fd3); border-color: var(--accent, #2f7fd3); }
+/* running chip pulses so a live dispatch is unmistakable */
+@keyframes rqRunningPulse { 0% { box-shadow: 0 0 0 0 rgba(76,175,80,.35); } 70% { box-shadow: 0 0 0 5px rgba(76,175,80,0); } 100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); } }
+.runqueue-chip-running { animation: rqRunningPulse 1.6s ease-out infinite; }
+
+/* ── unanswered-questions strip (bug-92) — mirrors the run-queue strip,
+   but amber/pending-leaning. Each open chip carries ↻ retry + × remove;
+   a "一键清空未回答·N" button wipes the whole open queue. ── */
+.pending-questions-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255, 193, 7, 0.07);
+  border-bottom: 1px solid var(--border-soft, rgba(128, 128, 128, 0.2));
+  font-size: 12px;
+}
+.pending-questions-strip[hidden] { display: none; }
+.pq-label { font-weight: bold; color: var(--muted); margin-right: 4px; }
+.pq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--bg-input, rgba(128, 128, 128, 0.15));
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.25));
+  font-size: 11px;
+  max-width: 340px;
+}
+.pq-chip-pending { border-color: rgba(255, 193, 7, 0.5); }
+.pq-chip-failed  { background: rgba(211, 47, 47, 0.15); border-color: rgba(211, 47, 47, 0.5); }
+.pq-rerun,
+.pq-clear-all,
+.pq-rerun-one,
+.pq-clear-one {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border-soft, rgba(128, 128, 128, 0.3));
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s;
+}
+}
+/* per-chip icon buttons — no text, just the glyph, so keep them tight */
+.runqueue-cancel,
+.runqueue-rerun,
+.runqueue-cancel-run { padding: 0 5px; }
+.runqueue-rerun:hover,
+.runqueue-resume:hover { color: #4caf50; border-color: #4caf50; background: rgba(76,175,80,.12); }
+/* agent-n2: dual-agent lane — cyan tint to read as "both workers" vs the
+   green single-agent resume. */
+.runqueue-n2-resume { color: #2fb7d3; border-color: rgba(47,183,211,.5); }
+.runqueue-n2-resume:hover { color: #fff; background: rgba(47,183,211,.85); border-color: #2fb7d3; }
+.runqueue-cancel:hover,
+.runqueue-cancel-run:hover { color: #d32f2f; border-color: #d32f2f; background: rgba(211,47,47,.12); }
+.runqueue-clear:hover { color: #d32f2f; border-color: #d32f2f; }
+.runqueue-clear-fin { color: var(--accent, #2f7fd3); border-color: rgba(47,127,211,.45); }
+.runqueue-clear-fin:hover { color: #fff; background: var(--accent, #2f7fd3); border-color: var(--accent, #2f7fd3); }
+/* running chip pulses so a live dispatch is unmistakable */
+@keyframes rqRunningPulse { 0% { box-shadow: 0 0 0 0 rgba(76,175,80,.35); } 70% { box-shadow: 0 0 0 5px rgba(76,175,80,0); } 100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); } }
+.runqueue-chip-running { animation: rqRunningPulse 1.6s ease-out infinite; }
+
 
 /* bug-49: the .artifact-item-delete base + :hover rules (formerly
    adopted from .artifact-comment-toggle's pill chrome per fr-77
@@ -3581,6 +4190,16 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .chat-msg.from-claude .chat-user { color: var(--accent); }
 .chat-msg .chat-ts { margin-left: 10px; color: rgba(140, 150, 165, .65); }
 
+/* full-text hover rows (meta.fullText — truncated /run-n2 progress +
+   ✅ 完成 lines). The full content is a native title tooltip on the row;
+   the dotted underline on the bubble is the only visible affordance that
+   there IS more to see on hover. */
+.chat-msg.chat-msg-fulltext { cursor: help; }
+.chat-msg.chat-msg-fulltext .chat-text {
+  text-decoration: underline dotted rgba(140, 150, 165, .55);
+  text-underline-offset: 3px;
+}
+
 .chat-msg .chat-text {
   font-size: .92rem;
   word-wrap: break-word;
@@ -3598,23 +4217,28 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .chat-msg .chat-text ul,
 .chat-msg .chat-text ol { padding-left: 22px; }
 .chat-msg .chat-text code {
-  background: rgba(255, 255, 255, .06);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   padding: 1px 5px;
-  border-radius: 2px;
+  border-radius: 3px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .88em;
+  color: var(--accent);
 }
 /* Code blocks: ONE flat layer — a single subtle dark slab embedded in
    the chat bubble. The hljs override below kills github-dark's own
-   #0d1117 + 1em padding so we don't get a nested 2-layer effect. */
+   #0d1117 + 1em padding so we don't get a nested 2-layer effect.
+   Theme-aware: --bg-elev well + hairline --border edge + faint accent
+   glow reads as a premium terminal slab in both dark and light. */
 .chat-msg .chat-text pre,
 .agent-card-md pre,
 .agent-card-body pre,
 .artifact-item-text.artifact-md pre {
-  background: rgba(0, 0, 0, .28);
+  background: var(--bg-elev);
   padding: 8px 12px;
-  border-radius: 3px;
-  border: none;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, .12);
   overflow-x: auto;
   margin: 8px 0;
   font-size: 0.82em;
@@ -3645,7 +4269,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 .chat-msg .chat-text h6 {
   margin: 0.7em 0 0.3em;
   line-height: 1.25;
-  color: #e6edf3;
+  color: var(--text);
 }
 .chat-msg .chat-text h1 { font-size: 1.3em; border-bottom: 1px solid rgba(255,255,255,.08); padding-bottom: 2px; }
 .chat-msg .chat-text h2 { font-size: 1.15em; border-bottom: 1px solid rgba(255,255,255,.06); padding-bottom: 2px; }
@@ -3722,7 +4346,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
      ellipsis kicks in only at the popover width (~chat-window
      width). */
   font-size: 12px;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
   white-space: nowrap;
   overflow: hidden;
@@ -3743,7 +4367,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: rgba(255, 255, 255, .04);
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 4px;
-  color: var(--text, #e6edf3);
+  color: var(--text);
   font: 13px/1.4 system-ui, -apple-system, sans-serif;
   outline: none;
 }
@@ -3761,7 +4385,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   background: transparent;
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 4px;
-  color: var(--text, #e6edf3);
+  color: var(--text);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
@@ -3810,12 +4434,12 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   border-radius: 4px;
   font-size: 13px;
   line-height: 1.45;
-  color: var(--text, #e6edf3);
+  color: var(--text);
   max-height: 320px;
   overflow-y: auto;
 }
 .chat-clarify-reply.is-busy {
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
 }
 .chat-clarify-reply.is-busy::before {
@@ -4082,7 +4706,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   user-select: none;
 }
 .composer-chip-at { opacity: 0.7; }
-.composer-chip-name { color: #c9d1d9; }
+.composer-chip-name { color: var(--text); }
 .composer-chip-x {
   background: transparent;
   border: 0;
@@ -4097,7 +4721,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .composer-chip-x:hover {
   background: rgba(255, 255, 255, .12);
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 
 /* Textarea inside the composer card — borderless + transparent so
@@ -4123,10 +4747,10 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 #chat-input::-webkit-scrollbar { width: 6px; }
 #chat-input::-webkit-scrollbar-track { background: transparent; }
-#chat-input::-webkit-scrollbar-thumb { background: rgba(120, 130, 145, .35); border-radius: 4px; }
+#chat-input::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 #chat-input:focus { outline: none; }
 #chat-input:disabled { opacity: .5; cursor: not-allowed; }
-#chat-input::placeholder { color: rgba(255, 255, 255, .28); }
+#chat-input::placeholder { color: var(--text-dim); opacity: .6; }
 
 /* Composer actions column — vertical stack on the right of the
    textarea. Stop on top (when visible), Send on bottom. The column
@@ -4496,7 +5120,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    Sized to fit within the 52px shared pane header. */
 #btn-chat {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + 10px);
   right: calc(env(safe-area-inset-right, 0px) + 10px);
   z-index: 50;
   width: var(--chrome-btn-size); height: var(--chrome-btn-size);
@@ -4547,7 +5171,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 /* Files toggle sits left of #btn-chat in the same fixed cluster. */
 #btn-files {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + 10px);
   /* 10 + chrome-btn-size + 8 gap from right edge — desktop value; mobile bumps in @media */
   right: calc(env(safe-area-inset-right, 0px) + 10px + var(--chrome-btn-size) + 8px);
   z-index: 50;
@@ -4573,7 +5197,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
    files and the other artifact views. */
 #btn-plan, #btn-arch, #btn-test {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + 10px);
   z-index: 50;
   width: var(--chrome-btn-size); height: var(--chrome-btn-size);
   padding: 0;
@@ -4595,6 +5219,77 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 #btn-plan:active, #btn-arch:active, #btn-test:active { transform: scale(.92); }
 #btn-plan.active, #btn-arch.active, #btn-test.active { background: rgba(80, 120, 200, .35); }
 
+/* Skills toggle (delm-10) — slot 5 from the right. Without these rules
+   the button rendered in-flow at the top of #terminal-pane and was
+   covered by the absolutely-positioned .artifact-main-view panes,
+   making it impossible to find (user report). Same chrome-cluster
+   treatment as plan/arch/test above. */
+#btn-skills {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + 10px);
+  right: calc(env(safe-area-inset-right, 0px) + 10px + 5 * (var(--chrome-btn-size) + 8px));
+  z-index: 50;
+  width: var(--chrome-btn-size); height: var(--chrome-btn-size);
+  padding: 0;
+  border-radius: 8px;
+  background: rgba(40, 40, 40, .85);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, .08);
+  font-size: .95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+#btn-skills:active { transform: scale(.92); }
+#btn-skills.active { background: rgba(80, 120, 200, .35); }
+#btn-skills.active .chrome-icon-svg { color: #aac8ff; }
+
+/* ── Light theme: top-right chrome cluster flips to white glass + ink
+   icons (user report 2026-10-23). In light mode the buttons' hardcoded
+   dark-glass bg (rgba(40,40,40,.85)) rendered as black squares on the
+   white pane; the cluster must read white-bg/ink-foreground instead.
+   Dark theme is untouched — these rules only match under
+   [data-theme="light"].
+   Covers the whole floating top-right cluster (#btn-chat home,
+   #btn-files folder, #btn-plan/#btn-arch/#btn-test/#btn-skills toggles)
+   plus the top-left #btn-expand (☰) which shares the same glass look
+   so the top chrome stays coherent. Active state keeps the accent-tint
+   treatment but flips to the light accent + ink icon. */
+:root[data-theme="light"] #btn-chat,
+:root[data-theme="light"] #btn-files,
+:root[data-theme="light"] #btn-plan,
+:root[data-theme="light"] #btn-arch,
+:root[data-theme="light"] #btn-test,
+:root[data-theme="light"] #btn-skills,
+:root[data-theme="light"] #btn-expand {
+  background: rgba(255, 255, 255, .92);
+  color: #17211c;                       /* ink icon (currentColor stroke) */
+  border: 1px solid var(--border);      /* visible hairline on white */
+  box-shadow: var(--shadow-1);
+}
+:root[data-theme="light"] #btn-chat.active,
+:root[data-theme="light"] #btn-files.active,
+:root[data-theme="light"] #btn-plan.active,
+:root[data-theme="light"] #btn-arch.active,
+:root[data-theme="light"] #btn-test.active,
+:root[data-theme="light"] #btn-skills.active {
+  background: var(--accent-dim);        /* mint tint, readable on white */
+  border-color: var(--accent);
+}
+:root[data-theme="light"] #btn-files.active .chrome-icon-svg,
+:root[data-theme="light"] #btn-chat.active .chrome-icon-svg,
+:root[data-theme="light"] .artifact-toggle.active .chrome-icon-svg,
+:root[data-theme="light"] #btn-skills.active .chrome-icon-svg {
+  color: #007a4d;                       /* dark-mode #aac8ff washes out on white */
+}
+/* Unread badge's dark ring would sit on a white button now — flip its
+   box-shadow ring to white so the badge stays readable in light mode. */
+:root[data-theme="light"] #btn-chat[data-unread]::after {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .95);
+}
+
 /* Main-pane artifact view container. Fills the terminal-pane like
    #files-wrap does, with a small header strip on top and a scrollable
    body underneath. */
@@ -4609,7 +5304,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
      hide under them. Desktop drops the reservation in the rule
      below so the artifact pane takes the entire vertical extent
      of the main area. */
-  padding-top: calc(env(safe-area-inset-top, 0px) + var(--pane-header-h));
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--top-strip, 0px) + var(--pane-header-h));
   box-sizing: border-box;
   /* Sit above the chatpane (z-index:30) so opening Plan/Arch/Test
      actually covers the conversation. Without this the chatpane
@@ -4684,7 +5379,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   display: flex;
   min-height: 0;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--bg-elev);
   /* Same overlay treatment as .artifact-main-view — sits above the
      chatpane (z-index:30) so the file tree + viewer actually
      replaces the conversation visually. */
@@ -4704,7 +5399,7 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
      any saved width is restored. */
   width: var(--files-tree-w, 220px);
   min-width: 180px;
-  border-right: 1px solid rgba(255, 255, 255, .06);
+  border-right: 1px solid var(--border);   /* was white-alpha hairline — invisible on the light theme */
   /* fr-77 r3: the changed-files section moved to the Plan view, so
      the pane is back to a single scroll region (tree only). overflow-y
      handles the scroll directly. (Pre-r3 this needed a flex split to
@@ -4712,7 +5407,11 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  background: #0a0e14;
+  /* Light-theme fix (2026-10-23): was a hard-coded dark #0a0e14, so the
+     folder/file tree stayed black under the white theme. Use the theme
+     token instead — dark keeps the elevated panel tone, light goes
+     white (var(--bg-elev) = #ffffff in light, #101714 in dark). */
+  background: var(--bg-elev);
   transition: width .15s ease;
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 130, 145, .35) transparent;
@@ -4769,7 +5468,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #files-tree-collapse {
   background: transparent;
   border: 0;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   padding: 2px 6px;
   cursor: pointer;
   font-size: 0.8rem;
@@ -4777,7 +5476,31 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   margin-left: auto;
   flex: 0 0 auto;
 }
-#files-tree-collapse:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+#files-tree-collapse:hover { background: var(--surface-2); color: var(--text); }
+/* delm-10: New folder / New file buttons in #files-header. Same look
+   as #files-tree-collapse; #files-new-folder carries margin-left:auto
+   so the create pair sits right of the crumb and the collapse button
+   stays flush-right. Hidden when read-only (app.js sets [hidden]). */
+#files-new-folder,
+#files-new-file {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+#files-new-folder { margin-left: auto; }
+#files-new-folder:hover,
+#files-new-file:hover { background: var(--surface-2); color: var(--text); }
+#files-new-folder[hidden],
+#files-new-file[hidden] { display: none; }
+#files-wrap.files-tree-collapsed #files-tree-pane #files-new-folder,
+#files-wrap.files-tree-collapsed #files-tree-pane #files-new-file {
+  display: none;
+}
 
 /* bug-78: drag handle for resizing #files-tree-pane horizontally.
    5px-wide vertical strip that sits between #files-tree-pane and
@@ -4790,7 +5513,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .files-tree-resize-handle {
   flex: 0 0 5px;
   width: 5px;
-  background: rgba(255, 255, 255, .04);
+  background: var(--border);   /* was white-alpha — invisible on light theme */
   cursor: col-resize;
   position: relative;
   transition: background .12s ease;
@@ -4917,7 +5640,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
      divider that separates the section from the plan items above. */
   padding: 8px 16px;
   font-size: 0.78rem;
-  color: #c9d1d9;
+  color: var(--text);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   background: rgba(56, 139, 253, .07);
@@ -4936,7 +5659,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #plan-changed-files-collapse {
   background: transparent;
   border: 0;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   padding: 2px 4px;
   cursor: pointer;
   border-radius: 3px;
@@ -5025,8 +5748,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .fc-status-R { color: #c792ea; }     /* renamed — purple */
 .fc-status-C { color: #c792ea; }     /* copied — purple */
 .fc-status-U { color: #ff8a8a; }     /* unmerged — red */
-.fc-status-Q { color: #8b949e; }     /* untracked (? mapped) — muted */
-.fc-status-untracked { color: #8b949e; }
+.fc-status-Q { color: var(--muted); }     /* untracked (? mapped) — muted */
+.fc-status-untracked { color: var(--muted); }
 .fc-path {
   flex: 1 1 auto;
   overflow: hidden;
@@ -5049,14 +5772,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .pcf-stats-add { color: #6fdc97; }
 .pcf-stats-rm  { color: #ff8a8a; }
 .pcf-stats-bin {
-  color: #8b949e;
+  color: var(--muted);
   font-style: italic;
 }
 #plan-changed-files-msg {
   /* fr-77 r5: 16px horizontal matches plan-body padding. */
   padding: 8px 16px;
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
 }
 /* fr-77 r2: description rows (Mentions + Recent commits) above the
@@ -5066,7 +5789,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   /* fr-77 r5: 16px horizontal matches plan-body padding. */
   padding: 6px 16px 4px;
   font-size: 0.72rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   border-bottom: 1px solid rgba(255, 255, 255, .04);
   display: flex;
   flex-direction: column;
@@ -5081,7 +5804,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .fc-desc-label {
   flex: 0 0 auto;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-size: 0.65rem;
@@ -5124,7 +5847,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 
 /* fr-77 r3: inline diff body. Rendered as a sibling LI inserted
@@ -5137,12 +5860,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
      row hover + cursor. */
   padding: 0;
   cursor: default;
-  background: #0d1117;
+  background: var(--bg-elev);
   border-top: 1px solid rgba(255, 255, 255, .04);
   border-bottom: 1px solid rgba(255, 255, 255, .04);
 }
 #plan-changed-files-list li.pcf-diff-row:hover {
-  background: #0d1117;
+  background: var(--bg-elev);
   color: var(--text);
 }
 .pcf-diff-body {
@@ -5157,7 +5880,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   /* fr-77 r5: match the 16px horizontal of the rest of the section. */
   padding: 6px 16px;
   font-size: 0.74rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   border-bottom: 1px solid rgba(255, 255, 255, .06);
   background: rgba(255, 255, 255, .02);
 }
@@ -5175,7 +5898,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .pcf-diff-body .fc-diff-empty {
   padding: 8px 16px;
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
 }
 /* fr-77 r7: per-line diff structure (replaces the previous pre>code
@@ -5186,7 +5909,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .pcf-diff-body .pcf-diff-pre {
   margin: 0;
   padding: 0;
-  background: #0d1117;
+  background: var(--bg-elev);
   overflow-x: auto;
   white-space: pre;
 }
@@ -5203,12 +5926,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   display: inline-block;
   width: 1ch;
   margin-right: 0.5ch;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   user-select: none;
 }
 .pcf-diff-body .pcf-diff-code {
   /* hljs token spans inherit color from here when no class matches. */
-  color: #c9d1d9;
+  color: var(--text);
 }
 /* Per-kind row backgrounds + marker colors. Tints kept light so the
    highlight.js token colors stay readable on top. */
@@ -5226,14 +5949,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: #58a6ff;
 }
 .pcf-diff-body .pcf-diff-meta {
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   background: rgba(255, 255, 255, .02);
 }
 .pcf-diff-body .pcf-diff-blank { background: transparent; }
 .pcf-diff-loading {
   padding: 8px 16px;
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
 }
 
@@ -5256,7 +5979,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(40, 40, 40, .55);
   border: 1px solid rgba(255, 255, 255, .08);
   border-radius: 5px;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   cursor: pointer;
   transition: background .12s, color .12s, border-color .12s;
 }
@@ -5287,7 +6010,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   gap: 4px;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, .08);
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   padding: 2px 8px;
   cursor: pointer;
   font-size: 0.72rem;
@@ -5405,8 +6128,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   justify-content: flex-end;
 }
 .pcf-line-cancel, .pcf-line-send {
-  background: rgba(255, 255, 255, .04);
-  border: 1px solid rgba(255, 255, 255, .12);
+  background: var(--surface-2);   /* was white-alpha — invisible on light theme */
+  border: 1px solid var(--border-strong);
   color: var(--text);
   padding: 4px 12px;
   cursor: pointer;
@@ -5419,14 +6142,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: #58a6ff;
 }
 .pcf-line-send:hover { background: rgba(56, 139, 253, .25); }
-.pcf-line-cancel:hover { background: rgba(255, 255, 255, .08); }
+.pcf-line-cancel:hover { background: var(--border); }
 /* fr-77 r15: small "Esc to cancel/clear" hint text in both the per-line
    + file-level reconsider forms. Muted italic so it reads as a
    contextual key-hint, not as content. */
 .pcf-line-hint,
 .pcf-reconsider-hint {
   flex: 1 1 auto;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-size: 0.7rem;
   font-style: italic;
   align-self: center;
@@ -5477,14 +6200,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .pcf-row-btn.is-accepted-state {
   opacity: 0.35;
   cursor: not-allowed;
-  background: rgba(40, 40, 40, .25);
-  border-color: rgba(255, 255, 255, .05);
+  background: var(--surface-2);
+  border-color: var(--border);
 }
 .pcf-row-btn.is-accepted-state:hover {
   /* No hover state — keep the greyed look. */
-  background: rgba(40, 40, 40, .25);
-  color: var(--muted, #8b949e);
-  border-color: rgba(255, 255, 255, .05);
+  background: var(--surface-2);
+  color: var(--muted);
+  border-color: var(--border);
 }
 
 /* Inline file editor — fills the files-view-body with a monospace
@@ -5494,7 +6217,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   width: 100%;
   height: 100%;
   min-height: 100%;
-  background: #0d1117;
+  background: var(--bg-elev);
   color: var(--text);
   border: 0;
   outline: none;
@@ -5539,14 +6262,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   justify-content: center;
 }
 #file-conflict-dialog {
-  background: #161b22;
+  background: var(--surface-2);
   color: var(--text);
   padding: 20px 24px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-strong);
   max-width: 480px;
   width: calc(100% - 32px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-1);
 }
 #file-conflict-dialog h2 {
   margin: 0 0 10px;
@@ -5559,7 +6282,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   line-height: 1.5;
 }
 #file-conflict-body code {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-elev);
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 0.85rem;
@@ -5572,7 +6295,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 #file-conflict-actions button {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--border-strong);
   color: var(--text);
   padding: 6px 12px;
   border-radius: 4px;
@@ -5580,7 +6303,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   cursor: pointer;
 }
 #file-conflict-actions button:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-elev);
 }
 #file-conflict-force {
   border-color: rgba(246, 180, 138, 0.5) !important;
@@ -5605,9 +6328,9 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   height: var(--chrome-btn-size);
   padding: 0;
   border-radius: 8px;
-  background: rgba(40, 40, 40, .85);
+  background: var(--surface-2);   /* was hard dark glass — wrong on light theme */
   color: var(--text);
-  border: 1px solid rgba(255, 255, 255, .08);
+  border: 1px solid var(--border);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5619,7 +6342,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #files-edit-cancel:hover,
 #files-wrap-toggle:hover,
 #files-copy:hover {
-  background: rgba(60, 60, 60, .9);
+  background: var(--border);
 }
 #files-edit:active,
 #files-edit-save:active,
@@ -5670,10 +6393,10 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 8px 12px;
   min-height: var(--pane-header-h);
   box-sizing: border-box;
-  border-bottom: 1px solid rgba(255, 255, 255, .06);
+  border-bottom: 1px solid var(--border);
   font: 12px 'JetBrains Mono', monospace;
   color: var(--text);
-  background: rgba(255, 255, 255, .02);
+  background: var(--surface-2);   /* was white-alpha overlay — wrong on light theme */
   position: sticky;
   top: 0;
   z-index: 2;
@@ -5687,7 +6410,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 0 4px;
   border-radius: 4px;
 }
-#files-tree-back:hover { background: rgba(255, 255, 255, .06); }
+#files-tree-back:hover { background: var(--surface-2); }
 #files-crumb { flex: 1; overflow-wrap: anywhere; opacity: .8; font-size: 11px; }
 
 #files-tree {
@@ -5712,6 +6435,56 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 #files-tree li:hover { background: rgba(80, 120, 200, .08); border-left-color: rgba(80, 120, 200, .35); }
 #files-tree li.heavy { opacity: .5; }
+
+/* td-copy-path: right-click context menu for the file-tree entries.
+   Fixed-position floating panel appended to <body>, styled to match
+   the app's chrome (same palette as .toast / dropdown panels).
+   Light-theme fix (2026-10-23): hard-coded #10151d + white-alpha border
+   replaced with theme tokens so the menu renders white in light mode. */
+.files-ctx-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 190px;
+  max-width: 380px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+  font: 12.5px 'JetBrains Mono', monospace;
+  color: var(--text);
+}
+.files-ctx-menu[hidden] { display: none; }
+.files-ctx-menu .fcx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.files-ctx-menu .fcx-item:hover {
+  background: rgba(80, 120, 200, .18);
+}
+.files-ctx-menu .fcx-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  color: var(--text-dim);   /* was white-alpha — invisible on light theme */
+}
+.files-ctx-menu .fcx-item span { flex-shrink: 0; }
+.files-ctx-menu .fcx-item code {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+
 
 /* fr-9 polish: Lucide-style SVG icons match the main app's chrome
    cluster. .ft-ic is the SVG container; the actual <svg.ft-svg>
@@ -5751,6 +6524,42 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #files-tree li .ft-ic.ext-rs   { color: #ffaa7a; }
 #files-tree li .ft-ic.ext-yml  { color: #ff9090; }
 #files-tree li .ft-ic.ext-default { color: rgba(255, 255, 255, .5); }
+
+/* Light-theme icon palette (2026-10-23): the dark tints above are
+   lightness-tuned for a near-black surface — on the white file-tree
+   they washed out (yellow folder, pale blue js/ts all read as pastel
+   smudges). Recut each tint darker for AA-ish contrast on #ffffff.
+   Scope: only the file-tree icons/neutral chips; hue families stay
+   the same so the two themes still read as one system. */
+:root[data-theme="light"] #files-tree li .ft-ic { color: rgba(23, 33, 28, .55); }
+:root[data-theme="light"] #files-tree li .ft-ic.kind-dir     { color: #b87400; }  /* folder — amber darkened */
+:root[data-theme="light"] #files-tree li .ft-ic.kind-symlink { color: #0b6bcb; }
+:root[data-theme="light"] #files-tree li .ft-ic.kind-other   { color: rgba(23, 33, 28, .35); }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-js   { color: #a08a00; }   /* JS yellow → olive-gold on white */
+:root[data-theme="light"] #files-tree li .ft-ic.ext-ts   { color: #1f6fd0; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-json { color: #5b6f65; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-md   { color: #3a63c4; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-css  { color: #0b6bcb; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-html { color: #c2541f; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-sh   { color: #3d8a37; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-py   { color: #1f6fd0; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-go   { color: #0b7c93; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-rs   { color: #c2541f; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-yml  { color: #cc3344; }
+:root[data-theme="light"] #files-tree li .ft-ic.ext-default { color: rgba(23, 33, 28, .5); }
+/* Per-row download button was white-alpha — invisible on white. */
+:root[data-theme="light"] #files-tree li .ft-download { color: rgba(23, 33, 28, .4); }
+:root[data-theme="light"] #files-tree li .ft-download:hover { color: #1f6fd0; }
+/* Git status chips: dark chips were near-white text on faint color —
+   flip to saturated ink-on-tint so the letter survives a white pane. */
+:root[data-theme="light"] #files-tree li .ft-git-M { background: rgba(0, 168, 106, .14); color: #007a4d; }
+:root[data-theme="light"] #files-tree li .ft-git-A { background: rgba(0, 168, 106, .18); color: #007a4d; }
+:root[data-theme="light"] #files-tree li .ft-git-D { background: rgba(217, 44, 64, .12); color: #d92c40; }
+:root[data-theme="light"] #files-tree li .ft-git-R { background: rgba(14, 143, 184, .12); color: #0e8fb8; }
+:root[data-theme="light"] #files-tree li .ft-git-C { background: rgba(14, 143, 184, .12); color: #0e8fb8; }
+:root[data-theme="light"] #files-tree li .ft-git-U { background: rgba(204, 130, 0, .16); color: #a06000; }
+:root[data-theme="light"] #files-tree li .ft-git-\? { background: rgba(91, 111, 101, .14); color: #5b6f65; }
+:root[data-theme="light"] #files-tree li .ft-git-\! { color: rgba(23, 33, 28, .3); }
 
 /* fr-9: git status badge — 1-letter chip next to the name. Colors
    match conventional VCS UI (Modified=green, Added=bright-green,
@@ -5870,7 +6679,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--bg-elev);
   position: relative;       /* anchor for the floating action bar */
   /* fr-83: on DESKTOP the prior 60px top-clearance band was wasted
      vertical space — the chrome cluster (top:10/right:10) only
@@ -5895,9 +6704,9 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  border-bottom: 1px solid rgba(255, 255, 255, .06);
+  border-bottom: 1px solid var(--border);
   font: 12px 'JetBrains Mono', monospace;
-  background: rgba(255, 255, 255, .02);
+  background: var(--surface-2);   /* was white-alpha overlay — wrong on light theme */
   flex-shrink: 0;
 }
 .files-view-header-row {
@@ -5950,7 +6759,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   transition: background-color .08s;
   flex-shrink: 0;
 }
-#files-view-header button:hover { background: rgba(255, 255, 255, .08); }
+#files-view-header button:hover { background: var(--surface-2); }
 /* .header-spacer: kept as a no-op for any historical / cross-pane
    reference. The pre-bug-33 layout used this as a flex:1 separator
    between the breadcrumb and the action buttons on a single row; the
@@ -5975,7 +6784,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   overflow: hidden;
 }
 #files-view-crumbs .crumb {
-  color: rgba(255,255,255,.55);
+  color: var(--text-dim);   /* was white-alpha — unreadable on light theme */
   cursor: pointer;
   padding: 1px 4px;
   border-radius: 3px;
@@ -5985,8 +6794,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   flex-shrink: 1;
   min-width: 0;
 }
-#files-view-crumbs .crumb:hover { background: rgba(255,255,255,.06); color: var(--text); }
-#files-view-crumbs .crumb-sep { color: rgba(255,255,255,.25); padding: 0 1px; flex-shrink: 0; }
+#files-view-crumbs .crumb:hover { background: var(--surface-2); color: var(--text); }
+#files-view-crumbs .crumb-sep { color: var(--border-strong); padding: 0 1px; flex-shrink: 0; }
 #files-view-crumbs .crumb.last {
   color: var(--text);
   cursor: default;
@@ -6029,10 +6838,10 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   flex: 1 1 auto;
   min-width: 0;
   padding: 5px 8px;
-  background: rgba(255, 255, 255, .04);
-  border: 1px solid rgba(255, 255, 255, .12);
+  background: var(--surface-2);   /* was white-alpha — invisible on light theme */
+  border: 1px solid var(--border-strong);
   border-radius: 5px;
-  color: var(--text, #e6edf3);
+  color: var(--text);
   font: 12px 'JetBrains Mono', monospace;
   outline: none;
 }
@@ -6070,6 +6879,35 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .files-action-btn:hover { background: rgba(80, 120, 200, .45); }
 .files-action-btn:active { transform: scale(.95); }
+/* Light-theme overrides for the floating selection action bar — the
+   dark translucent panel + pale-blue button ink read wrong on white;
+   flip to white panel + saturated ink (2026-10-23). */
+:root[data-theme="light"] #files-action-bar {
+  background: rgba(255, 255, 255, .97);
+  border-color: var(--border-strong);
+  box-shadow: 0 6px 18px rgba(23, 33, 28, .18), 0 0 0 1px rgba(23, 33, 28, .05);
+}
+:root[data-theme="light"] #files-ask-input {
+  background: var(--bg);
+  border-color: var(--border-strong);
+}
+:root[data-theme="light"] #files-ask-input:focus { border-color: var(--accent-2); }
+:root[data-theme="light"] #files-ask-send {
+  background: rgba(14, 143, 184, .12);
+  border-color: rgba(14, 143, 184, .4);
+  color: #0e8fb8;
+}
+:root[data-theme="light"] #files-ask-send:hover { background: rgba(14, 143, 184, .25); }
+:root[data-theme="light"] #files-action-label {
+  color: #0e8fb8;
+  border-right-color: rgba(14, 143, 184, .25);
+}
+:root[data-theme="light"] .files-action-btn {
+  background: rgba(14, 143, 184, .10);
+  border-color: rgba(14, 143, 184, .25);
+  color: #0b5f7d;
+}
+:root[data-theme="light"] .files-action-btn:hover { background: rgba(14, 143, 184, .22); }
 /* ── inline comment editor (Add comment) ───────────────────────────────────
    Renders as a faux code line in the viewer at the comment's destination,
    with the language's comment prefix as a non-editable label and an input
@@ -6127,7 +6965,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font: inherit;
   padding: 0;
   margin: 0;
-  caret-color: #fff;
+  caret-color: var(--accent);
   -webkit-user-select: text;
   user-select: text;
   /* Multi-line via <textarea>: no resize handle, auto-grow handled in JS */
@@ -6202,7 +7040,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #files-view-body {
   flex: 1;
   overflow: auto;
-  background: #0d1117;
+  background: var(--bg-elev);
   -webkit-overflow-scrolling: touch;
   /* Same thin scrollbar as #chat-messages / #conv-messages / xterm /
      #files-tree-pane so all scrollers share one visual language. */
@@ -6221,8 +7059,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font: 13px 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   line-height: 1.5;
   margin: 0;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--bg-elev);
+  color: var(--text);
   white-space: pre;
 }
 .code-chunk.wrap { white-space: pre-wrap; word-break: break-all; }
@@ -6264,7 +7102,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 18px 28px 32px;
   max-width: 920px;
   margin: 0 auto;
-  color: #c9d1d9;
+  color: var(--text);
   font: 14.5px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   user-select: text;
   -webkit-user-select: text;
@@ -6274,7 +7112,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .md-rendered h4, .md-rendered h5, .md-rendered h6 {
   margin: 1.6em 0 0.6em;
   line-height: 1.25;
-  color: #e6edf3;
+  color: var(--text);
 }
 .md-rendered h1 { font-size: 1.8em; border-bottom: 1px solid rgba(255,255,255,.08); padding-bottom: .3em; }
 .md-rendered h2 { font-size: 1.45em; border-bottom: 1px solid rgba(255,255,255,.06); padding-bottom: .25em; }
@@ -6300,7 +7138,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   color: #ffd58a;
 }
 .md-rendered pre {
-  background: #0d1117;
+  background: var(--bg-elev);
   border: 1px solid rgba(255,255,255,.06);
   border-radius: 6px;
   padding: 12px 14px;
@@ -6377,7 +7215,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .claude-card .cc-q::before { content: '› '; opacity: .5; }
 .claude-card .cc-a {
   padding: 10px 14px;
-  color: #c9d1d9;
+  color: var(--text);
   line-height: 1.55;
   overflow-x: auto;
   user-select: text;
@@ -6512,7 +7350,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: 'JetBrains Mono Nerd Font', 'JetBrains Mono', Menlo, monospace;
   font-size: 13px;
   line-height: 1.45;
-  color: #c9d1d9;
+  color: var(--text);
   padding: 8px 8px 40px;
   max-width: none;
   margin: 0;
@@ -6547,7 +7385,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .conv-turn {
   margin-top: 5px;
   padding-top: 5px;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border);
 }
 .conv-turn:first-child {
   margin-top: 0;
@@ -6592,7 +7430,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .conv-msg-assistant .conv-text {
-  color: #e6edf3;
+  color: var(--text);
   background: rgba(63, 185, 80, 0.04);
   border-left: 4px solid rgba(63, 185, 80, 0.55);
   border-radius: 0 4px 4px 0;
@@ -6602,7 +7440,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   line-height: 1.6;
 }
 
-.conv-msg-assistant .conv-text strong { color: #f0f6fc; }
+.conv-msg-assistant .conv-text strong { color: var(--text); }
 .conv-msg-assistant .conv-text a { font-weight: 500; }
 
 /* ── title divider ── */
@@ -6629,9 +7467,9 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 2px 10px;
   border-radius: 999px;
   font-size: 0.78em;
-  color: #8b949e;
-  background: #161b22;
-  border: 1px solid #30363d;
+  color: var(--muted);
+  background: var(--surface-2);
+  border 1px solid var(--border);
 }
 .conv-msg-mode-plan-mode .conv-mode-pill { color: #d2a8ff; border-color: #553a8b; }
 .conv-msg-mode-auto-mode .conv-mode-pill { color: #79c0ff; border-color: #2c5282; }
@@ -6643,7 +7481,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: 0.9em;
 }
 .conv-thinking {
-  border-left: 2px solid #30363d;
+  border-left: 2px solid var(--border);
   padding: 2px 0 2px 8px;
   margin: 4px 0;
 }
@@ -6653,10 +7491,10 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   user-select: none;
   font-style: italic;
 }
-.conv-thinking[open] > summary { color: #8b949e; }
+.conv-thinking[open] > summary { color: var(--muted); }
 .conv-thinking-body {
   padding: 6px 0 2px;
-  color: #8b949e;
+  color: var(--muted);
   white-space: pre-wrap;
 }
 
@@ -6675,7 +7513,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   text-transform: lowercase;
 }
 .conv-error-body {
-  color: #f0f6fc;
+  color: var(--text);
   margin-top: 4px;
   white-space: pre-wrap;
 }
@@ -6686,14 +7524,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   margin: 4px 0;
   padding: 2px 0;
   font-size: 0.85em;
-  color: #8b949e;
+  color: var(--muted);
   font-style: italic;
 }
 
 /* Structured status chips inside #claude-typing's label. */
 .claude-typing-primary { font-weight: 500; }
 .claude-typing-chip {
-  color: #8b949e;
+  color: var(--muted);
   font-size: 0.92em;
   margin-left: 2px;
 }
@@ -6716,7 +7554,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .conv-text p:last-child { margin-bottom: 0; }
 
 .conv-text strong {
-  color: #f0f6fc;
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -6736,7 +7574,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 
 .conv-text code {
   background: rgba(255,255,255,0.1);
-  color: #f0f6fc;
+  color: var(--text);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: inherit;
@@ -6744,8 +7582,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .conv-text pre {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface-2);
+  border 1px solid var(--border);
   border-radius: 6px;
   padding: 12px 16px;
   margin: 0.6em 0;
@@ -6762,13 +7600,13 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 
 .conv-text h1, .conv-text h2, .conv-text h3,
 .conv-text h4, .conv-text h5, .conv-text h6 {
-  color: #f0f6fc;
+  color: var(--text);
   margin: 0.8em 0 0.3em;
   font-weight: 600;
 }
 
 .conv-text h1 { font-size: 1.3em; }
-.conv-text h2 { font-size: 1.15em; border-bottom: 1px solid #21262d; padding-bottom: 4px; }
+.conv-text h2 { font-size: 1.15em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 .conv-text h3 { font-size: 1.05em; }
 
 .conv-text ul, .conv-text ol {
@@ -6784,12 +7622,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   border-left: 3px solid #3fb950;
   margin: 0.5em 0;
   padding: 0.3em 1em;
-  color: #8b949e;
+  color: var(--muted);
 }
 
 .conv-text hr {
   border: none;
-  border-top: 1px solid #30363d;
+  border 1px solid var(--border);
   margin: 0.8em 0;
 }
 
@@ -6799,15 +7637,15 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .conv-text th, .conv-text td {
-  border: 1px solid #30363d;
+  border 1px solid var(--border);
   padding: 6px 12px;
   text-align: left;
 }
 
 .conv-text th {
-  background: #161b22;
+  background: var(--surface-2);
   font-weight: 600;
-  color: #f0f6fc;
+  color: var(--text);
 }
 
 .conv-text img {
@@ -6819,8 +7657,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .conv-mermaid {
   margin: 0.6em 0;
   padding: 16px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface-2);
+  border 1px solid var(--border);
   border-radius: 8px;
   overflow-x: auto;
 }
@@ -6828,6 +7666,42 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .conv-mermaid svg {
   max-width: 100%;
   height: auto;
+}
+
+/* 2026-10-26 user report: mermaid EDGE labels ("/v1/messages",
+   "Bearer ANTHROPIC_AUTH_TOKEN", port labels like "252:80 → :3000")
+   render too faint in the Arch tab diagram. Mermaid 11 emits edge
+   labels as <span class="edgeLabel"><p class="label">…</p></span>
+   (HTML labels) or <g class="edgeLabel"><text>…</text></g> (SVG text
+   labels). Its default theme uses a washed-out gray + a small font;
+   on the surface-2 diagram background the labels are nearly
+   illegible. These rules give edge labels the same ink as body text
+   + a slightly larger, bolder face so protocol strings stand out.
+   Both the HTML-label and SVG-text paths are covered. */
+.conv-mermaid .edgeLabel {
+  color: var(--text);
+  font-size: .9rem;
+  font-weight: 600;
+}
+.conv-mermaid .edgeLabel p,
+.conv-mermaid .edgeLabel span.label,
+.conv-mermaid .edgeLabel p span {
+  background: transparent;
+  color: var(--text);
+  font-size: .9rem;
+  font-weight: 600;
+}
+.conv-mermaid .edgeLabel .label text,
+.conv-mermaid .edgeLabel text {
+  fill: var(--text);
+}
+/* The label background pill behind the text stays but is toned to
+   the diagram surface so it no longer reads as a washed-out box. */
+.conv-mermaid .edgeLabel rect,
+.conv-mermaid .labelBkg {
+  fill: var(--surface-2);
+  background-color: var(--surface-2);
+  opacity: 1;
 }
 
 /* ── tool calls: terminal command blocks ──
@@ -6894,7 +7768,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .conv-tool-summary {
-  color: #8b949e;
+  color: var(--muted);
   font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6910,10 +7784,10 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: inherit;
   font-size: 0.85em;
   word-break: break-word;
-  color: #8b949e;
+  color: var(--muted);
   max-height: 400px;
   overflow-y: auto;
-  border-left: 2px solid #30363d;
+  border-left: 2px solid var(--border);
   /* Preserve newlines in the body so multi-question / multi-line tool
      summaries (AskUserQuestion, multi-step Bash heredocs) render
      readably. textContent assigns newlines verbatim; default
@@ -6985,7 +7859,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .conv-result-first-line {
-  color: #8b949e;
+  color: var(--muted);
 }
 
 .conv-result-error {
@@ -7020,7 +7894,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   align-items: center;
   gap: 8px;
   padding: 0 14px;
-  color: #8b949e;
+  color: var(--muted);
   font-size: 0.78rem;
   /* Composer card below has its own visual boundary now; the dashed
      border above the status row was redundant chrome. */
@@ -7191,13 +8065,13 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .chat-menu-resolved-inline {
   display: inline;
   font-size: 0.92rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
 }
 .chat-menu-resolved-q {
-  color: var(--muted, #8b949e);
+  color: var(--muted);
 }
 .chat-menu-resolved-a {
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 .chat-menu-resolved.chat-menu-deferred {
   color: #f0b440;
@@ -7234,7 +8108,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .chat-msg.chat-msg-menu.chat-msg-menu-collapsed .chat-menu-resolved-a {
   font-size: 0.82rem;
   font-style: italic;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
 }
 /* Keep the ✓ Picked answer slightly brighter than the question so
    the eye still locks onto the decision. Italic + muted base, but
@@ -7271,7 +8145,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   display: inline-block;
   width: 20px;
   height: 20px;
-  border: 2px solid #30363d;
+  border: 2px solid var(--border);
   border-top-color: #3fb950;
   border-radius: 50%;
   animation: conv-spin 0.8s linear infinite;
@@ -7293,8 +8167,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   flex: 1;
   overflow: auto;
   padding: 16px;
-  background: var(--bg-elev, #0d1117);
-  color: var(--fg, #c9d1d9);
+  background: var(--bg-elev);
+  color: var(--text);
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 0.88rem;
   line-height: 1.5;
@@ -7317,16 +8191,16 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   gap: 8px;
   align-items: baseline;
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   cursor: pointer;
   user-select: none;
 }
-.agent-card-head:hover { color: var(--fg, #c9d1d9); }
+.agent-card-head:hover { color: var(--text); }
 /* Chevron pinned to the right edge of the head. */
 .agent-card .agent-card-head::after {
   content: '▸';
   margin-left: auto;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-size: 0.68rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   opacity: 0.6;
@@ -7473,7 +8347,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .agent-card-ts {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-size: 0.72rem;
 }
 .agent-card-kind {
@@ -7491,10 +8365,531 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .agent-card-done   { color: rgba(120, 200, 140, 1); }
 .agent-card-turn   { color: rgba(220, 180, 90, .95); }
 .agent-card-perm   { color: rgba(220, 180, 90, .95); }
-.agent-mute        { color: var(--muted, #8b949e); }
+.agent-mute        { color: var(--muted); }
+/* Delm agent-n2: worker identity chip on agent cards + chrome rows. */
+.agent-worker {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: baseline;
+  border: 1px solid transparent;
+}
+.agent-worker-a { color: #7bd0ff; border-color: rgba(123, 208, 255, .45); background: rgba(123, 208, 255, .10); }
+.agent-worker-b { color: #ffb86b; border-color: rgba(255, 184, 107, .45); background: rgba(255, 184, 107, .10); }
+/* delm-10 RLM mode: 🧠 chip for bridged RLM-lane cards (/rlm <task>). */
+.agent-worker-rlm { color: #c792ea; border-color: rgba(199, 146, 234, .45); background: rgba(199, 146, 234, .10); }
+
+/* ── team-split-view: dual-worker split pane (agent-n2) ────────────────
+   Layout inside #chatpane: toolbar / parallel bar / [col-A | mid | col-B].
+   #team-split and #chat-messages are mutually exclusive (both are flex
+   children of #chatpane; the JS toggles `hidden`). */
+.team-split {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 10px;
+}
+.team-split[hidden] { display: none; }
+#chat-messages[hidden] { display: none; }
+.team-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.team-toolbar-title { font-size: 0.82rem; font-weight: 700; margin-right: 6px; }
+
+/* View-mode dropdown (多列 / 单列) — a <select> mirroring the RLM
+   switch's shape so the two read as sibling controls in the same
+   top-right strip. Team = blue family (#7bd0ff, matching the worker-A
+   chip + toolbar accents) to stay in-palette with the split view;
+   RLM keeps its purple family. Same metrics as .rlm-scope-select so
+   the two dropdowns line up exactly. */
+.team-mode-select {
+  margin: 2px 0 0 0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: .8rem;
+  font-weight: 700;
+  /* background/color from the global `select, select option` rule
+     (theme-aware). */
+  border: 1px solid rgba(123, 208, 255, .6);
+  box-shadow: 0 1px 6px var(--accent-glow);
+  cursor: pointer;
+  /* 2026-10-28: 单列/多列下拉框名字太长 — hard width guard so neither the
+     option labels nor a future text regression can widen the topctl row. */
+  max-width: 7.5em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.team-mode-select:hover {
+  border-color: rgba(123, 208, 255, .95);
+  box-shadow: 0 0 10px rgba(123, 208, 255, .3);
+}
+.team-mode-select[hidden] { display: none; }
+
+/* 协同视图布局横幅 (2026-10-28) — one line under #chat-empty that
+   explains the CURRENT 布局 mode (单列/多列) and names where progress
+   lives, plus the live 看板 done/total counter. Solves the user report
+   "单、多列切换的内容不太好理解，不知道在哪里看进展". Same blue family
+   as the team controls (#7bd0ff) so it reads as part of the team view
+   chrome; sticky to the chatpane top so it stays visible while the
+   timeline scrolls underneath. */
+.team-mode-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 5px 14px;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: rgba(123, 208, 255, .07);
+  border-bottom: 1px solid rgba(123, 208, 255, .25);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.team-mode-banner[hidden] { display: none; }
+.team-mode-banner .tmb-label {
+  font-weight: 700;
+  color: #7bd0ff;
+  white-space: nowrap;
+}
+.team-mode-banner .tmb-text { color: var(--text); }
+.team-mode-banner .tmb-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+/* 2026-10-28 UX: 进度 chip next to the 布局 dropdown in the topctl row —
+   the ONLY always-visible progress surface (the split toolbar's readout
+   hides with #team-split in 单列 mode). Compact, same blue family. */
+.team-progress-chip {
+  margin: 2px 6px 0 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #7bd0ff;
+  border: 1px solid rgba(123, 208, 255, .4);
+  background: rgba(123, 208, 255, .08);
+  white-space: nowrap;
+}
+.team-progress-chip[hidden] { display: none; }
+
+/* 2026-10-28 UX (用户反馈: 单/多列切换不好理解、不知道在哪看进展) —
+   toolbar readouts + switch toast. The 布局 chip mirrors the dropdown so
+   the active layout is readable from the content area (not only the
+   top-right select); the 进度 chip aggregates every running lane's board
+   (done/total 子任务 + 运行中 lane 数) so "在哪里看进展" has a fixed
+   home in BOTH layouts. Same blue family as .team-mode-select. */
+.team-toolbar-mode {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #7bd0ff;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(123, 208, 255, .45);
+  background: rgba(123, 208, 255, .08);
+  white-space: nowrap;
+}
+.team-toolbar-progress {
+  font-size: 0.74rem;
+  color: var(--muted, #8b949e);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-toolbar-progress:empty { display: none; }
+
+/* Transient confirmation toast on 布局 switch — anchored bottom-center of
+   #chatpane, fades out. Non-interactive (pointer-events:none) so it never
+   blocks the composer. */
+.team-mode-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(13, 20, 28, .96);
+  border: 1px solid rgba(123, 208, 255, .55);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .45), 0 0 12px rgba(123, 208, 255, .18);
+  font-size: 0.78rem;
+  color: #e6edf3;
+  pointer-events: none;
+  animation: team-mode-toast-in .18s ease-out;
+}
+.team-mode-toast b { color: #7bd0ff; font-size: 0.8rem; }
+.team-mode-toast span { color: var(--muted, #8b949e); }
+@keyframes team-mode-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* 2026-10-23 行排列: the multi-lane picker dropdown was RETIRED —
+   every lane now renders as its own full-width row inside #team-rows,
+   so there is no lane to pick. */
+
+/* multi-lane 单列 stream label: a /run-n2 worker card's 「task」 chip
+   (server-stamped laneTask) so interleaved runs are distinguishable
+   in the single timeline. Sits right after the worker chip. */
+.lane-task-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #9ecbff;
+  background: rgba(123, 208, 255, .08);
+  border: 1px solid rgba(123, 208, 255, .3);
+  vertical-align: baseline;
+}
+
+/* 行排列 (2026-10-23 用户需求)：每个任务（lane）一行，行内为
+   [workerA 列 | 共享看板 | workerB 列]。#team-rows 纵向堆叠所有
+   lane 行（按启动顺序）；每行宽度 100% 占满协同区域。行内
+   grid 轨道固定：worker 列 minmax(220px,1fr) + 共享看板
+   minmax(260px,320px) — 不支持缩放（拖拽调宽已按需求移除）。 */
+.team-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.team-row {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  background: rgba(13, 17, 24, .35);
+  padding: 8px 10px 10px;
+}
+.team-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 2px 8px;
+  border-bottom: 1px solid var(--border, #30363d);
+  margin-bottom: 8px;
+}
+.team-row-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #7bd0ff;
+  white-space: nowrap;
+}
+.team-row-badge-ended { color: var(--muted, #8b949e); }
+.team-row-task {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #e6edf3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-columns {
+  display: grid;
+  /* 每行的三格轨道由 JS 写内联 grid-template-columns
+     （roster.map minmax(220px,1fr) + minmax(260px,320px) 看板）。
+     这里只是缺省回退：两 worker + 看板，行宽 100%。 */
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 320px) minmax(220px, 1fr);
+  gap: 8px;
+  width: 100%;
+  min-height: 0;
+  /* 每行给一个可读的最小高度，多行时纵向滚动由 .team-rows 承担。 */
+  flex: 1;
+}
+.team-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(13, 17, 24, .6);
+  overflow: hidden;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+/* 拖拽调宽手柄已于 2026-10-23 移除（行排列布局不支持缩放）—
+   .team-col-resize 及其 grip 样式全部删除。 */
+/* 中性 worker 花色（>2 worker 时的第 3+ 列）——沿用 A/B chip 的
+   同族冷色低饱和底，保持整行观感一致。 */
+.agent-worker-x { color: #9ecbff; border-color: rgba(158, 203, 255, .45); background: rgba(158, 203, 255, .10); }
+/* P3 dependency cue: hovering a queue row highlights the owning column. */
+.team-col-hi { border-color: rgba(123, 208, 255, .8); box-shadow: 0 0 0 1px rgba(123, 208, 255, .35); }
+.team-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+.team-col-status {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.team-col-busy { color: #7bd0ff; }
+/* Frozen record of a finished lane run: the split stays readable but
+   reads as archived — muted chrome, no busy indicators, badge in the
+   column heads ("■ 已结束"). Cleared by the next run's team-info
+   resetCache (client removes the class). */
+.team-split-ended .team-toolbar,
+.team-split-ended .team-mid,
+.team-split-ended .team-col-status { color: rgba(200, 200, 200, .75); }
+.team-split-ended .agent-worker { opacity: .7; }
+.team-col-body { flex: 1; overflow-y: auto; padding: 6px 8px; }
+.team-col .agent-card { margin: 0 0 8px; }
+
+/* Compact single-line rows for tool_use/tool_result inside a column. */
+.team-col-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  border-left: 2px solid transparent;
+}
+.team-col-row-tool_use { border-left-color: rgba(140, 180, 220, .6); }
+.team-col-row-tool_result { border-left-color: rgba(120, 200, 140, .45); opacity: .85; }
+.team-col-row-fatal { border-left-color: rgba(255, 130, 130, .8); color: rgba(255, 130, 130, .9); }
+.team-col-row-kind {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: rgba(140, 180, 220, .95);
+  white-space: nowrap;
+}
+.team-col-row-sum { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Middle column: shared board. */
+.team-mid {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(13, 17, 24, .9);
+  overflow: hidden;
+}
+.team-mid-title {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.team-mid-queue { flex: 1.2; overflow-y: auto; padding: 4px 6px; min-height: 0; }
+.team-mid-events { flex: 1; overflow-y: auto; padding: 4px 6px; border-top: 1px solid var(--border); min-height: 0; }
+.team-mid-empty { color: var(--muted); font-size: 0.75rem; padding: 8px 4px; text-align: center; }
+
+.team-q-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 4px;
+  margin: 0 0 3px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  border: 1px solid transparent;
+  cursor: default;
+}
+.team-q-icon { width: 14px; text-align: center; flex: none; }
+.team-q-open .team-q-icon { color: var(--muted); }
+.team-q-claimed .team-q-icon { color: #7bd0ff; }
+.team-q-done .team-q-icon { color: rgba(120, 200, 140, .9); }
+.team-q-subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-q-done .team-q-subject { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(120, 200, 140, .5); }
+.team-q-a { border-color: rgba(123, 208, 255, .35); background: rgba(123, 208, 255, .06); }
+.team-q-b { border-color: rgba(255, 184, 107, .35); background: rgba(255, 184, 107, .06); }
+.team-q-x { border-color: rgba(158, 203, 255, .35); background: rgba(158, 203, 255, .06); }
+.team-q-owner {
+  flex: none;
+  font-size: 0.66rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+.team-ev-card {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 4px;
+  margin: 0 0 3px;
+  font-size: 0.72rem;
+  border-radius: 4px;
+  border-left: 2px solid var(--border);
+}
+.team-ev-a { border-left-color: #7bd0ff; }
+.team-ev-b { border-left-color: #ffb86b; }
+.team-ev-x { border-left-color: #9ecbff; }
+
+/* 单列 fix (2026-10-23): the run's 看板 rendered into the single
+   timeline — one persistent, live-synced card per lane + one-line
+   notices per board change. Shares the split-view palette. */
+.team-stream-board {
+  margin: 8px 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(123, 208, 255, .04);
+  font-size: 0.75rem;
+}
+.team-stream-board-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.team-stream-board-count { color: var(--muted); font-size: 0.66rem; }
+.team-stream-board-workers {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.team-stream-board-wstat {
+  color: var(--muted);
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-ev-kind { font-weight: 700; white-space: nowrap; }
+.team-ev-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.team-ev-actor { color: var(--muted); font-size: 0.64rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* P3 conflict highlight: an apply with decision=conflict is the
+   cross-author edit protection firing — make it unmissable. */
+.team-ev-conflict { border-color: rgba(255, 130, 130, .6); border-left-color: rgba(255, 130, 130, .9); background: rgba(255, 130, 130, .08); }
+.team-ev-conflict .team-ev-kind { color: rgba(255, 130, 130, .95); }
+
+/* (Old stream-only view pill .team-float-toggle removed — superseded by
+   the #team-mode-select dropdown in #chatpane-topctl-row, which is
+   visible in BOTH modes so stream mode always has a way back to the
+   columns.) */
+
+/* Narrow screens: the 3-column grid collapses — force the stream view
+   (JS also disables split entry under 900px via the same query). */
+@media (max-width: 900px) {
+  .team-split { display: none; }
+}
+
+/* /compare dual-column overlay — pinned over the chat pane, two lanes. */
+.cmp-root {
+  position: fixed;
+  inset: 0;
+  z-index: 9990;
+  display: flex;
+  flex-direction: column;
+  background: rgba(3, 6, 10, .92);
+  backdrop-filter: blur(6px);
+}
+.cmp-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(10, 14, 20, .96);
+}
+.cmp-title { font-weight: 700; font-size: 0.95rem; }
+.cmp-status { color: var(--muted); font-size: 0.8rem; flex: 1; }
+.cmp-close {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+}
+.cmp-close:hover { background: rgba(255, 255, 255, .08); }
+.cmp-columns {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 16px;
+}
+.cmp-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(13, 17, 24, .92);
+  overflow: hidden;
+}
+/* Drag handle on the FIRST cmp column's right edge — same affordance
+   as the team-split worker columns (.team-col-resize): pointer-drag
+   resizes the 单 agent column horizontally; the 双 agent column
+   absorbs the remainder. Width persists in localStorage
+   (myco_cmp_col_w_single). */
+.cmp-col-resize {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  bottom: 0;
+  width: 12px;
+  z-index: 2;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.cmp-col-resize::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: transparent;
+  transition: background .15s ease;
+}
+.cmp-col-resize:hover::after,
+.cmp-col-resize:active::after { background: rgba(123, 208, 255, .55); }
+.cmp-col-title {
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.cmp-col-body { flex: 1; overflow-y: auto; padding: 8px 10px; }
+.cmp-card { margin: 0 0 10px; }
 .agent-card-body {
   font-size: 0.85rem;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 .agent-card-md p:first-child { margin-top: 0; }
 .agent-card-md p:last-child  { margin-bottom: 0; }
@@ -7521,7 +8916,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   margin: 8px 0;
   padding-left: 10px;
   border-left: 2px solid rgba(255, 255, 255, .12);
-  color: var(--muted, #8b949e);
+  color: var(--muted);
 }
 /* Note: pre / pre code rules for .agent-card-md and .agent-card-body
    live in the unified block earlier in this file (around the
@@ -7539,7 +8934,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .agent-prompt {
   font-style: italic;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
 }
 /* Phase 1 retired the per-card <details> elements (.agent-card-collapse).
    The whole card body is now toggled via the head's click handler and
@@ -7565,7 +8960,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(210, 153, 34, .12);
   border-bottom: 1px solid rgba(210, 153, 34, .35);
   font-size: 0.82rem;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
   position: sticky;
   top: 0;
   z-index: 6;
@@ -7579,7 +8974,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-weight: 600;
 }
 .chatpane-readonly-banner .ro-hint {
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-size: 0.76rem;
 }
 
@@ -7678,7 +9073,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 6px 10px;
   max-height: 360px;
   overflow: auto;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 .agent-json-error { border-left: 2px solid rgba(255, 130, 130, .6); }
 .agent-json .json-block { margin: 0; }
@@ -7742,7 +9137,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 4px 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.74rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   background: rgba(255, 255, 255, .03);
   border-bottom: 1px solid rgba(255, 255, 255, .05);
 }
@@ -7752,7 +9147,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 .agent-diff-stat {
   flex: 0 0 auto;
@@ -7783,7 +9178,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(255, 130, 130, .10);
   color: #ff8a8a;
 }
-.agent-diff-ctx { color: var(--muted, #8b949e); opacity: 0.7; }
+.agent-diff-ctx { color: var(--muted); opacity: 0.7; }
 .agent-diff-sep {
   height: 1px;
   margin: 6px 0;
@@ -7912,7 +9307,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.7rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   margin: 16px 8px 8px;
   opacity: 0.7;
   user-select: none;
@@ -7942,8 +9337,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   gap: 4px;
   align-items: center;
   padding: 6px 12px 4px;
-  background: rgba(255, 255, 255, .015);
-  border-bottom: 1px solid rgba(255, 255, 255, .06);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
   font-size: 0.7rem;
 }
 .chatpane-presence[hidden] { display: none; }
@@ -7963,13 +9358,17 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   cursor: help;
   position: relative;
   border: 2px solid transparent;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
   transition: transform .12s ease, box-shadow .12s ease;
 }
-.presence-chip:hover { transform: scale(1.08); }
+.presence-chip:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 10px var(--accent-glow), 0 1px 4px rgba(0, 0, 0, .3);
+}
 /* Owner: small accent ring + crown-ish dot at top */
 .presence-chip-owner {
-  border-color: rgba(76, 175, 130, .55);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35), 0 0 8px var(--accent-glow);
 }
 .presence-chip-owner::after {
   content: '';
@@ -7980,12 +9379,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   height: 6px;
   background: var(--accent, #4caf82);
   border-radius: 50%;
-  border: 1px solid var(--bg, #0d1117);
+  border: 1px solid var(--bg);
 }
 .presence-chip-guest { opacity: 0.85; }
 .presence-chip-me {
-  border-color: rgba(170, 200, 255, .65);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35), 0 0 8px var(--accent-glow);
 }
 .presence-initial { line-height: 1; }
 
@@ -8054,7 +9453,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   flex: 0 0 auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.74rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   opacity: 0.7;
 }
 .turn-head-outcome {
@@ -8154,7 +9553,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   margin: 0 0 8px;
   padding: 6px 10px;
   background: rgba(255, 255, 255, .03);
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   border: 1px dashed rgba(255, 255, 255, .14);
   border-radius: 4px;
   cursor: pointer;
@@ -8167,7 +9566,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .chat-load-older:hover {
   background: rgba(255, 255, 255, .07);
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
   border-color: rgba(255, 255, 255, .25);
 }
 .chat-load-older:active { transform: scale(.99); }
@@ -8183,7 +9582,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.7rem;
   line-height: 1.4;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   opacity: 0.72;
   user-select: text;
   cursor: help;
@@ -8207,7 +9606,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
   line-height: 1.45;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   padding: 2px 4px 6px;
   opacity: 0.78;
   user-select: text;
@@ -8235,7 +9634,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.76rem;
   line-height: 1.45;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
 }
 .agent-chrome-row-head {
   display: flex;
@@ -8247,7 +9646,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   user-select: none;
 }
 .agent-chrome-row-expandable .agent-chrome-row-head:hover {
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 /* Chevron only when this row has expandable details. */
 .agent-chrome-row-expandable .agent-chrome-row-head::after {
@@ -8298,7 +9697,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
   margin: 2px 0;
 }
 .agent-chrome-pre-error {
@@ -8308,7 +9707,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.78rem;
   line-height: 1.55;
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
   padding: 2px 0;
 }
 .agent-chrome-result {
@@ -8370,8 +9769,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .perm-modal-box {
   position: relative;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface-2);
+  border 1px solid var(--border);
   border-left: 4px solid #f0b440;
   border-radius: 10px;
   width: min(540px, calc(100vw - 32px));
@@ -8408,7 +9807,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
   background: rgba(255, 255, 255, .04);
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   border: 1px solid rgba(255, 255, 255, .08);
   border-radius: 3px;
   padding: 2px 8px;
@@ -8435,7 +9834,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   gap: 8px;
   margin-bottom: 8px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border);
 }
 .perm-modal-title {
   flex: 1;
@@ -8446,14 +9845,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .perm-modal-pager {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   padding: 0 4px;
 }
 .perm-modal-nav,
 .perm-modal-close {
   background: transparent;
   border: 1px solid transparent;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font: inherit;
   padding: 2px 8px;
   border-radius: 4px;
@@ -8463,12 +9862,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .perm-modal-nav:hover,
 .perm-modal-close:hover {
   background: rgba(255, 255, 255, 0.05);
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
 }
 .perm-modal-close { font-size: 1.1rem; line-height: 1; }
 .perm-modal-meta {
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   margin-bottom: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -8478,7 +9877,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   border-radius: 3px;
 }
 .perm-modal-question {
-  color: var(--fg, #c9d1d9);
+  color: var(--text);
   font-size: 0.95rem;
   line-height: 1.4;
   margin-bottom: 12px;
@@ -8493,8 +9892,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .perm-modal-opt {
   background: transparent;
-  color: var(--fg, #c9d1d9);
-  border: 1px solid #30363d;
+  color: var(--text);
+  border 1px solid var(--border);
   border-radius: 6px;
   padding: 9px 12px;
   font: inherit;
@@ -8510,25 +9909,25 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .perm-modal-opt:disabled { opacity: 0.45; cursor: default; }
 .perm-modal-opt-num {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   margin-right: 8px;
 }
 .perm-modal-opt-desc {
   display: block;
   font-size: 0.78rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   margin-top: 3px;
 }
 .perm-modal-hint {
   font-size: 0.72rem;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   text-align: center;
   padding-top: 8px;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border);
 }
 .perm-modal-hint kbd {
   background: rgba(255, 255, 255, .06);
-  border: 1px solid #30363d;
+  border 1px solid var(--border);
   border-radius: 3px;
   padding: 0 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -8563,7 +9962,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  background: #0d1117;
+  background: var(--bg-elev);
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 10px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
@@ -8579,7 +9978,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #diagram-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text, #e6edf3);
+  color: var(--text);
   margin: 0;
 }
 #diagram-toolbar {
@@ -8612,7 +10011,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: var(--text, #e6edf3);
+  color: var(--text);
   cursor: pointer;
   transition: background-color .08s, border-color .08s;
 }
@@ -8648,7 +10047,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .diagram-width > span {
   display: block;
   width: 18px;
-  background: var(--text, #e6edf3);
+  background: var(--text);
   border-radius: 2px;
 }
 #diagram-save {
@@ -8672,7 +10071,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   display: flex;
   align-items: stretch;
   justify-content: stretch;
-  background: #0d1117;
+  background: var(--bg-elev);
   overflow: hidden;
 }
 #diagram-canvas {
@@ -8708,7 +10107,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   padding: 6px 16px;
   min-height: 22px;
   font-size: 12px;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   border-top: 1px solid rgba(255, 255, 255, .04);
 }
 
@@ -8754,7 +10153,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .badge-more-pill {
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-size: 10px;
   margin-left: 2px;
 }
@@ -8774,19 +10173,19 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: 11px;
   line-height: 1.4;
   overflow-x: auto;
-  color: #e6edf3;
+  color: var(--text);
   margin: 0;
 }
 
 .diff-loading {
   font-size: 11px;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
 }
 
 .diff-empty {
   font-size: 11px;
-  color: var(--muted, #8b949e);
+  color: var(--muted);
   font-style: italic;
 }
 
@@ -8869,16 +10268,21 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .hud-task-text {
   font-size: 13px;
   font-weight: 500;
-  color: #e6edf3;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 400px;
+  /* 前端审查: 界面文字理论上都应支持选中复制 — HUD 任务标题是
+     用户可读文本, 恢复可选中(整行仍是 HUD chrome, 交互按钮在
+     sibling 节点上不受影响)。 */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .hud-task-status {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--muted);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -8891,7 +10295,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   gap: 8px;
   margin-top: 8px;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--muted);
   overflow-x: auto;
 }
 
@@ -9203,16 +10607,22 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   margin-bottom: 6px;
 }
 .verdict-user-question-body {
-  color: #c9d1d9;
+  color: var(--text);
   font-style: italic;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  /* 前端审查: critic 面板文本必须可选中复制。 */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .verdict-critique {
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text);
+  /* 前端审查: critic 面板文本必须可选中复制。 */
+  user-select: text;
+  -webkit-user-select: text;
   /* bug-50 (original): was max-height: 180px which capped the
      visible critique at ~10 lines on desktop — long Gemini verdicts
      (with multiple flagged issues + diff-line citations) ended up
@@ -9344,7 +10754,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .verdict-btn-dismiss {
   background: rgba(139, 148, 158, 0.12);
-  color: #8b949e;
+  color: var(--muted);
   border: 1px solid rgba(139, 148, 158, 0.35);
 }
 .verdict-btn-dismiss:hover {
@@ -9459,12 +10869,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 .verdict-user-prompt-label {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--muted);
   font-style: italic;
 }
 .verdict-user-prompt-input {
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text);
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
@@ -9486,8 +10896,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .composer-critic-select {
-  background: rgba(255, 255, 255, 0.04);
-  color: #8b949e;
+  /* 白底黑字 (dropdown light-theme): background/color come from the
+     global `select, select option` rule. */
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   padding: 4px 8px;
@@ -9500,9 +10910,8 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 }
 
 .composer-critic-select:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: #f0f0f0;
   border-color: rgba(255, 255, 255, 0.15);
-  color: #c9d1d9;
 }
 
 .composer-critic-select:focus {
@@ -9553,14 +10962,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: 1.15rem;
   font-weight: 600;
   margin: 0 0 8px 0;
-  color: #f0f6fc;
+  color: var(--text);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding-bottom: 8px;
 }
 
 .admin-section-desc {
   font-size: 0.85rem;
-  color: #8b949e;
+  color: var(--muted);
   line-height: 1.45;
   margin: 0 0 20px 0;
 }
@@ -9573,7 +10982,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   display: block;
   font-size: 0.78rem;
   font-weight: 550;
-  color: #c9d1d9;
+  color: var(--text);
   margin-bottom: 6px;
 }
 
@@ -9584,7 +10993,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(13, 17, 23, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  color: #f0f6fc;
+  color: var(--text);
   padding: 8px 12px;
   font-size: 0.88rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -9635,7 +11044,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   min-height: 1em;
   vertical-align: middle;
 }
-.test-key-status.testing { color: #8b949e; }
+.test-key-status.testing { color: var(--muted); }
 .test-key-status.ok      { color: #4caf82; }
 .test-key-status.err     { color: #ff6b6b; }
 
@@ -9644,7 +11053,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   right: 8px;
   background: transparent;
   border: 0;
-  color: #8b949e;
+  color: var(--muted);
   cursor: pointer;
   padding: 4px 6px;
   border-radius: 4px;
@@ -9654,7 +11063,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 
 .btn-reveal-pwd:hover {
   background: rgba(255, 255, 255, 0.08);
-  color: #f0f6fc;
+  color: var(--text);
 }
 
 .form-actions {
@@ -9688,7 +11097,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  color: #c9d1d9;
+  color: var(--text);
   padding: 8px 16px;
   font-size: 0.85rem;
   font-weight: 600;
@@ -9699,12 +11108,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .btn-secondary:hover {
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.2);
-  color: #f0f6fc;
+  color: var(--text);
 }
 
 .status-msg {
   font-size: 0.82rem;
-  color: #8b949e;
+  color: var(--muted);
   transition: color 0.2s ease;
   animation: statusFadeIn 0.3s ease;
 }
@@ -9734,7 +11143,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: rgba(13, 17, 23, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  color: #f0f6fc;
+  color: var(--text);
   padding: 8px 12px;
   font-size: 0.88rem;
   outline: none;
@@ -9754,7 +11163,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: 0.78rem;
   font-weight: 600;
   text-transform: uppercase;
-  color: #8b949e;
+  color: var(--muted);
   margin-bottom: 10px;
   letter-spacing: 0.05em;
 }
@@ -9836,12 +11245,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   width: min(520px, 92vw);
   max-height: 80vh;
   overflow: auto;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg-elev);
+  border 1px solid var(--border);
   border-radius: 10px;
   padding: 18px 20px 14px;
   box-shadow: 0 12px 48px rgba(0, 0, 0, .6);
-  color: #e6edf3;
+  color: var(--text);
 }
 .model-picker-head {
   display: flex;
@@ -9856,7 +11265,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .model-picker-close {
   background: rgba(255, 255, 255, .06);
   border: 1px solid rgba(255, 255, 255, .15);
-  color: #f0f6fc;
+  color: var(--text);
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -9879,11 +11288,11 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   align-items: center;
   gap: 10px;
   text-align: left;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface-2);
+  border 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
-  color: #e6edf3;
+  color: var(--text);
   cursor: pointer;
   transition: border-color .12s ease, background .12s ease;
 }
@@ -9894,6 +11303,13 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 .model-picker-row.active {
   border-color: #2ea043;
   background: rgba(46, 160, 67, .08);
+}
+/* Keyboard selection (↑/↓ + Enter). Distinct from .active (the CURRENT
+   profile) — .highlighted is the about-to-be-selected row. */
+.model-picker-row.highlighted {
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 1px #58a6ff inset;
+  background: rgba(88, 166, 255, .12);
 }
 .model-picker-mark {
   color: #2ea043;
@@ -9906,14 +11322,14 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-size: .92rem;
 }
 .model-picker-desc {
-  color: #8b949e;
+  color: var(--muted);
   font-size: .82rem;
   line-height: 1.35;
 }
 .model-picker-foot {
   font-size: .78rem;
-  color: #8b949e;
-  border-top: 1px solid #21262d;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
   padding-top: 8px;
 }
 .model-picker-foot code {
@@ -9923,6 +11339,91 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .78rem;
 }
+
+/* fr:model-gateway — gateway group inside the /model picker.
+   .gw-row is a <div> (not a clickable button) — it carries Edit/✕
+   action buttons, and the whole row is only selected via /model gw:. */
+.model-picker-group {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  margin: 12px 0 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.model-picker-row.gw-row {
+  grid-template-columns: 24px 110px 1fr auto;
+  cursor: default;
+}
+.model-picker-row.gw-row.active {
+  border-color: #2ea043;
+  background: rgba(46, 160, 67, .08);
+}
+.model-picker-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+.model-picker-mini {
+  background: transparent;
+  border 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: .72rem;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.model-picker-mini:hover { color: var(--text); border-color: #58a6ff; }
+.model-picker-mini.danger { color: #ff8a8a; }
+.model-picker-mini.danger:hover { border-color: #f85149; }
+.model-picker-manage {
+  margin-top: 8px;
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed #30363d;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.model-picker-manage:hover { color: var(--text); border-color: #58a6ff; }
+.model-picker-manage-form {
+  margin: 0 0 10px;
+  border 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+}
+.model-picker-form-title { font-size: .78rem; color: var(--muted); margin-bottom: 8px; }
+.model-picker-form-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.model-picker-form-row input {
+  flex: 1;
+  min-width: 180px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: .82rem;
+}
+.model-picker-gw-btn {
+  background: #238636;
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.model-picker-gw-btn:hover { background: #2ea043; }
+.model-picker-gw-status { font-size: .78rem; color: var(--muted); align-self: center; }
 
 /* ─── fr-103: /login chat-row affordances ─────────────────────────── */
 /* login-prompt: the "🔑 Open this URL…" assistant row. Subtle accent
@@ -9975,12 +11476,12 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   margin: 24px auto;
   object-fit: contain;
   background:
-    linear-gradient(45deg, #21262d 25%, transparent 25%) 0 0 / 20px 20px,
-    linear-gradient(-45deg, #21262d 25%, transparent 25%) 0 0 / 20px 20px,
-    linear-gradient(45deg, transparent 75%, #21262d 75%) 10px 10px / 20px 20px,
-    linear-gradient(-45deg, transparent 75%, #21262d 75%) 10px 10px / 20px 20px,
-    #161b22;                          /* checkerboard so transparent PNGs are visible */
-  border: 1px solid #30363d;
+    linear-gradient(45deg, var(--border-strong) 25%, transparent 25%) 0 0 / 20px 20px,
+    linear-gradient(-45deg, var(--border-strong) 25%, transparent 25%) 0 0 / 20px 20px,
+    linear-gradient(45deg, transparent 75%, var(--border-strong) 75%) 10px 10px / 20px 20px,
+    linear-gradient(-45deg, transparent 75%, var(--border-strong) 75%) 10px 10px / 20px 20px,
+    var(--surface-2);                 /* checkerboard so transparent PNGs are visible */
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
 }
 .file-preview-media {
@@ -10002,7 +11503,7 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
 #files-preview-toggle {
   background: rgba(255, 255, 255, .06);
   border: 1px solid rgba(255, 255, 255, .15);
-  color: #f0f6fc;
+  color: var(--text);
   padding: 4px 8px;
   border-radius: 4px;
   cursor: pointer;
@@ -10015,3 +11516,657 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   border-color: rgba(255, 255, 255, .3);
 }
 
+/* delm-10 — Skills view. Mirrors the artifact-main-view chrome: dark
+   subheader strip + scrollable list. Rows are full-width labels so the
+   whole row toggles the enabled checkbox; the delete button is a
+   separate hit target (type=button + preventDefault so it never
+   triggers the label's implicit checkbox toggle). */
+#skills-panel .skills-subheader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  /* Clear the floating chrome cluster (top-right). */
+  padding-right: 232px;
+}
+#skills-panel .skills-subtitle {
+  font-size: 12px;
+  opacity: .75;
+  line-height: 1.4;
+}
+#skills-panel .skills-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+#skills-panel .skills-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#skills-panel .skills-actions button:hover {
+  background: rgba(255, 255, 255, .08);
+}
+#skills-panel .skills-actions button.hidden {
+  display: none;
+}
+/* Upload-visibility selector (session / user / global) — same visual
+   weight as the Import button, hidden for read-only viewers like it. */
+#skills-scope-select {
+  /* 白底黑字 (dropdown light-theme): background/color come from the
+     global `select, select option` rule. */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#skills-scope-select.hidden {
+  display: none;
+}
+/* delm-11: layered market CATEGORY row (Skill/专家/专家团/MCP markets)
+   — sits ABOVE the scope tabs and switches the whole panel's intro
+   icon + copy per category. */
+#skills-panel .skills-cat-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 10px 14px 0 14px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+#skills-panel .skills-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  opacity: .6;
+}
+#skills-panel .skills-cat .ft-svg {
+  width: 15px;
+  height: 15px;
+}
+#skills-panel .skills-cat.active {
+  opacity: 1;
+  background: rgba(23, 190, 207, .16);
+  border-color: rgba(23, 190, 207, .55);
+  font-weight: 600;
+}
+/* delm-11: generic market row detail line (expert prompt preview /
+   team member list) — subtler than the description. */
+#skills-panel .market-item-detail {
+  opacity: .75;
+  font-style: italic;
+  max-width: 60ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* delm-11: private-entry editor dialog — reuses the mcp-import card
+   chrome; extra bits are the team expert row grid. */
+#market-editor-dialog .market-editor-expert-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+#market-editor-dialog .market-editor-expert-row input {
+  width: 100%;
+}
+#market-editor-dialog textarea {
+  width: 100%;
+  resize: vertical;
+}
+/* Scope tabs (My skills | Market) + the Publish affordance. */
+#skills-panel .skills-tabs {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 14px 0 14px;
+  flex-wrap: wrap;
+}
+#skills-panel .skills-tab {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: .65;
+}
+#skills-panel .skills-tab.active {
+  opacity: 1;
+  border-bottom-color: transparent;
+  background: rgba(23, 190, 207, .12);
+}
+#skills-panel .skills-publish {
+  margin-left: auto;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#skills-panel .skills-publish:hover {
+  background: rgba(255, 255, 255, .08);
+}
+/* Scope badge inside a skill row: where the skill lives. */
+#skills-panel .skill-scope {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  vertical-align: 1px;
+  letter-spacing: .02em;
+}
+#skills-panel .skill-scope-session {
+  background: rgba(120, 120, 120, .25);
+  opacity: .8;
+}
+#skills-panel .skill-scope-user {
+  background: rgba(31, 119, 180, .35);
+}
+#skills-panel .skill-scope-global {
+  background: rgba(148, 103, 189, .4);
+}
+/* Market rows aren't labels (no checkbox) — keep the same layout but
+   allow the meta to sit flush left. */
+#skills-panel .skill-item .skill-install {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  opacity: .6;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+#skills-panel .skill-item .skill-install:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, .1);
+}
+#skills-panel .skills-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Direct id selector: the list container needs min-height:0 so it
+   scrolls inside the flex column instead of stretching the panel.
+   Same for the sibling list containers that share the panel's flex
+   column (#skills-market-list, #market-generic-list) — without it a
+   long expert/team/market list stretches the panel instead of
+   scrolling, pushing the subheader + tabs off-viewport. */
+#skills-list,
+#skills-market-list,
+#market-generic-list {
+  min-height: 0;
+}
+#skills-panel .skills-empty {
+  padding: 24px 8px;
+  text-align: center;
+  opacity: .6;
+  font-size: 13px;
+}
+#skills-panel .skill-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+#skills-panel .skill-item:hover {
+  background: rgba(255, 255, 255, .05);
+}
+#skills-panel .skill-item input[type="checkbox"] {
+  accent-color: #17becf;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+#skills-panel .skill-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+#skills-panel .skill-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+#skills-panel .skill-desc {
+  font-size: 12px;
+  opacity: .7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#skills-panel .skill-del {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  opacity: .5;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+#skills-panel .skill-del:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, .1);
+}
+#skills-msg {
+  padding: 6px 14px;
+  font-size: 12px;
+  opacity: .85;
+}
+#skills-msg.err {
+  color: #ff8f8f;
+  opacity: 1;
+}
+@media (max-width: 900px) {
+  #skills-panel .skills-subheader {
+    padding-right: 14px;
+  }
+}
+
+/* ── Experts tab (专家团) ─────────────────────────────────────────
+   Reuses the skills-panel row idioms (.skill-item, .skills-empty,
+   .skill-del) so the roster reads as one surface with the My-skills
+   tab. The create form is a compact header block: name input, the
+   multi-select skill picker, create button; below it the roster and
+   the start-a-task row. */
+#experts-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 14px;
+}
+#skills-panel .experts-create {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+#expert-name-input {
+  background: var(--bg, #16181d);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+#expert-name-input:focus {
+  outline: none;
+  border-color: #17becf;
+}
+#skills-panel .expert-skills-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+#expert-create-btn,
+#expert-run-btn {
+  align-self: flex-start;
+  background: rgba(23, 190, 207, .18);
+  border: 1px solid rgba(23, 190, 207, .45);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+#expert-create-btn:hover,
+#expert-run-btn:hover {
+  background: rgba(23, 190, 207, .3);
+}
+#skills-panel .experts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#skills-panel .expert-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+#skills-panel .expert-item:hover {
+  background: rgba(255, 255, 255, .05);
+}
+#skills-panel .expert-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: rgba(23, 190, 207, .22);
+  border: 1px solid rgba(23, 190, 207, .4);
+}
+#skills-panel .expert-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+#skills-panel .expert-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+#skills-panel .expert-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+#skills-panel .expert-skill-chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 9px;
+  background: rgba(120, 120, 120, .25);
+  opacity: .9;
+}
+#skills-panel .expert-run-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0 2px;
+}
+#expert-run-task {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg, #16181d);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+#expert-run-task:focus {
+  outline: none;
+  border-color: #17becf;
+}
+#expert-run-btn {
+  align-self: auto;
+}
+
+
+/* ─── mcp-market: MCP server catalog cards (Skills panel, MCP tab) ─── */
+.mcp-market-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  padding: 8px 4px;
+  overflow-y: auto;
+  /* flex child of the panel column: allow it to shrink + scroll. */
+  min-height: 0;
+  flex: 1;
+}
+.mcp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.mcp-card:hover {
+  border-color: var(--border-strong);
+}
+.mcp-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mcp-card-name {
+  font-weight: 600;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-card-ver {
+  font-size: 11px;
+  color: var(--muted);
+}
+.mcp-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mcp-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mcp-tag {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.mcp-tag-low { border-color: #2e9e5b; color: #7fe0a5; }
+.mcp-tag-medium { border-color: #b58a2e; color: #ecc36f; }
+.mcp-tag-high { border-color: #c25050; color: #ff9e9e; }
+.mcp-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+}
+.mcp-card-actions button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.mcp-card-actions button:hover {
+  background: var(--accent-dim);
+}
+.mcp-market-detail {
+  padding: 8px 4px;
+  overflow-y: auto;
+}
+.mcp-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.mcp-detail-endpoint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 4px 0 8px;
+}
+.mcp-skill-fold {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+}
+.mcp-skill-fold summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.mcp-skill-md {
+  margin: 8px 0 0;
+  padding: 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.75);
+}
+/* ─── mcp-market head: catalog title + "Import doc…" button row ─── */
+.mcp-market-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 0;
+}
+.mcp-market-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+}
+/* The "Import doc…" affordance in the catalog header. Previously it
+   reused .skill-install (a 4px-padding ghost icon button scoped to
+   list rows) and rendered as an illegible sliver in the header row.
+   Give it a real labeled button: same visual language as the panel's
+   other affordances (.skills-actions button) with the accent border. */
+#mcp-import-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(23, 190, 207, 0.14);
+  color: var(--text);
+  border: 1px solid rgba(23, 190, 207, 0.55);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#mcp-import-open:hover {
+  background: rgba(23, 190, 207, 0.24);
+}
+#mcp-import-open:active {
+  transform: scale(.97);
+}
+#mcp-import-open .ft-svg {
+  width: 14px;
+  height: 14px;
+}
+/* ─── mcp-import: guidance-document import dialog (Skills panel, MCP tab).
+   A fixed overlay — dark backdrop + a centered card so the user keeps
+   context of the panel behind it. */
+#mcp-import-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.mcp-import-card {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface-2, #242424);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.mcp-import-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text, #e8e8e8);
+  margin-bottom: 2px;
+}
+.mcp-import-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 6px;
+}
+.mcp-import-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  margin-top: 4px;
+}
+.mcp-import-required { color: var(--danger, #ff6b6b); }
+#mcp-import-dialog input[type="text"],
+#mcp-import-dialog textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg, #16181d);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text, #e8e8e8);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+#mcp-import-dialog input[type="text"]:focus,
+#mcp-import-dialog textarea:focus {
+  border-color: #17becf;
+  outline: none;
+}
+#mcp-import-dialog input[type="file"] {
+  width: 100%;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+#mcp-import-dialog textarea { resize: vertical; min-height: 96px; }
+.mcp-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* 2026-10-23 用户需求: 协同区域在没有任务时不显示任何面板，只留
+   一条「暂无任务」空态（多列任务结束后面板已删除）。 */
+.team-rows-empty {
+  color: var(--muted, #8b949e);
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 18px 0;
+}

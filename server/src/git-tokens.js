@@ -37,7 +37,7 @@ const STATE_DIR = process.env.MYCO_STATE_DIR || path.join(os.homedir(), '.myco')
 const TOKENS_FILE = path.join(STATE_DIR, 'git-tokens.json');
 const LEGACY_GH_TOKENS_FILE = path.join(STATE_DIR, 'gh-tokens.json');
 
-const KNOWN_PROVIDERS = new Set(['github', 'gitee']);
+const KNOWN_PROVIDERS = new Set(['github', 'gitee', 'codehub']);
 
 let _cache = null;
 
@@ -205,10 +205,10 @@ function setUserToken(user, provider, token) {
 
 function _isLoginKey(key) {
   // Bare user-level login: exact string.
-  if (key === 'giteeLogin' || key === 'githubLogin') return true;
+  if (key === 'giteeLogin' || key === 'githubLogin' || key === 'codehubLogin') return true;
   // Per-repo login: <provider>/<owner>/<repo>.login. The `.login`
   // suffix on a repo-shaped key is the marker.
-  return /^(github|gitee)\/[^/]+\/.+\.login$/.test(key);
+  return /^(github|gitee|codehub)\/[^/]+\/.+\.login$/.test(key);
 }
 
 // Read the gitee login for a repo push. When (owner, repo) are supplied
@@ -296,22 +296,23 @@ function _maskToken(raw) {
 // entries have alias: null. The key regex correctly splits
 // "github/owner/repo#alias" so the repo field stays as "repo".
 function listAllPats(user) {
-  if (!user) return { userLevel: { github: null, gitee: null }, perRepo: [] };
+  if (!user) return { userLevel: { github: null, gitee: null, codehub: null }, perRepo: [] };
   const store = _load();
   const entry = store[user];
   if (!entry || typeof entry !== 'object') {
-    return { userLevel: { github: null, gitee: null }, perRepo: [] };
+    return { userLevel: { github: null, gitee: null, codehub: null }, perRepo: [] };
   }
   const out = {
     userLevel: {
-      github: _maskToken(entry.github),
-      gitee:  _maskToken(entry.gitee),
+      github:  _maskToken(entry.github),
+      gitee:   _maskToken(entry.gitee),
+      codehub: _maskToken(entry.codehub),
     },
     perRepo: [],
   };
   for (const key of Object.keys(entry)) {
     // Skip the user-level slots themselves; only collect repo-shaped keys.
-    if (key === 'github' || key === 'gitee') continue;
+    if (key === 'github' || key === 'gitee' || key === 'codehub') continue;
     // bug-91: skip gitee-login sidecar keys (user-level + per-repo).
     if (_isLoginKey(key)) continue;
     const m = key.match(/^([a-z]+)\/([^/]+)\/(.+?)(?:#(.+))?$/);

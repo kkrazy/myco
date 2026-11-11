@@ -440,8 +440,14 @@ t('bug-45 r4: setInterval ticker also writes the bare time (no emoji/brackets)',
     'HUD timer ticker must NOT re-insert the ⏱️ clock emoji every second (bug-45 r4). Found assignment RHS: ' + rhs.trim());
   assert.ok(!/\[/.test(rhs) && !/\]/.test(rhs),
     'HUD timer ticker must NOT wrap the time in [brackets] (bug-45 r4). Found: ' + rhs.trim());
-  assert.ok(/getElapsedStr\(\)/.test(rhs),
-    'HUD timer ticker must still call getElapsedStr() so the time updates.');
+  // (2026-10-23 working-status fix: the ticker recomputes elapsed from
+  // state.runQueue's CURRENT running entry — the old captured
+  // getElapsedStr closure showed the previous task's clock when a
+  // second queued task started. Shape contract unchanged: bare
+  // `${sec}s`, no emoji, no brackets.)
+  const tickBody = app.slice(app.indexOf('_hudTimerInterval = setInterval'));
+  assert.ok(/\$\{sec\}s/.test(tickBody),
+    'HUD timer ticker must render the bare `${sec}s` string (recomputed from the current running queue entry) so the time updates.');
 });
 
 // ── bug-45 round 7: HUD chip outer heights are deterministic + equal ──

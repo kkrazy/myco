@@ -98,5 +98,67 @@ t('app.js: _retireClaudeTyping clears claudeStatusKind + claudeStatusLine (not j
     'bug-37: _retireClaudeTyping must clear state.claudeStatusLine');
 });
 
+t('app.js: fatal branch retires the red/error strip after a grace (bug-92 — stop stays red)', () => {
+  // bug-92: a fatal outcome (incl. an abort surfacing as an error
+  // rather than AbortError) set claudeStatusKind='error' + awaitingClaude
+  // with NO timer — the RED '.claude-typing-error' strip stayed forever
+  // ("stop点了还是红色"). The fatal branch must now arm the shared
+  // _agentStatusGraceTimer and null claudeStatusKind when it fires.
+  const idx = APP.search(/function\s+_updateAgentStatusStrip\s*\(/);
+  assert.ok(idx > -1, '_updateAgentStatusStrip must be defined');
+  const win = sliceFn(APP, idx);
+  const fIdx = win.search(/ev\.type === ['"]fatal['"]/);
+  assert.ok(fIdx > -1, 'fatal branch must exist');
+  const fWin = win.slice(fIdx, fIdx + 1000);
+  assert.ok(/state\.claudeStatusKind\s*=\s*['"]error['"]/.test(fWin),
+    'bug-92: fatal branch still sets claudeStatusKind = "error"');
+  assert.ok(/_agentStatusGraceTimer\s*=\s*setTimeout\(/.test(fWin),
+    'bug-92: fatal branch must arm _agentStatusGraceTimer so the red strip is not stuck forever');
+  assert.ok(/state\.claudeStatusKind\s*=\s*null/.test(fWin) &&
+            /_retireClaudeTyping\s*\(\s*\)\s*;/.test(fWin),
+    'bug-92: the armed timer must null claudeStatusKind + call _retireClaudeTyping()');
+});
+
+t('app.js: _applyStateUpdate handles kind==="claude-running" and retires on idle', () => {
+  // Refresh-stale-status fix: on a fresh attach the status strip is
+  // rebuilt from the agent-event replay, and a replay tail ending on a
+  // non-terminal event (assistant_text after an aborted turn, or a
+  // chrome event older than the 16 KB replay window) wrongly leaves the
+  // Stop button "running" even though the agent is idle. The server
+  // ships the authoritative live-turn state via kind="claude-running";
+  // the client must retire the strip when it reports idle.
+  const idx = APP.search(/msg\.kind === ['"]claude-running['"]/);
+  assert.ok(idx > -1, '_applyStateUpdate must handle kind === "claude-running"');
+  // delm-10 widened this window: the handler now also mirrors the
+  // frame into state.claudeRunning (both polarities) before the
+  // idle-branch retire, so the original checks need a slightly
+  // larger window to still see them.
+  const win = APP.slice(idx, idx + 1200);
+  assert.ok(/msg\.running === false/.test(win),
+    'claude-running: must branch on running === false');
+  assert.ok(/_retireClaudeTyping\s*\(\s*\)/.test(win),
+    'claude-running: must call _retireClaudeTyping() when running === false so stale "stop" is cleared');
+});
+
+t('server: _sendAttachSnapshot ships an authoritative claude-running frame (refresh-stale-stop regression)', () => {
+  // The client relies on this frame (sent AFTER the replay) to decide
+  // whether the Stop button should actually show on a fresh attach. If
+  // this ship is removed, an idle session whose replay tail is
+  // non-terminal shows a phantom "stop" after F5.
+  const ATTACH = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'src', 'attach.js'), 'utf8');
+  const idx = ATTACH.search(/kind: ['"]claude-running['"]/);
+  assert.ok(idx > -1, 'attach.js must ship state-update kind="claude-running"');
+  const win = ATTACH.slice(idx - 900, idx + 400);
+  // working-status fix (2026-10-23): the running payload prefers
+  // session.isBusy() (honors agent-n2 TeamSessions, which have no
+  // _currentQuery slot) and falls back to !!session._currentQuery for
+  // plain AgentSessions — same busy contract as _handleInterrupt.
+  assert.ok(/typeof session\.isBusy === ['"]function['"]/.test(win),
+    'claude-running: running must prefer session.isBusy() — a TeamSession has no _currentQuery so the old read always reported idle');
+  assert.ok(/!!session\.isBusy\(\)/.test(win) && /!!session\._currentQuery/.test(win),
+    'claude-running: busy branch isBusy(), fallback branch _currentQuery (authoritative live-turn state)');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

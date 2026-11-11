@@ -22,9 +22,11 @@ fs.mkdirSync(process.env.MYCO_WORKSPACE, { recursive: true });
 const fakeHome = path.join(tmp, 'home');
 fs.mkdirSync(fakeHome, { recursive: true });
 process.env.HOME = fakeHome;
-// node's os.homedir() reads HOME on linux; macOS has different priority
-// but tests typically run on linux/alpine. Re-require os AFTER setenv
-// not needed — homedir() is computed fresh on each call.
+// os.homedir() resolves HOME on POSIX but USERPROFILE on Windows; setting
+// only HOME leaves the Windows run pointing at the real user dir, so the
+// loader reads a different projects/ root than the one seeded below. Set
+// both — homedir() is computed fresh on each call, no re-require needed.
+process.env.USERPROFILE = fakeHome;
 
 const proj = path.join(tmp, 'proj');
 fs.mkdirSync(proj, { recursive: true });
@@ -53,8 +55,10 @@ t('inlines CLAUDE.md when present', () => {
 });
 
 t('inlines the auto-memory MEMORY.md index + linked entries', () => {
-  // Encoded cwd: replace / with -, so /tmp/.../proj → -tmp-...-proj.
-  const enc = proj.replace(/\//g, '-');
+  // Encoded cwd uses the SAME helper the loader calls; hand-rolling
+  // `replace(/\//g,'-')` here passes on Linux and silently diverges on
+  // Windows, where the cwd is `C:\...\proj` and the separator is `\`.
+  const enc = require('../server/src/sessions').encodeCwdForClaude(proj);
   const memDir = path.join(fakeHome, '.claude', 'projects', enc, 'memory');
   fs.mkdirSync(memDir, { recursive: true });
   fs.writeFileSync(path.join(memDir, 'MEMORY.md'),

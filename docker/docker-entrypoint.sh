@@ -64,9 +64,33 @@ if [ "${MYCO_ENTERPRISE_PROXY:-0}" = "1" ]; then
         PROXY_URL="${MYCO_ENTERPRISE_PROXY_URL:-$http_proxy}"
         export http_proxy="${http_proxy:-$PROXY_URL}"
         export https_proxy="${https_proxy:-$PROXY_URL}"
-        export no_proxy="${no_proxy:-${MYCO_ENTERPRISE_NO_PROXY:-127.0.0.1,localhost,local,.local}}"
+        # Merge the default bypass list with any value already in no_proxy
+        # (Docker daemon injects no_proxy=localhost,127.0.0.1 before
+        # the entrypoint runs; a bare ${no_proxy:-default} leaves the
+        # daemon-injected value unchanged and omits .huawei.com, causing
+        # claude subprocess calls to the intranet LLM gateway to be
+        # tunnelled through the proxy → 504).
+        # MYCO_ENTERPRISE_NO_PROXY lets operators override the whole list.
+        _DEFAULT_NO_PROXY="${MYCO_ENTERPRISE_NO_PROXY:-localhost,127.0.0.1,.huawei.com,local,.local}"
+        if [ -z "${no_proxy}" ]; then
+            export no_proxy="${_DEFAULT_NO_PROXY}"
+        else
+            # Append default entries not already present.
+            _merged="${no_proxy}"
+            for _entry in $(echo "${_DEFAULT_NO_PROXY}" | tr ',' ' '); do
+                echo ",${_merged}," | grep -qF ",${_entry}," || _merged="${_merged},${_entry}"
+            done
+            export no_proxy="${_merged}"
+        fi
+        export NO_PROXY="${NO_PROXY:-${no_proxy}}"
         # global-agent: explicit proxy URL (needed for bootstrap to pick it up)
         export GLOBAL_AGENT_HTTP_PROXY="${GLOBAL_AGENT_HTTP_PROXY:-${http_proxy}}"
+        # global-agent reads GLOBAL_AGENT_NO_PROXY for the bypass list.
+        # Must be set HERE in the entrypoint (not just in index.js) because
+        # the `claude` CLI subprocess inherits PID 1 env and never runs
+        # index.js — so without this every claude API call goes through the
+        # enterprise proxy and gets 504 ("HIS Proxy Notification").
+        export GLOBAL_AGENT_NO_PROXY="${no_proxy}"
 
         # TLS-insecure mode: only when the proxy injects its own cert chain.
         # Disables Node TLS verification globally + git SSL verification.
@@ -80,6 +104,21 @@ if [ "${MYCO_ENTERPRISE_PROXY:-0}" = "1" ]; then
         # Configure git to use proxy
         git config --global http.proxy "${http_proxy}" 2>/dev/null || true
         git config --global https.proxy "${https_proxy}" 2>/dev/null || true
+
+        # Intranet hosts must bypass the enterprise proxy. git reads
+        # NO_PROXY for nothing — only its own per-URL config — so a global
+        # http.proxy sends every clone through the MITM proxy, which
+        # returns 504 for hosts it cannot reach. codehub-dg-g.huawei.com is
+        # a DIRECT-only intranet git host: an empty per-URL proxy value
+        # overrides the global one and makes git connect straight.
+        #
+        # MYCO_GIT_DIRECT_HOSTS extends the list (space- or comma-separated)
+        # for deployments whose own git host is also intranet-only.
+        GIT_DIRECT_HOSTS="${MYCO_GIT_DIRECT_HOSTS:-codehub-dg-g.huawei.com}"
+        for _gh in $(echo "$GIT_DIRECT_HOSTS" | tr ',' ' '); do
+            [ -n "$_gh" ] || continue
+            git config --global "http.https://${_gh}.proxy" '' 2>/dev/null || true
+        done
 
         # Rewrite SSH URLs to HTTPS so they go through the HTTP proxy
         # git@github.com:owner/repo.git → https://github.com/owner/repo.git

@@ -114,11 +114,53 @@ const state = {
   // calls) — and most of the wall-clock time IS between calls, so
   // the user saw "Analyze" except for brief flickers.
   lastToolPhase: null,
+  // delm-10: authoritative "the ATTACHED session's agent has a live
+  // SDK query iteration" flag, mirrored from the server's
+  // state-update {kind:'claude-running'} attach frame (sent LAST in
+  // _sendAttachSnapshot, after the replay frames). The HUD Stop
+  // button gates on this so it can only ever interrupt the session
+  // the user is actually looking at AND only while that session's
+  // agent is genuinely working — never a stale/leaked queue entry
+  // from another session. Cleared on session switch; flipped true
+  // by the frame, and by _markAwaitingClaude when the user sends a
+  // chat message that starts a turn (the frame only ships on attach,
+  // not continuously).
+  claudeRunning: false,
   // Running totals across this session's lifetime (since the page
   // opened). Updated on each turn_result. Surfaced as the token-meter
   // chip near the chat input — context-window fill + cumulative cost.
   // Resets on session switch (openSession clears it).
   turnTotals: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, lastTurnInputTokens: 0 },
+  // team-split-view: dual-worker (agent-n2) split-pane state. Activated
+  // by the `team-info` WS frame on attach; every worker-tagged agent
+  // event then routes to its column instead of the single chat stream.
+  //   active   — team frame seen for THIS session (reset on switch)
+  //   mode     — 'stream' (单列, DEFAULT) | 'split' (user toggled to 多列);
+  //              replaced by the saved localStorage preference on the
+  //              first session switch (_resetUiForNewSession)
+  //   roster   — ['worker-A','worker-B'] from the server
+  //   board    — latest board snapshot (queue/notes/status/sessions)
+  //   colEvents— per-worker event cache so stream↔split toggles rebuild
+  //              columns without re-fetching the agent-replay
+  //   openTools— per-worker in-flight tool calls (tool-progress frames
+  //              are worker-tagged server-side; pre-fix both workers
+  //              collided in the single state.openToolCalls slot)
+  teamView: { active: false, mode: 'stream', roster: [], board: null,
+              laneEnded: false, teamLane: false,
+              // endedLanes: laneIds of finished shadow lanes — _retireTeamLane
+              // records them here so a replayed / late event, a team-info
+              // re-announce or a row rebuild can never resurrect a finished
+              // run (2026-10-26 用户需求: 已结束的多列面板要清理, 不再复活).
+              endedLanes: {},
+              colEvents: { 'worker-A': [], 'worker-B': [] },
+              openTools: { 'worker-A': [], 'worker-B': [] },
+              // multi-lane (2026-10-22): several /run-n2 runs may be live
+              // at once — each keeps its OWN 看板. `lanes` maps laneId →
+              // per-lane snapshot {laneId, task, ended, roster, board,
+              // events, colEvents, openTools} in START order (server
+              // ships team-info per lane); `laneId` is the lane currently
+              // shown in the split view / targeted by board frames.
+              lanes: {}, laneId: null },
 };
 
 // ── auth ──────────────────────────────────────────────────────────────────────
@@ -347,13 +389,20 @@ function hideLogin() {
 }
 
 async function tryToken(token) {
+  // Always ask the server — do NOT short-circuit on a missing token. In
+  // single-user default mode (no GitHub OAuth app configured) /auth/check
+  // returns { ok:true, user:'default' } even with no token, so a fresh
+  // browser (empty localStorage) skips the login gate and enters directly.
+  // In multi-user mode /auth/check returns { ok:false, required:true } when
+  // there's no valid token, so the login modal still shows. A prior early
+  // bail-out on a missing token wrongly forced the login modal in
+  // single-user mode (bug), because the client never asked the server
+  // whether auth is even required.
   console.log('[admin-diag] tryToken called. Token length:', token ? token.length : 0);
-  if (!token) {
-    console.log('[admin-diag] tryToken: No token in state/localStorage.');
-    return false;
-  }
   try {
-    const res = await fetch('/auth/check', { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch('/auth/check', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     console.log('[admin-diag] tryToken: /auth/check response status:', res.status, 'ok:', res.ok);
     const body = await res.json().catch(() => ({}));
     console.log('[admin-diag] tryToken: /auth/check body parsed:', JSON.stringify(body));
@@ -439,7 +488,7 @@ const IS_TOUCH_DEVICE = (() => {
 // it's a left-sidebar overlay (desktop) / full-pane overlay (mobile)
 // that can coexist with whatever main-pane view is active underneath.
 // (Phase 9 step 3 retired #terminal-wrap and #conversation-wrap.)
-const MAIN_PANE_IDS = ['files-wrap', 'plan-wrap', 'arch-wrap', 'test-wrap', 'admin-wrap'];
+const MAIN_PANE_IDS = ['files-wrap', 'plan-wrap', 'arch-wrap', 'test-wrap', 'admin-wrap', 'skills-panel'];
 
 function _hideMainPaneSiblings(keep) {
   for (const id of MAIN_PANE_IDS) {
@@ -450,6 +499,9 @@ function _hideMainPaneSiblings(keep) {
   if (keep !== 'files-wrap') {
     state.files.visible = false;
     document.getElementById('btn-files')?.classList.remove('active');
+  }
+  if (keep !== 'skills-panel') {
+    document.getElementById('btn-skills')?.classList.remove('active');
   }
   // Clear the artifact-toggle active class for any view that's no longer up.
   for (const t of ['plan', 'arch', 'test', 'admin']) {
@@ -513,6 +565,12 @@ const LUCIDE_PATHS = {
   // (22, 2) is well outside the circle, V-apex + start are inside.
   'check-popout':  '<circle cx="12" cy="12" r="8"/><polyline points="7 12 12 17 22 2"/>',
   'trash':         '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  // skill-install: download glyph — install a market skill into the
+  // current session's personal store.
+  'download':      '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  // mcp-import-open: document-with-plus glyph — import a guidance
+  // document (.md) as a custom MCP market entry.
+  'file-plus':     '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><circle cx="9" cy="15" r="1"/><path d="M15 13v4"/><path d="M13 15h4"/>',
 };
 function _lucideIcon(name, cls) {
   const path = LUCIDE_PATHS[name];
@@ -637,7 +695,10 @@ async function renderMermaidInContainer(container) {
     try {
       await loadScript('/vendor/mermaid.min.js');
       if (typeof mermaid !== 'undefined') {
-        mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+        // § theme system: match the app palette — diagrams render with
+        // the current data-theme so light mode doesn't ship dark-on-dark
+        // mermaid output. Re-initialized on toggle by _reinitMermaidTheme.
+        mermaid.initialize({ startOnLoad: false, theme: currentTheme() });
       }
     } catch (err) {
       console.warn('[mermaid] failed to lazy-load:', err);
@@ -778,29 +839,59 @@ function _closeDiagramLightbox() {
   if (content) content.innerHTML = '';
 }
 
-// fr-102: model-picker popover. Opened by the server's
-// state-update kind:'model-picker' frame after a bare /model command.
-// Renders a small modal with one row per supported model + a "default"
-// row. Click → sendChatMessage('/model <id>') (or /model default).
-// Esc / × / backdrop click → close. No DOM is built until the first
-// open; the picker root is lazy-mounted on document.body.
-function _openModelPicker(currentId, supported) {
+// fr:model-gateway — `/model` picker popover. Opened by the server's
+// state-update kind:'model-picker' frame after a bare /model.
+// Single gateway group: a `default` row (system default via .env) plus
+// each saved per-user profile. Click → /model gw:<name> (or gw:default)
+// to switch the ACTIVE profile; the checkmark follows the active one.
+// Each profile row has Edit / Delete actions; Manage opens an inline
+// form to add / edit locally (token is write-only — never shown).
+// The per-session Model row is NOT shown here — a gateway profile carries
+// its own model (and `default` uses .env), so the picker is gateway-only.
+// Power users can still type `/model sonnet|opus|haiku|<full-id>`.
+// Esc / × / backdrop click → close. Lazy-mounted on document.body.
+// Note: `currentId`/`supported` are accepted (kept for the fr-102 picker
+// signature + state-update handler) but not rendered — the session model
+// row was dropped by user request; the gateway profile/model governs it.
+// The ACTIVE gateway profile's configured model, cached on every picker
+// open so the session chrome can display the model "as configured" (the
+// SDK's system_init `model=` is upstream-resolved and stale across resume).
+let _activeGatewayModel = null;
+let _activeGatewayBase = null;
+function _openModelPicker(currentId, supported, gateway, systemBase) {
   let pop = document.getElementById('model-picker');
   if (!pop) {
     pop = document.createElement('div');
     pop.id = 'model-picker';
     pop.className = 'model-picker-backdrop';
     pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', 'Choose model for this session');
+    pop.setAttribute('aria-label', 'Choose gateway for this session');
     pop.innerHTML = `
       <div class="model-picker-card" role="document">
         <div class="model-picker-head">
-          <span class="model-picker-title">Choose model</span>
+          <span class="model-picker-title">Choose gateway</span>
           <button class="model-picker-close" type="button" title="Close (Esc)" aria-label="Close">×</button>
         </div>
         <div class="model-picker-list"></div>
+        <div class="model-picker-manage-form" hidden>
+          <div class="model-picker-form-title">Manage gateway (locally)</div>
+          <div class="model-picker-form-row">
+            <input id="picker-gw-name" type="text" placeholder="name (e.g. lab-gateway)" autocomplete="off" spellcheck="false" />
+            <input id="picker-gw-base" type="text" placeholder="base URL (e.g. http://host:14000)" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="model-picker-form-row">
+            <input id="picker-gw-token" type="password" placeholder="auth token (blank = keep)" autocomplete="new-password" spellcheck="false" />
+            <input id="picker-gw-model" type="text" placeholder="model (e.g. DS-V4-0731)" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="model-picker-form-row">
+            <button type="button" class="model-picker-gw-btn" data-action="gw-save">Save</button>
+            <button type="button" class="model-picker-gw-btn" data-action="gw-test">Test</button>
+            <button type="button" class="model-picker-gw-btn" data-action="gw-cancel">Cancel</button>
+            <span id="picker-gw-status" class="model-picker-gw-status"></span>
+          </div>
+        </div>
         <div class="model-picker-foot">
-          Free-form full IDs are accepted via <code>/model &lt;claude-…&gt;</code>.
+          Free-form full IDs work via <code>/model &lt;claude-…&gt;</code>.
         </div>
       </div>
     `;
@@ -809,49 +900,204 @@ function _openModelPicker(currentId, supported) {
       if (e.target === pop) _closeModelPicker();    // backdrop click
     });
     pop.querySelector('.model-picker-close').addEventListener('click', _closeModelPicker);
+    // Keyboard navigation: ↑/↓ move the highlight among gateway rows,
+    // Enter activates the highlighted row (dispatches its click → switches),
+    // Esc closes. Rows are re-queried each keypress so highlights survive
+    // re-renders.
     pop.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); _closeModelPicker(); }
+      if (e.key === 'Escape') { e.preventDefault(); _closeModelPicker(); return; }
+      const rows = Array.from(pop.querySelectorAll('.model-picker-row[data-gw]'));
+      if (!rows.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const dir = e.key === 'ArrowDown' ? 1 : -1;
+        const cur = rows.findIndex((r) => r.classList.contains('highlighted'));
+        let idx = cur === -1 ? (dir === 1 ? -1 : 0) : cur;
+        idx = (idx + dir + rows.length) % rows.length;
+        rows.forEach((r) => r.classList.remove('highlighted'));
+        rows[idx].classList.add('highlighted');
+        // Scroll the highlighted row into view within the card's list.
+        try {
+          const list = pop.querySelector('.model-picker-list');
+          const nextTop = rows[idx].offsetTop - (list.scrollTop || 0);
+          if (list && (nextTop > list.clientHeight - rows[idx].offsetHeight || nextTop < 0)) {
+            rows[idx].scrollIntoView({ block: 'nearest' });
+          }
+        } catch {}
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const cur = rows.findIndex((r) => r.classList.contains('highlighted'));
+        const target = cur >= 0 ? rows[cur] : rows[0];
+        if (target) target.click();
+      }
+    });
+    // Inline form buttons — bound once on the shared card.
+    pop.querySelector('[data-action="gw-save"]').addEventListener('click', async () => {
+      const status = document.getElementById('picker-gw-status');
+      const name = document.getElementById('picker-gw-name').value.trim();
+      if (!name) { status.textContent = '⚠ name required'; return; }
+      const payload = {
+        name,
+        baseUrl: document.getElementById('picker-gw-base').value.trim(),
+        authToken: document.getElementById('picker-gw-token').value.trim(),
+        model: document.getElementById('picker-gw-model').value.trim(),
+      };
+      status.textContent = 'saving…';
+      try {
+        const res = await authedFetch('/api/gateways', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+        document.getElementById('picker-gw-token').value = '';  // never linger
+        status.textContent = '✓ saved';
+        await _modelPickerRefresh();
+      } catch (err) { status.textContent = '✗ ' + err.message; }
+    });
+    pop.querySelector('[data-action="gw-test"]').addEventListener('click', async () => {
+      const status = document.getElementById('picker-gw-status');
+      status.textContent = 'testing…';
+      const payload = {
+        baseUrl: document.getElementById('picker-gw-base').value.trim(),
+        authToken: document.getElementById('picker-gw-token').value.trim(),
+        model: document.getElementById('picker-gw-model').value.trim(),
+      };
+      try {
+        const res = await authedFetch('/api/gateways/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (body.ok) status.textContent = body.note ? '✓ ' + body.note : '✓ reachable';
+        else status.textContent = '✗ ' + (body.error || ('HTTP ' + res.status));
+      } catch (err) { status.textContent = '✗ ' + err.message; }
+    });
+    pop.querySelector('[data-action="gw-cancel"]').addEventListener('click', () => {
+      pop.querySelector('.model-picker-manage-form').hidden = true;
     });
   }
   const list = pop.querySelector('.model-picker-list');
   if (list) {
+    const gw = (gateway && Array.isArray(gateway.profiles)) ? gateway : { active: null, profiles: [] };
+    const gwActive = gw.active || null;
+    const activeProf = (gw.profiles || []).find((p) => p.name === gwActive);
+    _activeGatewayModel = activeProf ? (activeProf.model || null) : null;
+    // Request address (请求地址): the active profile's baseUrl, else the
+    // system default base carried in the picker payload (for `default`).
+    _activeGatewayBase = activeProf ? (activeProf.baseUrl || '') : (systemBase || '');
     const rows = [];
-    // First row: "default" (clears the override).
-    const isDefault = !currentId;
+    // ── Gateway group ──
+    rows.push('<div class="model-picker-group">Gateway (this user)</div>');
     rows.push(
-      `<button type="button" class="model-picker-row${isDefault ? ' active' : ''}" data-id="">` +
-      `<span class="model-picker-mark">${isDefault ? '✓' : ''}</span>` +
+      `<button type="button" class="model-picker-row gw-row${gwActive === null ? ' active' : ''}" data-gw="default">` +
+      `<span class="model-picker-mark">${gwActive === null ? '✓' : ''}</span>` +
       `<span class="model-picker-name">default</span>` +
-      `<span class="model-picker-desc">SDK picks the model (no per-session override).</span>` +
+      `<span class="model-picker-desc">system default (from .env).</span>` +
       `</button>`
     );
-    for (const m of (supported || [])) {
-      const active = currentId && currentId === m.id;
+    for (const p of gw.profiles || []) {
+      const bits = [
+        p.baseUrl ? escHtml(p.baseUrl) : 'default',
+        p.model ? escHtml(p.model) : 'default',
+        p.tokenSet ? ('token ' + escHtml(p.mask || '')) : 'no token',
+      ].join(' · ');
+      const active = p.name === gwActive;
       rows.push(
-        `<button type="button" class="model-picker-row${active ? ' active' : ''}" data-id="${escHtml(m.id)}">` +
+        `<div class="model-picker-row gw-row${active ? ' active' : ''}" data-gw="${escHtml(p.name)}">` +
         `<span class="model-picker-mark">${active ? '✓' : ''}</span>` +
-        `<span class="model-picker-name">${escHtml(m.label || m.id)}</span>` +
-        `<span class="model-picker-desc">${escHtml(m.desc || '')}</span>` +
-        `</button>`
+        `<span class="model-picker-name">${escHtml(p.name)}</span>` +
+        `<span class="model-picker-desc">${bits}</span>` +
+        `<span class="model-picker-actions">` +
+          `<button type="button" class="model-picker-mini" data-edit="${escHtml(p.name)}" title="Edit in the form below">Edit</button>` +
+          `<button type="button" class="model-picker-mini danger" data-del="${escHtml(p.name)}" title="Delete this profile">✕</button>` +
+        `</span>` +
+        `</div>`
       );
     }
+    rows.push(`<button type="button" class="model-picker-manage" data-action="manage">＋ Manage gateways…</button>`);
     list.innerHTML = rows.join('');
-    list.querySelectorAll('.model-picker-row').forEach((btn) => {
+    // Gateway rows → /model gw:… to switch the active profile.
+    list.querySelectorAll('.model-picker-row[data-gw]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id') || '';
-        // Empty data-id → /model default (clear override).
-        sendChatMessage(id ? `/model ${id}` : '/model default');
+        const nm = btn.getAttribute('data-gw');
+        sendChatMessage(`/model gw:${nm}`);
         _closeModelPicker();
       });
     });
+    // Profile edit → load values into the inline form + reveal it.
+    list.querySelectorAll('[data-edit]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = btn.getAttribute('data-edit');
+        const profile = (gw.profiles || []).find((x) => x.name === name);
+        const form = pop.querySelector('.model-picker-manage-form');
+        const status = document.getElementById('picker-gw-status');
+        if (profile) {
+          document.getElementById('picker-gw-name').value = profile.name;
+          document.getElementById('picker-gw-base').value = profile.baseUrl || '';
+          document.getElementById('picker-gw-model').value = profile.model || '';
+          document.getElementById('picker-gw-token').value = '';   // write-only — never fill
+          if (status) status.textContent = profile.tokenSet ? 'token already set (blank keeps it)' : '';
+        }
+        form.hidden = false;
+      });
+    });
+    // Profile delete → confirm + DELETE + refresh.
+    list.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const name = btn.getAttribute('data-del');
+        if (!confirm(`Delete gateway profile "${name}"?`)) return;
+        try {
+          const res = await authedFetch('/api/gateways/' + encodeURIComponent(name), { method: 'DELETE' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          await _modelPickerRefresh();
+        } catch (err) {
+          const status = document.getElementById('picker-gw-status');
+          if (status) status.textContent = '✗ delete: ' + err.message;
+        }
+      });
+    });
+    // Manage toggle.
+    const manageBtn = list.querySelector('[data-action="manage"]');
+    if (manageBtn) {
+      manageBtn.addEventListener('click', () => {
+        const form = pop.querySelector('.model-picker-manage-form');
+        const wasHidden = form.hidden;
+        // Reset to a fresh "add new" state unless we're continuing an edit.
+        if (wasHidden) {
+          document.getElementById('picker-gw-name').value = '';
+          document.getElementById('picker-gw-base').value = '';
+          document.getElementById('picker-gw-model').value = '';
+          document.getElementById('picker-gw-token').value = '';
+          const status = document.getElementById('picker-gw-status');
+          if (status) status.textContent = '';
+        }
+        form.hidden = !wasHidden;
+      });
+    }
   }
   pop.hidden = false;
-  // Tabindex on the backdrop so keydown(Escape) fires without a focused
-  // child. Focus the close button as a sensible default focus target.
   pop.tabIndex = -1;
   setTimeout(() => {
     try { pop.focus(); } catch {}
   }, 0);
+}
+
+// Re-fetch the user's gateway profiles and re-open the picker with the
+// current model context so the list + checkmarks stay fresh after a
+// local add / edit / delete / activate.
+async function _modelPickerRefresh() {
+  try {
+    const res = await authedFetch('/api/gateways');
+    const data = await res.json().catch(() => ({}));
+    _openModelPicker(null, [], data);
+  } catch (err) {
+    _openModelPicker(null, [], null);
+  }
 }
 
 function _closeModelPicker() {
@@ -1261,13 +1507,17 @@ async function doPatLogin() {
   if (!input || !btn) return;
   const pat = (input.value || '').trim();
   if (!pat) { input.focus(); return; }
+  // Provider dropdown lets the user pin the token's host (GitHub/Gitee/
+  // CodeHub). Default 'auto' keeps the server-side heuristic as fallback.
+  const provSel = document.getElementById('login-pat-provider');
+  const provider = provSel ? (provSel.value || 'auto') : 'auto';
   btn.disabled = true;
   if (errEl) errEl.hidden = true;
   try {
     const res = await fetch('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: pat }),
+      body: JSON.stringify({ token: pat, provider }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok || !body.token) {
@@ -1317,6 +1567,13 @@ async function init() {
   await refreshSessions();
   setInterval(refreshSessions, 3000);
 
+  // RLM switch: wire the scope selector's change handler once at boot,
+  // and move it into the top-right control row so it shares one line
+  // with the team view switch (单列/双列 pill).
+  const rlmSelect = document.getElementById('rlm-scope-select');
+  if (rlmSelect) rlmSelect.addEventListener('change', _onRlmScopeChange);
+  _adoptRlmSwitchIntoTopRow();
+
   // Auto-attach: if a share link is pending, open that session as viewer.
   // Otherwise prefer the last active session, or the most recent one.
   if (!state.activeId && state.sessions.length) {
@@ -1365,6 +1622,26 @@ async function init() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !document.getElementById('manual-modal').hidden) closeManualModal();
   });
+  // whatsnew banner + modal wiring. Banner shows on boot when the
+  // latest version id differs from the dismissed one; ✕ dismisses the
+  // CURRENT version only (a new version re-shows). The sidebar ✨ icon
+  // is the permanent entry. The modal's version dropdown lazy-fetches
+  // archived versions on change.
+  document.getElementById('btn-whatsnew').addEventListener('click', () => openWhatsnewModal());
+  document.getElementById('whatsnew-banner-text').addEventListener('click', () => openWhatsnewModal());
+  document.getElementById('whatsnew-banner-close').addEventListener('click', dismissWhatsnewBanner);
+  document.getElementById('whatsnew-close').addEventListener('click', closeWhatsnewModal);
+  document.getElementById('whatsnew-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'whatsnew-modal') closeWhatsnewModal();
+  });
+  document.getElementById('whatsnew-version-select').addEventListener('change', (e) => {
+    const body = document.getElementById('whatsnew-body');
+    if (e.target.value) renderWhatsnewVersionInto(body, e.target.value);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('whatsnew-modal').hidden) closeWhatsnewModal();
+  });
+  initWhatsnewBanner();
   document.getElementById('spawn-cwd').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); doSpawn(); }
     else if (e.key === 'Escape') { e.preventDefault(); closeSpawnModal(); }
@@ -1373,6 +1650,7 @@ async function init() {
   document.getElementById('log-panel-close').addEventListener('click', toggleLogPanel);
   bindChatUi();
   bindFilesUi();
+  bindSkillsUi();
   bindReadOnlyBanner();
   // Boot lands on the terminal view; the user picks chat / plan / arch /
   // test / files / preview from the chrome cluster. Previously chat
@@ -1698,7 +1976,12 @@ async function _refreshConfigPats() {
   const rows = [];
   // User-level (OAuth-fallback) row per provider, even when absent —
   // gives the user a place to PASTE a value if they want to set one.
-  for (const provider of ['github', 'gitee']) {
+  // codehub included: it is a first-class login provider (index.js
+  // POST /auth/login validates against /api/v4/user), so a user-level
+  // CodeHub token is reachable by /feature and /bug the same way the
+  // GitHub OAuth token is.
+  const userLevelProviders = ['github', 'gitee', 'codehub'];
+  for (const provider of userLevelProviders) {
     const meta = inventory.userLevel && inventory.userLevel[provider];
     rows.push(_renderConfigPatRow({
       kind: 'user-level',
@@ -1723,9 +2006,9 @@ async function _refreshConfigPats() {
     }));
   }
   for (const el of rows) listEl.appendChild(el);
-  const hasAny = (inventory.perRepo && inventory.perRepo.length)
-    || (inventory.userLevel.github && inventory.userLevel.github.present)
-    || (inventory.userLevel.gitee && inventory.userLevel.gitee.present);
+  const ul = inventory.userLevel || {};
+  const hasUserLevel = userLevelProviders.some(p => ul[p] && ul[p].present);
+  const hasAny = (inventory.perRepo && inventory.perRepo.length) || hasUserLevel;
   if (emptyEl) emptyEl.hidden = hasAny;
 }
 
@@ -1874,8 +2157,143 @@ async function refreshSessions() {
       if (!existing || (s.shared && !s.owned)) byId.set(s.id, s);
     }
     state.sessions = [...byId.values()];
+    // mcp-market: mirror the ACTIVE session's installedMcp (entry
+    // names) into state so the Skills panel's MCP tab can badge
+    // cards. Fresh from every 3s poll — an install in another tab /
+    // device shows up here without a reload.
+    if (state.activeId) {
+      const cur = byId.get(state.activeId);
+      state.installedMcp = (cur && Array.isArray(cur.installedMcp)) ? cur.installedMcp.slice() : [];
+    }
+    // Sidebar drag-reorder: keep the user's saved (dragged) order —
+    // the 3s poll rewrites state.sessions, so without this the list
+    // would snap back to server order mid-drag or right after a drop.
+    _sortSessionsBySavedOrder();
+    // working-status fix (2026-10-23): re-arm state.claudeRunning from
+    // the SERVER's busy truth (s.agentBusy ← AgentSession.isBusy() /
+    // TeamSession roster.some(isBusy)). The 30s _onClaudeIdle fallback
+    // retires the typing strip + claudeRunning after 30s of STRIP
+    // silence — but a long tool call (Agent/docker/大 build) can be
+    // legitimately silent past 30s, wrongly killing the Stop gate for
+    // a session that IS still working. This poll is one-directional
+    // self-healing: agentBusy=true resurrects the flag (and only when
+    // the user hasn't retired it by an explicit Stop); agentBusy=false
+    // does NOT retire — the turn's own terminal events own that.
+    try {
+      if (state.activeId) {
+        const cur = byId.get(state.activeId);
+        const busy = !!(cur && cur.agentBusy);
+        if (busy && !state.claudeRunning && !state.awaitingClaude) {
+          state.claudeRunning = true;
+          state.awaitingClaude = true;
+          _renderClaudeTyping();
+          _scheduleClaudeIdleCheck();
+        }
+      }
+    } catch {}
     renderSessionList();
   } catch {}
+}
+
+// ── Session sidebar drag-reorder (user ask: "session 应该支持鼠标拖动
+// 改变顺序") ──
+// The order is per-device, persisted in localStorage as
+// 'myco_session_order' (JSON array of session ids). Server order stays
+// authoritative for sessions the user has never dragged (they append in
+// the saved slot order first, then any unknown/new sessions keep the
+// server's relative order at the tail). Client-side only — no server
+// schema change, and a stale id in the array (deleted session) is
+// simply ignored.
+const SESSION_ORDER_KEY = 'myco_session_order';
+
+function _loadSessionOrder() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SESSION_ORDER_KEY) || '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch { return []; }
+}
+
+function _saveSessionOrder(ids) {
+  try { localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(ids)); } catch {}
+}
+
+// Stable-arrange `sessions` so ids present in the saved order come out
+// in that order (front), and everything else keeps its input order
+// (tail). Mutates nothing — returns a new array.
+function _applySessionOrder(sessions, savedOrder) {
+  const pos = new Map(savedOrder.map((id, i) => [id, i]));
+  const known = [];
+  const rest = [];
+  for (const s of sessions) (pos.has(s.id) ? known : rest).push(s);
+  known.sort((a, b) => pos.get(a.id) - pos.get(b.id));
+  return [...known, ...rest];
+}
+
+// Persisted user order → current session list. Called from
+// refreshSessions (server poll) so the 3s refresh never snaps a
+// dragged order back.
+function _sortSessionsBySavedOrder() {
+  state.sessions = _applySessionOrder(state.sessions, _loadSessionOrder());
+}
+
+// Persist the CURRENT visual order of the sidebar list.
+function _persistSidebarOrder() {
+  const ul = document.getElementById('session-list');
+  if (!ul) return;
+  const ids = [...ul.querySelectorAll('.session-item')]
+    .map((li) => li.dataset.id)
+    .filter(Boolean);
+  if (ids.length) _saveSessionOrder(ids);
+}
+
+// HTML5 drag-and-drop on the session cards. Cards are draggable
+// (desktop: mouse drag; the long-press delete toggle stays for touch).
+// dragover on a sibling computes the before/after drop slot from the
+// pointer's Y within the card and paints an insertion marker
+// (.session-item.drag-above / .drag-below, CSS-side); drop reorders
+// state.sessions + the DOM and persists the new order. dragend always
+// cleans the marker classes.
+function _wireSessionDrag(li, s) {
+  li.draggable = true;
+  li.addEventListener('dragstart', (ev) => {
+    state.dragSessionId = s.id;
+    li.classList.add('dragging');
+    try { ev.dataTransfer.setData('text/plain', s.id); } catch {}
+    try { ev.dataTransfer.effectAllowed = 'move'; } catch {}
+  });
+  li.addEventListener('dragend', () => {
+    state.dragSessionId = null;
+    li.classList.remove('dragging');
+    document.querySelectorAll('.session-item.drag-above, .session-item.drag-below')
+      .forEach((el) => el.classList.remove('drag-above', 'drag-below'));
+  });
+  li.addEventListener('dragover', (ev) => {
+    if (!state.dragSessionId || state.dragSessionId === s.id) return;
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch {}
+    const r = li.getBoundingClientRect();
+    const before = (ev.clientY - r.top) < r.height / 2;
+    document.querySelectorAll('.session-item.drag-above, .session-item.drag-below')
+      .forEach((el) => el.classList.remove('drag-above', 'drag-below'));
+    li.classList.add(before ? 'drag-above' : 'drag-below');
+  });
+  li.addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    const dragId = state.dragSessionId || (() => { try { return ev.dataTransfer.getData('text/plain'); } catch { return ''; } })();
+    if (!dragId || dragId === s.id) return;
+    const r = li.getBoundingClientRect();
+    const before = (ev.clientY - r.top) < r.height / 2;
+    const ids = state.sessions.map((x) => x.id);
+    const from = ids.indexOf(dragId);
+    if (from < 0) return;
+    const [moved] = state.sessions.splice(from, 1);
+    let to = state.sessions.findIndex((x) => x.id === s.id);
+    if (to < 0) { state.sessions.splice(from, 0, moved); return; }
+    if (!before) to += 1;
+    state.sessions.splice(to, 0, moved);
+    _saveSessionOrder(state.sessions.map((x) => x.id));
+    renderSessionList();
+  });
 }
 
 function mostRecentSession(sessions) {
@@ -1889,6 +2307,24 @@ function mostRecentSession(sessions) {
     if (k > bestKey) { best = s; bestKey = k; }
   }
   return best;
+}
+
+// delm-10 working-view badge (feature helper): renders the session's
+// live working-state chip for the sidebar card. Server truth: GET /sessions
+// sets s.agentBusy (AgentSession.isBusy()) and s.agentHasReview
+// (lastDoneAt > agentSeenAt). Precedence: busy > review > none. The
+// chip carries role="status" so screen readers announce the working /
+// to-review state without the user opening the session.
+// Redesigned 2026-10-22: plain text chips, no leading symbol glyphs —
+// the old "● working" / "◦ to review" circle prefixes are gone.
+function renderSessionBusyBadge(s) {
+  if (s.agentBusy) {
+    return `<span class="session-busy-badge" role="status" aria-label="Claude is actively working in this session">working</span>`;
+  }
+  if (s.agentHasReview) {
+    return `<span class="session-review-badge" role="status" aria-label="Claude finished — open to review the result">to review</span>`;
+  }
+  return '';
 }
 
 function renderSessionList() {
@@ -1906,6 +2342,12 @@ function renderSessionList() {
     if (readOnly) li.classList.add('shared');
     if (s.status) li.dataset.status = s.status;
     li.dataset.id = s.id;
+    // delm-10 working-view: expose the busy state as a data attribute so
+    // tests / automation can find "which session is working right now?"
+    // without parsing the chip markup, and make the card a polite
+    // live region so the busy → review → none transitions are announced.
+    li.dataset.busy = s.agentBusy ? '1' : '0';
+    li.setAttribute('aria-live', 'polite');
     // Display label: prefer the friendly s.name (server returns
     // rec.label or falls back to rec.cwd). Old sessions whose cwd
     // was the user-typed folder name continue to display unchanged;
@@ -1958,9 +2400,32 @@ function renderSessionList() {
     const verdictBadge = s.pendingVerdict
       ? `<span class="session-verdict-pending" title="A verdict modal is waiting in this session — click to review.">📋</span>`
       : '';
+    // delm-10 busy indicator: a pulsing "working" chip rendered next
+    // to the title when the session's agent is actively streaming.
+    // Precedence + markup live in the named helper renderSessionBusyBadge
+    // (shared by every render/refresh path): busy wins over review — a
+    // new turn already started makes "working" the more urgent signal;
+    // finished-but-unseen shows a steady amber "to review"; otherwise
+    // no chip at all. Redesigned 2026-10-22: plain text chips, no
+    // leading symbol glyphs (the old "●" / "◦" prefixes are gone).
+    const busyBadge = renderSessionBusyBadge(s);
+    // delm-10 queue visibility: open run-queue entries (pending +
+    // running) survive session switches server-side (rec.runQueue),
+    // but the client's queue chip strip only reflects the ATTACHED
+    // session. Badge every session card with its open-queue count so
+    // switching away never makes the queue "disappear" — the sidebar
+    // (3s poll via GET /sessions) keeps it visible at a glance.
+    const queueBadge = (Number.isFinite(s.queueOpen) && s.queueOpen > 0)
+      ? `<span class="session-queue-badge" title="${(Number.isFinite(s.queueRunning) && s.queueRunning > 0) ? s.queueRunning + ' running · ' : ''}${s.queueOpen} open task(s) in this session's run queue">${s.queueOpen} queued</span>`
+      : '';
+    // §5.2: sidebar 🧠 RLM badge — sessions opted into RLM mode (rec.rlm)
+    // are recognizable without opening them (server sets s.rlm).
+    const rlmBadge = s.rlm
+      ? `<span class="rlm-badge" title="Session runs in RLM mode (prompt-as-a-variable + recursive sub-agents)">🧠 RLM</span>`
+      : '';
     li.innerHTML = `
       ${statusDot}
-      <span class="session-title">${escHtml(dirName)}${sharedBadge}${visibilityBadge}${verdictBadge}</span>
+      <span class="session-title">${escHtml(dirName)}${busyBadge}${queueBadge}${rlmBadge}${sharedBadge}${visibilityBadge}${verdictBadge}</span>
       ${summary}
       <span class="session-meta">${escHtml(idShort)} · ${timeAgo(s.last_activity || s.created_at)}</span>
       ${s.owned && !s.shared ? '<button class="session-share" aria-label="Share session">↗</button>' : ''}
@@ -2000,6 +2465,10 @@ function renderSessionList() {
       }
     }
     attachLongPressDeleteToggle(li);
+    // Drag-reorder wiring (desktop). Registered on every card; the
+    // dragstart guard (state.dragSessionId) makes the drop a no-op
+    // unless another card is genuinely being dragged.
+    _wireSessionDrag(li, s);
     ul.appendChild(li);
   }
 }
@@ -2169,6 +2638,8 @@ async function deleteSessionWithConfirm(s) {
       state.artifacts = { sessionId: null, byType: {} };
       state.runQueue = null;
       try { _renderRunQueueStrip(); } catch {}
+      state.pendingQuestions = null;
+      try { _renderPendingQuestionsStrip(); } catch {}
       state.artifactView = { active: null, prev: 'terminal' };
       for (const t of ARTIFACT_TYPES) {
         const wrap = document.getElementById(t + '-wrap');
@@ -2183,6 +2654,16 @@ async function deleteSessionWithConfirm(s) {
     }
     document.querySelectorAll('.session-item.show-delete')
       .forEach(el => el.classList.remove('show-delete'));
+    // delm-10 ghost-session fix: drop any cached share token pointing at
+    // the deleted session. localStorage 'myco_shares' survives deletes,
+    // so refreshSessions kept re-requesting the dead id via ?share= and
+    // (pre server-side fix) the stale entry re-rendered in the sidebar
+    // after every page reload — the "session I closed came back" report.
+    try {
+      for (const sh of loadShareTokens()) {
+        if (sh.sessionId === s.id) removeShareToken(sh.shareToken);
+      }
+    } catch {}
     await refreshSessions();
   } catch (err) {
     alert(`Could not delete session: ${err.message || err}`);
@@ -2212,6 +2693,77 @@ function _teardownPreviousSession() {
   state.files.viewing = null;
 }
 
+// fr-78 r2 (2026-10-22): hydrate state.chatInputHistory from the session's
+// PERSISTED user inputs (rec.chat rows) so ArrowUp/ArrowDown recall works
+// on a fresh attach / cross-device reconnect — not just for messages typed
+// in this page-load. Reads GET /sessions/:id/chat/history (fromAgent rows
+// are filtered out by default), keeps only genuine user submissions, and
+// fills the recall buffer oldest→newest (the same order submitChat pushes
+// in), capped at the same 200 entries.
+async function _hydrateChatInputHistory(id) {
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(id)}/chat/history?limit=500`);
+    if (!res.ok) return;
+    const body = await res.json();
+    const rows = Array.isArray(body && body.messages) ? body.messages : [];
+    // Delm n=1 (2026-10-23): only the user's OWN typed inputs belong in
+    // arrow-key recall. Three gates, applied identically to every page:
+    //   1. meta.fromUserInput === true — the server stamps this ONLY on
+    //      rows that went through the canonical user-typed path
+    //      (handleChatMessage). Server-generated rows (run-queue
+    //      auto-dispatch bodies, login-callback echoes, assistant
+    //      replies) never carry it, so flipping through history shows
+    //      only what a human actually typed — not what the interface
+    //      printed. Legacy rows persisted before this flag lack it and
+    //      are skipped (safer: recall is a convenience, over-inclusion
+    //      is the bug being fixed).
+    //   2. r.user === state.chatUser — multi-user rooms: a teammate's
+    //      typed input is in rec.chat too, but it's not MINE to recall.
+    //   3. fromAgent/fromTranscript still guarded (fromUserInput rows
+    //      never overlap, but belt-and-suspenders vs includeAgent flip).
+    // meta.recallText (clarify popover) preserves the RAW question —
+    // prefer it over the LLM-wrapped text.
+    const collect = (r, out) => {
+      if (!r) return;
+      if (r.meta && (r.meta.fromAgent || r.meta.fromTranscript)) return;
+      if (!r.meta || r.meta.fromUserInput !== true) return;
+      if (state.chatUser && r.user !== state.chatUser) return;
+      const txt = String((r.meta && typeof r.meta.recallText === 'string' && r.meta.recallText) || r.text || '').trim();
+      if (!txt) return;
+      // Same dedupe rule as submitChat: skip a repeat of the immediately
+      // previous entry.
+      if (out.length && out[out.length - 1] === txt) return;
+      out.push(txt);
+    };
+    const inputs = [];
+    for (const r of rows) collect(r, inputs);
+    // The /chat/history window is capped at 500 rows; if there are older
+    // user inputs beyond it, walk `before` pages until exhausted.
+    let hasMore = !!body.hasMore;
+    let oldestTs = rows.length ? rows[0].ts : null;
+    while (hasMore && oldestTs && inputs.length < 200) {
+      const page = await authedFetch(`/sessions/${encodeURIComponent(id)}/chat/history?before=${encodeURIComponent(oldestTs)}&limit=500`);
+      if (!page.ok) break;
+      const pb = await page.json();
+      const prows = Array.isArray(pb && pb.messages) ? pb.messages : [];
+      if (!prows.length) break;
+      for (const r of prows) collect(r, inputs);
+      hasMore = !!pb.hasMore;
+      oldestTs = prows[0].ts;
+    }
+    if (inputs.length > 200) inputs.splice(0, inputs.length - 200);
+    // Drop the hydrate if the user already switched to another session
+    // (the async fetch landed after a second openSession) or already
+    // typed + submitted something here.
+    if (state.activeId !== id) return;
+    if (Array.isArray(state.chatInputHistory) && state.chatInputHistory.length) return;
+    state.chatInputHistory = inputs;
+  } catch {
+    // Fire-and-forget: a failed hydrate just leaves the in-memory
+    // (page-local) history behavior — never break session open.
+  }
+}
+
 // Reset state + chrome for the new session id (artifact views, sidebar
 // list, chat panes, etc.). Does not start any network I/O.
 function _resetUiForNewSession(id) {
@@ -2224,6 +2776,11 @@ function _resetUiForNewSession(id) {
   state.chatInputHistory = [];
   state.chatHistoryIdx = null;
   state.chatHistoryDraft = null;
+  // fr-78 r2 (2026-10-22): pull the session's PERSISTED user inputs from
+  // the server so arrow-key history recall works on a fresh attach /
+  // reconnect — not just for messages typed in this page-load. Fire-and-
+  // forget; the fetch may land before or after the WS attach frames.
+  _hydrateChatInputHistory(id);
   // ryan-blues bug fix: re-init the artifact cache bound to the new
   // session id. The loadArtifact lookup guard handles the same case,
   // but resetting here is belt-and-suspenders — guarantees the next
@@ -2238,12 +2795,40 @@ function _resetUiForNewSession(id) {
   state._lastPermQueueLen = 0;
   state._agentChatPaneArmed = false;         // re-arm auto-open for the next agent frame
   state.chatUserScrolledUp = false;          // bug-26: fresh session starts at the bottom
+  // Events-backfill cursor state: unknown until the first /events window
+  // answers (hasMore per session). Stale true from a previous session
+  // would keep the load-older button alive with nothing behind it.
+  state._eventsHasMore = false;
+  state._fetchingOlderEvents = false;
   // bug-27: clear the previous session's queue state so the chip
   // strip doesn't leak across sessions. The server ships the new
   // session's queue via _sendAttachSnapshot on attach; until that
   // frame lands, the strip stays hidden (empty entries → hidden).
   state.runQueue = null;
   try { _renderRunQueueStrip(); } catch {}
+  // §5.2: the previous session's RLM flag must not leak into the new
+  // session's 🧠 pill. The authoritative value arrives via the
+  // rlm-mode-changed attach frame (attach.js ships it from rec.rlm);
+  // until then assume off.
+  state.rlmMode = false;
+  try { _updateRlmBadge(); } catch {}
+  // RLM switch: reset the session-level selector to off until the
+  // rlm-mode-changed attach frame lands with the real value.
+  try { _refreshRlmSwitch(); } catch {}
+  // RLM stats are PER-SESSION (stats.js keys by sessionId) — clear the
+  // previous session's numbers so the fixed chip doesn't show them;
+  // the fresh session's rlm-stats attach frame repopulates it.
+  state.rlmStats = null;
+  try { _renderRlmStatsChip(); } catch {}
+  // delm-10: the previous session's "agent is working" flag must not
+  // leak into the new session — the HUD Stop button gates on it and
+  // must only ever control the session the user is actually attached
+  // to. The new session's authoritative value arrives via the
+  // claude-running attach frame; until then assume idle.
+  state.claudeRunning = false;
+  // bug-92: same leak-avoidance for the unanswered-question strip.
+  state.pendingQuestions = null;
+  try { _renderPendingQuestionsStrip(); } catch {}
   // Hide the modal if it was open for the previous session.
   const modal = document.getElementById('perm-modal');
   if (modal) modal.hidden = true;
@@ -2262,6 +2847,40 @@ function _resetUiForNewSession(id) {
   // resets on every new session.
   state.turnTotals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, lastTurnInputTokens: 0 };
   _renderTokenMeter();
+  // team-split-view: tear down any dual-column pane from the previous
+  // session. The new session only re-enters split mode if its own
+  // attach ships a team-info frame. `mode` persists across sessions
+  // via localStorage (user preference), the rest is per-session state.
+  try { _teardownTeamSplit(); } catch {}
+  // 2026-10-23 default 单列: /run-n2 (and every team view) must show the
+  // single-column stream by DEFAULT. Previously the no-preference fallback
+  // was 'split' — a fresh browser / cleared localStorage dropped the user
+  // straight into the 多列 columns. The saved preference still wins when
+  // the user explicitly picked a mode (any value present in localStorage
+  // is honoured as-is; only the ABSENT case defaults to 单列/stream).
+  const savedTeamMode = (() => {
+    try {
+      const saved = localStorage.getItem('myco_team_view_mode');
+      if (saved === 'stream' || saved === 'split') return saved;
+      return 'stream'; // default 单列 (run-n2 default view)
+    } catch { return 'stream'; }
+  })();
+  state.teamView = { active: false, mode: savedTeamMode, roster: [], board: null,
+                     laneEnded: false, teamLane: false, endedLanes: {},
+                     colEvents: { 'worker-A': [], 'worker-B': [] },
+                     openTools: { 'worker-A': [], 'worker-B': [] },
+                     lanes: {}, laneId: null };
+  // 2026-10-31 多列 missing-prints fix: re-arm the one-shot column
+  // backfill for the new session (see _backfillTeamColumnsFromServer).
+  state._teamColBackfilled = false;
+  // 单列显示回归修复 (2026-10-23): the PREVIOUS session may have left
+  // #chat-messages hidden (split view was active there). The new session's
+  // teamView starts INACTIVE and the saved 单列 preference must render the
+  // single timeline immediately — myco 打印 / 工具打印 land there. Pre-fix
+  // the element kept its stale hidden=true until some team frame ran
+  // _applyTeamViewMode, so a session switch could land on an EMPTY pane.
+  const chatList0 = document.getElementById('chat-messages');
+  if (chatList0) chatList0.hidden = false;
   try { localStorage.setItem('myco_active_id', id); } catch {}
   renderSessionList();
   clearChat();
@@ -2305,11 +2924,31 @@ function openSession(id, opts = {}) {
       // here re-shows the pane (it's a no-op when already visible).
       setChatPane(true);
     }
+    // working-status fix (2026-10-23): this re-tap path early-returns
+    // BEFORE the /viewed stamp below, so re-opening the session card
+    // while still attached never stamped rec.agentSeenAt and the
+    // sidebar's "to review" chip stayed up after the user looked at
+    // the results. Re-tapping IS reviewing — fire the same
+    // fire-and-forget stamp here.
+    if (state.token) {
+      authedFetch(`/sessions/${encodeURIComponent(id)}/viewed`, { method: 'POST' }).catch(() => {});
+    }
     return;
   }
 
   _teardownPreviousSession();
   _resetUiForNewSession(id);
+
+  // delm-10 stale-working-badge fix: opening a session IS reviewing
+  // it — stamp the server-side agentSeenAt so the sidebar's "◦ to
+  // review" chip clears. Server-side attach stamps it too; this
+  // covers the same-session re-open path (early return above) is
+  // not reached here, so every openSession call fires the stamp.
+  // Fire-and-forget: the 3s sidebar poll re-renders with the
+  // cleared badge; no UI action depends on the response.
+  if (state.token) {
+    authedFetch(`/sessions/${encodeURIComponent(id)}/viewed`, { method: 'POST' }).catch(() => {});
+  }
 
   // Owner sessions get an xterm immediately. Viewer sessions wait for the
   // server's viewer-mode message and then show the conversation pane
@@ -2490,6 +3129,13 @@ function openSession(id, opts = {}) {
         // event-log pane defined below — phase 3 will swap this for
         // a rich structured renderer.
         _handleAgentFrame(msg);
+      } else if (msg.t === 'team-info') {
+        // team-split-view: agent-n2 attach handshake. Enters split mode
+        // BEFORE any worker event arrives and seeds the shared-board
+        // pane from the server's authoritative snapshot. Idempotent —
+        // every reconnect re-sends it, so the board repaints from
+        // server truth without incremental reconciliation.
+        _handleTeamInfoFrame(msg);
       } else if (msg.t === 'clarify-reply') {
         // fr-85 r4: claude's response to a clarify-tagged user input
         // is routed back via this dedicated WS frame — NOT through
@@ -2637,6 +3283,8 @@ function updateChatButton() {
   // (vote / comment / mark / run) and the in-memory artifact cache.
   const fbtn = document.getElementById('btn-files');
   if (fbtn) fbtn.hidden = !hasSession;
+  const sbtn = document.getElementById('btn-skills');
+  if (sbtn) sbtn.hidden = !hasSession;
   for (const t of ['plan', 'arch', 'test']) {
     const el = document.getElementById('btn-' + t);
     if (el) el.hidden = !hasSession;
@@ -2765,6 +3413,126 @@ async function openManualModal() {
 function closeManualModal() {
   const modal = document.getElementById('manual-modal');
   if (modal) modal.hidden = true;
+}
+
+// ── whatsnew banner + modal ("功能上新") ─────────────────────────────
+// Server-side contract: each feature update is a docs/whatsnew/*.md
+// file; GET /whatsnew returns the LATEST version (id = filename stem,
+// newest by lexicographic order) plus the full version list; GET
+// /whatsnew/:version returns an archived version's markdown. The
+// banner at the top of #app announces the latest version and shows
+// whenever the user hasn't dismissed THAT version id (dismissal key:
+// localStorage 'myco_whatsnew_dismissed'). Clicking the banner text —
+// or the sidebar ✨ icon — opens the modal, which renders the markdown
+// via the existing renderMd → marked path and offers a history
+// dropdown to read any archived version.
+const WHATSNEW_DISMISS_KEY = 'myco_whatsnew_dismissed';
+const _whatsnew = {
+  meta: null,          // { available, version, title, versions[] } from GET /whatsnew
+  cache: {},           // version → rendered HTML (in-memory only)
+};
+
+async function fetchWhatsnewMeta() {
+  if (_whatsnew.meta) return _whatsnew.meta;
+  const res = await fetch('/whatsnew', { cache: 'no-store' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  _whatsnew.meta = await res.json();
+  return _whatsnew.meta;
+}
+
+function dismissedWhatsnewVersion() {
+  try { return localStorage.getItem(WHATSNEW_DISMISS_KEY) || ''; } catch { return ''; }
+}
+
+async function renderWhatsnewVersionInto(body, version) {
+  if (_whatsnew.cache[version]) {
+    body.innerHTML = _whatsnew.cache[version];
+    body.scrollTop = 0;
+    return;
+  }
+  body.textContent = 'Loading…';
+  try {
+    const res = await fetch('/whatsnew/' + encodeURIComponent(version), { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const md = await res.text();
+    _whatsnew.cache[version] = renderMd(md);
+    body.innerHTML = _whatsnew.cache[version];
+    body.scrollTop = 0;
+  } catch (err) {
+    body.innerHTML = '<p style="color:#f6b48a">Could not load update notes: '
+      + escHtml(err && err.message || String(err)) + '</p>';
+  }
+}
+
+function fillWhatsnewVersionSelect(select, versions, current) {
+  select.textContent = '';
+  for (const v of versions) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    if (v === current) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+async function openWhatsnewModal(versionOverride) {
+  const modal = document.getElementById('whatsnew-modal');
+  const body = document.getElementById('whatsnew-body');
+  const title = document.getElementById('whatsnew-modal-title');
+  const select = document.getElementById('whatsnew-version-select');
+  if (!modal || !body) return;
+  modal.hidden = false;
+  try {
+    const meta = await fetchWhatsnewMeta();
+    if (!meta.available) {
+      title.textContent = '功能上新';
+      select.disabled = true;
+      body.innerHTML = '<p>暂无更新说明。</p>';
+      return;
+    }
+    title.textContent = meta.title || meta.version;
+    select.disabled = false;
+    fillWhatsnewVersionSelect(select, meta.versions, versionOverride || meta.version);
+    await renderWhatsnewVersionInto(body, versionOverride || meta.version);
+  } catch (err) {
+    title.textContent = '功能上新';
+    body.innerHTML = '<p style="color:#f6b48a">Could not load update notes: '
+      + escHtml(err && err.message || String(err)) + '</p>';
+  }
+}
+
+function closeWhatsnewModal() {
+  const modal = document.getElementById('whatsnew-modal');
+  if (modal) modal.hidden = true;
+}
+
+function dismissWhatsnewBanner() {
+  const banner = document.getElementById('whatsnew-banner');
+  if (banner) banner.hidden = true;
+  const app = document.getElementById('app');
+  if (app) app.classList.remove('has-whatsnew');
+  if (_whatsnew.meta && _whatsnew.meta.version) {
+    try { localStorage.setItem(WHATSNEW_DISMISS_KEY, _whatsnew.meta.version); } catch {}
+  }
+}
+
+// Boot-time check: fetch the latest version and show the banner if the
+// user hasn't dismissed exactly this version id. A new deploy with a
+// new docs/whatsnew/*.md filename automatically re-shows the banner.
+async function initWhatsnewBanner() {
+  const banner = document.getElementById('whatsnew-banner');
+  const text = document.getElementById('whatsnew-banner-text');
+  const app = document.getElementById('app');
+  if (!banner || !text || !app) return;
+  try {
+    const meta = await fetchWhatsnewMeta();
+    if (!meta.available || meta.version === dismissedWhatsnewVersion()) return;
+    text.textContent = '✨ 功能上新 · ' + (meta.title || meta.version);
+    banner.hidden = false;
+    app.classList.add('has-whatsnew');
+  } catch {
+    // Server unreachable or no whatsnew dir — silently skip the banner.
+  }
 }
 
 // ── fr-84: in-browser freehand diagram drawing modal ──────────────────────
@@ -3417,8 +4185,7 @@ function timeAgo(iso) {
 
 // ── chat (collaborator discussion + claude assistant) ────────────────────────
 
-// Client-side rolling cap on state.chatMessages. Live appends drop
-// the oldest to stay under MAX_CHAT_BYTES. Scroll-up load-older
+// Client-side rolling cap on state.chatMessages. Scroll-up load-older
 // explicitly DISABLES the cap (sets state._scrolledBack = true)
 // because the user just asked to see older history — capping would
 // drop the rows they just fetched.
@@ -3427,6 +4194,19 @@ function timeAgo(iso) {
 // handle 1 MB of chat-msg objects easily, and bumping the ceiling
 // means the cap rarely fires for normal interaction — the user
 // only hits it on truly long sessions.
+//
+// 2026-11-04 lossless-cap fix (user report: "early messages get
+// lost, some messages get lost"): the cap used to SILENTLY DROP the
+// oldest rows from state.chatMessages — they became unrecoverable in
+// the pane even though the server still had them, and the
+// load-older paginator keyed its `before` cursor off
+// state.chatMessages[0].ts, so once the cap fired the user could
+// never scroll back past the 1 MB window. Rows evicted by the cap
+// are now stashed in state.chatEvicted (cheap: they're already
+// parsed objects) so nothing is lost before the session closes.
+// Memory cost is bounded — a 1 MB budget with, say, 10 MB of total
+// chat keeps 9 MB of lightweight row objects, fine on any device
+// that runs this pane.
 const MAX_CHAT_BYTES = 1024 * 1024;
 
 function _capChatMessagesBytes() {
@@ -3448,9 +4228,14 @@ function _capChatMessagesBytes() {
     keepFromIdx = i;
   }
   if (keepFromIdx > 0) {
-    const dropped = keepFromIdx;
+    const evicted = arr.slice(0, keepFromIdx);
+    // 2026-11-04 lossless-cap: stash instead of drop so early rows
+    // remain recoverable (prepended back by _revealOlderChat /
+    // _fetchOlderChatFromServer) until the session is closed.
+    if (!Array.isArray(state.chatEvicted)) state.chatEvicted = [];
+    state.chatEvicted = evicted.concat(state.chatEvicted);
     state.chatMessages = arr.slice(keepFromIdx);
-    try { console.log('[chat-cap] dropped ' + dropped + ' oldest message(s) to stay under ' + MAX_CHAT_BYTES + ' bytes (kept ' + state.chatMessages.length + ', ' + bytes + ' bytes)'); } catch {}
+    try { console.log('[chat-cap] evicted ' + evicted.length + ' oldest message(s) to state.chatEvicted (kept ' + state.chatMessages.length + ' in-memory, ' + bytes + ' bytes; evicted buffer now ' + state.chatEvicted.length + ')'); } catch {}
   }
 }
 
@@ -4364,6 +5149,11 @@ function _bindChatMenuClicks() {
 
 function clearChat() {
   state.chatMessages = [];
+  // 2026-11-04 lossless-cap: the evicted buffer + DOM-rip floor are
+  // per-session — wipe them on session switch so rows from the
+  // previous session never leak into the new one's load-older path.
+  state.chatEvicted = [];
+  state._domRippedBelowSeq = null;
   // Explicitly wipe ALL DOM children of #chat-messages — including
   // agent cards / turn-groups / load-older buttons. The
   // renderChatPane preserve logic (which keeps agent cards across
@@ -5042,9 +5832,23 @@ function _enforceChatHistoryCap() {
   }
   // Hard cap pass: rip the oldest from DOM entirely. Done first so
   // the subsequent archive counts reflect post-rip reality.
+  // 2026-11-04 lossless-cap: before removing, record the ripped
+  // cards' seq so _fetchOlderAgentEvents can re-fetch them from the
+  // server's durable events.jsonl when the user scrolls back. The
+  // old code removed them with no recovery path — the user report
+  // "some messages get lost" on long sessions.
   if (cards.length > CHAT_HARD_CAP) {
     const drop = cards.length - CHAT_HARD_CAP;
-    for (let i = 0; i < drop; i++) cards[i].remove();
+    let oldestRippedSeq = null;
+    for (let i = 0; i < drop; i++) {
+      const s = cards[i].dataset && cards[i].dataset.seq ? parseInt(cards[i].dataset.seq, 10) : NaN;
+      if (Number.isFinite(s) && (oldestRippedSeq === null || s < oldestRippedSeq)) oldestRippedSeq = s;
+      cards[i].remove();
+    }
+    if (oldestRippedSeq !== null) {
+      state._domRippedBelowSeq = oldestRippedSeq;
+      state._eventsHasMore = true; // keep the load-older path alive
+    }
     cards = cards.slice(drop);
   }
   // 2026-05-17 bug fix: compute archived + serverPending BEFORE the
@@ -5074,9 +5878,16 @@ function _enforceChatHistoryCap() {
   // INITIAL_CHAT_HISTORY_BYTES=1KB and DEFAULT_CHAT_HISTORY_LIMIT=50,
   // so a long session can leave hundreds of rows on the server. The
   // load-older button surfaces both: archived (locally hidden) +
-  // serverPending (never received).
+  // serverPending (never received). state._eventsHasMore extends the
+  // same contract to the agent-event backfill (/events pagination) —
+  // tool cards older than the 16 KB replay window keep the button
+  // alive even when chat rows are fully caught up.
+  // 2026-11-04 lossless-cap: rows evicted from state.chatMessages by
+  // the byte cap live in state.chatEvicted — they count toward the
+  // load-older button so it stays alive until they've been revealed.
+  const evictedCount = Array.isArray(state.chatEvicted) ? state.chatEvicted.length : 0;
   const serverPending = Math.max(0, (state.chatTotal || 0) - state.chatMessages.length);
-  const total = archived + serverPending;
+  const total = archived + serverPending + evictedCount + (state._eventsHasMore ? 1 : 0);
   if (total > 0) {
     _ensureLoadOlderButton(list, total);
   } else {
@@ -5473,17 +6284,33 @@ function _revealOlderChat() {
     console.log('[diag-load-older] reveal: archived=' + archived.length + ' serverPending=' + serverPending);
   } catch {}
   if (!archived.length) {
+    // 2026-11-04 lossless-cap: rows the byte cap evicted from
+    // state.chatMessages live in state.chatEvicted — restore them
+    // BEFORE hitting the server. They are strictly older than
+    // anything currently rendered (the cap only ever evicts from
+    // the head), so a straight prepend keeps chronological order.
+    if (Array.isArray(state.chatEvicted) && state.chatEvicted.length) {
+      const restore = state.chatEvicted.splice(-CHAT_LOAD_OLDER_BATCH);
+      state.chatMessages = restore.concat(state.chatMessages);
+      state._scrolledBack = true; // same contract as _fetchOlderChatFromServer
+      renderChatPane(/*scrollToBottom*/ false);
+      _enforceChatHistoryCap();
+      return;
+    }
     // bug-9: no more locally-archived cards to reveal — but the
-    // server may still have older messages we never received
-    // (chat-history WS frame is capped at DEFAULT_CHAT_HISTORY_LIMIT).
-    // Fetch the next window from the new /chat/history endpoint.
+    // server may still have older rows we never received (chat WS
+    // frame capped at DEFAULT_CHAT_HISTORY_LIMIT; agent replay capped
+    // at 16 KB). Fire BOTH backfills — chat rows via /chat/history,
+    // tool cards via /events — each is independently paginated.
     const serverPending = Math.max(0, (state.chatTotal || 0) - state.chatMessages.length);
     if (serverPending > 0) {
       _fetchOlderChatFromServer().catch(() => {});
-      return;
     }
-    const btn = list.querySelector('#chat-load-older');
-    if (btn) btn.remove();
+    // Agent-event backfill: older tool cards (Bash/Edit/Read) live in
+    // events.jsonl, not rec.chat — paginate them in the same
+    // interaction. chatTotal only counts chat rows, so the events
+    // window fires even when chat has nothing older left.
+    _fetchOlderAgentEvents().catch(() => {});
     return;
   }
   // Reveal the NEWEST archived first — the user wants the run-up to
@@ -5517,6 +6344,107 @@ function _revealOlderChat() {
   if (anchor) {
     const anchorTopAfter = anchor.getBoundingClientRect().top;
     list.scrollTop += (anchorTopAfter - anchorTopBefore);
+  }
+}
+
+// Agent-event history backfill — the tool-card twin of
+// _fetchOlderChatFromServer. The attach agent-replay frame ships only
+// a 16 KB tail; older Bash/Edit/Read cards (the "detailed steps") had
+// no fetch path, so refresh / session-switch blanked them even though
+// events.jsonl held the full history server-side. Cursor = the oldest
+// data-seq currently rendered in the pane (server events are stamped
+// with the same monotonic seq). Renders via _appendAgentEvent into a
+// detached fragment (no live-pane side effects), prepends above the
+// current head, then re-sorts the pane per the chat-persistence
+// contract §4 (any channel that pushes into #chat-messages MUST call
+// _resortChatPaneByTs).
+async function _fetchOlderAgentEvents() {
+  const sid = state.activeId;
+  if (!sid) return;
+  if (state._fetchingOlderEvents) return;
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  // Cursor: smallest data-seq among rendered agent cards. Cards
+  // without a seq (defensive — pre-seq replay rows) don't advance it.
+  // 2026-11-04 lossless-cap: when the DOM hard cap ripped cards, the
+  // oldest rendered seq is NEWER than what was ripped — re-fetch from
+  // the recorded floor instead so ripped cards come back.
+  let oldestSeq = null;
+  for (const el of list.children) {
+    const s = el.dataset && el.dataset.seq ? parseInt(el.dataset.seq, 10) : NaN;
+    if (Number.isFinite(s) && (oldestSeq === null || s < oldestSeq)) oldestSeq = s;
+  }
+  const domRippedBelow = typeof state._domRippedBelowSeq === 'number' ? state._domRippedBelowSeq : null;
+  if (domRippedBelow !== null && (oldestSeq === null || domRippedBelow < oldestSeq)) {
+    oldestSeq = domRippedBelow;
+    state._domRippedBelowSeq = null; // floor consumed by this fetch
+  }
+  if (oldestSeq === null) return; // nothing rendered yet — replay owns the paint
+  state._fetchingOlderEvents = true;
+  try {
+    const url = `/sessions/${encodeURIComponent(sid)}/events`
+      + `?before=${oldestSeq}&limit=${CHAT_LOAD_OLDER_BATCH}`;
+    const res = await authedFetch(url);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || !Array.isArray(data.events)) return;
+    state._eventsHasMore = Boolean(data.hasMore);
+    if (!data.events.length) return;
+    // Dedup against what's already rendered — a reconnect's replay
+    // already re-painted the tail; only genuinely-older rows prepend.
+    const renderedSeqs = new Set();
+    for (const el of list.children) {
+      if (el.dataset && el.dataset.seq) renderedSeqs.add(el.dataset.seq);
+    }
+    const fresh = data.events.filter((ev) => ev && typeof ev.seq === 'number'
+      && !renderedSeqs.has(String(ev.seq)));
+    if (!fresh.length) return;
+    // Render into a detached container by temporarily swapping
+    // _ensureAgentLogPane's return target. _appendAgentEvent hardcodes
+    // that helper for its DOM root; a pane-parameter would thread
+    // through a dozen chrome-batch/merge helpers, so the swap is the
+    // surgical route. Everything inside the swap renders into `frag`:
+    // no scroll-trigger, no live-cap eviction, no HUD churn on the
+    // real pane. Worker-tagged rows (team view active) render into the
+    // columns via _routeAgentEvent AND land in `frag` here — since the
+    // 2026-10-23 单列 regression fix they always also print into the
+    // single stream, so the backfill prepends them with badges.
+    const frag = document.createElement('div');
+    const origEnsure = _ensureAgentLogPane;
+    const origResort = _resortChatPaneByTs;
+    const origScroll = scrollChatToLatest;
+    _ensureAgentLogPane = () => frag;
+    _resortChatPaneByTs = () => {};
+    scrollChatToLatest = () => {};
+    try {
+      for (const ev of fresh) {
+        try { _appendAgentEvent(ev); } catch {}
+      }
+    } finally {
+      _ensureAgentLogPane = origEnsure;
+      _resortChatPaneByTs = origResort;
+      scrollChatToLatest = origScroll;
+    }
+    // Prepend above the current head (after the load-older button).
+    const loadOlder = list.querySelector('#chat-load-older');
+    const anchor = loadOlder ? loadOlder.nextSibling : list.firstChild;
+    for (const el of [...frag.children]) {
+      list.insertBefore(el, anchor || list.firstChild);
+    }
+    // Worker-tagged rows routed into colEvents during the render swap
+    // (team view active): rebuild the split columns from the enlarged
+    // cache so the backfill reaches the columns too. In stream mode
+    // the single-stream render above already shows them with badges.
+    if (state.teamView.active && state.teamView.mode === 'split') {
+      try { _rebuildTeamColumnsFromCache(); } catch {}
+    }
+    _resortChatPaneByTs();
+    state._scrolledBack = true;
+    console.log('[events-backfill] prepended ' + fresh.length + ' agent event(s) before seq=' + oldestSeq);
+  } catch (err) {
+    console.warn('[events-backfill] failed:', err && err.message);
+  } finally {
+    state._fetchingOlderEvents = false;
   }
 }
 
@@ -5570,9 +6498,14 @@ async function _fetchOlderChatFromServer() {
       // state.chatMessages.length — causing the IntersectionObserver
       // to fire again forever. Trim state.chatTotal down so
       // serverPending = 0 and the button retires.
-      if (state.chatTotal > state.chatMessages.length) {
-        console.log('[diag-fetch-older] forcing state.chatTotal down from ' + state.chatTotal + ' to ' + state.chatMessages.length + ' (server returned 0 older rows; the gap is unfetchable, likely all fromAgent rows newer than oldest.ts)');
-        state.chatTotal = state.chatMessages.length;
+      // 2026-11-04 lossless-cap: account for rows evicted into
+      // state.chatEvicted — they are NOT on the server-side "missing"
+      // path anymore (the reveal path restores them locally), so the
+      // retire check must compare against the evicted rows too.
+      const knownRows = state.chatMessages.length + (Array.isArray(state.chatEvicted) ? state.chatEvicted.length : 0);
+      if (state.chatTotal > knownRows) {
+        console.log('[diag-fetch-older] forcing state.chatTotal down from ' + state.chatTotal + ' to ' + knownRows + ' (server returned 0 older rows; the gap is unfetchable, likely all fromAgent rows newer than oldest.ts)');
+        state.chatTotal = knownRows;
       }
       _enforceChatHistoryCap();
       return;
@@ -5892,7 +6825,17 @@ function renderChatMessage(m, isActiveMenu) {
   // attribute is hooked by _bindChatMenuClicks. No visible affordance
   // line ('↗ Awaiting answer — open in popup' was retired); the row
   // itself is the affordance and gets `cursor: pointer` via CSS.
-  const rowAttrs = (menuOpts && !isResolvedMenu) ? ' data-perm-reopen="1"' : '';
+  let rowAttrs = (menuOpts && !isResolvedMenu) ? ' data-perm-reopen="1"' : '';
+  // full-text hover (用户需求: 截断的 /run-n2 进度/完成行鼠标放上去可见全部
+  // 内容). Server stamps meta.fullText on lines whose inline text is truncated
+  // (progress heartbeat + ✅ 完成); the full content rides along as a native
+  // title tooltip on the bubble — no extra DOM, works on refresh since the
+  // meta is persisted with the chat row.
+  const fullText = m.meta && typeof m.meta.fullText === 'string' ? m.meta.fullText : null;
+  if (fullText) {
+    cls += ' chat-msg-fulltext';
+    rowAttrs += ` title="${escHtml(fullText)}"`;
+  }
   // 2026-05-17: emit data-seq + data-ts in the markup directly.
   // data-seq is the server-allocated monotonic per-session counter
   // shared between chat-msg AND agent-event streams — it's the
@@ -5977,6 +6920,11 @@ const CLAUDE_IDLE_MS = 30000;           // post-stream silence before we declare
 
 function _markAwaitingClaude() {
   state.awaitingClaude = true;
+  // delm-10: a turn just started on the ATTACHED session (user sent
+  // a message / picked a menu / clicked Stop-adjacent rerun). The
+  // claude-running frame only ships on attach, so flip the busy flag
+  // here too — the HUD Stop button gates on it.
+  state.claudeRunning = true;
   state.pendingClaudeToolCalls = 0;
   state.pendingClaudeReplyPosted = false;
   state._claudeSeenText = new Set();    // dedupe by uuid across overlapping deltas
@@ -6019,7 +6967,13 @@ function _retireClaudeTyping() {
   state.claudeStatusLine = '';
   state.claudeStatusKind = null;
   state.claudeStatus = null;
+  // delm-10: the turn is over (idle timeout / spinner-stop / abort /
+  // turn_result) — clear the busy flag so the HUD Stop button hides
+  // and any late click is a no-op instead of interrupting a session
+  // that isn't working.
+  state.claudeRunning = false;
   _renderClaudeTyping();
+  try { _updateTaskHUD(); } catch {}
 }
 
 // Repaint #claude-typing's label with the structured status chips
@@ -6161,7 +7115,13 @@ function _renderClaudeTyping() {
   // ALWAYS visible so users can queue messages while claude works.
   const form = document.getElementById('chat-form');
   if (form) {
-    const showStop = visible && (kind === 'thinking' || kind === 'running' || kind === 'awaiting');
+    // stop-vs-run-n2: also show the composer Stop while a live team
+    // lane is running — the main session is idle then (no claude-typing
+    // strip), but the lane's workers are iterating and Stop must reach
+    // them (server _handleInterrupt → stopN2Lane).
+    const laneRunningComposer = state.teamView.active && state.teamView.teamLane && !state.teamView.laneEnded;
+    const showStop = laneRunningComposer
+      || (visible && (kind === 'thinking' || kind === 'running' || kind === 'awaiting'));
     form.classList.toggle('composer-running', showStop);
   }
   // Start / stop the 1Hz playful-status ticker. Active states keep
@@ -6202,6 +7162,23 @@ function _humanizeTokens(n) {
 
 function _setClaudeStatusLine(text, structured) {
   const trimmed = (text && String(text).trim()) || null;
+  // working-status fix: a late claude-status frame (spinner text or a
+  // stale tool-progress readout) must not re-arm the typing strip /
+  // Stop button after the turn retired. The server's claude-running
+  // frame + turn retire paths cleared state.claudeRunning; a spinner
+  // line arriving past the turn end (observed: a late frame right
+  // after turn_result's 3s grace fired) used to flip `visible` back
+  // on with kind='thinking', re-showing Stop against an idle session
+  // until the 30s idle timer cleaned up. Gate here: once the strip is
+  // fully retired (no awaiting, no grace timer in flight), ignore
+  // frames that claim activity — only the idle spinner clearing and
+  // the retire paths set everything null.
+  if (trimmed && !state.awaitingClaude && !state.claudeRunning && !state._spinnerSeen) {
+    // Idle + a frame claiming activity — this is out-of-turn noise
+    // (server keeps streaming claude-status briefly after the turn
+    // drains). Drop it rather than resurrect a dead indicator.
+    return;
+  }
   state.claudeStatusLine = trimmed;
   state.claudeStatus = structured || null;
   if (trimmed) {
@@ -6282,7 +7259,35 @@ function _handleAgentFrame(msg) {
     if (pane) {
       for (const el of [...pane.children]) {
         if (!el.classList || !el.classList.contains('chat-msg')) {
+          // 2026-10-26: the 单列 board artifacts — the per-lane stream board
+          // card (.team-stream-board) and its one-line coordination notices
+          // (.team-ev-card) — are NOT re-shipped by the replay (they are not
+          // agent events). Wiping them on every reattach is what emptied the
+          // 单列 view of its 看板/进度 content after a session switch or page
+          // refresh (bug: formatProgress/board info not printing in 单列).
+          // They are preserved here (the card is re-rendered below from the
+          // authoritative rec.board snapshot it was seeded from).
+          if (el.classList.contains('team-stream-board') || el.classList.contains('team-ev-card')) continue;
           el.remove();
+        }
+      }
+    }
+    // team-split-view: replay re-appends every worker-tagged event via
+    // _routeAgentEvent → the columns would double-render without the
+    // same wipe applied to them (行排列: wipe EVERY lane row's worker
+    // bodies, lane-scoped ids). Mirrors the pane wipe above; the
+    // team-info frame (shipped BEFORE this frame on attach) has
+    // already reset/re-seeded the cache. NOTE the mid-column board
+    // feeds (team-mid-events-<lane>) are deliberately NOT wiped here —
+    // the replay stream carries no board events, and the team-info
+    // frame's events-history backfill is what (re)builds those feeds.
+    // Wiping them here would erase the just-backfilled history on
+    // every reconnect/refresh.
+    if (state.teamView.active) {
+      for (const rec of _teamLanesList()) {
+        for (const w of Object.keys(rec.colEvents)) {
+          const body = document.getElementById('team-col-' + _teamLaneKey(rec.laneId) + '-' + w);
+          if (body) { for (const el of [...body.children]) el.remove(); }
         }
       }
     }
@@ -6316,6 +7321,29 @@ function _handleAgentFrame(msg) {
       console.log('[agent-replay] dedup dropped ' + dropped + ' duplicate event(s) of ' + msg.events.length + ' total (bug-7 root cause is server-side — investigate session.buffer hydrate-vs-emit + events.jsonl trim)');
     }
     for (const ev of deduped) _appendAgentEvent(ev);
+    // 2026-10-26 (单列 fix): re-attach must re-seed the stream board card.
+    // The replay wiped nothing of it (preserved above), but the card also
+    // needs to be current after a refresh — the team-info attach frame
+    // shipped BEFORE this replay carried the authoritative board snapshot,
+    // and any board change made while this device was detached is only
+    // reflected by re-rendering from rec.board now. Retired (ended) lanes
+    // are skipped so a finished run is never repainted.
+    if (state.teamView.active && state.teamView.mode !== 'split') {
+      for (const rec of _teamLanesList()) {
+        if (state.teamView.endedLanes && state.teamView.endedLanes[rec.laneId]) continue;
+        _renderTeamStreamBoardCard(rec.laneId);
+      }
+    }
+    // 2026-10-31 多列 missing-prints fix: the replay tail (16 KB) is the
+    // ONLY thing that re-populates the worker columns on a session
+    // switch — anything older than the tail never re-enters them (the
+    // 单列 stream has its scroll-up backfill; the columns had none).
+    // Kick the one-shot server backfill now that the replay has seeded
+    // the caches, so switching back into a team session shows ALL the
+    // worker prints, not just the last few.
+    if (state.teamView.active && state.teamView.mode === 'split') {
+      void _backfillTeamColumnsFromServer();
+    }
     // bug-9 round 4 + reload-order fix: agent-replay appends events at
     // the end of #chat-messages, regardless of where they belong
     // chronologically vs already-rendered chat-msg bubbles. When the
@@ -6421,6 +7449,10 @@ const AGENT_CHROME_TYPES = new Set([
   'agent_init_snapshot',
   'hook_allow',
   'hook_deny',
+  // Research mode: retrieval + write-back telemetry. Chrome rows, so the
+  // user can see the KB working without cluttering the chat timeline.
+  'knowledge_injected',
+  'knowledge_written',
   'permission_request',
   'permission_resolved',
   'rate_limit',
@@ -6487,11 +7519,24 @@ function _updateAgentStatusStrip(ev) {
     return;
   }
   if (ev.type === 'fatal') {
+    // bug-92: a fatal outcome (incl. an abort that surfaces as an
+    // uncaught error rather than AbortError) must not leave the typing
+    // strip stuck RED forever. turn_result already retires after a
+    // grace; fatal used to set kind='error' + awaitingClaude=true with
+    // NO timer, so the '.claude-typing-error' indicator persisted
+    // ("stop点了还是红色 / 界面一直停不掉"). Show the ⚠ briefly, then
+    // retire like done/aborted. The error text is still echoed to the
+    // chat/terminal/error surfaces, so clearing the strip loses nothing.
     state.claudeStatusLine = '⚠ fatal · ' + String(ev.error || '').split('\n')[0].slice(0, 80);
     state.claudeStatus = null;
     state.claudeStatusKind = 'error';
     state.awaitingClaude = true;
     _renderClaudeTyping();
+    _agentStatusGraceTimer = setTimeout(() => {
+      state.claudeStatusLine = '';
+      state.claudeStatusKind = null;
+      _retireClaudeTyping();
+    }, 3000);
     return;
   }
   if (ev.type === 'iteration_aborted') {
@@ -6700,6 +7745,1296 @@ function _localDayKey(iso) {
   return `${y}-${m}-${day}`;
 }
 
+// ---- team-split-view: dual-worker split pane (agent-n2) ----
+//
+// Layout (2026-10-23 用户需求): EVERY task (/run-n2 lane) renders as
+// its own FULL-WIDTH row inside the 多worker协同 area — one row per
+// lane, stacked in start order: [workerA column | 共享看板 | workerB
+// column]. Rows are NOT resizable (fixed, sensible grid tracks — 拖拽
+// 调宽已按用户要求移除), and each row fills the width of the 协同区域.
+// All rendering reuses the same primitives as the single stream
+// (_isChromeEvent / _appendToChromeBatch / _finishChromeBatch are
+// already worker-aware via dataset.worker).
+
+const TEAM_VIEW_MSG_CAP = 400; // per-worker event cache cap (UI memory hygiene)
+const TEAM_COL_MIN_W = 220;   // worker 列最小宽（仅作 grid 轨道下限，非拖拽边界）
+const TEAM_MID_MIN_W = 260;   // 共享看板固定轨道下限
+
+// 2026-10-31 多列 missing-prints fix: how many older worker events the
+// columns backfill from GET /sessions/:id/events when a session switch
+// lands with columns whose cache was never re-populated by the 16 KB
+// agent-replay tail. See _backfillTeamColumnsFromServer.
+const TEAM_COL_BACKFILL_LIMIT = 200;
+
+// ── multi-lane helpers: one lane record per /run-n2 run ──
+//
+// The server registers EVERY /run-n2 lane (keyed laneId, start order)
+// and tags team-info/board/team-lane-end frames + bridged worker events
+// with {laneId, task}. The client mirrors that here: one lane record
+// per run, and the split view renders EVERY lane as its own row (no
+// picker, no single selected lane — 按行排列, 全部展示).
+
+// All lane records in start order (oldest first) — the row order.
+function _teamLanesList() {
+  return Object.values(state.teamView.lanes || {});
+}
+
+// Ensure a lane record exists for laneId (attach frames may arrive for
+// a lane whose team-info we processed, and a bridged event may be the
+// FIRST thing we see for a lane when a team-info frame raced the WS).
+function _teamLaneRec(laneId, task) {
+  const lanes = state.teamView.lanes || (state.teamView.lanes = {});
+  if (!laneId) laneId = '__default__';
+  if (!lanes[laneId]) {
+    lanes[laneId] = {
+      laneId,
+      task: task || '',
+      ended: false,
+      roster: ['worker-A', 'worker-B'],
+      board: null,
+      events: [],
+      colEvents: { 'worker-A': [], 'worker-B': [] },
+      openTools: { 'worker-A': [], 'worker-B': [] },
+    };
+  }
+  if (task) lanes[laneId].task = task;
+  return lanes[laneId];
+}
+
+// DOM-id safe key for a lane (laneIds are timestamp-ish strings; the
+// default pseudo-lane gets a fixed name).
+function _teamLaneKey(laneId) {
+  return laneId || '__default__';
+}
+
+function _handleTeamInfoFrame(msg) {
+  state.teamView.active = true;
+  // teamLane: this team is an EPHEMERAL shadow lane (/run-n2 / /compare
+  // / queue ◓ button), not the session itself being agent-n2.
+  state.teamView.teamLane = Boolean(msg.teamLane);
+  // working-status fix: a NEW (not ended) lane re-arms the lane-running
+  // mirror — _handleTeamLaneEnd sets it true when a lane finishes, so
+  // it must flip back here or the Stop gates stay dead for a re-run.
+  // The ended:true re-announce (attach handshake for an already-finished
+  // lane) keeps laneEnded true.
+  if (msg.teamLane && !msg.ended) state.teamView.laneEnded = false;
+  // 2026-10-26: a FULL attach re-announces an already-ended shadow lane as
+  // team-info {ended:true} (server sends team-lane-end only on catch-up).
+  // A refreshed page must RETIRE the finished lane — record + row + 单列
+  // card deleted and the laneId remembered — instead of seeding a frozen
+  // "■ 已结束" row that lingers forever (用户需求: 结束要清理). Scoped to
+  // shadow lanes, mirroring the live-end guard in _handleTeamLaneEnd; the
+  // branch returns before the normal seeding so no frozen record is made.
+  if (msg.ended && state.teamView.teamLane) {
+    const endedLaneId = msg.laneId || '__default__';
+    _retireTeamLane(endedLaneId);
+    return;
+  }
+  state.teamView.roster = Array.isArray(msg.roster) ? msg.roster : ['worker-A', 'worker-B'];
+  // Record THIS lane. Frames without a laneId (a real agent-n2 session
+  // board, or a pre-multi-lane server) collapse onto the '__default__'
+  // pseudo-lane so everything below keeps working.
+  const rec = _teamLaneRec(msg.laneId, msg.task);
+  rec.roster = state.teamView.roster;
+  rec.ended = Boolean(msg.ended);
+  rec.board = msg.board || null;
+  // legacy laneId mirror for stream-mode rebuild + board-frame routing
+  // (frames without laneId target the default lane).
+  if (state.teamView.laneId == null) state.teamView.laneId = rec.laneId;
+  if (msg.resetCache) {
+    // A new lane run must start from clean columns — otherwise the
+    // previous run's events stack under the new ones. Also clears the
+    // frozen state from the previous run (ended badge / dimmed chrome).
+    rec.colEvents = Object.fromEntries((rec.roster || _teamRoster()).map((w) => [w, []]));
+    rec.openTools = Object.fromEntries((rec.roster || _teamRoster()).map((w) => [w, []]));
+    const staleFeed = document.getElementById('team-mid-events-' + _teamLaneKey(rec.laneId));
+    if (staleFeed) staleFeed.replaceChildren();
+  }
+  // Server-shipped event history: the full UI-relevant board log
+  // (publish/claim/done/note/apply…), same filter the live
+  // kind:'board' frames use. Reattach mid-run or after the run ended
+  // → rebuild the lane row's feed exactly as it looked live.
+  if (Array.isArray(msg.events)) {
+    rec.events = msg.events.slice();
+    const feed = document.getElementById('team-mid-events-' + _teamLaneKey(rec.laneId));
+    if (feed) {
+      feed.replaceChildren();
+      for (const ev of msg.events) _appendTeamBoardEvent(rec.laneId, ev);
+    }
+  }
+  _enterTeamView();
+  _renderTeamBoardPane(rec.laneId);
+  for (const w of (rec.roster || _teamRoster())) _renderTeamColumnStatus(rec.laneId, w);
+  // 单列 fix: attach/reattach must seed the single-timeline board card
+  // too (board snapshot ships on this frame), not just the hidden split
+  // panes. Board-change events already render notices via the kind:
+  // 'board' handler; the history below is deliberately NOT re-notified
+  // (it would spam the timeline on every refresh).
+  _renderTeamStreamBoardCard(rec.laneId);
+  // 布局横幅: attach carries the lane roster + board snapshot — seed the
+  // banner's mode line + 看板进展 counter here too (a fresh device attach
+  // must see the explainer without waiting for the next board change).
+  _renderTeamModeBanner();
+}
+
+// A shadow lane ended (/run-n2 terminal, /compare n2 leg, queue ◓ run).
+// 2026-10-23 用户需求: 每个多列任务结束后，面板要记得删除 — the
+// finished lane's row is REMOVED from the 协同区域 (no frozen record
+// anymore; the worker history itself stays durable in events.jsonl /
+// the 单列 stream). The lane record leaves the registry so
+// _rebuildTeamRows stops drawing its row; when NO lanes remain the
+// area falls to the 暂无任务 empty state.
+function _handleTeamLaneEnd(msg) {
+  if (!state.teamView.active) return;
+  if (!state.teamView.teamLane) return;
+  const laneId = (msg && msg.laneId) || state.teamView.laneId || '__default__';
+  // 2026-10-26: the shared retire path — deletes the record + row +
+  // 单列 board card AND remembers the laneId in endedLanes so a late /
+  // replayed event or a team-info re-announce can never resurrect it.
+  const lanes = state.teamView.lanes || {};
+  delete lanes[laneId];
+  const row = document.getElementById('team-row-' + _teamLaneKey(laneId));
+  if (row) row.remove();
+  // 单列 fix: retire the single-timeline board card with the lane — a
+  // stale card would keep claiming the run is live after it ended.
+  const streamCard = document.getElementById('team-stream-board-' + _teamLaneKey(laneId));
+  if (streamCard) streamCard.remove();
+  _retireTeamLane(laneId);
+  _rebuildTeamRows();
+  // 2026-10-31 fix: the retire path above removed the lane's row/card but
+  // never re-synced the 布局 dropdown — after a lane retired MID-RUN (one
+  // worker's terminal firing while the run's transcript was still
+  // streaming) the select kept stale hidden state and the 单双列 control
+  // disappeared even though the team view was still active. Re-sync so
+  // the dropdown stays up for as long as the team view is live.
+  try { _syncTeamModeSelect(); } catch {}
+  // working-status fix: this lane is over — flip the lane-running mirror
+  // so the composer Stop / HUD Stop / Esc-interrupt gates
+  // (active && teamLane && !laneEnded) stop offering an interrupt aimed
+  // at a dead lane. Pre-fix laneEnded was initialized false and never
+  // set true anywhere, so the Stop buttons stayed live until the next
+  // session switch reset teamView.
+  state.teamView.laneEnded = true;
+  try { _renderClaudeTyping(); } catch {}
+  try { _updateTaskHUD(); } catch {}
+}
+
+// 2026-10-26: THE single place that retires a finished shadow lane — the
+// lane record leaves the registry, its multi-column row is removed from
+// the 协同区域, its 单列 board card is retired, and the laneId is recorded
+// in state.teamView.endedLanes so a replayed / late worker event, a
+// team-info {ended:true} re-announce on refresh, or a _rebuildTeamRows
+// pass can never draw the finished run again. Idempotent — calling it on
+// a lane that is already gone is a no-op. Both the live end path
+// (_handleTeamLaneEnd) and the ended attach re-announce
+// (_handleTeamInfoFrame with ended:true) funnel through here.
+function _retireTeamLane(laneId) {
+  if (!laneId) laneId = '__default__';
+  state.teamView.endedLanes = state.teamView.endedLanes || {};
+  state.teamView.endedLanes[laneId] = true;
+  const lanes = state.teamView.lanes || {};
+  delete lanes[laneId];
+  const row = document.getElementById('team-row-' + _teamLaneKey(laneId));
+  if (row) row.remove();
+  const streamCard = document.getElementById('team-stream-board-' + _teamLaneKey(laneId));
+  if (streamCard) streamCard.remove();
+  _rebuildTeamRows();
+  // 2026-10-28 UX: the lane left the registry — the toolbar's 运行中/进度
+  // readout must drop it too.
+  _updateTeamToolbarReadouts();
+  // 2026-10-31 fix (user report: 单双列按钮就没了): re-sync the 布局
+  // dropdown after a retire — the ended:true attach re-announce path
+  // (page refresh after a lane finished) funnels through here, and
+  // without the sync the select never re-evaluated its hidden flag.
+  // The team view stays active (a new /run-n2 can start any moment), so
+  // the control must remain reachable.
+  try { _syncTeamModeSelect(); } catch {}
+}
+
+// worker 花色 chip class（A/B 沿用旧配色，其余 worker 用中性色 — 同一
+// 行内配色相近，避免引入突兀的新色相）。
+function _teamWorkerChipClass(w) {
+  if (w === 'worker-A') return 'agent-worker agent-worker-a';
+  if (w === 'worker-B') return 'agent-worker agent-worker-b';
+  return 'agent-worker agent-worker-x';
+}
+
+// 当前 roster（team-info 帧 msg.roster；缺省回退 A/B 两列）。
+function _teamRoster() {
+  return (Array.isArray(state.teamView.roster) && state.teamView.roster.length)
+    ? state.teamView.roster
+    : ['worker-A', 'worker-B'];
+}
+
+// Build (or reveal) the split DOM. #chat-messages and #team-split are
+// mutually exclusive surfaces inside #chatpane; switching just toggles
+// `hidden` — both stay in the DOM so stream↔split keeps state.
+// 2026-10-23 行排列: one full-width row per lane, rows stacked in start
+// order inside #team-rows. Row = [worker-A col | 共享看板 | worker-B
+// col] with FIXED grid tracks (不支持缩放 — the drag handles, width
+// persistence and lane picker from the 2026-10-22 layout are gone).
+function _ensureTeamSplitDom() {
+  let root = document.getElementById('team-split');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'team-split';
+    root.className = 'team-split';
+    root.innerHTML =
+      '<div class="team-toolbar">' +
+        '<span class="team-toolbar-title">多 worker 协同</span>' +
+        // 2026-10-28 UX: mode + progress readouts in the toolbar itself so
+        // the user can always see WHICH layout is active and how the run's
+        // board is progressing without hunting for the 布局 dropdown.
+        '<span class="team-toolbar-mode" id="team-toolbar-mode"></span>' +
+        '<span class="team-toolbar-progress" id="team-toolbar-progress"></span>' +
+      '</div>' +
+      '<div class="team-rows" id="team-rows"></div>';
+    const chatpane = document.getElementById('chatpane');
+    const anchor = document.getElementById('chat-messages');
+    chatpane.insertBefore(root, anchor);
+  }
+  _rebuildTeamRows();
+  // Persistent mode dropdown (survives stream mode, where the toolbar
+  // above is hidden with the whole #team-split container). Without it,
+  // switching to the single stream left NO way back to the rows.
+  _ensureTeamModeSelect();
+  // 单列显示回归修复 (2026-10-23): _applyTeamViewMode hides #team-split in
+  // stream mode but only unhides it in SPLIT mode — `root.hidden = !split`
+  // left the root HIDDEN after a session switch back into a lane while the
+  // user's saved mode is 单列. A hidden #team-split is display:none, so the
+  // parent #chatpane kept its visible empty state and the 单列 select did
+  // nothing — the view looked "gone" until the user re-picked a mode.
+  // Unhide the container whenever the team view is active; _applyTeamViewMode
+  // keeps the inner rows hidden in stream mode.
+  root.hidden = false;
+  return root;
+}
+
+// One lane row: header (task name + running/ended badge) + the
+// three-cell grid [workerA | 共享看板 | workerB]. All ids are
+// lane-scoped so multiple rows coexist without collisions.
+function _teamRowHtml(rec) {
+  const key = _teamLaneKey(rec.laneId);
+  const roster = (Array.isArray(rec.roster) && rec.roster.length) ? rec.roster : ['worker-A', 'worker-B'];
+  // 行内三格固定轨道: worker 列 minmax(TEAM_COL_MIN_W,1fr) ×N + 共享看板
+  // minmax(TEAM_MID_MIN_W,320px) — 每行占满协同区域宽度, 不支持缩放。
+  // Fixed, sensible track widths (rows are NOT resizable per the
+  // 2026-10-23 redesign): each worker column 1fr with a 220px floor,
+  // the shared 看板 panel a 260–320px track. The row spans the full
+  // width of the 多 worker 协同 area.
+  const tracks = roster.map(() => `minmax(${TEAM_COL_MIN_W}px, 1fr)`).join(' ') +
+    ` minmax(${TEAM_MID_MIN_W}px, 320px)`;
+  const taskLabel = String(rec.task || rec.laneId || '').replace(/\s+/g, ' ').trim() || '(未命名任务)';
+  const colsHtml = roster.map((w) =>
+    `<section class="team-col" data-worker="${escHtml(w)}" data-lane="${escHtml(rec.laneId)}">` +
+      `<header class="team-col-head"><span class="${_teamWorkerChipClass(w)}">${escHtml(w)}</span>` +
+      `<span class="team-col-status" id="team-status-${escHtml(key)}-${escHtml(w)}">● idle</span></header>` +
+      `<div class="team-col-body" id="team-col-${escHtml(key)}-${escHtml(w)}"></div>` +
+    `</section>`
+  ).join('');
+  return (
+    `<div class="team-row${rec.ended ? ' team-split-ended' : ''}" id="team-row-${escHtml(key)}" data-lane="${escHtml(rec.laneId)}">` +
+      `<header class="team-row-head">` +
+        `<span class="team-row-badge${rec.ended ? ' team-row-badge-ended' : ''}">${rec.ended ? '■ 已结束' : '● 运行中'}</span>` +
+        `<span class="team-row-task" title="${escHtml(rec.task || '')}">${escHtml(taskLabel)}</span>` +
+      `</header>` +
+      `<div class="team-columns" style="grid-template-columns: ${tracks}">${colsHtml}` +
+        `<aside class="team-mid" id="team-mid-${escHtml(key)}">` +
+          `<div class="team-mid-title">共享看板</div>` +
+          `<div class="team-mid-queue" id="team-mid-queue-${escHtml(key)}"></div>` +
+          `<div class="team-mid-events" id="team-mid-events-${escHtml(key)}"></div>` +
+        `</aside>` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+// Reconcile #team-rows with the lane registry: every lane gets its own
+// full-width row in start order. When the row SET is unchanged the DOM
+// is kept (live event listeners on queue rows survive); otherwise rows
+// are rebuilt, then every row's columns / board / feed are re-rendered
+// from the lane caches (the caches are the source of truth, so this is
+// safe to call on every team-info frame).
+function _rebuildTeamRows() {
+  const rowsEl = document.getElementById('team-rows');
+  if (!rowsEl) return;
+  // 2026-10-26: never draw a retired lane — _retireTeamLane already deleted
+  // its record+row, this is the defensive net so a rebuild can't redraw a
+  // finished run (its laneId lives in endedLanes).
+  const ended = state.teamView.endedLanes || {};
+  const lanes = _teamLanesList().filter((l) => !ended[l.laneId]);
+  // 2026-10-23 用户需求: 协同区域在没有任务的时候不显示任何面板，
+  // 只留一条「暂无任务」空态提示。
+  if (!lanes.length) {
+    rowsEl.innerHTML = '<div class="team-rows-empty">暂无任务</div>';
+    return;
+  }
+  const wanted = lanes.map((l) => _teamLaneKey(l.laneId));
+  const existing = [...rowsEl.children].map((r) => r.id.slice('team-row-'.length));
+  const same = wanted.length === existing.length && wanted.every((k, i) => k === existing[i]);
+  if (!same) {
+    rowsEl.innerHTML = lanes.map((l) => _teamRowHtml(l)).join('');
+  } else {
+    // Keep DOM (queue-row hover listeners), just sync the ended badge.
+    for (const l of lanes) {
+      const row = document.getElementById('team-row-' + _teamLaneKey(l.laneId));
+      if (!row) continue;
+      row.classList.toggle('team-split-ended', Boolean(l.ended));
+      const badge = row.querySelector('.team-row-badge');
+      if (badge) {
+        badge.textContent = l.ended ? '■ 已结束' : '● 运行中';
+        badge.classList.toggle('team-row-badge-ended', Boolean(l.ended));
+      }
+    }
+  }
+  // Render every lane's board + status + cached events (wipe-safe:
+  // rebuilt rows start empty; kept rows are re-rendered idempotently).
+  for (const l of lanes) {
+    _renderTeamBoardPane(l.laneId);
+    const roster = (Array.isArray(l.roster) && l.roster.length) ? l.roster : ['worker-A', 'worker-B'];
+    for (const w of roster) {
+      _renderTeamColumnStatus(l.laneId, w);
+      const body = document.getElementById('team-col-' + _teamLaneKey(l.laneId) + '-' + w);
+      if (body) {
+        for (const el of [...body.children]) el.remove();
+        for (const ev of (l.colEvents || {})[w] || []) _appendTeamColumnEvent(l.laneId, w, ev, { fromCache: true });
+      }
+    }
+    const feed = document.getElementById('team-mid-events-' + _teamLaneKey(l.laneId));
+    if (feed) {
+      feed.replaceChildren();
+      for (const ev of l.events || []) _appendTeamBoardEvent(l.laneId, ev);
+    }
+  }
+}
+
+// View-mode dropdown (多列/单列). Lives INSIDE #chatpane-topctl-row so
+// it shares ONE line with the RLM switch — same <select> shape, sibling
+// palette (team = blue #7bd0ff family, RLM = purple #a855f7 family) so
+// the two controls read as one coherent strip. Visible whenever the
+// team view is active (BOTH modes): in stream mode the split toolbar
+// hides with the container, so a control that only lived there would
+// strand the user with no way back to the columns. Replaces the old
+// stream-only floating pill (#team-float-toggle) AND the in-toolbar
+// segmented switch (#team-mode-switch).
+function _ensureTeamModeSelect() {
+  let sel = document.getElementById('team-mode-select');
+  if (!sel) {
+    sel = document.createElement('select');
+    sel.id = 'team-mode-select';
+    sel.className = 'team-mode-select';
+    sel.title = '视图布局：多列 = 每个 worker 一列 + 看板列；单列 = 合并时间流，看板卡片内联。切换后横幅说明当前模式与进展。';
+    sel.setAttribute('aria-label', '视图布局');
+    sel.innerHTML =
+      '<option value="split">◫ 多列</option>' +
+      '<option value="stream">▤ 单列</option>';
+    sel.addEventListener('change', () => _setTeamViewMode(sel.value));
+    const row = _topctlRow();
+    if (!row) return null;
+    // 用户反馈 (2026-10-22): "把RLM下拉框放在最右边" — the RLM switch
+    // (#rlm-scope-select, adopted into the row at boot by
+    // _adoptRlmSwitchIntoTopRow) must stay the RIGHTMOST child. Insert
+    // the team select BEFORE it, i.e. AFTER the 🧠 pill
+    // (#rlm-mode-badge, index.html's first row child). DOM order must
+    // end up [pill][布局 dropdown][🧠 RLM dropdown]: the pill carries
+    // margin-left:auto (styles.css) which absorbs free space on its
+    // LEFT — if the 布局 select sat LEFT of the pill (the old
+    // insertBefore(row.firstChild) did exactly that), the auto margin
+    // shoved 布局 to the row's far left edge (2026-10-26 squeeze
+    // report). Keeping the select to the pill's RIGHT keeps every
+    // visible control in one flush-right cluster.
+    const rlmSel = document.getElementById('rlm-scope-select');
+    if (rlmSel && rlmSel.parentElement === row) row.insertBefore(sel, rlmSel);
+    else row.appendChild(sel);
+    // 2026-10-28 UX: a compact 进度 chip sits LEFT of the 布局 select in
+    // the same row — the stream (单列) mode hides #team-split (and its
+    // toolbar readouts) with the container, so without a chip HERE the
+    // "在哪里看进展" answer had no home in 单列. Same blue family.
+    const prog = document.createElement('span');
+    prog.id = 'team-progress-chip';
+    prog.className = 'team-progress-chip';
+    row.insertBefore(prog, sel);
+  }
+  const progChip = document.getElementById('team-progress-chip');
+  if (progChip) progChip.hidden = !state.teamView.active;
+  sel.hidden = !state.teamView.active;
+  sel.value = state.teamView.mode === 'stream' ? 'stream' : 'split';
+  _refreshTopctlRow();
+  return sel;
+}
+
+// 2026-10-31 fix (user report: 有时候 run-n2 任务没结束 单双列按钮就没了):
+// the 布局 dropdown's visibility was only re-synced by the paths that
+// already ran _ensureTeamModeSelect — team-info / mode apply / teardown.
+// When a lane reaches its terminal state MID-RUN from the client's point
+// of view (a worker-level terminal that retires the lane, or a re-attach
+// whose replay wipes #team-rows without a fresh team-info), the select
+// kept a stale hidden state / stale DOM membership and the control simply
+// vanished while the run's transcript was still streaming. This helper is
+// the one idempotent "make the control reflect the CURRENT teamView
+// state" call that every state-changing team path funnels through — it is
+// safe to call from anywhere (creates the select on demand, fixes its
+// value, refreshes the row).
+function _syncTeamModeSelect() {
+  const sel = _ensureTeamModeSelect();
+  if (sel && state.teamView) {
+    sel.value = state.teamView.mode === 'stream' ? 'stream' : 'split';
+  }
+  _refreshTopctlRow();
+  return sel;
+}
+
+function _teardownTeamSplit() {
+  const root = document.getElementById('team-split');
+  if (root) root.remove();
+  const sel = document.getElementById('team-mode-select');
+  if (sel) sel.remove();
+  const progChip = document.getElementById('team-progress-chip');
+  if (progChip) progChip.remove();
+  const toast = document.getElementById('team-mode-toast');
+  if (toast) toast.remove();
+  // 布局横幅: the banner is team-view-scoped — hide + clear it on the
+  // session switch so the next (non-team) session doesn't inherit a
+  // stale 协同布局 explainer. Re-shown by _renderTeamModeBanner via
+  // _handleTeamInfoFrame when the new session ships its own team-info.
+  const banner = document.getElementById('team-mode-banner');
+  if (banner) { banner.hidden = true; banner.innerHTML = ''; }
+}
+
+// 2026-10-23 行排列: the multi-lane picker dropdown was RETIRED —
+// every lane now renders as its own full-width row, so there is no
+// "selected lane" to swap and no dropdown to show.
+function _enterTeamView() {
+  const root = _ensureTeamSplitDom();
+  _applyTeamViewMode();
+  void root;
+}
+
+// 协同视图布局横幅 (2026-10-28): user report "单、多列切换的内容不太好
+// 理解，不知道在哪里看进展" — the dropdown told you WHICH mode you were in,
+// but never WHAT that mode shows or WHERE progress/看板 live. This banner
+// sits at the top of #chatpane (index.html, right below #chat-empty) and
+// renders a one-line explainer for the CURRENT mode, plus the live 看板
+// progress (done/total per lane) so the user can see run progress at a
+// glance without hunting for the board.
+//
+// Single source of truth: called from _applyTeamViewMode (every mode
+// change / team attach) and from the board-frame + team-info handlers
+// (board snapshots land there) — idempotent, cheap (innerHTML swap on a
+// small fixed node), safe to call from any team path.
+function _renderTeamModeBanner() {
+  const el = document.getElementById('team-mode-banner');
+  if (!el) return;
+  const active = state.teamView && state.teamView.active;
+  // Hidden outside team sessions — a plain single-agent session has no
+  // 布局 mode at all, and a stray banner there would be pure noise.
+  el.hidden = !active;
+  if (!active) { el.innerHTML = ''; return; }
+  const stream = state.teamView.mode !== 'split';
+  // Live lane/queue stats shared by both mode lines: lanes running +
+  // 看板 done/total across every live lane. Both come from the lane
+  // registry (state.teamView.lanes), which team-info / board frames
+  // keep current — the same source the split rows + 单列 board cards
+  // render from.
+  const ended = state.teamView.endedLanes || {};
+  const lanes = _teamLanesList().filter((l) => !ended[l.laneId]);
+  let doneN = 0, totalN = 0;
+  for (const l of lanes) {
+    const q = (l.board && Array.isArray(l.board.queue)) ? l.board.queue : [];
+    totalN += q.length;
+    doneN += q.filter((i) => i && i.state === 'done').length;
+  }
+  const prog = (lanes.length && totalN)
+    ? `　·　看板进展 ${doneN}/${totalN}`
+    : '';
+  // WHAT this mode shows + WHERE progress lives. 单列: everything merges
+  // into one timeline (worker 徽章 distinguishes who), the 看板 card rides
+  // inline. 多列: one column per worker + the 看板 column beside them.
+  let line;
+  if (stream) {
+    line = '▤ 单列 — 所有 worker 输出合并在这一条时间流里（彩色徽章区分 worker）' +
+           '；看板卡片内联显示进展' + prog;
+  } else {
+    line = '◫ 多列 — 每个 worker 独立一列，右侧独立看板列显示进展' + prog +
+           (lanes.length ? '　·　横向滚动查看各列' : '');
+  }
+  el.innerHTML =
+    `<span class="tmb-label">${escHtml(stream ? '协同布局: 单列' : '协同布局: 多列')}</span>` +
+    `<span class="tmb-text">${escHtml(line)}</span>` +
+    `<span class="tmb-hint">右上「布局」下拉切换</span>`;
+}
+
+function _applyTeamViewMode(showToast) {
+  const root = document.getElementById('team-split');
+  if (!root) return;
+  const stream = document.getElementById('chat-messages');
+  const split = state.teamView.mode === 'split';
+  // 单列显示回归修复 (2026-10-23): pre-fix only SPLIT mode managed #chat-messages
+  // (`if (stream) stream.hidden = split`) — fine on the live in-session toggle,
+  // but a SESSION SWITCH while saved mode = 单列 re-created #team-split hidden
+  // (fixed in _ensureTeamSplitDom) while #chat-messages stayed hidden from the
+  // previous split view → 单列打印完全消失 (myco 打印 / 工具打印都看不到) after
+  // switching sessions. Explicitly unhide #chat-messages in stream mode so the
+  // single timeline always renders; split mode keeps the old exclusive toggle.
+  if (stream) stream.hidden = split;
+  root.hidden = !split;
+  // Mode dropdown (#team-mode-select in #chatpane-topctl-row): the
+  // select's value mirrors the current mode; visibility is refreshed
+  // via _ensureTeamModeSelect (shown whenever the team view is active).
+  const sel = document.getElementById('team-mode-select');
+  if (sel) sel.value = split ? 'split' : 'stream';
+  _ensureTeamModeSelect();
+  // 2026-10-28 UX: keep the toolbar's mode/progress readouts in sync —
+  // _enterTeamView (session switch) also lands here, so the readouts
+  // must refresh on every apply, not just on user toggles.
+  _updateTeamToolbarReadouts();
+  // 布局横幅: repaint the mode explainer + 看板进展 on every apply too.
+  _renderTeamModeBanner();
+  if (split) _rebuildTeamRows();
+  if (showToast) _showTeamModeToast(split);
+}
+
+// 2026-10-28 UX (用户反馈「单、多列切换的内容不太好理解，不知道在哪里看
+// 进展」): a small transient toast anchored in #chatpane confirming the
+// layout change and telling the user WHERE progress now lives. Without it
+// the switch was silent — the view just swapped and the user had to guess
+// what the 布局 dropdown had actually done.
+function _showTeamModeToast(split) {
+  const chatpane = document.getElementById('chatpane');
+  if (!chatpane) return;
+  const old = document.getElementById('team-mode-toast');
+  if (old) old.remove();
+  const toast = document.createElement('div');
+  toast.id = 'team-mode-toast';
+  toast.className = 'team-mode-toast';
+  toast.innerHTML = split
+    ? '<b>已切换到多列视图</b><span>每个 worker 独立一列；任务进展看每行的共享看板 + 列头状态</span>'
+    : '<b>已切换到单列视图</b><span>所有事件合并为一条时间流（保留 worker 徽章）；任务进展看时间流里的看板卡片</span>';
+  chatpane.appendChild(toast);
+  setTimeout(() => { const t = document.getElementById('team-mode-toast'); if (t) t.remove(); }, 2600);
+}
+
+// Toolbar readouts (2026-10-28 UX): a one-line 「布局：多列/单列」 chip plus
+// an aggregate board progress 「n/m 子任务完成 · k 运行中」 across every
+// active lane, refreshed on every mode apply and every board snapshot
+// (see _renderTeamColumnStatus call sites). Gives the "在哪里看进展"
+// answer a fixed, always-visible home in BOTH layouts.
+function _updateTeamToolbarReadouts() {
+  const modeEl = document.getElementById('team-toolbar-mode');
+  const progEl = document.getElementById('team-toolbar-progress');
+  const chipEl = document.getElementById('team-progress-chip');
+  if (!modeEl && !progEl && !chipEl) return;
+  const split = state.teamView.mode === 'split';
+  if (modeEl) modeEl.textContent = split ? '◫ 布局: 多列' : '▤ 布局: 单列';
+  // Aggregate over every non-retired, non-ended lane: done/total board
+  // 子任务 + 运行中 lane 数. Rendered to BOTH the split toolbar (hidden
+  // in 单列) and the topctl chip (visible in both modes).
+  const ended = state.teamView.endedLanes || {};
+  const lanes = _teamLanesList().filter((l) => !ended[l.laneId]);
+  let done = 0, total = 0, running = 0;
+  for (const l of lanes) {
+    if (l.ended) continue;
+    running++;
+    const q = (l.board && Array.isArray(l.board.queue)) ? l.board.queue : [];
+    total += q.length;
+    done += q.filter((i) => i && i.state === 'done').length;
+  }
+  const text = running
+    ? (total ? `进度 ${done}/${total} · ${running} 运行中` : `${running} 个任务运行中`)
+    : '';
+  if (progEl) progEl.textContent = running
+    ? (total ? `进度: ${done}/${total} 子任务完成 · ${running} 个任务运行中` : `${running} 个任务运行中`)
+    : '';
+  if (chipEl) {
+    chipEl.textContent = text;
+    chipEl.hidden = !state.teamView.active || !text;
+  }
+}
+
+function _setTeamViewMode(mode) {
+  state.teamView.mode = mode === 'stream' ? 'stream' : 'split';
+  try { localStorage.setItem('myco_team_view_mode', state.teamView.mode); } catch {}
+  _applyTeamViewMode(true);
+  // 2026-10-31 多列 missing-prints fix: switching INTO 多列 after a
+  // session switch is the other path where the columns may be missing
+  // their pre-replay-tail prints (the attach-time backfill only fires
+  // when the saved mode was already split). Same one-shot guard.
+  if (state.teamView.mode === 'split' && state.teamView.active) {
+    void _backfillTeamColumnsFromServer();
+  }
+}
+
+// Switching back to split after time in stream mode: rebuild every
+// lane row from its cached events. Chrome batches/assistant cards were
+// NOT maintained while in stream mode (events rendered into
+// #chat-messages instead), so a full wipe-and-replay of the cache is
+// the only correct rebuild — same shape as agent-replay's
+// wipe-and-render. Kept as the backfill entrypoint (name retained for
+// the callers that only need "columns reflect the caches now").
+function _rebuildTeamColumnsFromCache() {
+  _rebuildTeamRows();
+}
+
+// 2026-10-31 多列 missing-prints fix (user report: 切换 session 以后，
+// 多列有些 myco 打印不见了). On a session switch back into a team
+// session, the columns re-populate ONLY from the worker events the
+// 16 KB agent-replay tail happens to carry. The 单列 stream has a
+// scroll-up backfill (GET /sessions/:id/events, _fetchOlderAgentEvents)
+// but the 多列 columns had none — a long run's earlier worker
+// assistant_text / turn_result prints (the lane's cached copies live
+// in session.buffer + events.jsonl server-side, mirrored by the
+// bridge) simply never re-entered the columns, so the user saw the
+// middle/late prints but the early ones were gone.
+//
+// This backfill mirrors _fetchOlderAgentEvents: fetch a window of
+// worker-tagged events OLDER than the oldest seq currently in the
+// lane's colEvents caches, unshift them into each worker's cache,
+// then rebuild the rows so the columns render the full history.
+// Idempotent per session-switch: guarded by state._teamColBackfilled.
+async function _backfillTeamColumnsFromServer() {
+  const sid = state.activeId;
+  if (!sid || !state.teamView || !state.teamView.active) return;
+  if (state.teamView.mode !== 'split') return;
+  if (state._teamColBackfilled) return;
+  state._teamColBackfilled = true; // one shot per session switch
+  try {
+    const lanes = _teamLanesList()
+      .filter((l) => !(state.teamView.endedLanes || {})[l.laneId]);
+    if (!lanes.length) return;
+    // Cursor: the smallest seq ANY lane's colEvents cache holds. A
+    // lane with an empty cache (team-info arrived but replay hasn't
+    // run / carried nothing) uses Infinity so the newest window ships
+    // — that is exactly the "columns came up blank" case.
+    let oldestSeq = Infinity;
+    for (const l of lanes) {
+      for (const evs of Object.values(l.colEvents || {})) {
+        for (const ev of (evs || [])) {
+          if (ev && typeof ev.seq === 'number' && ev.seq < oldestSeq) oldestSeq = ev.seq;
+        }
+      }
+    }
+    const url = `/sessions/${encodeURIComponent(sid)}/events`
+      + (Number.isFinite(oldestSeq) ? `?before=${oldestSeq}` : '')
+      + `&limit=${TEAM_COL_BACKFILL_LIMIT}`;
+    const res = await authedFetch(url);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || !Array.isArray(data.events)) return;
+    // Only worker-tagged events route into columns (same gate as
+    // _routeAgentEvent); untagged main-agent events belong to the
+    // single stream, which has its own backfill.
+    const workerEvs = data.events.filter((ev) => ev && ev.worker && !ev.compareLane);
+    if (!workerEvs.length) return;
+    // Dedup against what the caches already hold (the replay tail may
+    // overlap the window when a lane cache was empty and oldestSeq
+    // fell through to Infinity with events already rendered live).
+    const have = new Set();
+    for (const l of lanes) {
+      for (const evs of Object.values(l.colEvents || {})) {
+        for (const ev of (evs || [])) {
+          if (ev && typeof ev.seq === 'number') have.add(ev.seq);
+        }
+      }
+    }
+    for (const ev of workerEvs) {
+      if (typeof ev.seq === 'number' && have.has(ev.seq)) continue;
+      const laneId = ev.laneId || state.teamView.laneId || '__default__';
+      if ((state.teamView.endedLanes || {})[laneId]) continue;
+      const rec = _teamLaneRec(laneId, ev.laneTask);
+      const cache = rec.colEvents[ev.worker];
+      if (!cache) continue;
+      cache.push(ev);
+    }
+    // Re-sort each cache by seq (server returns oldest→newest; the
+    // push above appended older-after-newer when caches were seeded
+    // by the replay tail first) so the rebuild draws them in order.
+    for (const l of _teamLanesList()) {
+      for (const w of Object.keys(l.colEvents || {})) {
+        const cache = l.colEvents[w];
+        if (Array.isArray(cache) && cache.length > TEAM_VIEW_MSG_CAP) {
+          cache.splice(0, cache.length - TEAM_VIEW_MSG_CAP);
+        }
+        if (Array.isArray(cache)) {
+          cache.sort((a, b) => (typeof a.seq === 'number' ? a.seq : Infinity)
+            - (typeof b.seq === 'number' ? b.seq : Infinity));
+        }
+      }
+    }
+    _rebuildTeamColumnsFromCache();
+    try { console.log('[team-col-backfill] restored ' + workerEvs.length + ' older worker event(s) into the 多列 columns'); } catch {}
+  } catch (err) {
+    try { console.warn('[team-col-backfill] failed:', err && err.message); } catch {}
+  }
+}
+
+// Route one agent event: split mode + worker tag → column; everything
+// else → the normal single-stream renderer. Returns true when the
+// event was consumed by the split view.
+//
+// 2026-10-23 单列 print regression: the single stream (▤ 单列) must
+// ALWAYS receive every worker event — same as before the team view
+// existed — myco prints, tool prints, assistant text, all of it.
+// Pre-fix, split mode swallowed the event here and rendered it ONLY
+// into the worker column, so the #chat-messages timeline never saw it;
+// after switching sessions the replay rebuilt ONLY the stream, and the
+// 单列 view had nothing from the dual-column run. Fix: in split mode
+// we now render into the column AND fall through to the single-stream
+// renderer (return false) so the stream stays complete in both modes.
+function _routeAgentEvent(ev) {
+  if (!state.teamView.active || !ev || !ev.worker) return false;
+  if (ev.compareLane) return false;                 // /compare overlay owns its own events
+  // multi-lane: the bridged event names ITS lane (laneId + laneTask from
+  // the server). Cache into that lane's per-worker cache so a later
+  // picker switch rebuilds the right columns. Legacy/no-laneId events
+  // fall back to the selected lane's cache (single-lane behaviour).
+  const evLaneId = ev.laneId || state.teamView.laneId || '__default__';
+  // stray-print hardening (2026-10-30): a laneId-LESS worker event whose
+  // resolved evLaneId has no live record — and at least one lane already
+  // retired (endedLanes non-empty) — is trailing/replayed traffic from a
+  // FINISHED run. Seeding a record for it (via _teamLaneRec below) would
+  // resurrect a phantom multi-column row or mis-file the event into an
+  // unrelated live lane — the "A/B 都完成了又冒出来一个打印" class. Let
+  // it fall through to the 单列 stream only (return false), same as the
+  // endedLanes guard below. When NO lane has ever ended (fresh page,
+  // replay races the team-info frame), keep the legacy seeding so the
+  // split view still rebuilds on attach.
+  const _lanes = state.teamView.lanes || {};
+  if (!ev.laneId && !_lanes[evLaneId] &&
+      state.teamView.endedLanes && Object.keys(state.teamView.endedLanes).length > 0) {
+    return false;
+  }
+  // 2026-10-26: never resurrect a FINISHED lane. A replay / late worker
+  // event for an ended lane (retired via _retireTeamLane → endedLanes) must
+  // NOT re-create its record/row — it only falls through (return false) so
+  // the run's transcript still prints in the 单列 stream. Guard sits BEFORE
+  // _teamLaneRec so no record is re-seeded for a dead run.
+  if (state.teamView.endedLanes && state.teamView.endedLanes[evLaneId]) return false;
+  const laneRec = _teamLaneRec(evLaneId, ev.laneTask);
+  const laneCache = laneRec.colEvents[ev.worker];
+  if (laneCache) {
+    laneCache.push(ev);
+    if (laneCache.length > TEAM_VIEW_MSG_CAP) laneCache.splice(0, laneCache.length - TEAM_VIEW_MSG_CAP);
+  }
+  // Stream mode (user toggled back to the single timeline): render into
+  // the single stream with the worker badge — swallowing the event here
+  // left the lane's activity invisible in the very view the user chose.
+  if (state.teamView.mode !== 'split') return false;
+  // Split mode renders into the worker column below AND, since the
+  // 2026-10-23 regression fix, ALSO falls through (return false) so the
+  // single stream keeps its full print in parallel. Column render is
+  // done first so the split pane is never starved by a stream-render
+  // exception.
+  // 行排列: every lane has its own row on screen — append into the
+  // event's lane row directly (no selected-lane gate anymore). The
+  // row must exist (team-info ran first); a missing row means the
+  // DOM is stale — reconcile rows, then retry once.
+  let body = document.getElementById('team-col-' + _teamLaneKey(evLaneId) + '-' + ev.worker);
+  if (!body) {
+    _rebuildTeamRows();
+    body = document.getElementById('team-col-' + _teamLaneKey(evLaneId) + '-' + ev.worker);
+    if (!body) {
+      // lane not in the registry view yet — stay cached. The event
+      // still falls through to the single stream (see the 2026-10-23
+      // 单列 regression fix): consume=false keeps the stream complete.
+      return false;
+    }
+  }
+  _appendTeamColumnEvent(evLaneId, ev.worker, ev, {});
+  // consumed=true is intentionally NOT returned anymore — fall through
+  // to the single-stream renderer so #chat-messages also prints the
+  // event with its worker badge. Dual-column rendering above stays
+  // untouched (task-only policy, same as before the fix).
+  return false;
+}
+
+// Which events still render as a compact row in the task-only columns.
+// Everything else that isn't assistant_text is dropped from the column
+// (turn lifecycle noise, permission cycling, hook noise…). `fatal`
+// stays: an aborted worker must be visible. `turn_result` stays: it
+// carries the worker's final answer/cost for the turn.
+const TEAM_COL_ROW_TYPES = new Set(['fatal', 'turn_result']);
+
+// Is this event one the task-only worker columns should render?
+// assistant_text (the task narration) + the few high-signal rows
+// above. Tool calls/results and SDK chrome are EXCLUDED — the user
+// asked for tasks only; the tool-level detail remains visible in the
+// single-stream view (▤ 单列) and in the column status line.
+function _isTeamColumnVisible(ev) {
+  if (!ev) return false;
+  if (ev.type === 'assistant_text') return true;
+  return TEAM_COL_ROW_TYPES.has(ev.type);
+}
+
+// Append one event into a worker column. Task-only policy (UX tweak):
+// the columns print the worker's TASKS — assistant_text narration,
+// turn results and fatal errors — and nothing else. Tool calls /
+// results / permission chrome are still cached (colEvents) so the
+// status line and a later switch to ▤ 单列 keep
+// working, they just don't get a row/card here.
+function _appendTeamColumnEvent(laneId, w, ev, { fromCache }) {
+  const body = document.getElementById('team-col-' + _teamLaneKey(laneId) + '-' + w);
+  if (!body) return;
+  // Unknown SDK passthroughs render nothing (mirrors _appendAgentEvent).
+  if (ev.type === 'unknown_event') return;
+  if (!_isTeamColumnVisible(ev)) {
+    // Not a task-visible event: still cached in colEvents (for the
+    // status line and a later switch to ▤ 单列), just no row/card here.
+    return;
+  }
+  if (_isChromeEvent(ev)) {
+    const prev = body.lastElementChild;
+    const prevIsBatch = prev && prev.dataset && prev.dataset.evType === '_chrome_batch';
+    // Same-worker batches are guaranteed by construction here (each
+    // column only ever holds one worker's events), so the seq
+    // consecutiveness check alone decides folding.
+    const prevLastSeq = prevIsBatch && prev.dataset.lastSeq ? parseInt(prev.dataset.lastSeq, 10) : null;
+    const evSeq = typeof ev.seq === 'number' ? ev.seq : null;
+    const consecutive = Number.isFinite(prevLastSeq) && Number.isFinite(evSeq) && evSeq === prevLastSeq + 1;
+    const alwaysFolds = _chromeEventAlwaysFolds(ev);
+    if (prevIsBatch && (consecutive || alwaysFolds)) {
+      _appendToChromeBatch(prev, ev, _localTs(ev.ts));
+      if (Number.isFinite(evSeq)) prev.dataset.lastSeq = String(evSeq);
+    } else {
+      const batch = _createChromeBatch(ev, _localTs(ev.ts));
+      if (ev.ts) batch.dataset.ts = ev.ts;
+      if (typeof ev.seq === 'number') {
+        batch.dataset.seq = String(ev.seq);
+        batch.dataset.lastSeq = String(ev.seq);
+      }
+      batch.dataset.worker = w;
+      body.appendChild(batch);
+      if (ev.type === 'turn_result') {
+        _attachTurnOutcomeChip(batch, ev);
+        _finishChromeBatch(batch);
+      }
+    }
+  } else if (ev.type === 'assistant_text') {
+    const prev = body.lastElementChild;
+    const prevLastSeq = prev && prev.dataset && prev.dataset.lastSeq ? parseInt(prev.dataset.lastSeq, 10) : null;
+    const evSeq = typeof ev.seq === 'number' ? ev.seq : null;
+    const consecutive = Number.isFinite(prevLastSeq) && Number.isFinite(evSeq) && evSeq === prevLastSeq + 1;
+    if (prev && prev.dataset && prev.dataset.evType === 'assistant_text' && consecutive) {
+      prev.dataset.combineCount = String((parseInt(prev.dataset.combineCount || '1', 10)) + 1);
+      if (Number.isFinite(evSeq)) prev.dataset.lastSeq = String(evSeq);
+      const merged = (prev.dataset.assistantText || '') + '\n\n' + (ev.text || '');
+      prev.dataset.assistantText = merged;
+      const el = prev.querySelector('.agent-card-body');
+      if (el) {
+        el.innerHTML = renderMd(merged);
+        renderMermaidInContainer(el).catch(() => {});
+      }
+    } else {
+      const card = document.createElement('div');
+      card.className = 'agent-card chat-msg-agent agent-card-assistant_text';
+      card.dataset.evType = 'assistant_text';
+      card.dataset.combineCount = '1';
+      card.dataset.assistantText = ev.text || '';
+      if (typeof ev.seq === 'number') card.dataset.lastSeq = String(ev.seq);
+      const head = document.createElement('div');
+      head.className = 'agent-card-head';
+      head.innerHTML = `<span class="agent-card-ts">${escHtml(_localTs(ev.ts))}</span>` + _workerBadge(ev) +
+        '<span class="agent-card-kind agent-card-claude">myco</span>';
+      const cardBody = document.createElement('div');
+      cardBody.className = 'agent-card-body agent-card-md';
+      cardBody.innerHTML = renderMd(ev.text || '');
+      card.appendChild(head);
+      card.appendChild(cardBody);
+      body.appendChild(card);
+    }
+  } else {
+    // Task-only columns: the only rows reaching this branch are
+    // fatal / turn_result (see _isTeamColumnVisible) — a compact
+    // one-line row beats the single-stream renderer's full card in
+    // a half-width column.
+    const row = document.createElement('div');
+    row.className = 'team-col-row team-col-row-' + (ev.type || 'unknown');
+    row.innerHTML = `<span class="agent-card-ts">${escHtml(_localTs(ev.ts))}</span>` +
+      `<span class="team-col-row-kind">${escHtml(_agentToolIcon(ev.name || '') + ' ' + (ev.name || ev.type || ''))}</span>` +
+      `<span class="team-col-row-sum">${escHtml(String(ev.summary || ev.input_summary || '').slice(0, 80))}</span>`;
+    body.appendChild(row);
+  }
+  if (!fromCache) {
+    const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+    if (atBottom) body.scrollTop = body.scrollHeight;
+  }
+}
+
+// Column header: busy tool (from worker-tagged tool-progress) + current
+// board claim + last board status line.
+function _renderTeamColumnStatus(laneId, w) {
+  const el = document.getElementById('team-status-' + _teamLaneKey(laneId) + '-' + w);
+  if (!el) return;
+  const rec = _teamLaneRec(laneId, null);
+  const tools = (rec.openTools || {})[w] || [];
+  let text;
+  if (rec.ended) {
+    // Frozen record of a finished lane run — never show a busy tool
+    // indicator on a dead lane, even if a stale tool-progress frame
+    // races the end frame.
+    text = '■ 已结束';
+  } else if (tools.length) {
+    const t = tools[0];
+    text = `⚙ ${t.name || 'tool'} · ${Math.round((t.sinceMs || 0) / 1000)}s` +
+      (tools.length > 1 ? ` (+${tools.length - 1})` : '');
+  } else {
+    text = '● idle';
+  }
+  const board = rec.board;
+  if (board) {
+    const claimed = (board.queue || []).find((i) => i && i.state === 'claimed' && i.owner === w);
+    if (claimed) text += ` · 认领: ${claimed.subject || claimed.id}`;
+    const st = (board.status || []).find((s) => s && s.actor === w);
+    if (st && st.text) text += ` · ${st.text}`;
+  }
+  el.textContent = text;
+  el.classList.toggle('team-col-busy', tools.length > 0 && !rec.ended);
+}
+
+// Shared-board middle column: queue rows (state icon + subject + owner
+// colour) and a rolling feed of board events. Hovering a queue row
+// highlights the owning worker's column (dependency cue, P3).
+function _renderTeamBoardPane(laneId) {
+  const queueEl = document.getElementById('team-mid-queue-' + _teamLaneKey(laneId));
+  const board = _teamLaneRec(laneId, null).board;
+  if (!queueEl) return;
+  if (!board || !Array.isArray(board.queue) || !board.queue.length) {
+    queueEl.innerHTML = '<div class="team-mid-empty">看板暂无子任务</div>';
+    return;
+  }
+  queueEl.innerHTML = '';
+  for (const item of board.queue) {
+    if (!item) continue;
+    const row = document.createElement('div');
+    const stCls = item.state === 'done' ? 'team-q-done' : item.state === 'claimed' ? 'team-q-claimed' : 'team-q-open';
+    const ownerCls = item.owner === 'worker-A' ? ' team-q-a' : item.owner === 'worker-B' ? ' team-q-b' : ' team-q-x';
+    row.className = 'team-q-row ' + stCls + ownerCls;
+    row.dataset.itemId = item.id || '';
+    row.dataset.owner = item.owner || '';
+    const icon = item.state === 'done' ? '✓' : item.state === 'claimed' ? '◐' : '○';
+    row.innerHTML = `<span class="team-q-icon">${icon}</span>` +
+      `<span class="team-q-subject" title="${escHtml(item.detail || item.subject || '')}">${escHtml(item.subject || item.id || '')}</span>` +
+      (item.owner ? `<span class="team-q-owner">${escHtml(item.owner)}</span>` : '');
+    // P3 dependency cue: hovering a claimed/done row highlights the
+    // owning worker's column head — the claim link made visible.
+    row.addEventListener('mouseenter', () => _highlightTeamWorker(laneId, item.owner, true));
+    row.addEventListener('mouseleave', () => _highlightTeamWorker(laneId, item.owner, false));
+    queueEl.appendChild(row);
+  }
+}
+
+function _highlightTeamWorker(laneId, worker, on) {
+  if (!worker) return;
+  const row = document.getElementById('team-row-' + _teamLaneKey(laneId));
+  if (!row) return;
+  const col = row.querySelector(`.team-col[data-worker="${CSS.escape(worker)}"]`);
+  if (col) col.classList.toggle('team-col-hi', Boolean(on));
+}
+
+// 单列 fix (2026-10-23): in stream (单列) mode the split DOM — and with
+// it the only surface that ever showed the run's 看板 — is hidden
+// (display:none), so the queue, per-item 认领人 and board activity were
+// simply invisible while the user watched the single timeline. This
+// renders the lane's board into #chat-messages as a compact, live-synced
+// card: one 队列 summary (state icon + subject + owner per item) with a
+// live per-worker busy-tool footer. The card is keyed per lane and
+// REPLACED in place on every board snapshot so it always mirrors the
+// authoritative board without spamming the timeline.
+function _renderTeamStreamBoardCard(laneId) {
+  if (!state.teamView.active || state.teamView.mode === 'split') return;
+  const pane = _ensureAgentLogPane();
+  if (!pane) return;
+  const rec = _teamLaneRec(laneId, null);
+  const cardId = 'team-stream-board-' + _teamLaneKey(laneId);
+  let card = document.getElementById(cardId);
+  const board = rec.board;
+  if (!board || !Array.isArray(board.queue) || !board.queue.length) {
+    if (card) card.remove();  // board empty / not yet shipped — show nothing
+    return;
+  }
+  const items = board.queue;
+  const doneN = items.filter((i) => i && i.state === 'done').length;
+  const rows = items.map((item) => {
+    if (!item) return '';
+    const stCls = item.state === 'done' ? 'team-q-done' : item.state === 'claimed' ? 'team-q-claimed' : 'team-q-open';
+    const ownerCls = item.owner === 'worker-A' ? ' team-q-a' : item.owner === 'worker-B' ? ' team-q-b' : ' team-q-x';
+    const icon = item.state === 'done' ? '✓' : item.state === 'claimed' ? '◐' : '○';
+    return `<div class="team-q-row ${stCls}${ownerCls}">` +
+      `<span class="team-q-icon">${icon}</span>` +
+      `<span class="team-q-subject" title="${escHtml(item.detail || item.subject || '')}">${escHtml(item.subject || item.id || '')}</span>` +
+      (item.owner ? `<span class="team-q-owner">${escHtml(item.owner)}</span>` : '') +
+      `</div>`;
+  }).join('');
+  // Per-worker busy footer: current in-flight tool + 认领 item per
+  // worker — the same info the (hidden) split column header holds.
+  const footers = (rec.roster || _teamRoster()).map((w) => {
+    const tools = (rec.openTools || {})[w] || [];
+    const claimed = (board.queue || []).find((i) => i && i.state === 'claimed' && i.owner === w);
+    let text = tools.length
+      ? `⚙ ${tools[0].name || 'tool'} · ${Math.round((tools[0].sinceMs || 0) / 1000)}s` + (tools.length > 1 ? ` (+${tools.length - 1})` : '')
+      : '● idle';
+    if (claimed) text += ` · 认领: ${claimed.subject || claimed.id}`;
+    return `<div class="team-stream-board-worker ${_teamWorkerChipClass(w)}">${escHtml(w)}</div>` +
+      `<div class="team-stream-board-wstat">${escHtml(text)}</div>`;
+  }).join('');
+  const html =
+    `<div class="team-stream-board-head">` +
+      `<span class="team-toolbar-title">看板</span>` +
+      `<span class="team-stream-board-count">${doneN}/${items.length} done</span>` +
+    `</div>` +
+    `<div class="team-stream-board-queue">${rows}</div>` +
+    `<div class="team-stream-board-workers">${footers}</div>`;
+  if (card) {
+    card.innerHTML = html;
+  } else {
+    card = document.createElement('div');
+    card.id = cardId;
+    card.className = 'team-stream-board';
+    card.dataset.evType = 'team_stream_board';
+    card.innerHTML = html;
+    pane.appendChild(card);
+  }
+}
+
+// 单列 fix companion: one board CHANGE (claim/done/note/apply…) as a
+// one-line notice in the single timeline so the coordination stream is
+// visible chronologically (the summary card above shows state, this
+// shows the event). Mirrors _appendTeamBoardEvent's labels.
+function _appendTeamStreamBoardNotice(laneId, ev) {
+  if (!state.teamView.active || state.teamView.mode === 'split') return;
+  const pane = _ensureAgentLogPane();
+  if (!pane || !ev) return;
+  const p = ev.payload || {};
+  let label = ev.kind;
+  let detail = '';
+  if (ev.kind === 'item') { label = '发布'; detail = p.subject || p.id || ''; }
+  else if (ev.kind === 'claim') { label = '认领'; detail = p.item || ''; }
+  else if (ev.kind === 'done') { label = '完成'; detail = p.item || ''; }
+  else if (ev.kind === 'note') { label = p.type === 'FAIL' ? 'FAIL 笔记' : 'FACT 笔记'; detail = p.text || ''; }
+  else if (ev.kind === 'status') { label = '状态'; detail = p.text || ''; }
+  else if (ev.kind === 'apply') { label = 'apply'; detail = Object.keys(p.decisions || {}).join(', '); }
+  else return;  // body/other coordination stays in the summary card
+  const actorCls = ev.actor === 'worker-A' ? ' team-ev-a' : ev.actor === 'worker-B' ? ' team-ev-b' : ' team-ev-x';
+  const card = document.createElement('div');
+  card.className = 'team-ev-card' + actorCls;
+  card.dataset.evType = 'team_stream_board_event';
+  card.innerHTML = `<span class="team-ev-kind">${escHtml(label)}</span>` +
+    `<span class="team-ev-detail" title="${escHtml(detail)}">${escHtml(String(detail).slice(0, 60))}</span>` +
+    `<span class="team-ev-actor">${escHtml(ev.actor || '')}</span>`;
+  pane.appendChild(card);
+}
+
+// One board change event → a small card in the middle feed. The server
+// already filtered read/wait/session; everything else is meaningful
+// coordination (item/claim/done/note/body/apply…).
+function _appendTeamBoardEvent(laneId, ev) {
+  const feed = document.getElementById('team-mid-events-' + _teamLaneKey(laneId));
+  if (!feed || !ev) return;
+  const card = document.createElement('div');
+  const actorCls = ev.actor === 'worker-A' ? ' team-ev-a' : ev.actor === 'worker-B' ? ' team-ev-b' : ' team-ev-x';
+  let label = ev.kind;
+  let detail = '';
+  const p = ev.payload || {};
+  if (ev.kind === 'item') { label = '发布'; detail = p.subject || p.id || ''; }
+  else if (ev.kind === 'claim') { label = '认领'; detail = p.item || ''; }
+  else if (ev.kind === 'done') { label = '完成'; detail = p.item || ''; }
+  else if (ev.kind === 'note') { label = p.type === 'FAIL' ? 'FAIL 笔记' : 'FACT 笔记'; detail = p.text || ''; }
+  else if (ev.kind === 'apply') {
+    const decisions = p.decisions || {};
+    const conflicts = Object.values(decisions).filter((d) => d === 'conflict').length;
+    label = conflicts ? '⚠ apply 冲突' : 'apply';
+    detail = Object.keys(decisions).join(', ');
+  } else if (ev.kind === 'status') { label = '状态'; detail = p.text || ''; }
+  else if (ev.kind === 'body') { label = '附文件'; detail = (p.files || []).map((f) => f.path).join(', '); }
+  card.className = 'team-ev-card' + actorCls + (ev.kind === 'apply' && /冲突/.test(label) ? ' team-ev-conflict' : '');
+  card.innerHTML = `<span class="team-ev-kind">${escHtml(label)}</span>` +
+    `<span class="team-ev-detail" title="${escHtml(detail)}">${escHtml(String(detail).slice(0, 60))}</span>` +
+    `<span class="team-ev-actor">${escHtml(ev.actor || '')}</span>`;
+  feed.appendChild(card);
+  while (feed.children.length > 60) feed.firstChild.remove();
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ---- Delm agent-n2: worker badge + compare dual-column ----
+//
+// Every agent-event may carry a `worker` ("worker-A"/"worker-B", set by
+// TeamSession._relay and preserved through the compare-lane bridge) and a
+// `compareLane` ("single"/"n2", added by compare-lanes.js for /compare).
+// _workerBadge renders the coloured worker chip in a card head; compare
+// lanes are drawn into a pinned dual-column overlay instead of the main
+// timeline.
+
+function _workerBadge(ev) {
+  const w = ev && ev.worker;
+  if (!w) return '';
+  const cls = w === 'worker-A' ? 'agent-worker agent-worker-a' : w === 'worker-B' ? 'agent-worker agent-worker-b' : 'agent-worker agent-worker-x';
+  return `<span class="${cls}" title="${escHtml(w)}">${escHtml(w)}</span>` + _laneTaskBadge(ev) + _rlmLaneBadge(ev);
+}
+
+// multi-lane (2026-10-22): bridged /run-n2 worker events carry the
+// lane's TASK (`laneTask`, set by the compare-lanes bridge). In the
+// 单列 stream — and anywhere several runs' cards interleave — the
+// card must say WHICH task it belongs to ("单流也要表明是什么任务").
+// Additive: events without laneTask render exactly as before.
+function _laneTaskBadge(ev) {
+  const task = ev && ev.laneTask;
+  if (!task) return '';
+  const short = String(task).replace(/\s+/g, ' ').trim();
+  if (!short) return '';
+  return `<span class="lane-task-badge" title="${escHtml(short)}">「${escHtml(short.slice(0, 18))}${short.length > 18 ? '…' : ''}」</span>`;
+}
+
+// delm-10 RLM mode: bridged RLM-lane events carry `rlmLane` (set by
+// rlm-session.js startRlmLane) instead of a worker roster tag. Render
+// a 🧠 chip in the same head slot so the user can tell RLM-lane cards
+// from main-session cards at a glance. Additive — events without
+// rlmLane render exactly as before.
+function _rlmLaneBadge(ev) {
+  const lane = ev && ev.rlmLane;
+  if (!lane) return '';
+  const label = lane === 'rlm' ? 'RLM' : String(lane).toUpperCase();
+  return `<span class="agent-worker agent-worker-rlm" title="RLM lane (${escHtml(lane)}) — prompt-as-a-variable + recursive sub-agents">🧠 ${escHtml(label)}</span>`;
+}
+
+function _ensureCompareOverlay() {
+  let root = document.getElementById('cmp-root');
+  if (root) {
+    root.style.display = 'flex';
+    return root;
+  }
+  root = document.createElement('div');
+  root.id = 'cmp-root';
+  root.className = 'cmp-root';
+  root.innerHTML =
+    '<div class="cmp-head">' +
+      '<span class="cmp-title">⚖ 单 agent vs 双 agent 对比</span>' +
+      '<span class="cmp-status" id="cmp-status">运行中…</span>' +
+      '<button id="cmp-close" class="cmp-close" type="button">✕ 关闭</button>' +
+    '</div>' +
+    '<div class="cmp-columns">' +
+      '<div class="cmp-col" id="cmp-col-single"><div class="cmp-col-title">单 agent</div><div class="cmp-col-body"></div><div class="cmp-col-resize" title="拖动调整列宽"></div></div>' +
+      '<div class="cmp-col" id="cmp-col-n2"><div class="cmp-col-title">双 agent (worker-A / worker-B)</div><div class="cmp-col-body"></div></div>' +
+    '</div>';
+  document.body.appendChild(root);
+  root.querySelector('#cmp-close').addEventListener('click', () => {
+    root.style.display = 'none';
+  });
+  _wireCmpColResize(root.querySelector('.cmp-col-resize'));
+  _applyCmpColWidth();
+  return root;
+}
+
+// /compare 列拖拽调宽：pointer-drag 手柄模式（team-split 行列已固定轨道）—
+// 左列（单 agent）右缘一个手柄，按住左右拖动即横向拉大/拉小该列，
+// 右列（双 agent）吸收剩余宽度。宽度存 localStorage（恢复后重现）。
+const CMP_COL_MIN_W = 180;
+const CMP_COL_MAX_W_FRAC = 0.8;
+
+function _cmpColWidthKey() {
+  return 'myco_cmp_col_w_single';
+}
+
+function _applyCmpColWidth() {
+  const col = document.getElementById('cmp-col-single');
+  if (!col) return;
+  const cols = col.parentElement;
+  const total = cols ? cols.clientWidth : 0;
+  let px = Number(localStorage.getItem(_cmpColWidthKey()));
+  if (!Number.isFinite(px) || px < CMP_COL_MIN_W) { col.style.width = ''; return; }
+  const maxW = Math.max(CMP_COL_MIN_W, Math.floor(total * CMP_COL_MAX_W_FRAC));
+  col.style.width = Math.min(px, maxW) + 'px';
+}
+
+function _wireCmpColResize(handle) {
+  if (!handle) return;
+  const col = handle.closest('.cmp-col');
+  if (!col) return;
+  handle.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault();
+    handle.setPointerCapture(ev.pointerId);
+    const startW = col.getBoundingClientRect().width;
+    const startX = ev.clientX;
+    const cols = col.parentElement;
+    const total = cols ? cols.clientWidth : 0;
+    const maxW = Math.max(CMP_COL_MIN_W, Math.floor(total * CMP_COL_MAX_W_FRAC));
+    const onMove = (mv) => {
+      const next = Math.min(Math.max(CMP_COL_MIN_W, startW + (mv.clientX - startX)), maxW);
+      col.style.width = next + 'px';
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      try {
+        localStorage.setItem(_cmpColWidthKey(), String(Math.round(col.getBoundingClientRect().width)));
+      } catch {}
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
+// Build a compact card for one compare-lane event. Deliberately simpler
+// than the main-timeline chrome batching — a working dual-column with
+// worker tags + chronological order is the goal.
+function _buildCompareCard(ev) {
+  if (!ev || !ev.type) return null;
+  const ts = _localTs(ev.ts);
+  const card = document.createElement('div');
+  card.className = 'cmp-card cmp-card-' + ev.type + ' chat-msg-agent';
+  const head = document.createElement('div');
+  head.className = 'agent-card-head';
+  head.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>` + _workerBadge(ev);
+  card.appendChild(head);
+  const body = document.createElement('div');
+  body.className = 'agent-card-body';
+  if (ev.type === 'assistant_text') {
+    head.innerHTML += '<span class="agent-card-kind agent-card-claude">myco</span>';
+    body.className += ' agent-card-md';
+    body.innerHTML = renderMd(ev.text || '');
+  } else if (ev.type === 'tool_use') {
+    head.innerHTML += `<span class="agent-card-kind agent-card-tool">${escHtml(_agentToolIcon(ev.name))} ${escHtml(ev.name)}</span>`;
+    body.innerHTML = `<pre class="agent-card-tool-input">${escHtml(JSON.stringify(ev.input, null, 2))}</pre>`;
+  } else if (ev.type === 'turn_result') {
+    const cost = ev.totalCostUsd != null ? '$' + ev.totalCostUsd.toFixed(4) : '$?';
+    head.innerHTML += `<span class="agent-card-kind agent-card-done">■ ${escHtml(ev.subtype || 'done')}</span>` +
+      `<span class="agent-card-summary agent-mute">${escHtml(cost)}</span>`;
+    body.innerHTML = ev.result
+      ? (body.className += ' agent-card-md', renderMd(String(ev.result)))
+      : `<span class="agent-mute">(no result text)</span>`;
+  } else if (ev.type === 'fatal') {
+    head.innerHTML += '<span class="agent-card-kind agent-card-error">⚠ fatal</span>';
+    body.innerHTML = `<pre>${escHtml(ev.error || '')}</pre>`;
+  } else if (ev.type === 'turn_start') {
+    head.innerHTML += `<span class="agent-chrome-kind agent-mute">▶ turn · ${escHtml(String(ev.prompt || '').slice(0, 60))}</span>`;
+  } else if (ev.type === 'permission_request') {
+    head.innerHTML += `<span class="agent-chrome-kind agent-mute">⊕ perm · ${escHtml(ev.toolName || '')}</span>`;
+  } else if (ev.type === 'session_ready' || ev.type === 'system_init' || ev.type === 'agent_init_snapshot' || ev.type === 'tool_result' || ev.type === 'iteration_aborted') {
+    head.innerHTML += `<span class="agent-chrome-kind agent-mute">${escHtml(_chromeShortLabel(ev) || ev.type)}</span>`;
+  } else {
+    head.innerHTML += `<span class="agent-chrome-kind agent-mute">${escHtml(ev.type)}</span>`;
+  }
+  card.appendChild(body);
+  return card;
+}
+
+function _appendCompareLaneEvent(ev) {
+  const root = _ensureCompareOverlay();
+  const col = document.getElementById(ev && ev.compareLane === 'n2' ? 'cmp-col-n2' : 'cmp-col-single');
+  const body = col && col.querySelector('.cmp-col-body');
+  const card = _buildCompareCard(ev);
+  if (!body || !card) return;
+  body.appendChild(card);
+  if (col) col.scrollTop = col.scrollHeight;
+  const status = document.getElementById('cmp-status');
+  if (status) {
+    const terminal = ev.type === 'turn_result' || ev.type === 'fatal' || ev.type === 'iteration_aborted';
+    status.textContent = terminal && ev.compareLane === 'n2'
+      ? '⏳ 双 agent 已结束 — 关闭以查看报告（主聊天区）'
+      : '运行中…';
+  }
+}
+
 function _appendAgentEvent(ev) {
   // bug-25: unknown_event is the server-side passthrough for SDK
   // message types myco doesn't recognize (see agent-session.js's
@@ -6715,6 +9050,20 @@ function _appendAgentEvent(ev) {
     try { console.warn('[unknown_event]', ev.raw_type || '(no raw_type)', ev.raw); } catch {}
     return;
   }
+  // compare-lane events (/run-n2 + /compare) draw into the pinned
+  // dual-column overlay, not the main timeline. Their `seq` was
+  // re-stamped by the bridge for ordering, but the main-pane chrome
+  // merging / HUD logic must not touch them.
+  if (ev && ev.compareLane) {
+    _appendCompareLaneEvent(ev);
+    return;
+  }
+  // team-split-view: a worker-tagged event on an agent-n2 session goes
+  // to its split-view column (or the colEvents cache when the user
+  // toggled back to the single stream). Falls through to the normal
+  // single-stream render when the team view isn't active — same
+  // behaviour as before this feature.
+  if (_routeAgentEvent(ev)) return;
   // bug-53: reset the HUD's sticky tool-phase tracker when a new turn
   // starts. Without this, a stale 'verify' or 'code' phase from the
   // previous turn would leak into the start of the new one — the new
@@ -6758,19 +9107,30 @@ function _appendAgentEvent(ev) {
   if (prevRunning) {
     let willAppend = false;
     if (isChrome) {
+      // /run-n2: a worker change ends the current chrome batch. Two
+      // workers' bridged events share one monotonic seq namespace, so
+      // purely consecutive seqs would wrongly fold worker-B's tool
+      // calls into worker-A's batch. A different worker = a new batch.
+      const prevWorker = prev.dataset.worker || '';
+      const sameWorker = prevWorker === (ev.worker || '');
       // bug-67: turn_result + permission_request + permission_resolved
-      // always fold into the prev chrome batch — they're tied to the
-      // surrounding tool-call lifecycle and would otherwise be split
-      // off by a seq gap from any interleaving chat-msg / system note.
-      if (_chromeEventAlwaysFolds(ev)) {
+      // always fold into the prev chrome batch for the SAME worker —
+      // they're tied to the surrounding tool-call lifecycle and would
+      // otherwise be split off by a seq gap from any interleaving
+      // chat-msg / system note.
+      const alwaysFolds = sameWorker && _chromeEventAlwaysFolds(ev);
+      if (alwaysFolds) {
         willAppend = true;
-      } else {
+      } else if (sameWorker) {
         const prevLastSeq = prev.dataset.lastSeq ? parseInt(prev.dataset.lastSeq, 10) : null;
         const evSeq = typeof ev.seq === 'number' ? ev.seq : null;
         const seqsConsecutive = Number.isFinite(prevLastSeq) && Number.isFinite(evSeq) && evSeq === prevLastSeq + 1;
         if (seqsConsecutive) {
           willAppend = true;
         }
+      }
+      if (!sameWorker) {
+        _finishChromeBatch(prev);
       }
     }
     if (!willAppend) {
@@ -6801,6 +9161,14 @@ function _appendAgentEvent(ev) {
     // is unfocused. Short turns are filtered inside the helper to
     // keep the OS center quiet.
     _maybeNotifyTurnComplete(ev);
+    // delm-10 stale-working-badge fix: the attached session's turn
+    // just ended while the user is watching — the user is reviewing
+    // the result live, so drop any pending "◦ to review" badge on
+    // THIS session's card immediately (don't wait for the 3s poll,
+    // which would briefly flip the chip after a turn the user just
+    // watched end).
+    const cur = state.sessions.find((s) => s.id === state.activeId);
+    if (cur && cur.agentHasReview) { cur.agentHasReview = false; renderSessionList(); }
   }
 
   // Chrome batching: consecutive chrome events collapse into one
@@ -6828,7 +9196,8 @@ function _appendAgentEvent(ev) {
     // hidden. Short-circuit before the seq-consecutive check so this
     // rule applies regardless of whether the seq run was broken.
     if (ev.type === 'turn_result') {
-      if (prev && prev.dataset && prev.dataset.evType === '_chrome_batch') {
+      if (prev && prev.dataset && prev.dataset.evType === '_chrome_batch' &&
+          (prev.dataset.worker || '') === (ev.worker || '')) {
         _appendToChromeBatch(prev, ev, ts);
         if (typeof ev.seq === 'number') prev.dataset.lastSeq = String(ev.seq);
         _attachTurnOutcomeChip(prev, ev);
@@ -6882,6 +9251,11 @@ function _appendAgentEvent(ev) {
       // breaks intact (a real chat-msg between menu and chrome
       // event blocks the walk).
       foldTarget = _findChromeBatchAcrossMenus(pane);
+    }
+    // /run-n2: never fold a chrome event into a batch from a DIFFERENT
+    // worker — each worker gets its own batch + badges.
+    if (foldTarget && (foldTarget.dataset.worker || '') !== (ev.worker || '')) {
+      foldTarget = null;
     }
     if (foldTarget) {
       _appendToChromeBatch(foldTarget, ev, ts);
@@ -6984,7 +9358,7 @@ function _appendAgentEvent(ev) {
   card.dataset.combineCount = '1';
   const head = document.createElement('div');
   head.className = 'agent-card-head';
-  head.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>`;
+  head.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>` + _workerBadge(ev);
   card.appendChild(head);
   const body = document.createElement('div');
   body.className = 'agent-card-body';
@@ -7102,7 +9476,12 @@ function _renderTokenMeter() {
   const t = state.turnTotals;
   if (!t || !state.activeId) { el.hidden = true; return; }
   const limit = _modelTokenLimit();
-  const fill = t.lastTurnInputTokens || 0;
+  // Hard clamp: a context FILL can never exceed the window. If a
+  // fill source upstream ever regresses to a cumulative value
+  // (the 3.9m/200k bug class), the chip shows a clamped ~100%
+  // rather than an impossible "3.9m / 200k" read.
+  const rawFill = t.lastTurnInputTokens || 0;
+  const fill = Math.min(rawFill, limit);
   const pct = limit > 0 ? Math.min(100, Math.round((fill / limit) * 100)) : 0;
   if (!fill) { el.hidden = true; return; }
   el.hidden = false;
@@ -7141,7 +9520,23 @@ function _appendTurnFooter(ev, ts) {
     state.turnTotals.outputTokens += outTok;
     state.turnTotals.cacheReadTokens += cacheR;
     state.turnTotals.costUsd += (ev.totalCostUsd || 0);
-    state.turnTotals.lastTurnInputTokens = inTok;
+    // Token-meter fix: ev.ctxFill is the LAST API request's
+    // context fill (input + cache_read + cache_creation), shipped
+    // by the server from the last assistant message's per-request
+    // usage. The turn_result `usage` is CUMULATIVE across all the
+    // turn's API requests, so using its input_tokens as the fill
+    // produced impossible reads like "3.6M/200k ctx (100%)".
+    // Fallback (older servers / single-request turns without a
+    // streamed assistant message): input + cache_read of the
+    // result usage. Huawei-gateway r2 (2026-10-22): the gateway
+    // ships no per-request assistant usage, so even fixed servers
+    // emit ctxFill derived from the cumulative usage — average it
+    // by the request count (numTurns) so the fallback can never
+    // exceed the context window.
+    const requests = (ev.numTurns && ev.numTurns > 1) ? ev.numTurns : 1;
+    const fallbackFill = Math.max(1, Math.round((inTok + cacheR + (u.cache_creation_input_tokens || 0)) / requests));
+    state.turnTotals.lastTurnInputTokens =
+      (typeof ev.ctxFill === 'number' && ev.ctxFill > 0) ? ev.ctxFill : fallbackFill;
     _renderTokenMeter();
   }
 }
@@ -7203,7 +9598,11 @@ function _chromeEventLine(ev, ts) {
     summary = ev.resumedFromSdkSessionId ? `resumed sdk=${String(ev.resumedFromSdkSessionId).slice(0, 8)}` : 'session live';
   } else if (ev.type === 'system_init') {
     kind = '▶ session';
-    summary = `sdk=${(ev.sdkSessionId || '').slice(0, 8)} · model=${ev.model || '?'}`;
+    // Show the ACTIVE gateway profile's configured model when known ("按
+    // 设置显示"); fall back to the SDK's (upstream-resolved, possibly stale
+    // across resume) ev.model otherwise.
+    summary = `sdk=${(ev.sdkSessionId || '').slice(0, 8)} · model=${_activeGatewayModel || ev.model || '?'}`
+      + (_activeGatewayBase ? ` · base=${_activeGatewayBase}` : '');
   } else if (ev.type === 'agent_init_snapshot') {
     kind = '⟲ reattach';
     summary = `sdk=${(ev.sdkSessionId || '').slice(0, 8)}`;
@@ -7271,7 +9670,7 @@ function _chromeEventLine(ev, ts) {
   } else {
     summary = JSON.stringify(ev).slice(0, 120);
   }
-  row.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>` +
+  row.innerHTML = `<span class="agent-card-ts">${escHtml(ts)}</span>` + _workerBadge(ev) +
     `<span class="agent-chrome-kind agent-mute">${escHtml(kind)}</span>` +
     (summary ? `<span class="agent-chrome-summary agent-mute">${escHtml(summary)}</span>` : '');
   wrap.appendChild(row);
@@ -7583,6 +9982,7 @@ function _createChromeBatch(ev, ts) {
   card.dataset.firstTs = ts;
   card.dataset.lastTs = ts;
   card.dataset.running = 'true';
+  card.dataset.worker = ev.worker || '';
   // bug-11: bootstrap the per-batch tool_result aggregator + persist a
   // bytes-free signature for merge eligibility BEFORE rendering the
   // head label, so the first event's bytes land in the aggregate and
@@ -7594,7 +9994,7 @@ function _createChromeBatch(ev, ts) {
   const head = document.createElement('div');
   head.className = 'agent-card-head';
   head.innerHTML =
-    `<span class="agent-card-ts">${escHtml(ts)}</span>` +
+    `<span class="agent-card-ts">${escHtml(ts)}</span>` + _workerBadge(ev) +
     `<span class="agent-chrome-glyph agent-mute" aria-hidden="true">▸</span>` +
     `<span class="agent-card-count agent-mute">× 1</span>` +
     `<span class="agent-card-summary agent-mute agent-chrome-last">${_chromeBatchHeadLabel(card, ev)}</span>`;
@@ -7858,6 +10258,11 @@ function _chromeShortLabel(ev) {
   if (ev.type === 'permission_resolved') return 'perm ' + (ev.decision || 'resolved') + ' · ' + (ev.toolName || '');
   if (ev.type === 'hook_allow') return 'hook allow · ' + (ev.toolName || '');
   if (ev.type === 'hook_deny') return 'hook deny · ' + (ev.toolName || '');
+  if (ev.type === 'knowledge_injected') return '📚 kb · ' + (ev.count || 0) + ' hit(s)';
+  if (ev.type === 'knowledge_written') {
+    const n = Array.isArray(ev.items) ? ev.items.length : 0;
+    return '📝 kb · wrote ' + n;
+  }
   if (ev.type === 'turn_start') return 'turn · ' + String(ev.prompt || '').replace(/\s+/g, ' ').slice(0, 60);
   if (ev.type === 'iteration_start') return ev.resume ? 'iter (resumed)' : 'iter';
   if (ev.type === 'agent_init_snapshot') return 'reattach';
@@ -7936,6 +10341,47 @@ function _applyStateUpdate(msg) {
     return;
   }
   if (msg.kind === 'tool-progress') {
+    // team-split-view: worker-tagged tool-progress (agent-n2) feeds the
+    // per-column openTools map so each column header shows its OWN
+    // worker's in-flight tool; the two workers no longer overwrite each
+    // other in the single shared slot. Untagged frames (single-agent
+    // sessions) keep the legacy single-slot path untouched.
+    if (msg.worker && state.teamView.active) {
+      // multi-lane 行排列: cache into the frame's lane record; the
+      // lane's OWN row status repaints (every lane is on screen).
+      const laneId = msg.laneId || state.teamView.laneId || '__default__';
+      const rec = _teamLaneRec(laneId, null);
+      if (rec.openTools[msg.worker]) rec.openTools[msg.worker] = Array.isArray(msg.open) ? msg.open : [];
+      if (!msg.laneId) state.teamView.openTools[msg.worker] = Array.isArray(msg.open) ? msg.open : [];
+      _renderTeamColumnStatus(laneId, msg.worker);
+      // 单列 fix (2026-10-23): in stream mode the split columns are
+      // hidden (display:none) — updating only them left the single
+      // timeline with NO busy-tool indicator at all. Merge every
+      // worker's in-flight tools (across all lanes) into the single-
+      // stream slot so the typing strip / HUD keep showing what the
+      // run is doing (tool name + count), then run the same
+      // lastToolPhase/HUD updates the untagged path uses.
+      if (state.teamView.mode !== 'split') {
+        const merged = [];
+        for (const lane of _teamLanesList()) {
+          for (const tools of Object.values(lane.openTools || {})) {
+            for (const t of (tools || [])) if (t) merged.push(t);
+          }
+        }
+        state.openToolCalls = merged;
+        for (const tc of state.openToolCalls) {
+          if (!tc || !tc.name) continue;
+          if (tc.name === 'Bash') state.lastToolPhase = 'verify';
+          else if (tc.name === 'Edit' || tc.name === 'Write' || tc.name === 'MultiEdit') {
+            if (state.lastToolPhase !== 'verify') state.lastToolPhase = 'code';
+          }
+        }
+        _renderClaudeTyping();
+        _updateTaskHUD();
+        _renderTeamStreamBoardCard(laneId);  // busy-tool footer lives on the 单列 card too
+      }
+      return;
+    }
     state.openToolCalls = Array.isArray(msg.open) ? msg.open : [];
     // bug-53 (HUD analyze stuck — dispatch-mislabeled-as-bug-52):
     // remember the most recent tool phase so the HUD chip stays
@@ -7979,12 +10425,104 @@ function _applyStateUpdate(msg) {
     clearChat();
     return;
   }
+  if (msg.kind === 'team-info') {
+    // team-split-view: a shadow lane (from /run-n2, /compare's n2 leg, or
+    // the run-queue ◓ agent-n2 button) announces itself mid-session via
+    // compare-lanes' bridge — same handler as the attach-time frame.
+    // resetCache clears the previous run's frozen columns, EXCEPT when
+    // this is the attach handshake re-announcing an ALREADY-ENDED lane
+    // (ended:true) — that frame re-freezes the existing record and the
+    // agent-replay that follows rebuilds it, so wiping here would
+    // discard the cache it is about to be repopulated from.
+    const isEndedReannounce = Boolean(msg.ended);
+    _handleTeamInfoFrame(Object.assign({}, msg, { resetCache: !isEndedReannounce }));
+    return;
+  }
+  if (msg.kind === 'team-lane-end') {
+    // team-split-view: the shadow lane reached a terminal state —
+    // FREEZE the split view as the finished run's record (a persistent
+    // agent-n2 session ignores this via the teamLane flag check inside).
+    _handleTeamLaneEnd(msg);
+    return;
+  }
+  if (msg.kind === 'board') {
+    // team-split-view: a board append happened (publish/claim/done/note/
+    // apply…). The snapshot is authoritative — repaint the queue + both
+    // column statuses from it; the raw event feeds the middle-column
+    // activity card list.
+    // multi-lane: the frame is scoped to ITS lane — store into that
+    // lane's record; only the SELECTED lane's panes repaint. A board
+    // frame without laneId (real agent-n2 session) stays on the
+    // default surface.
+    const laneId = msg.laneId || state.teamView.laneId || '__default__';
+    const rec = _teamLaneRec(laneId, null);
+    rec.board = msg.snapshot || null;
+    if (msg.event) {
+      rec.events.push(msg.event);
+      if (rec.events.length > 120) rec.events.splice(0, rec.events.length - 120);
+    }
+    if (!msg.laneId) state.teamView.board = msg.snapshot || null;
+    // 行排列: the lane's OWN row repaints (queue + statuses + feed) —
+    // every lane is on screen, so no selected-lane gate remains.
+    _renderTeamBoardPane(laneId);
+    const roster = (Array.isArray(rec.roster) && rec.roster.length) ? rec.roster : _teamRoster();
+    for (const w of roster) _renderTeamColumnStatus(laneId, w);
+    if (msg.event) _appendTeamBoardEvent(laneId, msg.event);
+    // 单列 fix: the board snapshot + change event must ALSO reach the
+    // single timeline (summary card + one-line notice) — in stream mode
+    // the split panes above are hidden and were the only surfaces.
+    _renderTeamStreamBoardCard(laneId);
+    if (msg.event) _appendTeamStreamBoardNotice(laneId, msg.event);
+    // 布局横幅: the banner's 看板进展 counter reads the lane registry —
+    // refresh it so a claim/done is visible at the top of the pane too.
+    _renderTeamModeBanner();
+    // 2026-10-28 UX: the toolbar's aggregate 进度 readout tracks board
+    // snapshots — refresh it wherever the board rendered (both modes).
+    _updateTeamToolbarReadouts();
+    return;
+  }
   if (msg.kind === 'runQueue') {
     // fr-48: run-queue state changed (entry added/removed/transitioned).
     // Cache the latest state + re-render the persistent queue chip
     // strip at the top of the chat pane.
     state.runQueue = msg.state || { entries: [], paused: false, counts: {} };
     _renderRunQueueStrip();
+    return;
+  }
+  if (msg.kind === 'pending-questions') {
+    // bug-92: unanswered user questions changed (question asked,
+    // answered, or failed). Re-render the small "unanswered" strip.
+    state.pendingQuestions = msg.state || { list: [], counts: {} };
+    _renderPendingQuestionsStrip();
+    return;
+  }
+  if (msg.kind === 'claude-running') {
+    // Refresh-stale-status fix: the status strip is rebuilt from the
+    // agent-event replay on attach, and a replay tail ending on a
+    // non-terminal event (assistant_text / tool_use / chrome after an
+    // aborted turn) wrongly shows the Stop button as "running". The
+    // server ships the AUTHORITATIVE live-turn state here (running =
+    // a Query stream is actually in flight). When it reports idle, retire
+    // the strip so a fresh F5 never leaves a phantom Stop button.
+    // delm-10: track BOTH polarities into state.claudeRunning — the
+    // HUD Stop button gates on it so it only appears/can only fire
+    // while the ATTACHED session's agent is genuinely working. A
+    // stale running HUD from a queue entry that belongs to a
+    // different/now-idle session must not offer a Stop that fires a
+    // no-op (or worse, a mis-timed) interrupt.
+    state.claudeRunning = msg.running === true;
+    if (msg.running === false) _retireClaudeTyping();
+    try { _updateTaskHUD(); } catch {}
+    return;
+  }
+  if (msg.kind === 'gateway-changed') {
+    // fr:model-gateway — a typed `/model gw:<name>` switch updates the
+    // active gateway without reopening the picker, so the cached
+    // _activeGatewayModel / _activeGatewayBase ("按设置显示") used by the
+    // "▶ session" card would otherwise stay stale ("切换模型没有及时生效"
+    // display half). The server broadcasts the new model + base here.
+    _activeGatewayModel = msg.model || null;
+    _activeGatewayBase = msg.baseUrl || '';
     return;
   }
   if (msg.kind === 'model-picker') {
@@ -7994,7 +10532,7 @@ function _applyStateUpdate(msg) {
     // server's SUPPORTED_MODELS const. Click → sendChatMessage('/model <id>')
     // which re-enters handleModel and either reports "no change" or
     // persists the new override. Esc or backdrop click closes.
-    _openModelPicker(msg.current || null, Array.isArray(msg.supported) ? msg.supported : []);
+    _openModelPicker(msg.current || null, Array.isArray(msg.supported) ? msg.supported : [], msg.gateway, msg.systemBase);
     return;
   }
   if (msg.kind === 'critique-review') {
@@ -8108,6 +10646,175 @@ function _applyStateUpdate(msg) {
     }
     return;
   }
+  // delm-10 RLM mode: `/rlm on|off` flipped the session's persistent
+  // RLM flag (server persists rec.rlm + broadcasts this). Track it in
+  // state so the client can badge the mode (the /rlm slash reply also
+  // lands as a normal chat row, so this handler is intentionally
+  // lightweight — no extra row is synthesized here).
+  if (msg.kind === 'rlm-mode-changed') {
+    state.rlmMode = !!msg.rlm;
+    // RLM switch: session-level only — keep the select in sync too.
+    // §5.2: keep the 🧠 RLM chip in sync the instant the mode flips —
+    // also runs on initial attach (attach.js ships this frame from the
+    // effective mode), so refresh / device-switch restores the badge.
+    _updateRlmBadge();
+    // 2026-10-29 user report: the dropdown showed 关 while RLM was
+    // actually on (dropdown/state mismatch). The mode flip must sync
+    // BOTH surfaces — the pill AND the #rlm-scope-select (same frame
+    // drives them; _refreshRlmSwitch sets el.value from state.rlmMode
+    // and re-evaluates the row's collapse state).
+    try { _refreshRlmSwitch(); } catch {}
+    // The fixed stats chip's visibility follows the mode too.
+    try { _renderRlmStatsChip(); } catch {}
+    return;
+  }
+  // RLM usage stats (task req c, 2026-10-23): server-side agents/rlm/stats
+  // broadcasts kind:'rlm-stats' on every rlm_eval / rlm.spawn / rlm.collect
+  // so the 🧠 badge tooltip + status readout stay live without a refresh.
+  if (msg.kind === 'rlm-stats') {
+    state.rlmStats = msg.stats || null;
+    _updateRlmStatsBadge();
+    return;
+  }
+}
+
+// task req c: surface RLM usage (trigger count + estimated context
+// saved) in the UI. Design: the 🧠 RLM pill's tooltip carries the live
+// numbers (hover = inspect, zero layout cost); the pill's title is
+// rebuilt whenever a rlm-stats frame lands.
+function _updateRlmStatsBadge() {
+  // Tooltip (hover = inspect) on the pill…
+  const el = document.getElementById('rlm-mode-badge');
+  if (el) {
+    const base = '本会话运行在 RLM (Recursive Language Model) 模式：REPL + 变量内核（上下文存为变量、跨轮次/重启存活）+ 递归子代理（rlm.spawn/collect，只回收答案不回收转录）。用 /rlm session off 或右上角开关关闭。';
+    const s = state.rlmStats;
+    el.title = base + (s ? `\n本次服务期统计：内核调用 ${s.evalCalls} 次 · 子代理 ${s.spawns} 个 · 回收 ${s.collects} 次 · 进化 ${s.evolved || 0} 次 · 节省上下文 ≈ ${(Number(s.savedChars || 0) / 1024).toFixed(1)} KB` : '');
+  }
+  // …AND the fixed stats chip (2026-10-29 user request: stats live in a
+  // FIXED AREA, always-visible while RLM mode is on — not hover-only).
+  try { _renderRlmStatsChip(); } catch {}
+}
+
+// 2026-10-29 user request: RLM 关键特性触发情况放固定区域. Renders
+// #rlm-stats-chip (a sibling of the 🧠 pill in the topctl row) from
+// state.rlmStats — REPL 内核触发次数 (evalCalls) · 子代理 spawns/回收
+// collects · Continual Harness 进化次数 (evolved, server-side harness
+// additions) · 节省上下文 savedChars KB. Hidden when RLM mode is off
+// (stats without the mode on are meaningless to the user).
+function _renderRlmStatsChip() {
+  const chip = document.getElementById('rlm-stats-chip');
+  if (!chip) return;
+  if (!state.rlmMode) { chip.hidden = true; chip.textContent = ''; return; }
+  const s = state.rlmStats || {};
+  const kb = (Number(s.savedChars || 0) / 1024).toFixed(1);
+  chip.textContent =
+    `内核 ${s.evalCalls || 0} · 子代理 ${s.spawns || 0}/${s.collects || 0}` +
+    ` · 进化 ${s.evolved || 0} · 省 ${kb} KB`;
+  chip.title =
+    'RLM 关键特性触发统计（本服务期，服务器内存统计，重启归零）：\n' +
+    `- REPL 内核调用：${s.evalCalls || 0} 次（rlm_eval 把上下文存为变量）\n` +
+    `- 子代理 spawn/回收：${s.spawns || 0} / ${s.collects || 0}（rlm.spawn → rlm.collect，只回收答案）\n` +
+    `- Continual Harness 进化：${s.evolved || 0} 次（rlm.addPrompt 持久规则）\n` +
+    `- 节省上下文 ≈ ${kb} KB（子代理事件只进 UI，未进父上下文的部分）`;
+  chip.hidden = false;
+}
+
+// §5.2: render/hide the persistent 🧠 RLM pill in the chat top bar.
+// Driven by state.rlmMode (set by the rlm-mode-changed handler above —
+// broadcast on /rlm toggles AND replayed on attach from the effective
+// mode). Session-level only (the user-level scope was removed).
+function _updateRlmBadge() {
+  const el = document.getElementById('rlm-mode-badge');
+  if (!el) return;
+  el.hidden = !state.rlmMode;
+  el.classList.toggle('rlm-mode-on', !!state.rlmMode);
+  const label = el.querySelector('span');
+  if (label) label.textContent = state.rlmMode ? '🧠 RLM' : '🧠 RLM';
+  // Bonus layer: the composer placeholder hints the active mode.
+  const input = document.getElementById('chat-input');
+  if (input) {
+    const base = 'Message claude · Enter sends · Shift+Enter newline';
+    input.placeholder = state.rlmMode ? base + ' · (RLM 模式)' : base;
+  }
+}
+
+// ─── RLM switch: session-level selector (off / on) ──────────────────────
+// The select drives the SAME switch as the `/rlm on|off` slash command:
+//   'off'     → rec.rlm=false for THIS session.
+//   'session' → rec.rlm=true for THIS session.
+// (The user-level scope was removed — each session opts in individually.)
+// The select reflects state.rlmMode (set by the rlm-mode-changed frame,
+// broadcast on toggles AND replayed on attach).
+function _rlmSwitchEl() {
+  return document.getElementById('rlm-scope-select');
+}
+
+function _refreshRlmSwitch() {
+  const el = _rlmSwitchEl();
+  if (!el) return;
+  // Hidden for read-only guests — they can't flip the switch.
+  el.hidden = !!state.readOnly;
+  el.value = state.rlmMode ? 'session' : 'off';
+  _refreshTopctlRow();
+}
+
+// Top-right control row (#chatpane-topctl-row): hosts the RLM switch +
+// the floating team view switch (单列/双列) so BOTH render on one line.
+// Previously each was positioned independently in #chatpane — when the
+// team toggle was hidden, the RLM switch sat alone with a blank band
+// above it (user-reported spacing bug). The row itself collapses
+// (display:none via [hidden]) when BOTH children are hidden, so no
+// blank strip is ever left behind.
+function _topctlRow() {
+  return document.getElementById('chatpane-topctl-row');
+}
+
+// Move the RLM select (declared in index.html as a chatpane sibling)
+// into the row. Idempotent; runs at boot + whenever the row is rebuilt.
+function _adoptRlmSwitchIntoTopRow() {
+  const row = _topctlRow();
+  const el = _rlmSwitchEl();
+  if (!row || !el || el.parentElement === row) return;
+  row.appendChild(el);
+  _refreshTopctlRow();
+}
+
+// Show the row only when at least one control inside is visible.
+function _refreshTopctlRow() {
+  const row = _topctlRow();
+  if (!row) return;
+  const anyVisible = [...row.children].some((c) => !c.hidden);
+  row.hidden = !anyVisible;
+  _updateTopctlRowPlacement();
+}
+
+// 2026-10-23 user report: the pane's top band is reserved for the
+// run-queue strip; with NO queue the topctl row (RLM + 单列/双列
+// switches) floated alone far from the chat input ("离得太远").
+// Toggle #chatpane.no-queue-floating so the row re-orders (see the
+// `#chatpane.no-queue-floating .chatpane-topctl-row` rule in
+// styles.css) to sit right above the composer. When a queue strip is
+// visible — or the row is fully hidden — the class is absent and the
+// row keeps its reserved top-band slot (order:-1), dynamically
+// adapting between the two states. Callers: _refreshTopctlRow +
+// _renderRunQueueStrip.
+function _updateTopctlRowPlacement() {
+  const pane = document.getElementById('chatpane');
+  if (!pane) return;
+  const row = _topctlRow();
+  const strip = document.getElementById('runqueue-strip');
+  const rowVisible = !!(row && !row.hidden);
+  const queueVisible = !!(strip && !strip.hidden);
+  pane.classList.toggle('no-queue-floating', rowVisible && !queueVisible);
+}
+
+// Change handler: applies the pick through the chat channel so the
+// owner+admin checks + rec.rlm persistence + the rlm-mode-changed
+// broadcast all run server-side.
+function _onRlmScopeChange(ev) {
+  const mode = ev.target.value;
+  const cmd = mode === 'session' ? '/rlm session on' : '/rlm session off';
+  try { sendChatMessage(cmd); } catch { _refreshRlmSwitch(); }
 }
 
 // fr-48: persistent chip strip showing the run-queue at the top of
@@ -8140,9 +10847,11 @@ function _renderRunQueueStrip() {
   if (!q || !Array.isArray(q.entries) || !q.entries.length) {
     host.hidden = true;
     host.innerHTML = '';
+    _updateTopctlRowPlacement();
     return;
   }
   host.hidden = false;
+  _updateTopctlRowPlacement();
   const pausedBadge = q.paused ? '<span class="runqueue-paused">⏸ paused</span>' : '';
 
   // Partition by status so we can cap finished + pending independently
@@ -8164,11 +10873,25 @@ function _renderRunQueueStrip() {
 
   const renderChip = (e) => {
     const glyph = ({ pending: '⏸', running: '⚙', success: '✓', failed: '⚠', cancelled: '✗' })[e.status] || '?';
-    const cancelable = !state.readOnly && e.status === 'pending';
-    const cancelBtn = cancelable
-      ? ` <button class="runqueue-cancel" data-id="${escHtml(e.itemId)}" title="Remove ${escHtml(e.itemId)} from queue" aria-label="Cancel">×</button>`
-      : '';
-    return `<span class="runqueue-chip runqueue-chip-${escHtml(e.status)}" data-id="${escHtml(e.itemId)}" title="${escHtml(e.status)} · added by @${escHtml(e.addedBy || '?')}">${glyph} ${escHtml(e.itemId)}${cancelBtn}</span>`;
+    const btns = [];
+    if (!state.readOnly) {
+      if (e.status === 'running') {
+        // ⏹ stops THIS task: interrupt the SDK iteration + mark cancelled
+        // (POST /queue/:itemId/cancel). Leaves the rest of the queue alone.
+        btns.push(`<button class="runqueue-cancel-run" data-id="${escHtml(e.itemId)}" title="Stop this task (cancel)" aria-label="Stop">⏹</button>`);
+      } else if (e.status === 'pending') {
+        // × removes a still-waiting entry (DELETE /queue/:itemId).
+        btns.push(`<button class="runqueue-cancel" data-id="${escHtml(e.itemId)}" title="Remove ${escHtml(e.itemId)} from queue" aria-label="Cancel">×</button>`);
+      } else {
+        // success / failed / cancelled — every finished chip is actionable:
+        // ↻ re-dispatches it as a fresh entry (keeps the old record for
+        // audit); × drops it from history entirely.
+        btns.push(`<button class="runqueue-rerun" data-id="${escHtml(e.itemId)}" title="Re-run ${escHtml(e.itemId)}" aria-label="Rerun">↻</button>`);
+        btns.push(`<button class="runqueue-cancel" data-id="${escHtml(e.itemId)}" title="Remove ${escHtml(e.itemId)} from history" aria-label="Remove">×</button>`);
+      }
+    }
+    const btnsHtml = btns.length ? ' ' + btns.join(' ') : '';
+    return `<span class="runqueue-chip runqueue-chip-${escHtml(e.status)}" data-id="${escHtml(e.itemId)}" title="${escHtml(e.status)} · added by @${escHtml(e.addedBy || '?')}">${glyph} ${escHtml(e.itemId)}${btnsHtml}</span>`;
   };
   const renderOverflow = (n, side) => {
     if (n <= 0) return '';
@@ -8189,14 +10912,26 @@ function _renderRunQueueStrip() {
   const resumeBtn = (!state.readOnly && q.paused)
     ? ' <button class="runqueue-resume" title="Unpause queue + dispatch next pending">▶ Resume</button>'
     : '';
+  // agent-n2: run the next pending plan item through the DUAL-agent lane
+  // (worker-A + worker-B) instead of the single-agent dispatch. Always
+  // offered while something is waiting, independent of the paused flag.
+  const n2Btn = (!state.readOnly && q.counts && q.counts.pending > 0)
+    ? ' <button class="runqueue-n2-resume" title="用双 agent（worker-A + worker-B）跑下一个待办任务（agent-n2）">◓ agent-n2</button>'
+    : '';
   const clearBtn = (!state.readOnly && q.counts && q.counts.pending > 0)
     ? ' <button class="runqueue-clear" title="Drop all pending entries">Clear pending</button>'
     : '';
-  host.innerHTML = `<span class="runqueue-label">Queue:</span> ${chipsHtml} ${pausedBadge} ${resumeBtn} ${clearBtn}`;
+  const clearFinishedBtn = (!state.readOnly && finished.length > 0)
+    ? ` <button class="runqueue-clear-fin" title="Wipe all finished chips (${finished.length}) — running + pending stay">一键清空已结束·${finished.length}</button>`
+    : '';
+  host.innerHTML = `<span class="runqueue-label">Queue:</span> ${chipsHtml} ${pausedBadge} ${resumeBtn} ${n2Btn} ${clearFinishedBtn} ${clearBtn}`;
   host.querySelectorAll('.runqueue-chip').forEach((chip) => {
     chip.addEventListener('click', (ev) => {
-      // Clicks on the × button don't navigate.
-      if (ev.target && ev.target.classList.contains('runqueue-cancel')) return;
+      // Clicks on the per-chip buttons (× / ↻ / ⏹) don't navigate.
+      const t = ev.target;
+      if (t && (t.classList.contains('runqueue-cancel')
+        || t.classList.contains('runqueue-rerun')
+        || t.classList.contains('runqueue-cancel-run'))) return;
       const id = chip.dataset.id;
       if (id) location.hash = '#' + id;
     });
@@ -8207,13 +10942,132 @@ function _renderRunQueueStrip() {
       onArtifactQueueCancel(btn.dataset.id);
     });
   });
+  host.querySelectorAll('.runqueue-rerun').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      onArtifactQueueRerun(btn.dataset.id);
+    });
+  });
+  host.querySelectorAll('.runqueue-cancel-run').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      onArtifactQueueCancelRunning(btn.dataset.id);
+    });
+  });
   const resumeEl = host.querySelector('.runqueue-resume');
   if (resumeEl) resumeEl.addEventListener('click', onArtifactQueueResume);
+  host.querySelectorAll('.runqueue-n2-resume').forEach((btn) => {
+    btn.addEventListener('click', onArtifactQueueN2Resume);
+  });
   const clearEl = host.querySelector('.runqueue-clear');
   if (clearEl) clearEl.addEventListener('click', onArtifactQueueClear);
+  const clearFinEl = host.querySelector('.runqueue-clear-fin');
+  if (clearFinEl) clearFinEl.addEventListener('click', onArtifactQueueClearFinished);
 
   // Update pinned Task HUD
   _updateTaskHUD();
+}
+
+// bug-92: "unanswered questions" strip — a second chip bar under the
+// run-queue strip so a user's question that a failed/aborted turn
+// dropped is never silently forgotten. Shows pending (⏳) + failed (⚠)
+// entries; a ↻ rerun button re-kicks the failed ones via
+// POST /sessions/:id/questions/rerun. Auto-rerun covers backend
+// failures server-side; this button is the manual kick for anything the
+// auto-rerun couldn't (incl. user-stopped turns).
+function _renderPendingQuestionsStrip() {
+  const OPEN = new Set(['pending', 'failed']);
+  const q = state.pendingQuestions || null;
+  const host = document.getElementById('pending-questions-strip')
+    || (() => {
+      const div = document.createElement('div');
+      div.id = 'pending-questions-strip';
+      div.className = 'pending-questions-strip';
+      const chatPane = document.getElementById('chatpane');
+      const messages = document.getElementById('chat-messages');
+      if (chatPane && messages) chatPane.insertBefore(div, messages);
+      return div;
+    })();
+  const open = (q && Array.isArray(q.list)) ? q.list.filter((e) => OPEN.has(e.status)) : [];
+  const hasFailed = open.some((e) => e.status === 'failed');
+  if (!open.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+  const chips = open.map((e) => {
+    const glyph = e.status === 'pending' ? '⏳' : '⚠';
+    const label = String(e.text || '').replace(/\s+/g, ' ').slice(0, 44);
+    const btns = [];
+    if (!state.readOnly) {
+      // ↻ = 单独重试 this question; × = 单独清理 (remove it entirely).
+      btns.push(`<button class="pq-rerun-one" data-qid="${escHtml(e.qid)}" title="重试这个问题" aria-label="Retry">↻</button>`);
+      btns.push(`<button class="pq-clear-one" data-qid="${escHtml(e.qid)}" title="移除这个问题" aria-label="Remove">×</button>`);
+    }
+    const btnsHtml = btns.length ? ' ' + btns.join(' ') : '';
+    return `<span class="pq-chip pq-chip-${escHtml(e.status)}" data-qid="${escHtml(e.qid)}" title="${escHtml(e.status)} · try ${(e.dispatchCount || 1)} · @${escHtml(e.user || '?')}">${glyph} ${escHtml(label)}${btnsHtml}</span>`;
+  }).join('');
+  const rerunBtn = (!state.readOnly && hasFailed)
+    ? ' <button class="pq-rerun" title="Re-run the failed unanswered questions">↻ rerun</button>'
+    : '';
+  const clearAllBtn = (!state.readOnly && open.length)
+    ? ` <button class="pq-clear-all" title="清空所有未回答问题（已回答的保留）">一键清空未回答·${open.length}</button>`
+    : '';
+  host.innerHTML = `<span class="pq-label">Unanswered:</span> ${chips} ${rerunBtn} ${clearAllBtn}`;
+  const rerunEl = host.querySelector('.pq-rerun');
+  if (rerunEl) rerunEl.addEventListener('click', onPendingQuestionsRerun);
+  const clearAllEl = host.querySelector('.pq-clear-all');
+  if (clearAllEl) clearAllEl.addEventListener('click', onPendingQuestionsClear);
+  host.querySelectorAll('.pq-rerun-one').forEach((btn) => {
+    btn.addEventListener('click', (ev) => { ev.stopPropagation(); onPendingQuestionRerun(btn.dataset.qid); });
+  });
+  host.querySelectorAll('.pq-clear-one').forEach((btn) => {
+    btn.addEventListener('click', (ev) => { ev.stopPropagation(); onPendingQuestionClear(btn.dataset.qid); });
+  });
+}
+
+async function onPendingQuestionsRerun() {
+  const sid = state.activeId;
+  if (!sid) return;
+  try {
+    await authedFetch(`/sessions/${encodeURIComponent(sid)}/questions/rerun`, { method: 'POST' });
+  } catch (err) {
+    console.error('[bug-92] unanswered question rerun threw:', err);
+  }
+}
+
+// ↻ on a single chip — retry one unanswered question.
+async function onPendingQuestionRerun(qid) {
+  const sid = state.activeId;
+  if (!sid || !qid) return;
+  try {
+    await authedFetch(`/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/rerun`, { method: 'POST' });
+  } catch (err) {
+    console.error('[bug-92] unanswered question individual rerun threw:', err);
+  }
+}
+
+// × on a single chip — remove one question from the unanswered queue.
+async function onPendingQuestionClear(qid) {
+  const sid = state.activeId;
+  if (!sid || !qid) return;
+  try {
+    await authedFetch(`/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/clear`, { method: 'POST' });
+  } catch (err) {
+    console.error('[bug-92] unanswered question individual clear threw:', err);
+  }
+}
+
+// 一键清空未回答 — wipe every open (pending+failed) question at once.
+async function onPendingQuestionsClear() {
+  const sid = state.activeId;
+  if (!sid) return;
+  try {
+    await authedFetch(`/sessions/${encodeURIComponent(sid)}/questions/clear`, { method: 'POST' });
+  } catch (err) {
+    console.error('[bug-92] unanswered question clear-all threw:', err);
+  }
 }
 
 // bug-45 round 2: pipeline labels shortened from
@@ -8318,6 +11172,26 @@ function _updateTaskHUD() {
     return `${sec}s`;
   };
 
+  // delm-10: the HUD's Stop button must only control the session the
+  // user is ATTACHED to, and only while that session's agent is
+  // genuinely working. state.claudeRunning is the authoritative
+  // busy flag (claude-running attach frame + _markAwaitingClaude on
+  // turn start; cleared on retire / switch). When it's false the
+  // running queue entry shown in the HUD belongs to a session that
+  // is NOT currently streaming (e.g. stuck-running across a
+  // restart, or the entry never belonged to this session) — render
+  // no Stop button so a click can't fire a stray interrupt at the
+  // attached (idle) session.
+  // stop-vs-run-n2: a live team lane also renders the Stop button —
+  // the server's _handleInterrupt stops the lane's workers even when
+  // the attached session itself is idle (see _sendStopAgent's gate).
+  const laneRunningHud = state.teamView.active && state.teamView.teamLane && !state.teamView.laneEnded;
+  const stopBtnHtml = (state.claudeRunning || laneRunningHud)
+    ? `<button type="button" class="hud-stop-btn" title="Stop execution (Esc)" aria-label="Stop">
+          <svg class="composer-icon" viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin:0;"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+        </button>`
+    : '';
+
   hud.innerHTML = `
     <div class="hud-task-row">
       <div class="hud-task-title-wrap">
@@ -8329,9 +11203,7 @@ function _updateTaskHUD() {
              + icon-only Stop. Tooltip + aria-label keep the
              affordance discoverable / a11y-readable. -->
         <span id="hud-duration-text">${getElapsedStr()}</span>
-        <button type="button" class="hud-stop-btn" title="Stop execution (Esc)" aria-label="Stop">
-          <svg class="composer-icon" viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin:0;"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-        </button>
+        ${stopBtnHtml}
       </div>
     </div>
     <div class="hud-progress-timeline">
@@ -8339,10 +11211,15 @@ function _updateTaskHUD() {
     </div>
   `;
 
-  // Attach stop button click listener
+  // Attach stop button click listener (only rendered while busy —
+  // see the stopBtnHtml gate above; the listener is a belt-and-
+  // suspenders re-check in case a stale DOM node survives a re-render).
   const stopBtn = hud.querySelector('.hud-stop-btn');
   if (stopBtn) {
     stopBtn.addEventListener('click', () => {
+      // delm-10 double-gate: never send an interrupt frame unless the
+      // attached session's agent is actually working.
+      if (!state.claudeRunning) return;
       _sendStopAgent();
     });
   }
@@ -8352,9 +11229,21 @@ function _updateTaskHUD() {
     _hudTimerInterval = setInterval(() => {
       const durText = document.getElementById('hud-duration-text');
       if (durText) {
+        // working-status fix: recompute from the CURRENT running queue
+        // entry on every tick instead of the captured getElapsedStr
+        // closure. Pre-fix the closure captured the FIRST render's
+        // `startedAt`, so when a second queued task started while the
+        // HUD stayed visible, the timer kept showing the old task's
+        // elapsed clock (stale closure — the callback only touched the
+        // DOM element, never state).
+        const q = state.runQueue || null;
+        const cur = q && Array.isArray(q.entries) && q.entries.find(e => e.status === 'running');
+        if (!cur) { durText.textContent = '0s'; return; }
+        const st = cur.startedAt ? new Date(cur.startedAt).getTime() : Date.now();
+        const sec = Math.max(0, Math.floor((Date.now() - st) / 1000));
         // bug-45 r4: bare time (no clock emoji, no brackets) —
         // must mirror the initial-render string above.
-        durText.textContent = getElapsedStr();
+        durText.textContent = `${sec}s`;
       }
     }, 1000);
   }
@@ -9001,6 +11890,54 @@ async function onArtifactQueueCancel(itemId) {
   }
 }
 
+// ⏹ on a RUNNING chip: interrupt the SDK iteration + mark the entry
+// cancelled (POST /queue/:itemId/cancel). Unlike DELETE (which refuses a
+// running entry), this stops the in-flight dispatch; the next pending
+// entry may still advance.
+async function onArtifactQueueCancelRunning(itemId) {
+  const sid = state.activeId;
+  if (!sid || !itemId) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/${encodeURIComponent(itemId)}/cancel`,
+      { method: 'POST' }
+    );
+  } catch (err) {
+    console.error('[fr-48] queue cancel-running threw:', err);
+  }
+}
+
+// ↻ on a failed/cancelled chip: re-dispatch the item as a fresh queue
+// entry (POST /queue/:itemId/rerun). The prior failed record stays for
+// audit; the fresh entry is dispatched immediately if the queue is idle.
+async function onArtifactQueueRerun(itemId) {
+  const sid = state.activeId;
+  if (!sid || !itemId) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/${encodeURIComponent(itemId)}/rerun`,
+      { method: 'POST' }
+    );
+  } catch (err) {
+    console.error('[fr-48] queue rerun threw:', err);
+  }
+}
+
+// 一键清空已完成 (clear-finished): wipe every terminal chip
+// (success/failed/cancelled) in one click; running + pending stay.
+async function onArtifactQueueClearFinished() {
+  const sid = state.activeId;
+  if (!sid) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/clear-finished`,
+      { method: 'POST' }
+    );
+  } catch (err) {
+    console.error('[fr-48] queue clear-finished threw:', err);
+  }
+}
+
 async function onArtifactQueueClear() {
   const sid = state.activeId;
   if (!sid) return;
@@ -9025,6 +11962,21 @@ async function onArtifactQueueResume() {
     );
   } catch (err) {
     console.error('[fr-48] queue resume threw:', err);
+  }
+}
+// agent-n2: run the next pending plan item through the dual-agent lane.
+// Mirrors resume, but POSTs to /queue/n2 (server starts a worker-A/B lane
+// and flips the queue entry on completion).
+async function onArtifactQueueN2Resume() {
+  const sid = state.activeId;
+  if (!sid) return;
+  try {
+    await authedFetch(
+      `/sessions/${encodeURIComponent(sid)}/queue/n2`,
+      { method: 'POST' }
+    );
+  } catch (err) {
+    console.error('[runQueueN2] queue/n2 threw:', err);
   }
 }
 
@@ -9375,6 +12327,9 @@ function applyReadOnly(owner) {
   // bug-19: re-evaluate Send-button disable state — readOnly just
   // flipped on, so the existing typed text (if any) may now be denied.
   _syncGuestSendStateIfBound();
+  // delm-10: hide the files-page create file/folder buttons for
+  // read-only guests (server rejects the POST anyway — this is UX).
+  _setFilesCreateButtonsHidden(true);
 }
 
 function clearReadOnly() {
@@ -9389,6 +12344,17 @@ function clearReadOnly() {
   // bug-19: re-evaluate Send-button disable state — readOnly cleared,
   // any previously-disabled Send should re-enable.
   _syncGuestSendStateIfBound();
+  // delm-10: owner again — restore the files-page create buttons.
+  _setFilesCreateButtonsHidden(false);
+}
+
+// delm-10: show/hide the files-page New file / New folder header
+// buttons. Called from applyReadOnly / clearReadOnly. The buttons are
+// owner-only server-side (POST /files/create-* uses 'owner' auth), so
+// guests never even see the affordance.
+function _setFilesCreateButtonsHidden(hidden) {
+  document.getElementById('files-new-folder')?.toggleAttribute('hidden', !!hidden);
+  document.getElementById('files-new-file')?.toggleAttribute('hidden', !!hidden);
 }
 
 // bug-19: external trigger for the chat-form's Send-button disable
@@ -9946,6 +12912,28 @@ function _bindStopAgent() {
 
 function _sendStopAgent() {
   if (!state.activeId) return;
+  // delm-10: final session-busy gate. The interrupt frame routes to
+  // session.interrupt() of the session THIS WS is attached to — if
+  // that session's agent isn't actually working (state.claudeRunning
+  // false: authoritative claude-running attach frame + turn-start
+  // arming, cleared on retire/switch), there is nothing to stop.
+  // Bailing here guarantees a stray click on a stale HUD can never
+  // fire an interrupt at an idle session, no matter which caller
+  // (HUD button / composer Stop / Esc) reached this point.
+  //
+  // stop-vs-run-n2: a LIVE team lane also counts as "working" — the
+  // /run-n2 shadow TeamSession iterates its own workers while the MAIN
+  // session stays idle (claudeRunning false), and pre-fix this gate
+  // dropped the Stop click so a running lane could never be stopped.
+  // active && teamLane && !laneEnded is the client-side mirror of the
+  // server's live _teamLane check (_handleInterrupt → stopN2Lane),
+  // which re-verifies server-side — this gate only decides whether the
+  // frame is worth sending.
+  const laneRunning = state.teamView.active && state.teamView.teamLane && !state.teamView.laneEnded;
+  if (!state.claudeRunning && !laneRunning) {
+    console.log('[stop] attached session not working — interrupt dropped (session-busy gate)');
+    return;
+  }
   // bug-14: send a dedicated interrupt frame instead of the legacy
   // chat-text-esc path. The legacy path persisted the literal stop
   // keyword as a user-typed chat row + broadcast it to viewers AS IF
@@ -10080,11 +13068,20 @@ function _wrapIdForArtifact(type) {
 // stayed at inset:0 behind the artifact (z-index trick), and the user
 // couldn't see chat + artifact at the same time. Sidebar mode also
 // re-enables the resize handle.
+// The Skills view (#skills-panel, incl. the Market tab) is an
+// artifact-main-view sibling like files/plan/arch/test — it must also
+// set .has-artifact so the chatpane shrinks into the right sidebar
+// beside it (delm-10 regression: opening Skills/Market covered chat
+// full-pane instead of coexisting with it). `hidden` is the single
+// visibility source for this pane (showSkillsView /
+// _hideMainPaneSiblings), so reading it here is authoritative.
 function _updateMainPaneLayout() {
   const main = document.getElementById('terminal-pane');
   if (!main) return;
+  const skillsOpen = !document.getElementById('skills-panel')?.hidden;
   const hasArt = !!(state.artifactView && state.artifactView.active) ||
-                 !!(state.files && state.files.visible);
+                 !!(state.files && state.files.visible) ||
+                 skillsOpen;
   main.classList.toggle('has-artifact', hasArt);
 }
 
@@ -10394,6 +13391,15 @@ function _runButtonLabel(layer) {
   }
 }
 
+// Human-readable remote-host label for the Plan-view remote-issues
+// section. codehub is the Huawei intranet GitLab-family host — it must
+// read "CodeHub", not the old non-gitee default "GitHub".
+function _remoteProviderLabel(p) {
+  if (p === 'gitee') return 'Gitee';
+  if (p === 'codehub') return 'CodeHub';
+  return 'GitHub';
+}
+
 // fr-81 Phase A: fetch + render open issues from the session project's
 // upstream remote (GitHub or Gitee) into a separate section at the
 // bottom of the Plan view. Lives in its own DOM container so it's
@@ -10442,16 +13448,21 @@ async function _loadAndRenderRemoteIssues(sid, opts = {}) {
     return;
   }
   if (data && data.error === 'no-token') {
-    const providerLabel = data.provider === 'gitee' ? 'Gitee' : 'GitHub';
-    const setpatHint = data.provider === 'gitee'
-      ? `Run <code>/setpat &lt;token&gt;</code> from the chat — Gitee has no OAuth flow yet.`
+    const providerLabel = _remoteProviderLabel(data.provider);
+    // Per-provider "where do I get a token" guidance — codehub + gitee
+    // have no OAuth flow here, so both point at /setpat; github uses
+    // sign-in (OAuth) as the default with /setpat as the fallback.
+    const setpatHint = (data.provider === 'codehub' || data.provider === 'gitee')
+      ? (data.provider === 'codehub'
+          ? `Run <code>/setpat @codehub &lt;token&gt;</code> from the chat — CodeHub has no OAuth flow yet.`
+          : `Run <code>/setpat &lt;token&gt;</code> from the chat — Gitee has no OAuth flow yet.`)
       : `Sign in via the top-right user chip, or <code>/setpat &lt;token&gt;</code>.`;
     section.innerHTML = `<h3 class="remote-issues-title">🔗 Remote issues — ${escHtml(providerLabel)}</h3>` +
       `<div class="remote-issues-empty">No ${escHtml(providerLabel)} token on file for <code>${escHtml(data.owner + '/' + data.repo)}</code>. ${setpatHint}</div>`;
     return;
   }
   const items = Array.isArray(data && data.items) ? data.items : [];
-  const providerLabel = data && data.provider === 'gitee' ? 'Gitee' : 'GitHub';
+  const providerLabel = _remoteProviderLabel(data && data.provider);
   const ownerRepo = data && data.owner && data.repo ? `${data.owner}/${data.repo}` : '';
   // fr-81 Phase B.2: surface the dedup pass in the section header.
   // "(N linked)" means N remote issues were folded into local plan
@@ -10673,7 +13684,7 @@ function renderArtifact(type, artifact) {
     // below), the user sees one row with a quick link to upstream.
     const remoteUrl = it.meta && typeof it.meta.remoteUrl === 'string' ? it.meta.remoteUrl : '';
     const remoteChip = remoteUrl
-      ? `<a class="artifact-item-remote" href="${escHtml(remoteUrl)}" target="_blank" rel="noopener noreferrer" title="Open the linked remote issue on ${escHtml(it.meta && it.meta.remoteProvider === 'gitee' ? 'Gitee' : 'GitHub')}: ${escHtml(remoteUrl)}">🔗</a>`
+      ? `<a class="artifact-item-remote" href="${escHtml(remoteUrl)}" target="_blank" rel="noopener noreferrer" title="Open the linked remote issue on ${escHtml(_remoteProviderLabel(it.meta && it.meta.remoteProvider))}: ${escHtml(remoteUrl)}">🔗</a>`
       : '';
     // Creator line: small muted "filed by @user · <ts>" rendered on
     // its own row BELOW the body text. Doesn\'t compete with the body
@@ -11765,6 +14776,9 @@ function bindFilesUi() {
   document.getElementById('files-copy')?.addEventListener('click', copyFileContents);
   document.getElementById('files-wrap-toggle')?.addEventListener('click', toggleWrap);
   document.getElementById('files-tree-collapse')?.addEventListener('click', _toggleFilesTreeCollapsed);
+  // delm-10: create file / create folder in the browsed dir.
+  document.getElementById('files-new-folder')?.addEventListener('click', () => _filesCreatePrompt('dir'));
+  document.getElementById('files-new-file')?.addEventListener('click', () => _filesCreatePrompt('file'));
   // fr-77 r3: changed-files section moved to the Plan view; the refresh /
   // collapse / list-click bindings live in bindPlanChangedFilesUi() now.
   document.getElementById('files-edit')?.addEventListener('click', _enterFileEditMode);
@@ -11924,6 +14938,1399 @@ function showFilesTreeError(msg) {
   ul.innerHTML = '';
   errEl.textContent = msg;
   errEl.hidden = false;
+}
+
+// delm-10 — Skills panel: list / select / import skills.
+//
+// Server contract (server/src/skills.js + routes in index.js):
+//   GET    /sessions/:id/skills          -> { skills:[{name,dirName,description,…}],
+//                                              enabledSkills: string[]|null, skillsMode }
+//   POST   /sessions/:id/skills          {name, description?, content} -> 201 {skill}
+//   POST   /sessions/:id/skills/import   {name?, files:[{path,content}]} -> 201 {skill}
+//   POST   /sessions/:id/skills/toggle   {name, enabled} -> {ok, enabledSkills, skillsMode}
+//   DELETE /sessions/:id/skills/:name    -> {deleted, dirName}
+// `enabledSkills` on the session record (null = 'all') is the SDK
+// `skills` context filter; a tick takes effect from the next reply.
+// Mutations are owner-only server-side; guests get a read-only list.
+function bindSkillsUi() {
+  const btn = document.getElementById('btn-skills');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', showSkillsView);
+  }
+  const imp = document.getElementById('skills-upload-btn');
+  if (imp && !imp.dataset.bound) {
+    imp.dataset.bound = '1';
+    imp.addEventListener('click', () => {
+      if (!state.activeId) return;
+      if (state.readOnly) { flashToast('Read-only: sign in as the session owner to import'); return; }
+      document.getElementById('skills-upload')?.click();
+    });
+  }
+  const inp = document.getElementById('skills-upload');
+  if (inp && !inp.dataset.bound) {
+    inp.dataset.bound = '1';
+    inp.addEventListener('change', () => _skillsUpload(inp.files).catch((e) => {
+      _showSkillsMsg(e.message || String(e), true);
+    }).finally(() => { inp.value = ''; }));
+  }
+  const ref = document.getElementById('skills-refresh-btn');
+  if (ref && !ref.dataset.bound) {
+    ref.dataset.bound = '1';
+    ref.addEventListener('click', () => _skillsRefresh());
+  }
+  // delm-11: LAYERED MARKET — top category row (skill / expert /
+  // team / mcp). Each category switches the icon, the subtitle intro,
+  // the visible list and the create affordance.
+  const CATS = ['skill', 'expert', 'team', 'mcp', 'harness'];
+  for (const cat of CATS) {
+    const btn = document.getElementById(`market-cat-${cat}`);
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => _skillsSetCat(cat));
+    }
+  }
+  // Scope tabs: personal (private drafts) vs the cross-user market.
+  // Both reload on switch so the data is fresh.
+  const tabPersonal = document.getElementById('skills-tab-personal');
+  if (tabPersonal && !tabPersonal.dataset.bound) {
+    tabPersonal.dataset.bound = '1';
+    tabPersonal.addEventListener('click', () => _skillsSetTab('personal'));
+  }
+  const tabMarket = document.getElementById('skills-tab-market');
+  if (tabMarket && !tabMarket.dataset.bound) {
+    tabMarket.dataset.bound = '1';
+    tabMarket.addEventListener('click', () => _skillsSetTab('market'));
+  }
+  // Experts runner (专家团): create/delete session experts + start a
+  // task with the saved team. Mutations owner-only (server routes
+  // gate too). Lives in the expert category below the market list.
+  const expCreate = document.getElementById('expert-create-btn');
+  if (expCreate && !expCreate.dataset.bound) {
+    expCreate.dataset.bound = '1';
+    expCreate.addEventListener('click', () => _expertsCreate().catch((e) => _showSkillsMsg(e.message || String(e), true)));
+  }
+  const expRun = document.getElementById('expert-run-form');
+  if (expRun && !expRun.dataset.bound) {
+    expRun.dataset.bound = '1';
+    expRun.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      _expertsRunTask();
+    });
+  }
+  const pub = document.getElementById('skills-publish-btn');
+  if (pub && !pub.dataset.bound) {
+    pub.dataset.bound = '1';
+    pub.addEventListener('click', () => _skillsMarketPublish().catch((e) => _showSkillsMsg(e.message || String(e), true)));
+  }
+  // delm-11: create a new expert/team/mcp private draft.
+  const newBtn = document.getElementById('market-new-btn');
+  if (newBtn && !newBtn.dataset.bound) {
+    newBtn.dataset.bound = '1';
+    newBtn.addEventListener('click', () => _marketEditorOpen(null));
+  }
+  _marketEditorBindOnce();
+  const mcpBack = document.getElementById('mcp-detail-back');
+  if (mcpBack && !mcpBack.dataset.bound) {
+    mcpBack.dataset.bound = '1';
+    mcpBack.addEventListener('click', () => {
+      document.getElementById('mcp-market-detail')?.setAttribute('hidden', '');
+      document.getElementById('mcp-market-list')?.removeAttribute('hidden');
+    });
+  }
+  // 自定义文档导入: bind the dialog's cancel/submit buttons once.
+  _mcpImportBindOnce();
+}
+
+// ─── delm-11: layered market — category state ─────────────────────────
+// state.marketCat selects the market LAYER; state.skillsTab keeps the
+// scope (personal private drafts vs the published market). Per-category
+// copy: the subtitle introduces the CURRENT category — not just skills.
+
+const MARKET_CAT_META = {
+  skill: {
+    subtitle: 'Enabled skills load into the agent\'s context (takes effect on the next reply).<br />Import a <code>SKILL.md</code> or a skill folder.',
+    publishHint: 'Publish one of my skills to the market',
+  },
+  expert: {
+    subtitle: 'Experts are reusable personas — a system prompt that defines a specialist.<br />Create a private expert, then one-click <b>Publish</b> to make it visible in the 专家市场 (market).',
+    publishHint: 'Publish one of my experts to the market',
+  },
+  team: {
+    subtitle: '专家团 (expert teams) bundle several experts into one roster that runs as a team.<br />Create a private team, then one-click <b>Publish</b> to share it in the 专家团市场.',
+    publishHint: 'Publish one of my teams to the market',
+  },
+  mcp: {
+    subtitle: 'MCP servers extend the agent with external tools.<br />Install a server pack into this session — its SKILL.md guides (and SDK tools) load on the next reply.',
+    publishHint: 'Publish one of my MCP servers',
+  },
+  harness: {
+    subtitle: 'Harness 市场收录了 Harness² sweep 调优出的最优 harness 配置。<br />安装后立即生效：下一轮对话起，session 就使用选中的 harness。',
+    publishHint: 'Publish the chosen harness to the market',
+  },
+};
+
+function _skillsSetCat(cat) {
+  if (!MARKET_CAT_META[cat]) cat = 'skill';
+  state.marketCat = cat;
+  for (const c of ['skill', 'expert', 'team', 'mcp', 'harness']) {
+    const btn = document.getElementById(`market-cat-${c}`);
+    btn?.classList.toggle('active', c === cat);
+    btn?.setAttribute('aria-selected', c === cat ? 'true' : 'false');
+  }
+  // Per-category intro + affordances — the panel introduces the
+  // CURRENT layer, never a fixed skill blurb.
+  const meta = MARKET_CAT_META[cat];
+  const sub = document.getElementById('skills-subtitle');
+  if (sub) sub.innerHTML = meta.subtitle;
+  document.getElementById('skills-scope-select')?.classList.toggle('hidden', cat !== 'skill');
+  document.getElementById('skills-upload-btn')?.classList.toggle('hidden', cat !== 'skill');
+  document.getElementById('market-new-btn')?.classList.toggle('hidden', cat === 'skill' || cat === 'mcp' || cat === 'harness' || !!state.readOnly);
+  // The top Publish… button drives the SKILL publish flow (prompt-pick
+  // from the personal skills list → POST /sessions/:id/skills/publish).
+  // In the expert/team categories each private row already carries its
+  // own one-click ⇧ Publish (POST /market/publish/:type/:name), and MCP
+  // has no publish at all — a visible button there is a trap that
+  // publishes an unrelated SKILL. Hide it outside the skill category.
+  const pub = document.getElementById('skills-publish-btn');
+  if (pub) {
+    pub.hidden = cat !== 'skill';
+    pub.title = meta.publishHint;
+  }
+  // Reset scope when switching layers (skill 'personal' vs market
+  // browsing reads differently per category).
+  _skillsSetTab('personal');
+}
+
+// ─── MCP market tab ────────────────────────────────────────────────────
+// Server surface (server/src/mcp/market.js + index.js routes):
+//   GET    /mcp-market                    → { servers: [entries] }
+//   GET    /mcp-market/:name              → entry incl. skill bodies
+//   POST   /sessions/:id/mcp-market/install    {name} → packs into skills
+//   POST   /sessions/:id/mcp-market/uninstall  {name} → removes the packs
+// An entry card shows transport / security / skill count; entries with
+// sdkTools also expose real mcp__myco_mcp__<entry>_<tool> tools after
+// install (applies from the next reply).
+
+async function _mcpMarketLoad() {
+  const sid = state.activeId;
+  if (!sid) return;
+  _showSkillsMsg('');
+  const res = await authedFetch('/mcp-market');
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  if (sid !== state.activeId) return;
+  _renderMcpMarketList(data.servers || []);
+}
+
+function _renderMcpMarketList(servers) {
+  const list = document.getElementById('mcp-market-list');
+  if (!list) return;
+  document.getElementById('mcp-market-detail')?.setAttribute('hidden', '');
+  list.removeAttribute('hidden');
+  // 自定义文档导入: header row with the import affordance (owner-only).
+  // Button uses the dedicated #mcp-import-open style (a real labeled
+  // button) — not the row-scoped .skill-install ghost it used to be.
+  const importBtn = state.readOnly ? '' : `<button type="button" id="mcp-import-open" title="把指导文档 (.md) 导入为自定义 MCP 市场条目" aria-label="导入指导文档">${_lucideIcon('file-plus', 'ft-svg')} 导入文档…</button>`;
+  const header = `<div class="mcp-market-head"><span class="mcp-market-title">MCP server catalog</span>${importBtn}</div>`;
+  if (!Array.isArray(servers) || servers.length === 0) {
+    list.innerHTML = `${header}<div class="skills-empty">No MCP servers in the market yet.</div>`;
+    _bindMcpImportOpen();
+    return;
+  }
+  list.innerHTML = header + servers.map((s) => {
+    const tools = Array.isArray(s.sdkTools) ? s.sdkTools.length : 0;
+    const tags = [
+      `<span class="mcp-tag mcp-tag-${escHtml(String((s.security && s.security.level) || 'medium'))}">${escHtml(String((s.security && s.security.level) || 'medium'))}</span>`,
+      s.transport ? `<span class="mcp-tag">${escHtml(String(s.transport.type || ''))}</span>` : '',
+      tools ? `<span class="mcp-tag">${tools} server tools</span>` : '',
+      `<span class="mcp-tag">${(s.skills || []).length} skill${(s.skills || []).length === 1 ? '' : 's'}</span>`,
+    ].filter(Boolean).join('');
+    const installed = (state.installedMcp || []).includes(s.name);
+    const actions = state.readOnly ? '' : (installed
+      ? `<button type="button" class="skill-install" data-mcp-un="${escHtml(s.name)}" title="Remove this pack's skills from the session">Uninstall</button>`
+      : `<button type="button" class="skill-install" data-mcp-in="${escHtml(s.name)}" title="Install the pack's skill guides into this session">Install</button>`);
+    return `
+    <div class="mcp-card" data-name="${escHtml(s.name)}">
+      <div class="mcp-card-head">
+        <span class="mcp-card-name">${escHtml(s.displayName || s.name)} <span class="skill-scope skill-scope-global">${escHtml(s.source || 'builtin')}</span></span>
+        <span class="mcp-card-ver">v${escHtml(s.version || '1.0.0')}</span>
+      </div>
+      <p class="mcp-card-desc">${escHtml(s.description || '')}</p>
+      <div class="mcp-card-tags">${tags}</div>
+      <div class="mcp-card-actions">
+        ${actions}
+        <button type="button" class="skill-del" data-mcp-detail="${escHtml(s.name)}" title="Preview the pack's skill guides">Detail</button>
+      </div>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('button[data-mcp-in]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const name = String(b.dataset.mcpIn);
+      if (!window.confirm(`Install MCP pack "${name}" into this session? Its skill guides load from the next reply.`)) return;
+      _mcpMarketInstall(name).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+  list.querySelectorAll('button[data-mcp-un]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const name = String(b.dataset.mcpUn);
+      if (!window.confirm(`Uninstall MCP pack "${name}" from this session?`)) return;
+      _mcpMarketUninstall(name).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+  list.querySelectorAll('button[data-mcp-detail]').forEach((b) => {
+    b.addEventListener('click', () => _mcpMarketDetail(String(b.dataset.mcpDetail)).catch((e) => _showSkillsMsg(e.message || String(e), true)));
+  });
+  _bindMcpImportOpen();
+}
+
+// ─── 自定义文档导入 (custom-doc import) ───
+// POST /mcp-market/import-doc {name, displayName?, description?,
+// docName?, content} → publishes a doc-derived skill-pack entry.
+// The import dialog lives in index.html (#mcp-import-dialog); this
+// code opens/closes it, gathers the fields (file wins over pasted
+// text), and submits.
+
+function _bindMcpImportOpen() {
+  const btn = document.getElementById('mcp-import-open');
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', () => _mcpImportOpenDialog());
+}
+
+function _mcpImportOpenDialog() {
+  const dlg = document.getElementById('mcp-import-dialog');
+  if (!dlg) return;
+  ['mcp-import-name', 'mcp-import-display', 'mcp-import-desc', 'mcp-import-text'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const file = document.getElementById('mcp-import-file');
+  if (file) file.value = '';
+  dlg.removeAttribute('hidden');
+}
+
+function _mcpImportCloseDialog() {
+  document.getElementById('mcp-import-dialog')?.setAttribute('hidden', '');
+}
+
+function _mcpImportBindOnce() {
+  const cancel = document.getElementById('mcp-import-cancel');
+  if (cancel && !cancel.dataset.bound) {
+    cancel.dataset.bound = '1';
+    cancel.addEventListener('click', () => _mcpImportCloseDialog());
+  }
+  const submit = document.getElementById('mcp-import-submit');
+  if (submit && !submit.dataset.bound) {
+    submit.dataset.bound = '1';
+    submit.addEventListener('click', () => _mcpImportSubmit().catch((e) => _showSkillsMsg(e.message || String(e), true)));
+  }
+}
+
+async function _mcpImportSubmit() {
+  const name = (document.getElementById('mcp-import-name')?.value || '').trim();
+  if (!name) throw new Error('Entry name is required');
+  const displayName = (document.getElementById('mcp-import-display')?.value || '').trim();
+  const description = (document.getElementById('mcp-import-desc')?.value || '').trim();
+  const fileEl = document.getElementById('mcp-import-file');
+  const file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+  let content = '';
+  let docName = `${name}-guide.md`;
+  if (file) {
+    content = await file.text();
+    docName = file.name;
+  } else {
+    content = document.getElementById('mcp-import-text')?.value || '';
+  }
+  if (!content.trim()) throw new Error('Pick a .md/.txt file or paste the document text');
+  const res = await authedFetch('/mcp-market/import-doc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, displayName: displayName || name, description, docName, content }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const out = await res.json();
+  _mcpImportCloseDialog();
+  _showSkillsMsg(`Imported "${out.server.name}" from ${docName} — install it from the catalog like any other entry.`);
+  await _mcpMarketLoad();
+}
+
+async function _mcpMarketInstall(name) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/mcp-market/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const out = await res.json();
+  const n = (out.skills || []).length;
+  const skip = (out.skipped || []).length;
+  _showSkillsMsg(`Installed ${n} skill${n === 1 ? '' : 's'} from "${name}"${skip ? ` (${skip} skipped — already present)` : ''}. Takes effect from the next reply.`);
+  await _mcpMarketLoad();
+  _skillsRefresh();
+}
+
+async function _mcpMarketUninstall(name) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/mcp-market/uninstall`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  _showSkillsMsg(`Uninstalled the "${name}" skill pack.`);
+  await _mcpMarketLoad();
+  _skillsRefresh();
+}
+
+async function _mcpMarketDetail(name) {
+  const res = await authedFetch(`/mcp-market/${encodeURIComponent(name)}`);
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const srv = await res.json();
+  const list = document.getElementById('mcp-market-list');
+  const detail = document.getElementById('mcp-market-detail');
+  if (!list || !detail) return;
+  list.setAttribute('hidden', '');
+  detail.removeAttribute('hidden');
+  const skillsHtml = (srv.skills || []).map((sk) => `
+    <details class="mcp-skill-fold" open>
+      <summary><code>${escHtml(sk.dirName)}</code> — ${escHtml(sk.description || '')}</summary>
+      <pre class="mcp-skill-md">${escHtml(sk.content || '')}</pre>
+    </details>`).join('');
+  detail.innerHTML = `
+    <div class="mcp-detail-head">
+      <button type="button" id="mcp-detail-back" class="skills-tab">← Back to catalog</button>
+      <span class="mcp-card-name">${escHtml(srv.displayName || srv.name)}</span>
+      <span class="mcp-card-ver">v${escHtml(srv.version || '1.0.0')}</span>
+    </div>
+    <p class="mcp-card-desc">${escHtml(srv.description || '')}</p>
+    ${srv.endpoint ? `<p class="mcp-detail-endpoint">Endpoint: <code>${escHtml(srv.endpoint)}</code></p>` : ''}
+    ${skillsHtml}`;
+  detail.querySelector('#mcp-detail-back')?.addEventListener('click', () => {
+    detail.setAttribute('hidden', '');
+    list.removeAttribute('hidden');
+  });
+}
+
+function showSkillsView() {
+  if (!state.activeId) return;
+  _hideMainPaneSiblings('skills-panel');
+  document.getElementById('skills-panel').hidden = false;
+  document.getElementById('btn-skills')?.classList.add('active');
+  if (window.innerWidth > 900) setChatPane(true);
+  // Import is owner-only; hide the affordance for read-only guests.
+  document.getElementById('skills-upload-btn')?.classList.toggle('hidden', !!state.readOnly);
+  // The visibility selector follows the same owner-only rule.
+  document.getElementById('skills-scope-select')?.classList.toggle('hidden', !!state.readOnly);
+  updateChatButton();
+  _updateMainPaneLayout();
+  _skillsSetTab(state.skillsTab || 'personal');
+}
+
+// Switch the scope tab within the ACTIVE category and reload whichever
+// list is showing. state.skillsTab: 'personal' (private drafts) or
+// 'market' (published, all users — items appear ONLY after publish).
+function _skillsSetTab(tab) {
+  state.skillsTab = (tab === 'market') ? 'market' : 'personal';
+  const cat = state.marketCat || 'skill';
+  const personal = document.getElementById('skills-tab-personal');
+  const market = document.getElementById('skills-tab-market');
+  personal?.classList.toggle('active', state.skillsTab === 'personal');
+  personal?.setAttribute('aria-selected', state.skillsTab === 'personal' ? 'true' : 'false');
+  market?.classList.toggle('active', state.skillsTab === 'market');
+  market?.setAttribute('aria-selected', state.skillsTab === 'market' ? 'true' : 'false');
+  // Scope-tab labels stay truthful per category.
+  if (personal) personal.textContent = (cat === 'skill') ? 'My skills' : 'My ' + cat + 's';
+  // The MCP category is a single catalog (GET /mcp-market) — there is
+  // no personal/market scope split behind these tabs, so a visible My
+  // / Market pair is a dead control. Hide both tabs there.
+  personal?.toggleAttribute('hidden', cat === 'mcp' || cat === 'harness');
+  market?.toggleAttribute('hidden', cat === 'mcp' || cat === 'harness');
+  // Panel visibility per category × scope.
+  const isSkill = cat === 'skill';
+  const isMcp = cat === 'mcp';
+  document.getElementById('skills-list')?.toggleAttribute('hidden', !(isSkill && state.skillsTab === 'personal'));
+  document.getElementById('skills-market-list')?.toggleAttribute('hidden', !(isSkill && state.skillsTab === 'market'));
+  document.getElementById('market-generic-list')?.toggleAttribute('hidden', isSkill || isMcp);
+  document.getElementById('experts-panel-list')?.toggleAttribute('hidden', cat !== 'expert');
+  document.getElementById('mcp-market-list')?.toggleAttribute('hidden', !isMcp);
+  document.getElementById('mcp-market-detail')?.setAttribute('hidden', '');
+  document.getElementById('harness-market-list')?.toggleAttribute('hidden', cat !== 'harness');
+  _skillsRefresh();
+}
+
+// Reload the list for the ACTIVE category × scope.
+function _skillsRefresh() {
+  const cat = state.marketCat || 'skill';
+  const scope = state.skillsTab || 'personal';
+  const showErr = (e) => _showSkillsMsg(e.message || String(e), true);
+  if (cat === 'mcp') return _mcpMarketLoad().catch(showErr);
+  if (cat === 'harness') return _harnessMarketLoad().catch(showErr);
+  if (cat === 'skill') {
+    return (scope === 'market')
+      ? _skillsMarketLoad().catch(showErr)
+      : _skillsLoad().catch(showErr);
+  }
+  // expert / team: the layered generic market (delm-11 /market API).
+  return _marketGenericLoad(cat, scope).catch(showErr);
+}
+
+function _showSkillsMsg(msg, isErr) {
+  const el = document.getElementById('skills-msg');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('err', !!isErr);
+  el.hidden = !msg;
+}
+
+// ─── delm-11: generic expert/team market (/market API) ────────────────
+// Server surface (server/src/market.js + index.js routes):
+//   GET    /market/personal/:type   → { <type>: [private items] }
+//   GET    /market                  → { skill, expert, team, mcp } (published)
+//   POST   /market/personal/:type   {item} → save/replace a private draft
+//   DELETE /market/personal/:type/:name
+//   POST   /market/publish/:type/:name  → ONE-CLICK publish (the only
+//                                        path to market visibility)
+//   POST   /market/install/:type/:name  → install a market item into my drafts
+//   DELETE /market/:type/:name?code=     → delete published (uploader-or-code)
+
+// Render one row of an expert (persona prompt) or team (member list).
+// Private rows: Edit / Publish / Delete. Market rows: Install / Delete.
+function _marketRenderRow(item, cat, scope) {
+  const detail = (cat === 'expert')
+    ? escHtml((item.prompt || '').slice(0, 160))
+    : (Array.isArray(item.experts)
+        ? item.experts.map((e) => escHtml(e.name) + (e.role ? ` <i>(${escHtml(e.role)})</i>` : '')).join(' + ')
+        : '');
+  const badge = scope === 'market'
+    ? `<span class="skill-scope skill-scope-global">market · by ${escHtml(item.uploader || 'unknown')}</span>`
+    : `<span class="skill-scope skill-scope-user">private</span>${item.publishedAt ? ' <span class="skill-scope skill-scope-global">published</span>' : ''}`;
+  let actions = '';
+  if (scope === 'personal') {
+    actions = (state.readOnly ? '' : `
+      <button type="button" class="skill-install" data-mkt-edit="${escHtml(item.name)}" title="Edit this ${escHtml(cat)}">✎</button>
+      <button type="button" class="skill-install" data-mkt-publish="${escHtml(item.name)}" title="One-click publish — make this ${escHtml(cat)} visible in the market">⇧ Publish</button>
+      <button type="button" class="skill-del" data-mkt-personal-del="${escHtml(item.name)}" title="Delete this private ${escHtml(cat)}">${_lucideIcon('trash', 'ft-svg')}</button>`);
+  } else {
+    actions = (state.readOnly ? '' : `
+      <button type="button" class="skill-install" data-mkt-generic-install="${escHtml(item.name)}" title="Install into my private store">${_lucideIcon('download', 'ft-svg')}</button>`)
+      + `<button type="button" class="skill-del" data-mkt-generic-del="${escHtml(item.name)}" title="Delete from market (uploader or system delete code)">${_lucideIcon('trash', 'ft-svg')}</button>`;
+  }
+  return `
+    <div class="skill-item" data-name="${escHtml(item.name)}" title="${escHtml(item.description || '')}">
+      <span class="skill-meta">
+        <span class="skill-name">${escHtml(item.name)} ${badge}</span>
+        <span class="skill-desc">${escHtml(item.description || '')}</span>
+        ${detail ? `<span class="skill-desc market-item-detail">${detail}</span>` : ''}
+      </span>
+      ${actions}
+    </div>`;
+}
+
+function _marketBindRowActions(list, cat, scope, reload) {
+  list.querySelectorAll('button[data-mkt-publish]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const name = String(b.dataset.mktPublish);
+      if (!window.confirm(`Publish "${name}" to the ${cat} market? It becomes visible to ALL users.`)) return;
+      try {
+        const res = await authedFetch(`/market/publish/${encodeURIComponent(cat)}/${encodeURIComponent(name)}`, { method: 'POST' });
+        if (!res.ok) {
+          let body = {};
+          try { body = await res.json(); } catch {}
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        _showSkillsMsg(`✓ Published "${name}" — it is now visible in the market.`, false);
+        reload();
+      } catch (e) { _showSkillsMsg(e.message || String(e), true); }
+    });
+  });
+  list.querySelectorAll('button[data-mkt-personal-del]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const name = String(b.dataset.mktPersonalDel);
+      if (!window.confirm(`Delete your private ${cat} "${name}"?`)) return;
+      try {
+        const res = await authedFetch(`/market/personal/${encodeURIComponent(cat)}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          let body = {};
+          try { body = await res.json(); } catch {}
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        _showSkillsMsg(`Deleted "${name}".`, false);
+        reload();
+      } catch (e) { _showSkillsMsg(e.message || String(e), true); }
+    });
+  });
+  list.querySelectorAll('button[data-mkt-edit]').forEach((b) => {
+    b.addEventListener('click', () => _marketEditorOpen(String(b.dataset.mktEdit)));
+  });
+  list.querySelectorAll('button[data-mkt-generic-install]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const name = String(b.dataset.mktGenericInstall);
+      if (!window.confirm(`Install market ${cat} "${name}" into your private store?`)) return;
+      try {
+        const res = await authedFetch(`/market/install/${encodeURIComponent(cat)}/${encodeURIComponent(name)}`, { method: 'POST' });
+        if (!res.ok) {
+          let body = {};
+          try { body = await res.json(); } catch {}
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        _showSkillsMsg(`✓ Installed "${name}" — switch to My ${cat}s to see it.`, false);
+        reload();
+      } catch (e) { _showSkillsMsg(e.message || String(e), true); }
+    });
+  });
+  list.querySelectorAll('button[data-mkt-generic-del]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const name = String(b.dataset.mktGenericDel);
+      // Two tries: uploader delete, then prompt for the system code.
+      const first = await authedFetch(`/market/${encodeURIComponent(cat)}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (first.ok) { _showSkillsMsg(`Deleted market ${cat} "${name}".`, false); reload(); return; }
+      const code = window.prompt(`Only the uploader (or the system delete code) can delete "${name}". Enter the system delete code (from the server operator):`);
+      if (!code) return;
+      try {
+        const res = await authedFetch(`/market/${encodeURIComponent(cat)}/${encodeURIComponent(name)}?code=${encodeURIComponent(code)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          let body = {};
+          try { body = await res.json(); } catch {}
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        _showSkillsMsg(`Deleted market ${cat} "${name}".`, false);
+        reload();
+      } catch (e) { _showSkillsMsg(e.message || String(e), true); }
+    });
+  });
+}
+
+// Load + render the expert/team list for the active scope.
+async function _marketGenericLoad(cat, scope) {
+  const list = document.getElementById('market-generic-list');
+  if (!list) return;
+  _showSkillsMsg('');
+  const reload = () => _marketGenericLoad(cat, scope).catch((e) => _showSkillsMsg(e.message || String(e), true));
+  const url = (scope === 'market') ? '/market' : `/market/personal/${encodeURIComponent(cat)}`;
+  const res = await authedFetch(url);
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  const items = (scope === 'market') ? (data[cat] || []) : (data[cat] || []);
+  const label = (cat === 'expert') ? 'experts' : 'teams';
+  if (!items.length) {
+    const empty = (scope === 'market')
+      ? `No ${label} in the market yet — they appear here only after their owner publishes one.`
+      : `No private ${label} yet. Create one with the + New… button, then Publish to make it visible in the market.`;
+    list.innerHTML = `<div class="skills-empty">${empty}</div>`;
+    if (cat === 'expert') _expertsLoad().catch(() => {});
+    return;
+  }
+  list.innerHTML = items.map((it) => _marketRenderRow(it, cat, scope)).join('');
+  _marketBindRowActions(list, cat, scope, reload);
+  // The experts runner (专家团) rides along under the expert list.
+  if (cat === 'expert') _expertsLoad().catch(() => {});
+}
+
+// ─── delm-11: private-entry editor (create / edit) ────────────────────
+// Builds category-appropriate fields into #market-editor-extra:
+//   expert → prompt textarea
+//   team   → experts[name, role] row editor
+//   mcp    → transport select + command/args or url
+function _marketEditorBindOnce() {
+  const dlg = document.getElementById('market-editor-dialog');
+  if (!dlg || dlg.dataset.bound) return;
+  dlg.dataset.bound = '1';
+  document.getElementById('market-editor-cancel')?.addEventListener('click', () => {
+    dlg.setAttribute('hidden', '');
+  });
+  document.getElementById('market-editor-save')?.addEventListener('click', () => {
+    _marketEditorSave().catch((e) => _showSkillsMsg(e.message || String(e), true));
+  });
+}
+
+function _marketEditorExtraHtml(cat, item) {
+  const it = item || {};
+  if (cat === 'expert') {
+    return `
+      <label class="mcp-import-label" for="market-editor-prompt">Persona prompt (system prompt) <span class="mcp-import-required">*</span></label>
+      <textarea id="market-editor-prompt" rows="8" placeholder="You are a … expert. Always …" aria-label="Persona prompt">${escHtml(it.prompt || '')}</textarea>`;
+  }
+  if (cat === 'team') {
+    const rows = (Array.isArray(it.experts) && it.experts.length ? it.experts : [{ name: '', role: '' }])
+      .map((e) => `
+        <div class="market-editor-expert-row">
+          <input type="text" class="mkt-exp-name" maxlength="64" placeholder="expert name" value="${escHtml(e.name || '')}" aria-label="Expert name" />
+          <input type="text" class="mkt-exp-role" maxlength="200" placeholder="role (optional)" value="${escHtml(e.role || '')}" aria-label="Expert role" />
+        </div>`).join('');
+    return `
+      <label class="mcp-import-label">Team experts <span class="mcp-import-required">*</span> (name + role each)</label>
+      <div id="market-editor-experts">${rows}</div>
+      <button type="button" id="market-editor-add-expert" class="skills-tab">+ add expert</button>`;
+  }
+  // mcp
+  const transport = it.transport || 'stdio';
+  return `
+    <label class="mcp-import-label" for="market-editor-transport">Transport</label>
+    <select id="market-editor-transport" aria-label="Transport">
+      <option value="stdio" ${transport === 'stdio' ? 'selected' : ''}>stdio (command)</option>
+      <option value="http" ${transport === 'http' ? 'selected' : ''}>http (url)</option>
+      <option value="sse" ${transport === 'sse' ? 'selected' : ''}>sse (url)</option>
+    </select>
+    <label class="mcp-import-label" for="market-editor-command">Command (stdio)</label>
+    <input id="market-editor-command" type="text" placeholder="e.g. npx" value="${escHtml(it.command || '')}" aria-label="Command" autocomplete="off" />
+    <label class="mcp-import-label" for="market-editor-args">Args (space-separated)</label>
+    <input id="market-editor-args" type="text" placeholder="e.g. -y @modelcontextprotocol/server-filesystem /tmp" value="${escHtml((it.args || []).join(' '))}" aria-label="Args" autocomplete="off" />
+    <label class="mcp-import-label" for="market-editor-url">URL (http/sse)</label>
+    <input id="market-editor-url" type="text" placeholder="https://mcp.example.com/sse" value="${escHtml(it.url || '')}" aria-label="URL" autocomplete="off" />`;
+}
+
+// Open the editor: pass null to create, or the item name to edit (the
+// draft is read from the personal list fetched fresh).
+async function _marketEditorOpen(name) {
+  const cat = state.marketCat || 'skill';
+  if (cat !== 'expert' && cat !== 'team' && cat !== 'mcp') return;
+  if (state.readOnly) { flashToast('Read-only: sign in to create entries'); return; }
+  const dlg = document.getElementById('market-editor-dialog');
+  if (!dlg) return;
+  let item = null;
+  if (name) {
+    // read the private draft for edit
+    const res = await authedFetch(`/market/personal/${encodeURIComponent(cat)}`);
+    if (res.ok) {
+      const data = await res.json();
+      item = (data[cat] || []).find((it) => it.name === name) || null;
+    }
+  }
+  dlg.dataset.editing = name || '';
+  document.getElementById('market-editor-title').textContent =
+    (cat === 'expert' ? 'Expert' : cat === 'team' ? '专家团 (team)' : 'MCP server') + (name ? ' — edit' : ' — new private draft');
+  document.getElementById('market-editor-name').value = item ? item.name : '';
+  document.getElementById('market-editor-desc').value = item ? (item.description || '') : '';
+  document.getElementById('market-editor-extra').innerHTML = _marketEditorExtraHtml(cat, item);
+  const addExp = document.getElementById('market-editor-add-expert');
+  addExp?.addEventListener('click', () => {
+    const holder = document.getElementById('market-editor-experts');
+    holder.insertAdjacentHTML('beforeend', `
+      <div class="market-editor-expert-row">
+        <input type="text" class="mkt-exp-name" maxlength="64" placeholder="expert name" aria-label="Expert name" />
+        <input type="text" class="mkt-exp-role" maxlength="200" placeholder="role (optional)" aria-label="Expert role" />
+      </div>`);
+  });
+  dlg.removeAttribute('hidden');
+}
+
+function _marketEditorSave() {
+  const cat = state.marketCat || 'skill';
+  const dlg = document.getElementById('market-editor-dialog');
+  const name = (document.getElementById('market-editor-name').value || '').trim();
+  const description = (document.getElementById('market-editor-desc').value || '').trim();
+  if (!name) throw new Error('Enter a name first.');
+  const body = { name, description };
+  if (cat === 'expert') {
+    const prompt = (document.getElementById('market-editor-prompt')?.value || '').trim();
+    if (!prompt) throw new Error('An expert needs a persona prompt.');
+    body.prompt = prompt;
+  } else if (cat === 'team') {
+    const experts = [...document.querySelectorAll('#market-editor-experts .market-editor-expert-row')]
+      .map((row) => ({
+        name: (row.querySelector('.mkt-exp-name')?.value || '').trim(),
+        role: (row.querySelector('.mkt-exp-role')?.value || '').trim(),
+      }))
+      .filter((e) => e.name);
+    if (!experts.length) throw new Error('A team needs at least one expert.');
+    body.experts = experts;
+  } else if (cat === 'mcp') {
+    const transport = document.getElementById('market-editor-transport')?.value || 'stdio';
+    body.transport = transport;
+    if (transport === 'stdio') {
+      body.command = (document.getElementById('market-editor-command')?.value || '').trim();
+      body.args = (document.getElementById('market-editor-args')?.value || '').trim().split(/\s+/).filter(Boolean);
+      if (!body.command) throw new Error('stdio transport needs a command.');
+    } else {
+      body.url = (document.getElementById('market-editor-url')?.value || '').trim();
+      if (!/^https?:\/\//.test(body.url || '')) throw new Error('http/sse transport needs an http(s) URL.');
+    }
+  } else {
+    throw new Error('This category uses its own import flow.');
+  }
+  const editing = String(dlg.dataset.editing || '');
+  const reload = () => _skillsRefresh();
+  return (async () => {
+    const res = await authedFetch(`/market/personal/${encodeURIComponent(cat)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let errBody = {};
+      try { errBody = await res.json(); } catch {}
+      throw new Error(errBody.error || `HTTP ${res.status}`);
+    }
+    // Editing under a NEW name creates a second draft; drop the old
+    // one so a rename is a rename, not a fork. Best-effort — a failure
+    // leaves the old draft in place (harmless, user can delete it).
+    if (editing && editing !== name) {
+      try {
+        await authedFetch(`/market/personal/${encodeURIComponent(cat)}/${encodeURIComponent(editing)}`, { method: 'DELETE' });
+      } catch {}
+    }
+    dlg.setAttribute('hidden', '');
+    _showSkillsMsg(`✓ Saved "${name}" to your private ${cat}s. One-click Publish to make it visible in the market.`, false);
+    reload();
+  })();
+}
+
+// ── Experts tab (专家团) ──────────────────────────────────────────
+// Server surface:
+//   GET    /sessions/:id/experts          -> { experts:[{name, skills:[{name,description,dirName}]}], max }
+//   POST   /sessions/:id/experts          {name, skills:[dirName…]} -> 201 {experts}
+//   DELETE /sessions/:id/experts/:name    -> {experts}
+// rec.experts is the persistence; the resolved skill metadata comes
+// back from the server (skills deleted since creation are silently
+// dropped server-side). Creating an expert = name + a MULTI-select of
+// skills (checkboxes in #expert-skills-picker, fed by the same merged
+// personal list the My skills tab shows — market skills appear there
+// after install). Starting a task sends `/run-experts <task>` through
+// the normal chat pipeline (the server's slash-command dispatcher owns
+// the team-lane launch — the client never spawns agents itself).
+
+// Load the saved experts + rebuild the create-form skill picker (the
+// picker re-reads the merged personal list so freshly installed
+// market skills show up without a page refresh).
+async function _expertsLoad() {
+  const sid = state.activeId;
+  if (!sid) return;
+  _showSkillsMsg('');
+  // Skills for the picker (personal merged list). Reuse skillsCache
+  // when fresh, but always fetch so the picker is current.
+  const skills = await _expertsFetchSkills(sid);
+  const data = await _expertsFetchRoster(sid);
+  if (sid !== state.activeId) return;   // session switched mid-fetch
+  state.expertsCache = { experts: data.experts || [], max: data.max || 12 };
+  _renderExpertSkillsPicker(skills);
+  _renderExpertsList(state.expertsCache.experts);
+  // Owner-only affordances: create form + run row + delete buttons.
+  const ro = !!state.readOnly;
+  document.querySelector('.experts-create')?.classList.toggle('hidden', ro);
+  document.getElementById('expert-run-form')?.classList.toggle('hidden', ro || !(state.expertsCache.experts || []).length);
+}
+
+async function _expertsFetchSkills(sid) {
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.skills || [];
+  } catch { return []; }
+}
+
+async function _expertsFetchRoster(sid) {
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/experts`);
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// Checkbox multi-select of the session's skills. Each box carries the
+// skill's dirName (the identifier POST /experts expects).
+function _renderExpertSkillsPicker(skills) {
+  const picker = document.getElementById('expert-skills-picker');
+  if (!picker) return;
+  if (!Array.isArray(skills) || skills.length === 0) {
+    picker.innerHTML = '<div class="skills-empty">No skills available yet — import one on the My skills tab (or install from Market) first.</div>';
+    return;
+  }
+  picker.innerHTML = skills.map((s) => `
+    <label class="skill-item expert-pick" title="${escHtml(s.description || '')}">
+      <input type="checkbox" data-expert-skill="${escHtml(s.dirName || s.name)}" ${state.readOnly ? 'disabled' : ''} />
+      <span class="skill-meta">
+        <span class="skill-name">${escHtml(s.name)}</span>
+        <span class="skill-desc">${escHtml(s.description || '')}</span>
+      </span>
+    </label>`).join('');
+}
+
+// One row per saved expert: name + its skill chips + a delete button.
+function _renderExpertsList(experts) {
+  const list = document.getElementById('experts-list');
+  if (!list) return;
+  if (!Array.isArray(experts) || experts.length === 0) {
+    list.innerHTML = '<div class="skills-empty">No experts yet. Create one above — a name plus one or more skills.</div>';
+    return;
+  }
+  list.innerHTML = experts.map((e, i) => `
+    <div class="expert-item" data-name="${escHtml(e.name)}">
+      <span class="expert-badge">worker-${String.fromCharCode(65 + i)}</span>
+      <span class="expert-meta">
+        <span class="expert-name">${escHtml(e.name)}</span>
+        <span class="expert-skills">${(e.skills || []).map((s) => `<span class="expert-skill-chip">${escHtml(s.name)}</span>`).join('') || '<span class="skill-desc">(no skills)</span>'}</span>
+      </span>
+      ${state.readOnly ? '' : '<button type="button" class="skill-del" data-expert-del="' + escHtml(e.name) + '" title="Remove expert">' + _lucideIcon('trash', 'ft-svg') + '</button>'}
+    </div>`).join('');
+  list.querySelectorAll('button[data-expert-del]').forEach((b) => {
+    b.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const name = String(b.dataset.expertDel);
+      if (!window.confirm(`Remove expert "${name}" from the team?`)) return;
+      try { await _expertsDelete(name); } catch (e) { _showSkillsMsg(e.message || String(e), true); }
+    });
+  });
+}
+
+// Create an expert from the form: name + every checked picker box.
+async function _expertsCreate() {
+  const sid = state.activeId;
+  if (!sid) return;
+  if (state.readOnly) { flashToast('Read-only: sign in as the session owner to manage experts'); return; }
+  const nameEl = document.getElementById('expert-name-input');
+  const name = (nameEl && nameEl.value || '').trim();
+  if (!name) { _showSkillsMsg('Enter a name for the expert first.', true); return; }
+  const picked = [...document.querySelectorAll('#expert-skills-picker input[data-expert-skill]:checked')]
+    .map((cb) => String(cb.dataset.expertSkill))
+    .filter(Boolean);
+  if (!picked.length) { _showSkillsMsg('Pick at least one skill for the expert (they define its specialty).', true); return; }
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/experts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, skills: picked }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  if (nameEl) nameEl.value = '';
+  document.querySelectorAll('#expert-skills-picker input[data-expert-skill]').forEach((cb) => { cb.checked = false; });
+  state.expertsCache = { experts: data.experts || [], max: data.max || 12 };
+  _renderExpertsList(state.expertsCache.experts);
+  document.getElementById('expert-run-form')?.classList.toggle('hidden', !!state.readOnly || !(state.expertsCache.experts || []).length);
+  _showSkillsMsg(`✓ Expert "${name}" added — pick skills again to create another, or start a task below.`, false);
+}
+
+async function _expertsDelete(name) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/experts/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  state.expertsCache = { experts: data.experts || [], max: data.max || 12 };
+  _renderExpertsList(state.expertsCache.experts);
+  document.getElementById('expert-run-form')?.classList.toggle('hidden', !!state.readOnly || !(state.expertsCache.experts || []).length);
+  _showSkillsMsg(`Expert "${name}" removed.`, false);
+}
+
+// Start a task with the saved team: sends `/run-experts <task>` via
+// the normal chat pipeline. The server launches the multi-expert team
+// lane (same board-queue collaboration as /run-n2, but the roster is
+// the experts and each worker's skill context is its expert's skills).
+function _expertsRunTask() {
+  const input = document.getElementById('expert-run-task');
+  const task = (input && input.value || '').trim();
+  if (!task) return;
+  if (state.readOnly) { flashToast('Read-only: sign in as the session owner to start a team run'); return; }
+  if (!sendChatMessage(`/run-experts ${task}`)) return;
+  if (input) input.value = '';
+  _showSkillsMsg('Team run started — see the chat pane for live worker activity.', false);
+}
+
+async function _skillsLoad() {
+  const sid = state.activeId;
+  if (!sid) return;
+  const list = document.getElementById('skills-list');
+  _showSkillsMsg('');
+  try {
+    const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills`);
+    if (!res.ok) {
+      let body = {};
+      try { body = await res.json(); } catch {}
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (sid !== state.activeId) return;   // session switched mid-fetch
+    state.skillsCache = { skills: data.skills || [], enabledSkills: data.enabledSkills || null };
+    _renderSkillsList(data.skills || [], data.enabledSkills);
+  } catch (e) {
+    if (list) list.innerHTML = '';
+    _showSkillsMsg(e.message || String(e), true);
+  }
+}
+
+// Render one row per discovered skill. `enabledSkills` (string[]|null
+// from the session record) drives the checked state: null/'all' mode
+// shows every skill un-checked (SDK gets no filter); 'selected' mode
+// checks exactly the listed names. Checkbox disabled for read-only
+// viewers (the server also rejects their POST /toggle).
+// Scope extension: each row carries a scope badge ('session' | 'user'
+// | 'global' — from the merged GET /skills response) so the user sees
+// where the skill lives; the delete button routes with ?scope= for
+// user/global rows so the SHARED copy is removed (not just the
+// session link), after a stronger confirm.
+function _renderSkillsList(skills, enabledSkills) {
+  const list = document.getElementById('skills-list');
+  if (!list) return;
+  const sel = new Set(Array.isArray(enabledSkills) ? enabledSkills : []);
+  if (!Array.isArray(skills) || skills.length === 0) {
+    list.innerHTML = '<div class="skills-empty">No skills yet. Import a <code>SKILL.md</code> or a skill folder above.</div>';
+    return;
+  }
+  const scopeLabel = { session: 'this session', user: 'my sessions', global: 'all users' };
+  list.innerHTML = skills.map((s) => {
+    const scope = (s.scope === 'user' || s.scope === 'global') ? s.scope : 'session';
+    return `
+    <label class="skill-item" data-name="${escHtml(s.name)}" title="${escHtml(s.description || '')}">
+      <input type="checkbox" data-skill="${escHtml(s.dirName || s.name)}" ${sel.has(s.dirName || s.name) ? 'checked' : ''} ${state.readOnly ? 'disabled' : ''} />
+      <span class="skill-meta">
+        <span class="skill-name">${escHtml(s.name)} <span class="skill-scope skill-scope-${scope}">${escHtml(scopeLabel[scope] || scope)}</span></span>
+        <span class="skill-desc">${escHtml(s.description || '')}</span>
+      </span>
+      ${state.readOnly ? '' : '<button type="button" class="skill-del" data-skill-del="' + escHtml(s.dirName || s.name) + '" data-scope="' + scope + '" title="Delete skill">' + _lucideIcon('trash', 'ft-svg') + '</button>'}
+    </label>`;
+  }).join('');
+  list.querySelectorAll('input[data-skill]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      _skillsToggle(String(cb.dataset.skill), cb.checked).catch((e) => {
+        // Revert the checkbox so the UI stays truthful on failure.
+        cb.checked = !cb.checked;
+        _showSkillsMsg(e.message || String(e), true);
+      });
+    });
+  });
+  list.querySelectorAll('button[data-skill-del]').forEach((b) => {
+    b.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const name = String(b.dataset.skillDel);
+      const scope = String(b.dataset.scope || 'session');
+      let msg = `Delete skill "${name}"?`;
+      if (scope === 'global') msg = `Delete skill "${name}" for ALL USERS? This removes the shared copy.`;
+      else if (scope === 'user') msg = `Delete skill "${name}" from ALL YOUR sessions? This removes the shared copy.`;
+      if (!window.confirm(msg)) return;
+      _skillsDelete(name, scope).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+}
+
+async function _skillsToggle(name, enabled) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, enabled }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  // Re-render from the authoritative enabledSkills in the response.
+  if (sid === state.activeId && state.skillsCache) {
+    state.skillsCache.enabledSkills = data.enabledSkills || null;
+    _renderSkillsList(state.skillsCache.skills, state.skillsCache.enabledSkills);
+  }
+  _showSkillsMsg(enabled ? `✓ ${name} enabled — applies from the next reply` : `${name} disabled`, false);
+}
+
+// Delete a personal-store skill. scope 'session' (default) removes the
+// session entry — for a user/global skill that entry may be a LINK,
+// so only the link drops and the shared copy survives. scope
+// 'user'|'global' (sent as ?scope=) removes the shared copy itself,
+// for every session/user it covers — gated server-side to the
+// uploader (user scope) or uploader/system-delete-code (global scope).
+// On 403 with a global-scope skill, offer the delete-code prompt (the
+// code lives with the server operator — never exposed over HTTP).
+async function _skillsDelete(name, scope) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const q = (scope === 'user' || scope === 'global') ? `?scope=${scope}` : '';
+  const first = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills/${encodeURIComponent(name)}${q}`, { method: 'DELETE' });
+  if (first.ok) {
+    _showSkillsMsg(`✓ ${name} deleted`, false);
+    await _skillsLoad();   // server already dropped it from the selection
+    return;
+  }
+  let body = {};
+  try { body = await first.json(); } catch {}
+  if (first.status !== 403 || scope !== 'global') {
+    throw new Error(body.error || `HTTP ${first.status}`);
+  }
+  // 403 on a GLOBAL (all-users) skill: offer the system delete code.
+  const code = window.prompt(`Only the uploading user can delete "${name}". Enter the system delete code (from the server operator) to delete anyway:`);
+  if (code === null) return;   // cancelled
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills/${encodeURIComponent(name)}?scope=global&code=${encodeURIComponent(code)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    let b2 = {};
+    try { b2 = await res.json(); } catch {}
+    throw new Error(b2.error || `HTTP ${res.status}`);
+  }
+  _showSkillsMsg(`✓ ${name} deleted`, false);
+  await _skillsLoad();
+}
+
+// Upload/import. The file picker is `multiple`; a folder pick arrives
+// as N File entries with webkitRelativePath set. Everything is
+// serialised to the JSON {files:[{path,content}]} shape the
+// /skills/import route takes (per-file + total size caps live
+// server-side). Text files only — binary helpers aren't supported.
+async function _skillsUpload(fileList) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  if (state.readOnly) throw new Error('Read-only session — import is owner-only');
+  // Keep the raw file NAME list for errors; read each as text.
+  let entries = [];
+  let name = '';
+  for (const f of files) {
+    const rel = (f.webkitRelativePath && f.webkitRelativePath !== f.name) ? f.webkitRelativePath : f.name;
+    const txt = await f.text();
+    if (!entries.length) {
+      // Infer a wrapper dir (folder pick) so the server sees a single
+      // top-level skill dir — or a bare SKILL.md it names by front-matter.
+      const first = rel.split('/')[0];
+      if (rel.includes('/')) name = first;
+    }
+    entries.push({ path: rel, content: txt });
+  }
+  // Strip a single wrapper dir from the paths when we captured one —
+  // the server's importSkill accepts either shape, but naming
+  // explicitly avoids inference errors on odd layouts.
+  const payload = { files: entries };
+  if (name && entries.every((e) => e.path.startsWith(name + '/'))) {
+    payload.name = name;
+    payload.files = entries.map((e) => ({ path: e.path.slice(name.length + 1), content: e.content }));
+  }
+  // Visibility for this upload: session (default) / user / global —
+  // straight from the selector next to the Import button.
+  const sel = document.getElementById('skills-scope-select');
+  const scope = sel ? String(sel.value || 'session') : 'session';
+  if (scope === 'user' || scope === 'global') payload.scope = scope;
+  _showSkillsMsg('Importing…', false);
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  const where = (scope === 'user') ? ' (all your sessions)' : (scope === 'global') ? ' (all users)' : '';
+  const skName = data.skill && (data.skill.name || data.skill.dirName) || 'skill';
+  _showSkillsMsg(`✓ Imported: ${skName}${where}`, false);
+  if (data.skill && data.skill.linked === false) {
+    _showSkillsMsg(`✓ Imported: ${skName}${where} — note: a session skill named "${skName}" shadows it here`, true);
+  }
+  await _skillsLoad();
+}
+
+// ─── delm-10: skill MARKET tab ───
+// Cross-user shared skills (GET /skill-market). Rows show the uploader;
+// actions: Install (owner-only, into this session), Publish (send one
+// of my skills to the market), Delete (uploader, or any signed-in user
+// with the system delete code — prompted for, never stored).
+
+async function _skillsMarketLoad() {
+  const sid = state.activeId;
+  if (!sid) return;
+  const list = document.getElementById('skills-market-list');
+  _showSkillsMsg('');
+  const res = await authedFetch('/skill-market');
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  if (sid !== state.activeId) return;
+  _renderMarketList(data.skills || []);
+}
+
+function _renderMarketList(skills) {
+  const list = document.getElementById('skills-market-list');
+  if (!list) return;
+  if (!Array.isArray(skills) || skills.length === 0) {
+    list.innerHTML = '<div class="skills-empty">No market skills yet. Publish one of your skills with the Publish button.</div>';
+    return;
+  }
+  list.innerHTML = skills.map((s) => `
+    <div class="skill-item" data-name="${escHtml(s.name)}" title="${escHtml(s.description || '')}">
+      <span class="skill-meta">
+        <span class="skill-name">${escHtml(s.name)} <span class="skill-scope skill-scope-global">market</span></span>
+        <span class="skill-desc">${escHtml(s.description || '')} · by ${escHtml(s.uploader || 'unknown')}</span>
+      </span>
+      ${state.readOnly ? '' : '<button type="button" class="skill-install" data-mkt-install="' + escHtml(s.dirName || s.name) + '" title="Install into this session">' + _lucideIcon('download', 'ft-svg') + '</button>'}
+      <button type="button" class="skill-del" data-mkt-del="' + escHtml(s.dirName || s.name) + '" title="Delete market skill (uploader or system delete code)">' + _lucideIcon('trash', 'ft-svg') + '</button>
+    </div>`).join('');
+  list.querySelectorAll('button[data-mkt-install]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const name = String(b.dataset.mktInstall);
+      if (!window.confirm(`Install market skill "${name}" into this session?`)) return;
+      _skillsMarketInstall(name).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+  list.querySelectorAll('button[data-mkt-del]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const name = String(b.dataset.mktDel);
+      _skillsMarketDelete(name).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+}
+
+async function _skillsMarketInstall(name) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skill-market/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  _showSkillsMsg(`✓ Installed "${name}" into this session`, false);
+  await _skillsRefresh();
+}
+
+// Delete a market skill. First try as the uploader (no code needed);
+// on 403, offer the system delete code prompt (the code lives with
+// the server operator — GET /skill-market never exposes it).
+async function _skillsMarketDelete(name) {
+  const first = await authedFetch(`/skill-market/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (first.ok) {
+    _showSkillsMsg(`✓ Market skill "${name}" deleted`, false);
+    await _skillsMarketLoad();
+    return;
+  }
+  let body = {};
+  try { body = await first.json(); } catch {}
+  if (first.status !== 403) throw new Error(body.error || `HTTP ${first.status}`);
+  const code = window.prompt(`Only the uploader can delete "${name}". Enter the system delete code (from the server operator) to delete anyway:`);
+  if (code === null) return;   // cancelled
+  const res = await authedFetch(`/skill-market/${encodeURIComponent(name)}?code=${encodeURIComponent(code)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    let b2 = {};
+    try { b2 = await res.json(); } catch {}
+    throw new Error(b2.error || `HTTP ${res.status}`);
+  }
+  _showSkillsMsg(`✓ Market skill "${name}" deleted`, false);
+  await _skillsMarketLoad();
+}
+
+// Publish one of MY skills (any scope) to the market. Pick-by-name via
+// prompt keeps the UX identical to other small admin actions here.
+async function _skillsMarketPublish() {
+  const sid = state.activeId;
+  if (!sid) return;
+  if (state.readOnly) { flashToast('Read-only: sign in as the session owner to publish'); return; }
+  const cached = (state.skillsCache && state.skillsCache.skills) || [];
+  const names = cached.map((s) => s.dirName || s.name);
+  if (!names.length) { _showSkillsMsg('No personal skills to publish yet — import one first.', true); return; }
+  const name = window.prompt(`Publish which skill to the market?\n(${names.join(', ')})`, names[0] || '');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/skills/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: trimmed }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  _showSkillsMsg(`✓ Published "${trimmed}" to the market`, false);
+  if (state.skillsTab === 'market') await _skillsMarketLoad();
+}
+
+// ─── Harness market (P7) ────────────────────────────────────────────────────
+// Server surface:
+//   GET  /harness-market              → [item, …]
+//   GET  /harness-market/:name        → item (meta + file hashes)
+//   POST /sessions/:id/harness-market/install  {name} → adopt into session
+//   POST /sessions/:id/harness-market/publish  {sweepId?} → publish from sweep
+
+async function _harnessMarketLoad() {
+  const sid = state.activeId;
+  if (!sid) return;
+  _showSkillsMsg('');
+  const res = await authedFetch('/harness-market');
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const items = await res.json();
+  if (sid !== state.activeId) return;
+  _renderHarnessMarketList(Array.isArray(items) ? items : (items.items || []));
+}
+
+function _renderHarnessMarketList(items) {
+  const list = document.getElementById('harness-market-list');
+  if (!list) return;
+  if (!items || items.length === 0) {
+    list.innerHTML = [
+      '<div class="skills-empty">',
+      '  <strong>Harness 市场暂时没有条目。</strong><br />',
+      '  先用 <code>/harness run &lt;任务&gt;</code> 跑一次 sweep，完成后用 ',
+      '  <code>/harness publish</code> 把调优结果发布到这里。',
+      '</div>',
+    ].join('');
+    return;
+  }
+  list.innerHTML = items.map((item) => {
+    const name    = escHtml(item.name || '');
+    const desc    = escHtml(item.description || '');
+    const domain  = item.domain  ? `<span class="skill-scope skill-scope-global">${escHtml(item.domain)}</span>` : '';
+    const task    = item.task    ? `<code class="harness-task">${escHtml(item.task)}</code>` : '';
+    const why     = item.selectionWhy ? `<div class="harness-why">${escHtml(item.selectionWhy.slice(0, 160))}${item.selectionWhy.length > 160 ? '…' : ''}</div>` : '';
+    const files   = item.files   ? Object.keys(item.files).length : 0;
+    const uploader = item.uploader ? ` · by ${escHtml(item.uploader)}` : '';
+    return `<div class="skill-item" data-name="${name}">
+      <span class="skill-meta">
+        <span class="skill-name">${name} ${domain} ${task}</span>
+        <span class="skill-desc">${desc}${uploader} · ${files} 个文件</span>
+        ${why}
+      </span>
+      <button type="button" class="harness-detail-btn" data-hm-info="${name}" title="查看详情">
+        ${_lucideIcon('info', 'ft-svg')}
+      </button>
+      ${state.readOnly ? '' : `<button type="button" class="skill-install" data-hm-install="${name}" title="安装到当前 session">${_lucideIcon('download', 'ft-svg')}</button>`}
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('button[data-hm-install]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const name = String(b.dataset.hmInstall);
+      if (!window.confirm(`把 harness "${name}" 安装到这个 session？\n安装后下一轮对话立即生效，可用 /harness rollback 撤销。`)) return;
+      _harnessMarketInstall(name).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+
+  list.querySelectorAll('button[data-hm-info]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const name = String(b.dataset.hmInfo);
+      _harnessMarketShowDetail(name).catch((e) => _showSkillsMsg(e.message || String(e), true));
+    });
+  });
+}
+
+async function _harnessMarketShowDetail(name) {
+  const res = await authedFetch(`/harness-market/${encodeURIComponent(name)}`);
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const item = await res.json();
+  const fileList = Object.keys(item.files || {}).sort();
+  const lines = [
+    `**${escHtml(item.name)}**`,
+    item.description ? escHtml(item.description) : '',
+    '',
+    item.domain  ? `领域: ${escHtml(item.domain)}` : '',
+    item.task    ? `任务: ${escHtml(item.task)}` : '',
+    item.sweepTag ? `Sweep: ${escHtml(item.sweepTag)}` : '',
+    item.selectionWhy ? `选择理由: ${escHtml(item.selectionWhy)}` : '',
+    '',
+    `文件 (${fileList.length}): ${fileList.slice(0, 8).map(f => `<code>${escHtml(f)}</code>`).join(', ')}${fileList.length > 8 ? `…(+${fileList.length - 8})` : ''}`,
+  ].filter(Boolean).join('<br />');
+  window.alert(lines.replace(/<[^>]+>/g, ''));
+}
+
+async function _harnessMarketInstall(name) {
+  const sid = state.activeId;
+  if (!sid) return;
+  const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/harness-market/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    let body = {};
+    try { body = await res.json(); } catch {}
+    throw new Error(body.message || body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  const count = (data.installed || []).length;
+  _showSkillsMsg(`✓ 已安装 "${name}" — ${count} 个文件写入完毕，下一轮对话生效。`, false);
+}
+
+// delm-10: create file / create folder in the currently browsed
+// directory (state.files.currentPath). Owner-only server-side; guests
+// (state.readOnly) never see the buttons and get a client-side guard
+// too. Names are a single path segment — '/' and '..' are rejected
+// both here (friendly message) and on the server (ERR_BAD_INPUT /
+// ERR_OUTSIDE).
+function _filesCreatePrompt(kind) {
+  if (!state.activeId) return;
+  if (state.readOnly) { flashToast('Read-only: sign in as the session owner to create'); return; }
+  const label = kind === 'dir' ? 'folder' : 'file';
+  const name = window.prompt(`New ${label} name (in ${state.files.currentPath === '.' ? '/' : '/' + state.files.currentPath}):`, '');
+  if (name === null) return;
+  _filesCreateEntry(kind, name.trim()).catch((e) => flashToast(e.message || String(e)));
+}
+
+async function _filesCreateEntry(kind, name) {
+  if (!name) throw new Error('Name is required');
+  if (name.includes('/') || name === '.' || name === '..') {
+    throw new Error('Name must be a single path segment (no slashes)');
+  }
+  const id = state.activeId;
+  const url = _withShareToken(`/sessions/${encodeURIComponent(id)}/files/create-${kind}`);
+  let res;
+  try {
+    res = await authedFetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, dir: state.files.currentPath || '.' }),
+    });
+  } catch (e) { throw new Error(`Failed to create: ${e.message || e}`); }
+  let body = {};
+  try { body = await res.json(); } catch {}
+  if (!res.ok) {
+    if (body.code === 'ERR_EXISTS') throw new Error(`"${name}" already exists`);
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  flashToast(`${kind === 'dir' ? 'Folder' : 'File'} "${name}" created`);
+  // Refresh the tree so the new entry appears immediately.
+  loadFileTree(state.files.currentPath || '.');
 }
 
 // fr-77 r3: fetch + render the flat list of git-status-changed files
@@ -12780,6 +17187,17 @@ function renderFilesList(entries, truncated, relPath) {
   ul.innerHTML = parts.join('');
 
   ul.querySelectorAll('li[data-name]').forEach((li) => {
+    // td-copy-path: right-click on a tree entry opens a small context
+    // menu with Copy rel path / Copy abs path / Download (files only).
+    // _bindFilesContextMenu handles positioning + dismissal.
+    li.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const name = li.dataset.name;
+      const kind = li.dataset.kind;
+      const child = relPath === '.' ? name : `${relPath}/${name}`;
+      _openFilesContextMenu(ev, child, kind === 'file');
+    });
     li.addEventListener('click', (ev) => {
       // fr-9: download button click — don't open the file viewer.
       if (ev.target && ev.target.closest && ev.target.closest('[data-action="download"]')) {
@@ -12802,6 +17220,109 @@ function renderFilesList(entries, truncated, relPath) {
     });
   });
 }
+
+// td-copy-path: shared clipboard write with a legacy fallback. The
+// Files pane runs over HTTP/HTTPS; navigator.clipboard is only
+// available in secure contexts (HTTPS or localhost), so on plain-
+// HTTP LAN deployments we fall back to a hidden textarea + execCommand.
+function _copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).catch(() => _copyTextLegacy(text));
+  }
+  return Promise.resolve(_copyTextLegacy(text));
+}
+
+function _copyTextLegacy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  try { ta.select(); document.execCommand('copy'); } catch {}
+  finally { ta.remove(); }
+}
+
+// td-copy-path: resolve the session's absolute root path (abs_cwd,
+// falling back to cwd) so "Copy absolute path" can prefix it.
+function _sessionAbsRoot() {
+  const s = (state.sessions || []).find((x) => x.id === state.activeId);
+  return (s && (s.abs_cwd || s.cwd)) || '';
+}
+
+// td-copy-path: open the file-tree context menu at the pointer.
+// Items: Copy relative path, Copy absolute path, Download (files).
+// The menu is a single reused #files-ctx-menu element (created on
+// demand, appended to <body>) so we never stack stale copies.
+// Dismissal: any click outside, Escape, scroll, or blur.
+function _openFilesContextMenu(ev, relChild, isFile) {
+  _closeFilesContextMenu();
+  const menu = _ensureFilesCtxMenuEl();
+  const absRoot = _sessionAbsRoot();
+  menu.innerHTML =
+    `<div class="fcx-item" data-fcx="rel">${_FCX_SVG.copy}<span>Copy relative path</span><code>${escHtml(relChild)}</code></div>` +
+    (absRoot
+      ? `<div class="fcx-item" data-fcx="abs">${_FCX_SVG.copy}<span>Copy absolute path</span><code>${escHtml((absRoot.replace(/\/+$/, '') + '/' + relChild))}</code></div>`
+      : '') +
+    (isFile
+      ? `<div class="fcx-item" data-fcx="download">${_FCX_SVG.download}<span>Download</span></div>`
+      : '');
+  menu.dataset.path = relChild;
+  document.body.appendChild(menu);
+  menu.hidden = false;
+  // Position: prefer pointer position, clamped so the menu never
+  // overflows the viewport (menu is ~180px wide, items ~30px tall).
+  const mw = menu.offsetWidth || 200;
+  const mh = menu.offsetHeight || 100;
+  const x = Math.min(ev.clientX, window.innerWidth - mw - 8);
+  const y = Math.min(ev.clientY, window.innerHeight - mh - 8);
+  menu.style.left = Math.max(8, x) + 'px';
+  menu.style.top = Math.max(8, y) + 'px';
+  menu.querySelector('[data-fcx="rel"]')?.addEventListener('click', () => {
+    _copyTextToClipboard(relChild).then(() => flashToast('Path copied'));
+    _closeFilesContextMenu();
+  });
+  menu.querySelector('[data-fcx="abs"]')?.addEventListener('click', () => {
+    const abs = absRoot.replace(/\/+$/, '') + '/' + relChild;
+    _copyTextToClipboard(abs).then(() => flashToast('Path copied'));
+    _closeFilesContextMenu();
+  });
+  menu.querySelector('[data-fcx="download"]')?.addEventListener('click', () => {
+    triggerFileDownload(relChild);
+    _closeFilesContextMenu();
+  });
+}
+
+function _ensureFilesCtxMenuEl() {
+  let menu = document.getElementById('files-ctx-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'files-ctx-menu';
+    menu.className = 'files-ctx-menu';
+    menu.hidden = true;
+    document.body.appendChild(menu);
+    // One-time global dismissal wiring (menu element is reused).
+    document.addEventListener('click', (e) => {
+      if (!menu.hidden && !e.target.closest('#files-ctx-menu')) _closeFilesContextMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') _closeFilesContextMenu();
+    });
+    window.addEventListener('blur', _closeFilesContextMenu);
+  }
+  return menu;
+}
+
+function _closeFilesContextMenu() {
+  const menu = document.getElementById('files-ctx-menu');
+  if (menu) { menu.hidden = true; menu.innerHTML = ''; menu.remove(); }
+}
+
+// td-copy-path: 14px Lucide-style icons for the context-menu items,
+// matching the ft-svg style (currentColor, round caps).
+const _FCX_SVG = {
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
+};
 
 // fr-9: render a colored 1-letter git-status badge. Maps the
 // porcelain code from server-side _gitStatusMap to a visible chip.
@@ -14367,6 +18888,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // wiring; the PAT side does.
   bindLoginUi();
   bootstrap();
+  bindThemeToggle();
   bindBestPracticesToggle();
   bindPlanOpenOnlyToggle();
   bindPlanTypeFilters();
@@ -14399,6 +18921,64 @@ function bindPlanOpenOnlyToggle() {
       && state.artifacts.byType.plan;
     if (cached) renderArtifact('plan', cached);
   });
+}
+
+// § Theme system — one-click dark ⇄ light ("夜间模式"一键切换).
+// The entire palette is CSS variables keyed off <html data-theme>
+// (':root, :root[data-theme=dark]' = hacker dark, '[data-theme=light]'
+// = white). applyTheme() flips that attribute, syncs the #btn-theme
+// icon (moon ↔ sun) and the <meta name=theme-color> (mobile browser
+// chrome), and persists to localStorage.myco_theme ('dark'|'light').
+// Default is dark — the static CSS ships the dark palette so a fresh
+// visitor gets no flash; light visitors get one tiny repaint at boot.
+const THEME_KEY = 'myco_theme';
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem(THEME_KEY, t); } catch { /* private mode */ }
+  // Sync toggle icon: in dark (night) mode show a SUN (click → light),
+// in light mode show a MOON (click → dark). Both SVGs live inside
+// #btn-theme; exactly one is unhidden.
+  const moon = document.getElementById('theme-icon-moon');
+  const sun = document.getElementById('theme-icon-sun');
+  if (moon) moon.hidden = (t !== 'light');
+  if (sun) sun.hidden = (t === 'light');
+  // Keep the mobile browser chrome (address bar tint) in sync.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'light' ? '#f4f6f5' : '#0a0e0c');
+  // Mermaid picks up the new theme so diagrams don't stay dark-on-dark
+  // after a light toggle (or vice versa). Idempotent: re-initializing
+  // with the same theme is a no-op.
+  _reinitMermaidTheme(t);
+}
+// Re-initialize mermaid with the active palette. Only runs when the
+// mermaid bundle has actually been lazy-loaded (typeof mermaid !==
+// 'undefined') — before that, renderMermaidInContainer's own
+// initialize() call uses currentTheme() at first-load time.
+function _reinitMermaidTheme(t) {
+  if (typeof mermaid === 'undefined' || !mermaid || !mermaid.initialize) return;
+  try { mermaid.initialize({ startOnLoad: false, theme: t }); } catch { /* mermaid not ready */ }
+}
+function currentTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch { /* private mode */ }
+  // No stored choice: default to dark (night mode) — the app ships
+  // the hacker dark palette as its identity and does NOT follow the
+  // OS preference.
+  return 'dark';
+}
+function toggleTheme() { applyTheme(currentTheme() === 'light' ? 'dark' : 'light'); }
+// The OS-preference live-tracking listener is intentionally gone: the
+// default is always dark (night) unless the user explicitly toggles.
+function bindThemeToggle() {
+  const btn = document.getElementById('btn-theme');
+  if (!btn) return;
+  // Restore persisted choice (or default dark) before any dynamic
+  // rendering so the whole session starts on the right palette.
+  applyTheme(currentTheme());
+  btn.addEventListener('click', toggleTheme);
 }
 
 // fr-56: Plan-tab type-filter chips (Bug / Feature / Todo). Default

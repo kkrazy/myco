@@ -1,0 +1,44 @@
+{{- if .Values.storage.createStaticPVs }}
+{{- range $name, $v := .Values.storage.volumes }}
+# Local PV —— {{ $name }}：{{ $v.hostPath }}（{{ $.Values.storage.node }} 本机 2T 盘）
+# 前置：目录需先在 {{ $.Values.storage.node }} 上手工创建（Local PV 不自动建目录）：
+#   mkdir -p {{ $v.hostPath }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}-{{ $.Values.storage.node | replace "." "-" }}
+  labels:
+    app: {{ $.Release.Name }}
+    volume: {{ $name }}
+spec:
+  capacity:
+    storage: {{ $v.size }}
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain   # 删 PVC/PV 不删 252 磁盘上的数据
+  storageClassName: {{ $.Values.storage.storageClassName }}
+  local:
+    path: {{ $v.hostPath }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - {{ $.Values.storage.node }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ $.Values.storage.storageClassName }}
+  resources:
+    requests:
+      storage: {{ $v.size }}
+{{- end }}
+{{- end }}

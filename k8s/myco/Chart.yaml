@@ -1,0 +1,7 @@
+apiVersion: v2
+name: myco
+description: myco on K8s — 单副本固定调度 master(252)，hostNetwork 80/443，
+  状态目录走 252 本机 2T Local PV。内网/代理环境专用。
+type: application
+version: 0.1.0
+appVersion: "latest"

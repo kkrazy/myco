@@ -95,6 +95,8 @@ const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-bug80-'));
 process.env.MYCO_WORKSPACE = path.join(TMP_ROOT, 'wks');
 process.env.MYCO_STATE_DIR = path.join(TMP_ROOT, 'state');
 process.env.HOME = path.join(TMP_ROOT, 'home');
+// os.homedir() prefers USERPROFILE on Windows; HOME alone is a no-op there.
+process.env.USERPROFILE = process.env.HOME;
 fs.mkdirSync(process.env.MYCO_WORKSPACE, { recursive: true });
 fs.mkdirSync(process.env.MYCO_STATE_DIR, { recursive: true });
 fs.mkdirSync(process.env.HOME, { recursive: true });
@@ -233,7 +235,7 @@ t('loadStore: a polluted store on disk gets normalized on first load', () => {
     // Claude's project-dir mangles slashes → dashes; we mirror that.
     const subAbsCwd = path.join(parentAbs, 'sub-child');
     fs.mkdirSync(subAbsCwd, { recursive: true });
-    const claudeProjectsDir = path.join(process.env.HOME, '.claude', 'projects', subAbsCwd.replace(/\//g, '-'));
+    const claudeProjectsDir = path.join(process.env.HOME, '.claude', 'projects', sessions.encodeCwdForClaude(subAbsCwd));
     fs.mkdirSync(claudeProjectsDir, { recursive: true });
     const claudeId = '00000000-0000-4000-8000-000000000080';
     const jsonlPath = path.join(claudeProjectsDir, `${claudeId}.jsonl`);

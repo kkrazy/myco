@@ -215,6 +215,10 @@ async function extractArtifact(rec, type) {
     userMessage: combinedInput,
     cwd: rec.absCwd,
     timeoutMs: EXTRACTOR_TIMEOUT_MS,
+    // Task B: extractor runs on the session's active gateway profile (same
+    // custom model as the main agent) when the user selected one.
+    user: rec.user,
+    activeGw: rec.activeGw,
   });
   const elapsed = Date.now() - t0;
   if (text === null) {

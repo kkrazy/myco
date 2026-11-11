@@ -19,6 +19,8 @@ const path = require('path');
 // Sandbox claude's home dir so we don't read real /home/<user>/.claude
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-acs-'));
 process.env.HOME = tmpHome;
+// os.homedir() prefers USERPROFILE on Windows; HOME alone is a no-op there.
+process.env.USERPROFILE = tmpHome;
 const sessionsDir = path.join(tmpHome, '.claude', 'sessions');
 fs.mkdirSync(sessionsDir, { recursive: true });
 

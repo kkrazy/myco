@@ -48,7 +48,46 @@ function isResumeFailure(err) {
   // documented, but these phrases consistently appear when a resume
   // can't be loaded. New phrases that show up in production should
   // be added here.
-  return /session not found|invalid session.?id|could not load conversation|conversation not found|no such session|session expired/i.test(msg);
+  return isResumeFailureMessage(msg);
+}
+
+// bug: prose-form variant, mirroring agent-session.js
+// _isResumeFailureMessage(text). The SDK sometimes surfaces a resume-miss
+// as a normal `result` event with `result:<error text>` (subtype:'success')
+// instead of throwing — see the bug-40-r2 thinking-block analog. The
+// for-await loop classifies THIS string form so fr-44's recovery can run
+// on that path too.
+function isResumeFailureMessage(text) {
+  if (!text || typeof text !== 'string') return false;
+  return /session not found|invalid session.?id|could not load conversation|conversation not found|no conversation found|no such session|session expired/i.test(text);
+}
+
+// Simulates the prose-form recovery: the SDK returns each attempt's
+// outcome as a `result` event whose value is a string (null = clean end,
+// i.e. the stream produced a normal result). A resume-miss-shaped result
+// on an attempt that used resume= clears sdkSessionId and retries fresh
+// (instead of being swallowed as a clean end and wedging the session).
+async function simulateProseResult({ initialSessionId, results }) {
+  const rec = { sdkSessionId: initialSessionId };
+  const events = [];
+  let attempt = 0;
+  let resumeUsed = !!rec.sdkSessionId;
+  while (attempt < results.length) {
+    attempt++;
+    const resultText = results[attempt - 1];
+    events.push({ type: 'attempt_start', attempt, resumeUsed });
+    if (resultText === null) return { events, terminated: 'success', attempt };
+    if (isResumeFailureMessage(resultText) && resumeUsed) {
+      const prev = rec.sdkSessionId;
+      events.push({ type: 'resume_failed', prevSdkSessionId: prev, prose: resultText });
+      rec.sdkSessionId = null;
+      resumeUsed = false;
+      continue;
+    }
+    events.push({ type: 'fatal', result: resultText });
+    return { events, terminated: 'fatal', attempt };
+  }
+  return { events, terminated: 'attempts_exhausted' };
 }
 
 // Simulates the resume-fallback branch in _ensureIteration:
@@ -101,8 +140,51 @@ t('isResumeFailure: matches "conversation not found"', () => {
   assert.strictEqual(isResumeFailure(new Error('Conversation not found: 1234')), true);
 });
 
+t('isResumeFailure: matches "No conversation found with session ID" (SDK real wording)', () => {
+  // The Claude Code SDK reports a resume-miss as "No conversation found
+  // with session ID: <uuid>" — ordered "no conversation found", which the
+  // older "conversation not found" branch never matched. Pre-fix this fell
+  // through to a hard fatal instead of the resume-failure fallback.
+  assert.strictEqual(
+    isResumeFailure(new Error('No conversation found with session ID: 8598e440-a421-4890-966c-8359c2b00636')),
+    true,
+    '"No conversation found with session ID" must be treated as a resume failure (not a fatal)');
+});
+
 t('isResumeFailure: matches "session expired"', () => {
   assert.strictEqual(isResumeFailure(new Error('Session expired upstream')), true);
+});
+
+t('isResumeFailureMessage: proxies the prose text (no throw needed)', () => {
+  assert.strictEqual(isResumeFailureMessage('Claude Code returned an error result: No conversation found with session ID: 8598e440-a421-4890-966c-8359c2b00636'), true,
+    'prose result text must be classified as a resume-failure');
+  assert.strictEqual(isResumeFailureMessage('all good, here is the answer'), false, 'non-resume text must not match');
+});
+
+t('prose-form: a resume-miss in a `result` event recovers instead of wedging', async () => {
+  // The SDK returns the failure as a result event (result:<error text>)
+  // rather than throwing. Pre-fix the clean-end path swallowed it, no
+  // recovery ran, and every later turn re-resumed the same dead id and
+  // errored identically (the "用完双agent 单agent报错" symptom).
+  const res = await simulateProseResult({
+    initialSessionId: '8598e440-a421-4890-966c-8359c2b00636',
+    results: [
+      'Claude Code returned an error result: No conversation found with session ID: 8598e440-a421-4890-966c-8359c2b00636',
+      null, // fresh attempt ends cleanly
+    ],
+  });
+  assert.strictEqual(res.terminated, 'success', 'prose-result resume-miss must recover to a fresh session, not fatal');
+  const failed = res.events.find((e) => e.type === 'resume_failed');
+  assert.ok(failed, 'must emit resume_failed on the prose-result resume-miss');
+  const attempt2 = res.events.find((e) => e.type === 'attempt_start' && e.attempt === 2);
+  assert.strictEqual(attempt2.resumeUsed, false, 'retry must run WITHOUT resume= so the SDK spawns a fresh conversation');
+});
+
+t('prose-form: a normal successful result does NOT trigger recovery', async () => {
+  const res = await simulateProseResult({ initialSessionId: 'abc', results: [null] });
+  assert.strictEqual(res.terminated, 'success', 'a clean result is just a clean end');
+  assert.strictEqual(res.events.find((e) => e.type === 'resume_failed'), undefined,
+    'no resume_failed for a normal successful result');
 });
 
 t('isResumeFailure: does NOT match network errors (different recovery path)', () => {
@@ -199,6 +281,20 @@ t('agent-session.js _isResumeFailure matches documented phrases', () => {
   assert.match(PROD_AGENT, /invalid session\.\?id/i,
     'must contain the regex `invalid session.?id` (matches "invalid session_id" / "invalid sessionId" / "invalid session id")');
   assert.match(PROD_AGENT, /could not load conversation/i, 'must match "could not load conversation"');
+  assert.match(PROD_AGENT, /no conversation found/i,
+    'must match the SDK\'s real resume-miss wording "No conversation found with session ID: …" — a 2026-10-16 bug where only "conversation not found" was matched, so a resume-miss burst fatal instead of the fr-44 fallback');
+});
+
+t('agent-session.js detects prose-form resume-miss inside `result` events (not just thrown errors)', () => {
+  // The SDK surfaces a resume-miss as a `result` event (result:<error text>)
+  // on the stream path — a thrown-error-only matcher never fires there, so
+  // the session wedges and re-errors every turn (the /run-n2 → single-agent
+  // symptom). The result loop must classify m.result via
+  // _isResumeFailureMessage AND gate it on sdkOpts.resume.
+  assert.match(PROD_AGENT, /_isResumeFailureMessage\s*\(\s*m\.result/,
+    'the for-await loop must classify the prose-form resume-miss in m.result');
+  assert.match(PROD_AGENT, /_isResumeFailureMessage\s*\(\s*m\.result[\s\S]{0,120}sdkOpts\.resume|sdkOpts\.resume[\s\S]{0,120}_isResumeFailureMessage\s*\(\s*m\.result/,
+    'the prose-form resume-miss detection must be gated on sdkOpts.resume so it only recovers when a resume was actually attempted');
 });
 
 t('agent-session.js _ensureIteration clears sdkSessionId + retries on resume failure', () => {

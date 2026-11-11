@@ -87,8 +87,10 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const sessionsMod = require('./sessions');
-const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, isOwnerAdminOrViewer, resolveAccessTier, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage } = sessionsMod;
+const { listSessions, spawnSession, sessionBelongsToUser, isOwnerOrAdmin, isOwnerAdminOrViewer, resolveAccessTier, workspaceName, listWorkspaceDirs, ensureLiveSession, deleteSession, importExistingTranscripts, loadStore, saveStore, getSessionRecord, readDescriptionForCwd: readDescriptionForCwdPublic, resolveCwd, getFileChat, getRecentFileChatMessages, appendFileChatMessage, deleteFileChatMessage, putSession } = sessionsMod;
 const filesApi = require('./files');
+// delm-10: skill store — list / upload / import / delete / select.
+const skillsApi = require('./skills');
 const { askAboutFile, ASSISTANT_USER } = require('./btw');
 const githubMod = require('./github');
 const gitHosts = require('./git-hosts');
@@ -109,7 +111,7 @@ const { resolveMycoDir: _resolveMycoDir } = require('./artifacts');
 const {
   isAuthRequired, userFromRequest, userFromToken,
   profileFromToken, listUsernames,
-  mintSession, revokeSession, loadAllowlist, isAllowed,
+  mintSession, revokeSession, loadAllowlist, isAllowed, isAllowlistConfigured,
   createShareToken, shareTokenInfo, revokeShareTokensForSession,
   addUserToAllowlist, removeUserFromAllowlist,
 } = require('./auth');
@@ -206,6 +208,65 @@ app.get('/USER_MANUAL.md', (req, res) => {
   res.sendFile(manualPath, (err) => {
     if (err && !res.headersSent) res.status(404).send('USER_MANUAL.md not found');
   });
+});
+
+// ── whatsnew: versioned "feature update" markdown ──────────────────────
+// Each feature update ships a markdown file in docs/whatsnew/ named
+// YYYY-MM-DD-<slug>.md — filename sort order = chronological order, so
+// the lexicographically-last file is the current version and older
+// files double as the archive/backup. GET /whatsnew returns the latest
+// version's metadata + full markdown (client renders via marked);
+// GET /whatsnew/:version returns any archived version's markdown for
+// the history dropdown in the client modal.
+const WHATSNEW_DIR = path.join(__dirname, '..', '..', 'docs', 'whatsnew');
+function listWhatsnewVersions() {
+  let names;
+  try {
+    names = fs.readdirSync(WHATSNEW_DIR).filter((n) => n.endsWith('.md'));
+  } catch {
+    return [];
+  }
+  // Slice off the .md suffix — the client treats the bare filename stem
+  // as the version id everywhere (banner dismiss key, dropdown value).
+  return names.sort(); // lexicographic = chronological by naming convention
+}
+function whatsnewTitle(markdown) {
+  const m = typeof markdown === 'string' ? markdown.match(/^#\s+(.+)$/m) : null;
+  return m ? m[1].trim() : '';
+}
+function readWhatsnewVersion(version) {
+  // Guard against path traversal — the version id must be a plain stem
+  // that exists in the directory listing, never a user-built path.
+  const versions = listWhatsnewVersions();
+  if (!versions.includes(version + '.md')) return null;
+  try {
+    return fs.readFileSync(path.join(WHATSNEW_DIR, version + '.md'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+app.get('/whatsnew', (req, res) => {
+  const versions = listWhatsnewVersions();
+  if (!versions.length) return res.json({ available: false, versions: [] });
+  const latest = versions[versions.length - 1];
+  const markdown = readWhatsnewVersion(latest.replace(/\.md$/, ''));
+  if (markdown === null) return res.json({ available: false, versions: [] });
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    available: true,
+    version: latest.replace(/\.md$/, ''),
+    title: whatsnewTitle(markdown),
+    markdown,
+    // Newest→oldest for the client's history dropdown.
+    versions: versions.slice().reverse().map((v) => v.replace(/\.md$/, '')),
+  });
+});
+app.get('/whatsnew/:version', (req, res) => {
+  const markdown = readWhatsnewVersion(req.params.version);
+  if (markdown === null) return res.status(404).json({ error: 'unknown whatsnew version' });
+  res.set('Content-Type', 'text/markdown; charset=utf-8');
+  res.set('Cache-Control', 'no-store');
+  res.send(markdown);
 });
 
 app.use(express.static(PUBLIC_DIR, { etag: false, lastModified: false, maxAge: 0 }));
@@ -318,7 +379,11 @@ app.get('/auth/github/callback', async (req, res) => {
   if (!login) {
     return _renderHtml(res, 400, `<h1>Login failed</h1><p>GitHub returned no login.</p>`);
   }
-  if (!isAllowed(login)) {
+  // Same conditional-enforcement semantics as the PAT path below: only
+  // reject when an allowlist is actually configured. Open mode (no
+  // allowed-github-users.txt, or MYCO_DISABLE_ALLOWLIST set) admits any
+  // valid provider login.
+  if (isAllowlistConfigured() && !isAllowed(login)) {
     return _renderHtml(res, 403,
       `<h1>Not invited yet</h1>` +
       `<p>Hi <code>${escHtmlServer(login)}</code> — your GitHub login isn't on the allowlist.</p>` +
@@ -367,10 +432,21 @@ app.post('/auth/login', async (req, res) => {
   if (pat.length < 8) return res.status(400).json({ error: 'token looks too short' });
 
   let user;
-  let provider = 'github';
-  
+  // Provider may be explicit (from the login modal's dropdown) or 'auto'
+  // (heuristic). Unknown values fall back to 'auto' so old clients that
+  // POST without a provider keep working.
+  let provider = String((req.body && req.body.provider) || 'auto').toLowerCase();
+  if (!['github', 'gitee', 'codehub', 'auto'].includes(provider)) provider = 'auto';
+
   const bypass = String(process.env.MYCO_TEST_OAUTH_BYPASS || '').trim();
-  if (bypass && pat.startsWith('test-token-')) {
+  // Test seam: canned users, no network — mirrors each provider branch so
+  // the E2E suite exercises every login path deterministically.
+  if (bypass && pat.startsWith('test-codehub-token-')) {
+    const login = pat.slice('test-codehub-token-'.length);
+    console.log(`[login] Test bypass active. Resolving CodeHub user: ${login}`);
+    user = { username: login, login, id: 300000 + login.split('').reduce((a, c) => a + c.charCodeAt(0), 0), name: login, avatar_url: '' };
+    provider = 'codehub';
+  } else if (bypass && pat.startsWith('test-token-')) {
     const login = pat.slice(11);
     console.log(`[login] Test bypass active. Resolving GitHub user: ${login}`);
     user = { login, id: 100000 + login.split('').reduce((a, c) => a + c.charCodeAt(0), 0), name: login, avatar_url: '' };
@@ -380,45 +456,77 @@ app.post('/auth/login', async (req, res) => {
     console.log(`[login] Test bypass active. Resolving Gitee user: ${login}`);
     user = { login, id: 200000 + login.split('').reduce((a, c) => a + c.charCodeAt(0), 0), name: login, avatar_url: '' };
     provider = 'gitee';
+  } else if (provider === 'codehub') {
+    // Explicit CodeHub (Huawei intranet GitLab-family): validate the PAT
+    // against /api/v4/user via git-hosts (PRIVATE-TOKEN header). Needs
+    // codehub-dg-g.huawei.com reachable directly (in no_proxy), not via
+    // the enterprise proxy.
+    try {
+      console.log('[login] Explicit CodeHub provider. Validating against codehub.');
+      user = await gitHosts.fetchUser({ provider: 'codehub', token: pat });
+      provider = 'codehub';
+    } catch (err) {
+      return res.status(401).json({ error: `CodeHub rejected the token. ${err.message}` });
+    }
+  } else if (provider === 'github') {
+    try {
+      console.log('[login] Explicit GitHub provider.');
+      user = await oauth.fetchUser(pat);
+      provider = 'github';
+    } catch (err) {
+      return res.status(401).json({ error: `GitHub rejected the token. ${err.message}` });
+    }
+  } else if (provider === 'gitee') {
+    try {
+      console.log('[login] Explicit Gitee provider.');
+      user = await gitHosts.fetchUser({ provider: 'gitee', token: pat });
+      provider = 'gitee';
+    } catch (err) {
+      return res.status(401).json({ error: `Gitee rejected the token. ${err.message}` });
+    }
   } else {
-    // Heuristic: Gitee PATs are typically 32-character hexadecimal/opaque strings, or start with gitee_pat_
-    const isLikelyGitee = pat.startsWith('gitee_') || /^[a-f0-9]{32}$/i.test(pat);
-    
-    if (isLikelyGitee) {
+    // auto: heuristic — pick the most LIKELY provider by token shape, then
+    // fall back through the OTHERS so a CodeHub PAT (whose format isn't a
+    // reliably sniffable prefix) is still found. Gitee PATs are typically
+    // 32-char hex / gitee_pat_; GitHub PATs carry a ghp_/gho_/ghu_/ghs_/
+    // github_pat_ prefix. GitHub goes first in the ambiguous case (most
+    // common by volume).
+    const isLikelyGitee  = pat.startsWith('gitee_') || /^[a-f0-9]{32}$/i.test(pat);
+    const isLikelyGithub = /^(ghp_|gho_|ghu_|ghs_|github_pat_)/.test(pat);
+    const order = isLikelyGitee  ? ['gitee', 'github', 'codehub']
+                : isLikelyGithub ? ['github', 'gitee', 'codehub']
+                : ['github', 'gitee', 'codehub'];
+
+    // Probe candidates in order. First provider that accepts the token wins.
+    const errs = {};
+    for (const p of order) {
       try {
-        console.log('[login] Token structure suggests Gitee. Trying Gitee API first.');
-        user = await gitHosts.fetchUser({ provider: 'gitee', token: pat });
-        provider = 'gitee';
-      } catch (err) {
-        console.log('[login] Gitee validation failed, trying GitHub as fallback. Error:', err.message);
-        try {
-          user = await oauth.fetchUser(pat);
-          provider = 'github';
-        } catch (ghErr) {
-          return res.status(401).json({ error: `Gitee and GitHub both rejected the token. Gitee error: ${err.message}. GitHub error: ${ghErr.message}` });
-        }
+        user = (p === 'github')
+          ? await oauth.fetchUser(pat)
+          : await gitHosts.fetchUser({ provider: p, token: pat });
+        provider = p;
+        console.log(`[login] Auto-detect: ${p} accepted the token.`);
+        break;
+      } catch (e) {
+        errs[p] = e.message;
+        console.log(`[login] Auto-detect: ${p} rejected (${e.message}).`);
       }
-    } else {
-      try {
-        console.log('[login] Trying GitHub API first.');
-        user = await oauth.fetchUser(pat);
-        provider = 'github';
-      } catch (err) {
-        console.log('[login] GitHub validation failed, trying Gitee as fallback. Error:', err.message);
-        try {
-          user = await gitHosts.fetchUser({ provider: 'gitee', token: pat });
-          provider = 'gitee';
-        } catch (giteeErr) {
-          return res.status(401).json({ error: `GitHub and Gitee both rejected the token. GitHub error: ${err.message}. Gitee error: ${giteeErr.message}` });
-        }
-      }
+    }
+    if (!user) {
+      return res.status(401).json({
+        error: `All providers rejected the token. GitHub: ${errs.github || 'n/a'}. Gitee: ${errs.gitee || 'n/a'}. CodeHub: ${errs.codehub || 'n/a'}`,
+      });
     }
   }
 
-  const login = require('./auth').sanitize(user.login || '');
+  const authMod = require('./auth');
+  const login = authMod.sanitize(user.login || '');
   if (!login) return res.status(401).json({ error: `${provider} returned no login` });
-  
-  if (!isAllowed(login)) {
+
+  // Only enforce the invitation allowlist when one is configured. In
+  // "open" mode (auth required via MYCO_AUTH_REQUIRED but no
+  // allowed-github-users.txt) any valid provider login is admitted.
+  if (authMod.isAllowlistConfigured() && !isAllowed(login)) {
     return res.status(403).json({
       error: `not invited`,
       login,
@@ -427,7 +535,9 @@ app.post('/auth/login', async (req, res) => {
   }
 
   try {
-    if (provider === 'gitee') {
+    if (provider === 'codehub') {
+      gitTokens.setUserToken(login, 'codehub', pat);
+    } else if (provider === 'gitee') {
       gitTokens.setUserToken(login, 'gitee', pat);
     } else {
       githubMod.setToken(login, pat);
@@ -544,14 +654,19 @@ app.get('/sessions', async (req, res) => {
     // private sessions to every authenticated user. The user filter is
     // now ALWAYS applied when there's an auth'd user; the all=1 flag
     // is preserved for the URL shape (older bookmarked queries don't
-    // 400) but no longer has gate semantics. Anonymous requests (auth
-    // bypass mode + the share-token-only path) still get the unfiltered
-    // listing because that's the only way a shareless guest can see
-    // anything at all.
+    // 400) but no longer has gate semantics. Anonymous requests (the
+    // share-token-only path) never reach listSessions at all — they only
+    // get the explicit share-token entries below, so a guest can never
+    // enumerate the store.
     const all = req.query.all === '1';
     let own = [];
     if (user) {
-      own = await listSessions(isAuthRequired() ? user : null);
+      // delm-10 ghost-session fix: never pass null to listSessions when
+      // there is a user. The old isAuthRequired() ? user : null made the
+      // auth-bypass path list EVERY session in the store, so a browser
+      // that hit the endpoint unauthenticated saw other users' sessions
+      // as "shared" ghosts.
+      own = await listSessions(user);
       // Tag owned/owner so the client can label non-owned sessions and
       // open them in viewer (read-only) mode without a share token.
       // bug-84: also enrich each session with a `pendingVerdict` flag
@@ -569,11 +684,63 @@ app.get('/sessions', async (req, res) => {
       // to claude (or chat-accept) and silently advances stages
       // without the user ever seeing the modal.
       for (const s of own) {
-        if (!isAuthRequired()) { s.owned = true; continue; }
+        // delm-10: busy/review/queue enrichment applies to every listed
+        // session regardless of auth mode. Pre-redesign this block
+        // short-circuited with `if (!isAuthRequired()) { s.owned = true;
+        // continue; }` — in the k8s single-user deployment (no OAuth
+        // config → isAuthRequired()=false) the short-circuit skipped the
+        // agentBusy/agentHasReview computation entirely, so the sidebar
+        // NEVER showed the "working" badge — the "working badge stopped
+        // displaying" bug. owned=true still lands for the open mode;
+        // the enrichments now run unconditionally.
         const rec = getSessionRecord(s.id);
-        s.owned = !!(rec && rec.user === user);
-        if (!s.owned && rec) s.owner = rec.user || null;
+        if (!isAuthRequired()) {
+          s.owned = true;
+        } else {
+          s.owned = !!(rec && rec.user === user);
+          if (!s.owned && rec) s.owner = rec.user || null;
+        }
         s.pendingVerdict = sessionsMod.hasPendingVerdict(rec);
+        // delm-10 busy indicator: agentBusy=true while the session's
+        // AgentSession has an SDK query iteration streaming (claude
+        // actively working). The sidebar polls this list every ~3s and
+        // renders a pulsing "working" badge on the session card, so
+        // anyone looking at the sidebar can tell WHICH session is
+        // working at a glance. agent-n2 team sessions expose the same
+        // contract: TeamSession.isBusy() aggregates its workers
+        // (team-session.js working-status parity).
+        const live = getPtySession(s.id);
+        s.agentBusy = !!(live && typeof live.isBusy === 'function' && live.isBusy());
+        // delm-10 stale-working-badge fix: "to review" badge. When the
+        // agent finished (terminal event stamped at live._lastDoneAt)
+        // and the user hasn't looked at the session since (rec.agentSeenAt
+        // absent or older than the done moment), the sidebar flips the
+        // "● working" chip to a steady "◦ to review" chip. Opening the
+        // session (attach or POST /sessions/:id/viewed) stamps
+        // rec.agentSeenAt and the badge disappears — "user viewed it,
+        // nothing new" = no icon at all, per the requested UX.
+        const doneAt = (live && typeof live._lastDoneAt === 'number') ? live._lastDoneAt : null;
+        const seenAt = (rec && typeof rec.agentSeenAt === 'number') ? rec.agentSeenAt : 0;
+        s.agentHasReview = !!(doneAt && seenAt < doneAt);
+        // delm-10 queue visibility: the run-queue lives on the session
+        // record (rec.runQueue) and survives session switches + restarts,
+        // but the sidebar only sees it after attaching. Ship the open
+        // (pending + running) counts here so the sidebar (3s poll) can
+        // badge every session with queued/running work — switching
+        // sessions never loses sight of the queue.
+        const openQ = (rec && Array.isArray(rec.runQueue))
+          ? rec.runQueue.filter((e) => e && (e.status === 'pending' || e.status === 'running'))
+          : [];
+        s.queueOpen = openQ.length;
+        s.queueRunning = openQ.filter((e) => e.status === 'running').length;
+        // §5.2: sidebar 🧠 RLM badge — which sessions run in RLM mode,
+        // visible without opening the session (3s poll picks up /rlm on).
+        s.rlm = !!(rec && sessionsMod.isRlmEffective(rec));
+        s.rlmScope = rec ? sessionsMod.getRlmScope(rec) : null;
+        // mcp-market: the entries installed in this session (rec.
+        // installedMcp) — the Skills panel's MCP tab badges cards
+        // with it. Array copy; absent when nothing is installed.
+        if (rec && Array.isArray(rec.installedMcp)) s.installedMcp = rec.installedMcp.slice();
       }
     }
     // Also include sessions the user has accessed via share tokens.
@@ -585,6 +752,25 @@ app.get('/sessions', async (req, res) => {
       if (!info) continue;
       const rec = getSessionRecord(info.sessionId);
       if (!rec) continue;
+      // delm-10 ghost-session fix r2 (kkrazy report): the share tokens
+      // ARE the session id (see auth.js createShareToken), and the
+      // client keeps them forever in localStorage 'myco_shares',
+      // replaying them on every 3-second sidebar poll. Pre-fix this
+      // branch listed ANY session whose id matched the token — with no
+      // access check at all. So a stale entry (session deleted and
+      // later re-imported, a session id the user only ever viewed via
+      // a link that was later revoked, or simply a foreign id picked
+      // up from an old /?s= URL) re-surfaced the session in the
+      // sidebar after every page refresh — the "session I closed came
+      // back" symptom. Gate the branch on resolveAccessTier (the same
+      // single source of truth fr-87 uses): authed users must be
+      // owner/admin/viewer on the session; anonymous guests keep the
+      // share-link path (that's the entire point of a share link), but
+      // a deleted session has no record so shareTokenInfo already
+      // returns null for it above.
+      if (user && isAuthRequired() && resolveAccessTier(info.sessionId, user) === null) {
+        continue;
+      }
       const meta = await readDescriptionForCwdPublic(rec.absCwd, rec);
       sharedSessions.push({
         id: rec.id,
@@ -610,6 +796,30 @@ function redact(msg) {
   // Remove absolute POSIX paths from any error message before sending it out.
   return String(msg || '').replace(/(\/[^\s'"<>]+)/g, '<path>');
 }
+
+// delm-10 stale-working-badge fix: mark a session as "reviewed by the
+// user". The sidebar's "◦ to review" badge (GET /sessions →
+// s.agentHasReview) shows when the agent finished after the user's
+// last look. The client fires this endpoint when the user opens/views
+// a session's chat; the server stamps rec.agentSeenAt = Date.now()
+// (persisted in sessions.json so the state survives restarts). Idem-
+// potent — a fresh open while the agent works also stamps, so the
+// badge only re-arms after the NEXT terminal event.
+app.post('/sessions/:id/viewed', requireAuth, (req, res) => {
+  const id = req.params.id;
+  if (isAuthRequired() && !sessionBelongsToUser(id, req.user)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const rec = getSessionRecord(id);
+    if (!rec) return res.status(404).json({ error: 'unknown session' });
+    rec.agentSeenAt = Date.now();
+    saveStore();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: redact(err.message) });
+  }
+});
 
 app.post('/sessions', requireAuth, async (req, res) => {
   try {
@@ -707,6 +917,73 @@ app.delete('/config/pats/per-repo/:provider/:owner/:repo', requireAuth, (req, re
   const alias = (req.query && typeof req.query.alias === 'string' && req.query.alias.trim()) || null;
   const removed = gitTokensMod.removeRepoToken(req.user, req.params.provider, req.params.owner, req.params.repo, alias);
   res.json({ ok: true, removed });
+});
+
+// ─── Per-user model-gateway profiles (base_url / auth_token / model) ──────
+// The user can save MULTIPLE named gateway profiles and switch which one is
+// active; the active profile is injected into their agent SDK calls on the
+// next turn (see agent-session.js `_ensureIteration`). Same access model as
+// the PATs routes above: requireAuth-gated, and every route only reads or
+// mutates req.user's OWN profiles — no impersonation possible.
+//
+// SECURITY INVARIANT (matches /config/pats): the GET response NEVER includes
+// a raw authToken — only `tokenSet:true/false` + a short mask. Tokens only
+// flow IN via the POST body; they are never returned by the server.
+const gatewaysMod = require('./gateways');
+
+app.get('/api/gateways', requireAuth, (req, res) => {
+  res.json(gatewaysMod.listProfiles(req.user));
+});
+
+app.post('/api/gateways', requireAuth, (req, res) => {
+  const { name, baseUrl, authToken, model } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'profile name required' });
+  if (baseUrl != null && typeof baseUrl !== 'string') return res.status(400).json({ error: 'baseUrl must be a string' });
+  if (authToken != null && typeof authToken !== 'string') return res.status(400).json({ error: 'authToken must be a string' });
+  if (model != null && typeof model !== 'string') return res.status(400).json({ error: 'model must be a string' });
+  try {
+    const saved = gatewaysMod.upsertProfile(req.user, name, { baseUrl, authToken, model });
+    res.json({ ok: true, profile: saved });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/gateways/activate', requireAuth, (req, res) => {
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  try { gatewaysMod.setActive(req.user, name); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
+  res.json({ ok: true, active: name });
+});
+
+app.delete('/api/gateways/:name', requireAuth, (req, res) => {
+  const removed = gatewaysMod.deleteProfile(req.user, req.params.name);
+  res.json({ ok: true, removed });
+});
+
+// Connectivity probe for a candidate gateway before saving it. Reuses the
+// same HTTP semantics as _probeCustomCriticKey (GET the endpoint, Bearer
+// auth when a token is given); a failure there just means "can't reach /
+// api gateway responded oddly", not that the endpoint is unusable.
+app.post('/api/gateways/test', requireAuth, async (req, res) => {
+  const { baseUrl, authToken, model } = req.body || {};
+  if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
+    return res.json({ ok: true, note: 'empty baseUrl → using system default (.env)' });
+  }
+  const url = /^https?:\/\//i.test(baseUrl) ? baseUrl : `http://${baseUrl}`;
+  // NB: `withTimeout` from /api/admin/test-key is handler-local (a const),
+  // so inline the timeout race here — 15s cap, mirrors the admin probe.
+  const probe = _probeCustomCriticKey(url, authToken || '', model || '');
+  try {
+    const out = await Promise.race([
+      probe,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`probe timed out (15s): ${url}`)), 15000)),
+    ]);
+    res.json(out);
+  } catch (err) {
+    res.json({ ok: false, error: err && err.message || String(err) });
+  }
 });
 
 const TLS_CERT_PATH = process.env.TLS_CERT_PATH || '';
@@ -955,6 +1232,9 @@ function fileApiPreamble(req, res, requiredAccess /* 'owner' | 'viewer' | 'authe
 function fileApiError(res, e) {
   const code = e && e.code;
   if (code === 'ERR_OUTSIDE' || code === 'ERR_PERM') return res.status(403).json({ error: e.message, code });
+  // delm-10: shared-skill delete gate (deleteSkillShared) — not the
+  // uploading user and no valid system delete code.
+  if (code === 'ERR_FORBIDDEN') return res.status(403).json({ error: e.message, code });
   if (code === 'ERR_NOT_FOUND') return res.status(404).json({ error: e.message, code });
   if (code === 'ERR_NOT_DIR') return res.status(400).json({ error: e.message, code });
   if (code === 'ERR_BINARY') return res.status(415).json({ error: e.message, code, binary: true, size: e.size, mtimeMs: e.mtime });
@@ -962,6 +1242,7 @@ function fileApiError(res, e) {
   if (code === 'ERR_MTIME_CONFLICT') return res.status(409).json({ error: e.message, code });
   if (code === 'ERR_SYMLINK_WRITE') return res.status(400).json({ error: e.message, code });
   if (code === 'ERR_BAD_INPUT') return res.status(400).json({ error: e.message, code });
+  if (code === 'ERR_EXISTS') return res.status(409).json({ error: e.message, code });
   console.error('[files] unexpected error:', e);
   return res.status(500).json({ error: 'internal error' });
 }
@@ -973,6 +1254,830 @@ app.get('/sessions/:id/files', async (req, res) => {
     const out = await filesApi.listDir(ctx.root, req.query.path || '.');
     res.json(out);
   } catch (e) { fileApiError(res, e); }
+});
+
+// delm-10: create a new folder in the currently browsed directory.
+// Owner-only — this mutates the workspace tree, so a viewer/share-
+// token reader (who can list + read) must not be able to write.
+// Body: { name, dir? } where `dir` defaults to '.' (the UI passes
+// state.files.currentPath). Name is a single path segment resolved
+// relative to `dir`.
+app.post('/sessions/:id/files/create-dir', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name, dir } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  const base = (typeof dir === 'string' && dir) ? dir : '.';
+  const rel = (base === '.' || base === './') ? name : (base.replace(/\/+$/, '') + '/' + name);
+  try {
+    const out = await filesApi.createDir(ctx.root, rel);
+    res.status(201).json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
+// delm-10: create a new file in the currently browsed directory.
+// Same owner-only gating as create-dir. Body: { name, dir?, content? }.
+// Refuses to overwrite an existing file (HTTP 409 ERR_EXISTS).
+app.post('/sessions/:id/files/create-file', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name, dir, content } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  const base = (typeof dir === 'string' && dir) ? dir : '.';
+  const rel = (base === '.' || base === './') ? name : (base.replace(/\/+$/, '') + '/' + name);
+  try {
+    const out = await filesApi.createFile(ctx.root, rel, { content: typeof content === 'string' ? content : '' });
+    res.status(201).json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
+// ── delm-10: skill selection + upload/import ────────────────────────────
+// Skills live at <session root>/.claude/skills/<name>/SKILL.md (the
+// project-skill layout the SDK's `skills` option reads). Selection is
+// per-session state: rec.enabledSkills is an array of skill dir names
+// the SDK filter is pinned to, or null/undefined = 'all' (no filter,
+// pre-delm-10 behaviour). Mutations are owner-only via fileApiPreamble
+// — a viewer/share-token reader must not reshape the agent's skill
+// set. GET is viewer-readable like the rest of the file API.
+//
+// NOTE: the skills root always anchors at the SESSION root (ctx.rec's
+// cwd), not the main-project subdir — rec.enabledSkills selection is
+// scoped per myco session, and .claude/ is session-level config
+// (same layer as .claude/memory/, .claude/settings.json per CLAUDE.md
+// §Session-storage). Skills are still visible to the SDK because
+// settingSources includes 'project' relative to the agent cwd; for
+// sessions with a main project subdir the project's own skills (if
+// any) continue working unfiltered alongside these.
+//
+// delm-10 SCOPE extension: an upload can be visible to just this
+// session, to every session of the uploading user, or to ALL users.
+// Three stores, widest last:
+//   session  <session root>/.claude/skills/<name>          (real dir)
+//   user     <WORKSPACE>/<rec.user>/.claude/skills/<name>  (real dir)
+//   global   <WORKSPACE>/.claude/skills/<name>             (real dir)
+// The SDK only reads the session store, so a user/global upload is
+// materialized there as a SYMLINK to the real dir (skills.js
+// linkSkill; listSkills follows symlinks). GET /skills merges all
+// three stores and tags each entry with its scope; a session entry
+// shadows same-named user/global ones.
+
+// Resolve the skill-store ROOTS for a session record. Returns
+// { session, user, global } as absolute paths — each is a directory
+// whose .claude/skills the skillsApi functions (createSkill, linkSkill,
+// listSkills, …) resolve THEMSELVES (skillsRoot(absRoot) appends
+// ".claude/skills"). So these values must be the ROOT (parent of
+// .claude), never the skills dir itself — passing a skills dir here
+// double-appends and lands the skill in <root>/.claude/skills/.claude/
+// skills/<name> where neither the SDK nor linkSkill finds it (the
+// delm-10 bug this comment guards against).
+function _skillStores(rec, sessionRoot) {
+  const ws = sessionsMod.getWorkspace();
+  const userDir = path.join(ws, rec.user || 'default');
+  return {
+    session: sessionRoot,
+    user: userDir,
+    global: ws,
+  };
+}
+
+// The absolute skill dir of a shared-store entry (link target /
+// publish source). `root` is a _skillStores() value, so the .claude/
+// skills segments are appended exactly once.
+function _skillDirInStore(root, dirName) {
+  return path.join(root, '.claude', 'skills', dirName);
+}
+
+// Normalize a request `scope` value. Unknown/absent → 'session'
+// (pre-delm-10 behaviour).
+function _skillScope(value) {
+  const v = String(value == null ? '' : value).trim().toLowerCase();
+  return (v === 'user' || v === 'global') ? v : 'session';
+}
+
+// Merge the three stores into one list, tagged with scope. Session
+// entries shadow user entries, which shadow global ones (a same-named
+// narrower skill wins). Returns { skills, scopes } — scopes maps
+// dirName → its owning scope for toggle/delete routing.
+async function _listSkillsMerged(rec, sessionRoot) {
+  const stores = _skillStores(rec, sessionRoot);
+  const byDir = new Map();   // dirName → entry
+  const scopes = new Map();  // dirName → 'session'|'user'|'global'
+  for (const scope of ['global', 'user', 'session']) {
+    let out;
+    try { out = await skillsApi.listSkills(stores[scope]); }
+    catch (e) { if (e.code === 'ERR_PERM') throw e; out = { skills: [] }; }
+    for (const s of out.skills) {
+      if (!byDir.has(s.dirName)) {
+        byDir.set(s.dirName, Object.assign({}, s, { scope }));
+        scopes.set(s.dirName, scope);
+      }
+    }
+  }
+  const skills = [...byDir.values()].sort((a, b) => a.dirName.localeCompare(b.dirName));
+  return { skills, scopes };
+}
+
+// List skills + the session's current selection.
+app.get('/sessions/:id/skills', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  try {
+    const merged = await _listSkillsMerged(ctx.rec, ctx.root);
+    const enabled = Array.isArray(ctx.rec.enabledSkills) ? ctx.rec.enabledSkills.slice() : null;
+    res.json({ skills: merged.skills, enabledSkills: enabled, skillsMode: enabled ? 'selected' : 'all' });
+  } catch (e) { fileApiError(res, e); }
+});
+
+// ── Multi-expert team: expert CRUD (rec.experts) ──────────────────
+// An expert = { name, skills:[dirName,…] }. Skills are validated
+// against the merged personal list (session/user/global) so the SDK's
+// per-worker skill filter can never reference a skill nobody has.
+// Owner-only mutations; viewers read the list (they can see it in the
+// UI but not change who's on the team).
+const expertsApi = require('./experts');
+const { listExperts } = expertsApi;
+
+// Resolve each expert's skill dirNames against the merged skill list,
+// producing the [{ name, description }] arrays the TeamSession
+// expertSkills map + prompts-team.js expertPrompt() consume. A skill
+// that has since been deleted is silently dropped (the expert keeps
+// running with the survivors); an expert left with zero skills stays a
+// generalist. Exported for slashcmds.js /run-team.
+async function resolveExpertSkills(rec, sessionRoot) {
+  const merged = await _listSkillsMerged(rec, sessionRoot);
+  const byDir = new Map(merged.skills.map((s) => [s.dirName, s]));
+  return listExperts(rec).map((e) => ({
+    name: e.name,
+    skills: (e.skills || [])
+      .map((d) => byDir.get(d))
+      .filter(Boolean)
+      .map((s) => ({ name: s.name, description: s.description || '', dirName: s.dirName })),
+  }));
+}
+
+// List this session's experts (+ their resolved skills for display).
+app.get('/sessions/:id/experts', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  try {
+    const experts = await resolveExpertSkills(ctx.rec, ctx.root);
+    res.json({ experts, max: expertsApi.MAX_EXPERTS });
+  } catch (e) { fileApiError(res, e); }
+});
+
+// Create an expert. Body: { name, skills:[dirName,…] }.
+app.post('/sessions/:id/experts', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const body = req.body || {};
+  if (!Array.isArray(body.skills) || body.skills.length === 0) {
+    return res.status(400).json({ error: 'skills[] required — pick at least one skill for the expert' });
+  }
+  // Every referenced skill must exist in the merged personal list (the
+  // market-install flow materializes installed skills there, so
+  // market skills are covered too).
+  let known;
+  try { known = new Set((await _listSkillsMerged(ctx.rec, ctx.root)).skills.map((s) => s.dirName)); }
+  catch (e) { return fileApiError(res, e); }
+  const unknown = body.skills.filter((d) => !known.has(d));
+  if (unknown.length) {
+    return res.status(400).json({ error: `unknown skill(s): ${unknown.join(', ')}`, code: 'ERR_BAD_INPUT' });
+  }
+  try {
+    const experts = expertsApi.addExpert(ctx.rec, { name: body.name, skills: body.skills });
+    saveStore();
+    const resolved = await resolveExpertSkills(ctx.rec, ctx.root);
+    res.status(201).json({ experts: resolved, max: expertsApi.MAX_EXPERTS });
+  } catch (e) {
+    if (e.code === 'ERR_EXISTS') return res.status(409).json({ error: e.message, code: e.code });
+    if (e.code === 'ERR_BAD_INPUT') return res.status(400).json({ error: e.message, code: e.code });
+    fileApiError(res, e);
+  }
+});
+
+// Delete an expert by name.
+app.delete('/sessions/:id/experts/:name', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  try {
+    const experts = expertsApi.removeExpert(ctx.rec, req.params.name);
+    saveStore();
+    const resolved = await resolveExpertSkills(ctx.rec, ctx.root);
+    res.json({ experts: resolved, max: expertsApi.MAX_EXPERTS });
+  } catch (e) {
+    if (e.code === 'ERR_NOT_FOUND') return res.status(404).json({ error: e.message, code: e.code });
+    fileApiError(res, e);
+  }
+});
+
+// Read one skill's SKILL.md.
+app.get('/sessions/:id/skills/:name', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  try {
+    const out = await skillsApi.readSkill(ctx.root, req.params.name);
+    res.json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
+// Upload a single skill (SKILL.md or any markdown body). Body:
+// { name, description?, content, scope? } where scope is 'session'
+// (default) | 'user' | 'global'. 409 when the name already exists.
+// user/global uploads land in the shared store + are linked into the
+// session store so the SDK sees them.
+app.post('/sessions/:id/skills', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name, description, content } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  if (typeof content !== 'string' || !content.trim()) return res.status(400).json({ error: 'content required' });
+  const scope = _skillScope((req.body || {}).scope);
+  const stores = _skillStores(ctx.rec, ctx.root);
+  try {
+    let skill;
+    if (scope === 'session') {
+      skill = await skillsApi.createSkill(stores.session, { name, description, content });
+    } else {
+      // Write to the shared store, then link into the session store.
+      // If the link name collides with a different session skill, the
+      // shared upload still succeeds — report it with linked:false.
+      skill = await skillsApi.createSkill(stores[scope], { name, description, content });
+      skill.scope = scope;
+      // Record the uploader so shared-store deletion can be gated
+      // (deleteSkillShared): only the uploading user may remove it.
+      await skillsApi.writeSkillMeta(stores[scope], skill.dirName, req.user);
+      try {
+        await skillsApi.linkSkill(stores.session, skill.dirName, _skillDirInStore(stores[scope], skill.dirName));
+        skill.linked = true;
+      } catch (e) {
+        if (e.code !== 'ERR_EXISTS') throw e;
+        skill.linked = false;
+      }
+    }
+    res.status(201).json({ skill });
+  } catch (e) { fileApiError(res, e); }
+});
+
+// Import a multi-file skill folder (e.g. a skill with helper scripts).
+// Body: { name?, description?, files: [{ path, content }], scope? }
+// where paths are relative to the skill dir and SKILL.md must be at
+// root. A single top-level wrapper dir is unwrapped automatically.
+// scope: 'session' (default) | 'user' | 'global', same semantics as
+// POST /skills above.
+app.post('/sessions/:id/skills/import', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const scope = _skillScope((req.body || {}).scope);
+  const stores = _skillStores(ctx.rec, ctx.root);
+  try {
+    let skill;
+    if (scope === 'session') {
+      skill = await skillsApi.importSkill(stores.session, req.body || {});
+    } else {
+      skill = await skillsApi.importSkill(stores[scope], req.body || {});
+      skill.scope = scope;
+      // Record the uploader for shared-store delete gating (see POST
+      // /skills above).
+      await skillsApi.writeSkillMeta(stores[scope], skill.dirName, req.user);
+      try {
+        await skillsApi.linkSkill(stores.session, skill.dirName, _skillDirInStore(stores[scope], skill.dirName));
+        skill.linked = true;
+      } catch (e) {
+        if (e.code !== 'ERR_EXISTS') throw e;
+        skill.linked = false;
+      }
+    }
+    res.status(201).json({ skill });
+  } catch (e) { fileApiError(res, e); }
+});
+
+// Toggle a skill's membership in the session's selection. Body:
+// { name, enabled: true|false }. Persisted on rec.enabledSkills.
+// enabled=false for the LAST selected skill clears the filter back
+// to 'all' — an empty allow-list would hide every skill, which is
+// never what the user meant by toggling one off.
+// A user/global-scoped skill that has no session-store entry yet is
+// linked in first — the SDK filter only resolves names it can see.
+app.post('/sessions/:id/skills/toggle', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name, enabled } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  const want = !!enabled;
+  const stores = _skillStores(ctx.rec, ctx.root);
+  try {
+    // Reject names that aren't real skills — a typo'd toggle would
+    // otherwise silently pin the SDK filter to a nonexistent skill.
+    await skillsApi.readSkill(stores.session, name);
+  } catch (e) {
+    // Not in the session store: if it exists in a wider store, link
+    // it in; otherwise surface the original NOT_FOUND.
+    if (e.code !== 'ERR_NOT_FOUND' || !want) return fileApiError(res, e);
+    const merged = await _listSkillsMerged(ctx.rec, ctx.root);
+    const scope = merged.scopes.get(name);
+    if (!scope || scope === 'session') return fileApiError(res, e);
+    try {
+      await skillsApi.linkSkill(stores.session, name, _skillDirInStore(stores[scope], name));
+    } catch (le) {
+      if (le.code !== 'ERR_EXISTS') return fileApiError(res, le);
+    }
+  }
+  const cur = Array.isArray(ctx.rec.enabledSkills) ? ctx.rec.enabledSkills.slice() : null;
+  let next = cur;
+  if (want) {
+    next = (next || []).concat(name);
+  } else if (next) {
+    next = next.filter((n) => n !== name);
+    // last one off → clear the filter back to 'all' (an empty
+    // allow-list would hide every skill).
+    if (next.length === 0) next = null;
+  }
+  if (next && new Set(next).size !== next.length) next = [...new Set(next)];
+  if (JSON.stringify(cur) === JSON.stringify(next)) {
+    return res.json({ ok: true, unchanged: true, enabledSkills: next });
+  }
+  if (next) ctx.rec.enabledSkills = next;
+  else delete ctx.rec.enabledSkills;
+  putSession(ctx.rec);
+  _applySkillsToLiveSession(ctx.rec);
+  res.json({ ok: true, enabledSkills: next === null ? null : next.slice(), skillsMode: next ? 'selected' : 'all' });
+});
+
+// Delete a skill (removes the folder + drops it from the selection).
+// A session-store entry (real dir or scope symlink) is deleted from
+// the session store; if it was a symlink the shared target survives
+// (deleting the LINK is "remove from this session"). A skill that
+// only exists in the user/global store is deleted from that store
+// (removes it for every session/user it covers). Query ?scope=user|global
+// forces the shared-store deletion even when a session link exists.
+app.delete('/sessions/:id/skills/:name', async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const stores = _skillStores(ctx.rec, ctx.root);
+  const qScope = _skillScope(req.query && req.query.scope);
+  try {
+    let out;
+    if (qScope === 'user' || qScope === 'global') {
+      // Shared-store delete goes through the ownership gate: only the
+      // uploading user (or, for the global store, a holder of the
+      // system delete code via ?code=) may remove it. This is what
+      // makes "visible to everyone" safe to offer per-upload.
+      out = await skillsApi.deleteSkillShared(stores[qScope], req.params.name, {
+        deleter: req.user,
+        deleteCode: (req.query && req.query.code) || (req.body && req.body.code) || '',
+        scope: qScope,
+      });
+      // A shared skill's session-store link (if any) is now dangling —
+      // drop it too so the SDK/list view doesn't show a ghost entry.
+      try { await skillsApi.deleteSkill(stores.session, req.params.name); } catch {}
+    } else {
+      out = await skillsApi.deleteSkill(stores.session, req.params.name);
+    }
+    const cur = Array.isArray(ctx.rec.enabledSkills) ? ctx.rec.enabledSkills : null;
+    if (cur && cur.includes(out.dirName)) {
+      const next = cur.filter((n) => n !== out.dirName);
+      if (next.length === 0) delete ctx.rec.enabledSkills;
+      else ctx.rec.enabledSkills = next;
+      putSession(ctx.rec);
+      _applySkillsToLiveSession(ctx.rec);
+    }
+    res.json(out);
+  } catch (e) { fileApiError(res, e); }
+});
+
+// Push a (possibly changed) rec.enabledSkills onto the live AgentSession
+// so the NEXT SDK iteration picks it up without a respawn. Respects the
+// "one source of truth" rule: the record is authoritative; the live
+// object is a cache. The live session applies the filter at iteration
+// start (agent-session.js setSkills), and a mid-iteration change waits
+// for the current turn to drain (streaming-input queries can't swap
+// options live).
+function _applySkillsToLiveSession(rec) {
+  try {
+    const live = getPtySession(rec.id);
+    if (live && live.alive && typeof live.setSkills === 'function') {
+      live.setSkills(Array.isArray(rec.enabledSkills) ? rec.enabledSkills.slice() : null);
+    }
+  } catch (err) {
+    console.error(`[skills] apply-to-live failed for ${rec.id}: ${err.message}`);
+  }
+}
+
+// mcp-market: push rec.installedMcp onto the live AgentSession so the
+// NEXT SDK iteration rebuilds sdkOpts.mcpServers with the entry's
+// sdkTools (agent-session.js setInstalledMcp). Same liveness model as
+// _applySkillsToLiveSession — the record is authoritative, the live
+// object a cache applied at iteration start.
+function _applyInstalledMcpToLiveSession(rec) {
+  try {
+    const live = getPtySession(rec.id);
+    if (live && live.alive && typeof live.setInstalledMcp === 'function') {
+      live.setInstalledMcp(Array.isArray(rec.installedMcp) ? rec.installedMcp.slice() : []);
+    }
+  } catch (err) {
+    console.error(`[mcp-market] apply-to-live failed for ${rec.id}: ${err.message}`);
+  }
+}
+
+// ─── delm-10: skill MARKET ───
+// A cross-session, cross-user store of skills shared via the state dir
+// ($MYCO_STATE_DIR/skill-market/). Complements the personal stores:
+//   GET    /skill-market                       → list (any signed-in user)
+//   GET    /skill-market/:name                 → preview SKILL.md
+//   POST   /skill-market                       → publish directly
+//       body { name, description?, content } | { name?, description?, files:[{path,content}] }
+//   POST   /sessions/:id/skills/publish        → publish a personal skill
+//       body { name } — source = the session store entry (real dir or
+//       scope symlink target; resolved via _listSkillsMerged scopes).
+//   POST   /sessions/:id/skill-market/install  → install into the session
+//       personal store (owner-only, no-clobber on name collision)
+//   DELETE /skill-market/:name?code=<code>     → delete. Authorized when
+//       req.user is the recorded uploader, OR `code` matches the system
+//       delete code ($MYCO_STATE_DIR/skill-market/delete-code, mode
+//       0600, constant-time compare, per-user failure throttle). The
+//       code never leaves the server over HTTP — an operator reads it
+//       from the state file on the host.
+// requireAuth stamps req.user (userFromRequest); in single-user mode
+// that is 'default', so the uploader-or-code rule holds in both modes.
+
+const skillMarketApi = require('./skill-market');
+
+function marketApiError(res, e) {
+  const code = e && e.code;
+  if (code === 'ERR_FORBIDDEN') return res.status(403).json({ error: e.message, code });
+  if (code === 'ERR_THROTTLED') return res.status(429).json({ error: e.message, code });
+  if (code === 'ERR_OUTSIDE' || code === 'ERR_PERM') return res.status(403).json({ error: e.message, code });
+  if (code === 'ERR_NOT_FOUND') return res.status(404).json({ error: e.message, code });
+  if (code === 'ERR_TOO_LARGE') return res.status(413).json({ error: e.message, code });
+  if (code === 'ERR_BAD_INPUT') return res.status(400).json({ error: e.message, code });
+  if (code === 'ERR_EXISTS') return res.status(409).json({ error: e.message, code });
+  console.error('[skill-market] unexpected error:', e);
+  return res.status(500).json({ error: 'internal error' });
+}
+
+// Locate a personal skill's real dir across the three stores — used
+// by publish to market so a user/global-scoped skill can be published
+// too, not just session-scoped ones.
+async function _findPersonalSkillDir(rec, sessionRoot, name) {
+  const stores = _skillStores(rec, sessionRoot);
+  const merged = await _listSkillsMerged(rec, sessionRoot);
+  const scope = merged.scopes.get(name);
+  if (!scope) return null;
+  return _skillDirInStore(stores[scope], name);
+}
+
+app.get('/skill-market', requireAuth, async (req, res) => {
+  try {
+    const out = await skillMarketApi.listMarket(req.user);
+    res.json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.get('/skill-market/:name', requireAuth, async (req, res) => {
+  try {
+    const out = await skillMarketApi.readMarketSkill(req.params.name);
+    res.json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/skill-market', requireAuth, async (req, res) => {
+  try {
+    const skill = await skillMarketApi.publishDirect(req.body || {}, req.user);
+    res.status(201).json({ skill });
+  } catch (e) { marketApiError(res, e); }
+});
+
+// Publish a personal skill (any scope) into the market.
+app.post('/sessions/:id/skills/publish', requireAuth, async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  try {
+    const srcDir = await _findPersonalSkillDir(ctx.rec, ctx.root, name.trim());
+    if (!srcDir) throw Object.assign(new Error('personal skill not found'), { code: 'ERR_NOT_FOUND' });
+    const skill = await skillMarketApi.publishFromDir(srcDir, name.trim(), req.user);
+    res.status(201).json({ skill });
+  } catch (e) { marketApiError(res, e); }
+});
+
+// Install a market skill into this session's personal store.
+app.post('/sessions/:id/skill-market/install', requireAuth, async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  try {
+    const out = await skillMarketApi.installMarketSkill(ctx.root, name);
+    res.status(201).json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+// Delete a market skill — uploader or system delete code.
+app.delete('/skill-market/:name', requireAuth, async (req, res) => {
+  const code = (req.query && req.query.code) || (req.body && req.body.code) || '';
+  try {
+    const out = await skillMarketApi.deleteMarketSkill(req.params.name, req.user, code);
+    res.json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+// ─── mcp-market: MCP server marketplace (skill-pack model) ───
+// Each catalog entry ("MCP server") is a SKILL PACK: installing it
+// copies the entry's skill folders into the session's .claude/skills
+// store, so the agent learns the MCP server's tool interface from
+// ordinary skill instructions and calls it via curl / JSON-RPC. No
+// MCP gateway process — full reuse of the delm-10 skill engine.
+//   GET    /mcp-market                        → catalog (builtin + user)
+//   GET    /mcp-market/:name                  → entry detail + skill bodies
+//   POST   /mcp-market                        → publish a custom entry
+//   POST   /sessions/:id/mcp-market/install   → install into session (owner)
+//   POST   /sessions/:id/mcp-market/uninstall → remove the pack's skills
+//   DELETE /mcp-market/:name                  → delete a custom entry (uploader)
+const mcpMarketApi = require('./mcp/market');
+
+app.get('/mcp-market', requireAuth, async (req, res) => {
+  try {
+    res.json(await mcpMarketApi.listMarket());
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.get('/mcp-market/:name', requireAuth, async (req, res) => {
+  try {
+    res.json(await mcpMarketApi.readServer(req.params.name));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/mcp-market', requireAuth, async (req, res) => {
+  try {
+    const out = await mcpMarketApi.publishServer(req.body || {}, req.user);
+    res.status(201).json({ server: out });
+  } catch (e) { marketApiError(res, e); }
+});
+
+// 自定义文档导入: import a guidance document (markdown) as a custom
+// MCP market entry (a one-skill pack). Same body caps + registry as
+// publishServer; entry lands under category 'doc-import'.
+app.post('/mcp-market/import-doc', requireAuth, async (req, res) => {
+  try {
+    const out = await mcpMarketApi.importDoc(req.body || {}, req.user);
+    res.status(201).json({ server: out });
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/sessions/:id/mcp-market/install', requireAuth, async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  try {
+    // The SDK's skills option reloads skill dirs from disk each
+    // iteration, so the freshly installed pack takes effect on the
+    // session's next reply with no restart.
+    const out = await mcpMarketApi.installServer(ctx.root, name.trim());
+    // Record the entry on the session (source of truth for the
+    // myco_mcp SDK MCP server built at iteration start) so the
+    // entry's sdkTools survive container restarts / reaper respawns.
+    const cur = Array.isArray(ctx.rec.installedMcp) ? ctx.rec.installedMcp.slice() : [];
+    if (!cur.includes(out.name)) cur.push(out.name);
+    ctx.rec.installedMcp = cur;
+    putSession(ctx.rec);
+    _applyInstalledMcpToLiveSession(ctx.rec);
+    res.status(201).json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/sessions/:id/mcp-market/uninstall', requireAuth, async (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'owner');
+  if (!ctx) return;
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  try {
+    const out = await mcpMarketApi.uninstallServer(ctx.root, name.trim());
+    // Drop the entry from the session record so its sdkTools vanish
+    // from the next iteration's myco_mcp server.
+    const cur = Array.isArray(ctx.rec.installedMcp) ? ctx.rec.installedMcp : [];
+    ctx.rec.installedMcp = cur.filter((n) => n !== out.name);
+    if (ctx.rec.installedMcp.length === 0) delete ctx.rec.installedMcp;
+    putSession(ctx.rec);
+    _applyInstalledMcpToLiveSession(ctx.rec);
+    res.json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.delete('/mcp-market/:name', requireAuth, async (req, res) => {
+  try {
+    res.json(await mcpMarketApi.deleteServer(req.params.name, req.user));
+  } catch (e) { marketApiError(res, e); }
+});
+
+// ─── delm-11: EXPERT / TEAM / MCP MARKET ───
+// Layered market beside the skill market: every expert, expert-team
+// and MCP-server item has a PERSONAL (user-private) copy and becomes
+// market-visible (all signed-in users) ONLY via the one-click publish
+// below. Storage + policy in market.js (mirrors skill-market.js).
+//   GET    /market                                  → published lists {expert,team,mcp}
+//   GET    /market/:type/:name                      → published item (full def)
+//   GET    /market/personal[/:type]                 → caller's private items
+//   POST   /market/personal/:type                   → save/replace a private item
+//   DELETE /market/personal/:type/:name             → delete a private item
+//   POST   /market/publish/:type/:name              → ONE-CLICK publish → market
+//   POST   /market/install/:type/:name              → install market item → personal
+//   DELETE /market/:type/:name?code=<code>          → delete published (uploader-or-code)
+
+const marketApi = require('./market');
+
+app.get('/market', requireAuth, async (req, res) => {
+  try {
+    res.json(await marketApi.listMarket(req.user));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.get('/market/personal', requireAuth, async (req, res) => {
+  try {
+    res.json(await marketApi.listPersonal(req.user, null));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.get('/market/personal/:type', requireAuth, async (req, res) => {
+  try {
+    res.json(await marketApi.listPersonal(req.user, req.params.type));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.get('/market/:type/:name', requireAuth, async (req, res) => {
+  try {
+    res.json(await marketApi.readMarketItem(req.params.type, req.params.name));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/market/personal/:type', requireAuth, async (req, res) => {
+  try {
+    const out = await marketApi.savePersonal(req.user, req.params.type, req.body || {});
+    res.status(out.created ? 201 : 200).json(out);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.delete('/market/personal/:type/:name', requireAuth, async (req, res) => {
+  try {
+    res.json(await marketApi.deletePersonal(req.user, req.params.type, req.params.name));
+  } catch (e) { marketApiError(res, e); }
+});
+
+// ONE-CLICK PUBLISH — the only path to market visibility.
+app.post('/market/publish/:type/:name', requireAuth, async (req, res) => {
+  try {
+    res.status(201).json(await marketApi.publishToMarket(req.user, req.params.type, req.params.name));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/market/install/:type/:name', requireAuth, async (req, res) => {
+  try {
+    res.status(201).json(await marketApi.installFromMarket(req.user, req.params.type, req.params.name));
+  } catch (e) { marketApiError(res, e); }
+});
+
+// ── harness-market (P7) ─────────────────────────────────────────────────────
+// GET  /harness-market                       → list all published harness items
+// GET  /harness-market/:name                 → read one item (files + meta)
+// POST /sessions/:id/harness-market/install  → install into session cwd
+// POST /sessions/:id/harness-market/publish  → publish chosen sweep harness
+
+const harnessMarketApi = require('./harness-market');
+const harnessResultApi  = require('./harness-result');
+
+app.get('/harness-market', requireAuth, async (req, res) => {
+  try {
+    res.json(await harnessMarketApi.listHarnesses(req.user));
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.get('/harness-market/:name', requireAuth, async (req, res) => {
+  try {
+    // market.js readMarketItem takes positional (type, name) args.
+    const item = await marketApi.readMarketItem('harness', req.params.name);
+    if (!item) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'harness not found' });
+    // Strip internal content blob from the listing; only expose metadata + file hashes.
+    const { _fileContent, ...safe } = item;
+    res.json(safe);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/sessions/:id/harness-market/install', requireAuth, async (req, res) => {
+  const rec = sessions.getSessionRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'session not found' });
+  if (!sessions.isOwnerOrAdmin(req.params.id, req.user)) {
+    return res.status(403).json({ error: 'ERR_FORBIDDEN', message: 'owner or admin required' });
+  }
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'ERR_BAD_INPUT', message: 'name required' });
+  try {
+    const result = await harnessMarketApi.installIntoSession(name, rec.absCwd || rec.cwd || '', req.user);
+    res.status(201).json(result);
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/sessions/:id/harness-market/publish', requireAuth, async (req, res) => {
+  const rec = sessions.getSessionRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'session not found' });
+  if (!sessions.isOwnerOrAdmin(req.params.id, req.user)) {
+    return res.status(403).json({ error: 'ERR_FORBIDDEN', message: 'owner or admin required' });
+  }
+  const cwd = rec.absCwd || rec.cwd || '';
+  const runner = require('./harness-runner');
+  const { sweepId } = req.body || {};
+  const sel = harnessResultApi.findSelection(cwd, sweepId || null);
+  if (!sel) {
+    return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'no successful selection found for this session' });
+  }
+  const st = runner.getStatus(cwd, sweepId || null);
+  const sweepMeta = {
+    sweepTag: (st && st.namespace) || sweepId || 'unknown',
+    task:     sel.task_id  || 'unknown',
+    mode:     sel.mode     || 'agg',
+    k:        sel.k        || 1,
+    domain:   sel.domain   || '',
+  };
+  try {
+    const result = await harnessMarketApi.publishFromSweep(sel, sweepMeta, req.user);
+    res.status(201).json(result);
+  } catch (e) { marketApiError(res, e); }
+});
+
+// ── harness adopt / rollback REST endpoints (P4) ───────────────────────────
+
+app.get('/sessions/:id/harness/diff', requireAuth, async (req, res) => {
+  const rec = sessions.getSessionRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'session not found' });
+  // B3: diff returns full file contents — gate it the same as adopt/rollback.
+  if (!sessions.isOwnerOrAdmin(req.params.id, req.user)) {
+    return res.status(403).json({ error: 'ERR_FORBIDDEN', message: 'owner or admin required' });
+  }
+  // B4: rec.cwd is relative by design; prefer absCwd so writes resolve
+  // inside the session workspace, not against mycod's process cwd.
+  const cwd = rec.absCwd || rec.cwd || '';
+  const sel = harnessResultApi.findSelection(cwd, req.query.sweepId || null);
+  if (!sel) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'no selection' });
+  const dir = harnessResultApi.harnessDir(sel);
+  if (!dir || !require('fs').existsSync(dir)) {
+    return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'workspace not found' });
+  }
+  res.json({ changes: harnessResultApi.diffHarness(dir, cwd) });
+});
+
+app.post('/sessions/:id/harness/adopt', requireAuth, async (req, res) => {
+  const rec = sessions.getSessionRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'session not found' });
+  if (!sessions.isOwnerOrAdmin(req.params.id, req.user)) {
+    return res.status(403).json({ error: 'ERR_FORBIDDEN', message: 'owner or admin required' });
+  }
+  const cwd = rec.absCwd || rec.cwd || '';
+  const { sweepId } = req.body || {};
+  const sel = harnessResultApi.findSelection(cwd, sweepId || null);
+  if (!sel) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'no selection' });
+  const dir = harnessResultApi.harnessDir(sel);
+  if (!dir || !require('fs').existsSync(dir)) {
+    return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'workspace not found' });
+  }
+  try {
+    const { adopted, snapshot } = await harnessResultApi.adoptHarness(dir, cwd);
+    const snapshotFile = await harnessResultApi.saveSnapshot(snapshot, cwd, sel.chosen_run_id || sweepId || 'sweep');
+    res.status(200).json({ adopted, snapshotId: snapshot.id, snapshotFile });
+  } catch (e) { marketApiError(res, e); }
+});
+
+app.post('/sessions/:id/harness/rollback', requireAuth, async (req, res) => {
+  const rec = sessions.getSessionRecord(req.params.id);
+  if (!rec) return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'session not found' });
+  if (!sessions.isOwnerOrAdmin(req.params.id, req.user)) {
+    return res.status(403).json({ error: 'ERR_FORBIDDEN', message: 'owner or admin required' });
+  }
+  const cwd = rec.absCwd || rec.cwd || '';
+  const { sweepId, snapshotId } = req.body || {};
+  const runner = require('./harness-runner');
+  const resolvedSweepId = sweepId || (() => {
+    const st = runner.getStatus(cwd, null);
+    return st && st.id;
+  })();
+  if (!resolvedSweepId) {
+    return res.status(400).json({ error: 'ERR_BAD_INPUT', message: 'sweepId required' });
+  }
+  const snapshot = harnessResultApi.loadSnapshot(cwd, resolvedSweepId, snapshotId || null);
+  if (!snapshot) {
+    return res.status(404).json({ error: 'ERR_NOT_FOUND', message: 'snapshot not found' });
+  }
+  try {
+    const result = await harnessResultApi.rollbackHarness(snapshot, cwd);
+    res.json(result);
+  } catch (e) { marketApiError(res, e); }
+});
+
+// Delete a published item — uploader or the (shared) system delete code.
+app.delete('/market/:type/:name', requireAuth, async (req, res) => {
+  const code = (req.query && req.query.code) || (req.body && req.body.code) || '';
+  try {
+    res.json(await marketApi.deleteMarketItem(req.params.type, req.params.name, req.user, code));
+  } catch (e) { marketApiError(res, e); }
 });
 
 // fr-77: flat list of all git-changed files in the project root. Used
@@ -1430,6 +2535,9 @@ app.post('/sessions/:id/file-chat', async (req, res) => {
       anchor: normAnchor,
       history,
       question: question.trim(),
+      // Task B: file-viewer review uses the session's active gateway profile
+      // (same custom model as the main agent).
+      gw: { user: ctx.rec && ctx.rec.user, activeGw: ctx.rec && ctx.rec.activeGw },
     });
   } catch (err) {
     reply = `(claude error: ${err && err.message ? err.message : 'unknown'})`;
@@ -1526,6 +2634,76 @@ app.get('/sessions/:id/chat/history', (req, res) => {
     }
   }
   res.json({ messages: window, total, hasMore });
+});
+
+// team-split-view: board snapshot for an agent-n2 session — the shared
+// sub-queue (with per-item owner), FACT/FAIL notes, per-worker status
+// lines, and session states. Auth-gated viewer-tier like the other
+// session-scoped GETs (fileApiPreamble). Serves the same shape the
+// team-info WS frame carries, for clients that attach without a live
+// WS (read-only review, mobile catch-up) — live updates still flow via
+// state-update {kind:'board'} frames.
+app.get('/sessions/:id/board', (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  const attachMod = require('./attach');
+  const live = attachMod.getSession(ctx.id);
+  if (!live || live.mode !== 'agent-n2' || typeof live.boardSnapshot !== 'function') {
+    res.status(404).json({ error: 'not a live agent-n2 session' });
+    return;
+  }
+  try {
+    res.json(Object.assign({ roster: Array.isArray(live.roster) ? live.roster : [] },
+      live.boardSnapshot()));
+  } catch (err) {
+    console.error(`[board] snapshot failed for ${ctx.id}: ${err && err.message}`);
+    res.status(500).json({ error: 'board snapshot failed' });
+  }
+});
+
+// Agent-event history pagination — the "load older" backfill for the
+// TOOL cards (Bash/Edit/Read cards, chrome batches, turn footers),
+// mirroring the /chat/history contract for the chat rows. The attach
+// WS frame only ships a 16 KB tail (sub-100ms first paint); everything
+// before that window had NO fetch path — refresh/page-switch lost the
+// command + result history even though events.jsonl holds it all.
+// Claude Code loads its whole project JSONL into memory; myco's web
+// client can't, so this endpoint is the equivalent "render lazily,
+// from the durable transcript" leg.
+//
+//   GET /sessions/:id/events?before=<seq>&limit=<n>
+//
+//     before — return events with seq strictly less than this. The
+//               client passes the oldest rendered agent card's seq.
+//               Omitted → the newest window (same tail as replay).
+//     limit  — max events; default 100, clamped 1..500.
+//
+// Source order: live session.buffer first (authoritative, includes
+// lane events bridged in by compare-lanes); fallback to the session's
+// events.jsonl tail (reaped / pre-boot sessions) so history survives
+// the 5-min reaper and container restarts. Response rows are
+// oldest→newest within the window (chat-persistence contract §4).
+// { events, total, hasMore } — same envelope as /chat/history.
+const { agentEventsWindow } = require('./agent-events-history');
+
+app.get('/sessions/:id/events', (req, res) => {
+  const ctx = fileApiPreamble(req, res, 'viewer');
+  if (!ctx) return;
+  let limit = parseInt(String(req.query.limit || ''), 10);
+  if (!Number.isFinite(limit) || limit < 1) limit = 100;
+  if (limit > 500) limit = 500;
+  const beforeRaw = req.query.before;
+  const beforeNum = beforeRaw !== undefined ? parseInt(String(beforeRaw), 10) : NaN;
+  const before = Number.isFinite(beforeNum) && beforeNum >= 0 ? beforeNum : null;
+  const { window, total, hasMore } = agentEventsWindow(ctx.id, { before, limit }, {
+    getSession: (id) => {
+      const attachMod = require('./attach');
+      return attachMod.getSession && attachMod.getSession(id);
+    },
+    getRecord: (id) => sessionsMod.getSessionRecord(id),
+    resolveMycoDir: _resolveMycoDir,
+  });
+  res.json({ events: window, total, hasMore });
 });
 
 // fr-81 Phase A: ingest open GitHub / Gitee issues for the session's
@@ -2048,6 +3226,22 @@ server.listen(PORT, HOST, async () => {
     console.error('[migrate] import failed:', err.message);
   }
   startSummaryWatcher();
+  // P3: a sweep is spawned `detached` so it survives a mycod restart. That is
+  // also how an orphan happens — mycod dies, the sweep keeps spending with
+  // nobody watching. Sweep the workspace at boot and kill anything left over.
+  try {
+    const harnessRunner = require('./harness-runner');
+    const { listWorkspaceDirs } = require('./sessions');
+    const roots = new Set();
+    for (const uid of ['default']) roots.add(require('path').join(process.env.MYCO_WORKSPACE || '/wks', uid));
+    const killed = [];
+    for (const root of roots) {
+      try { killed.push(...harnessRunner.sweepOrphans(root)); } catch {}
+    }
+    if (killed.length) console.log(`[harness] swept ${killed.length} orphaned sweep(s): ${killed.join(', ')}`);
+  } catch (err) {
+    console.error('[harness] orphan sweep cleanup failed:', err.message);
+  }
 });
 
 if (tlsEnabled && HTTP_REDIRECT_PORT) {

@@ -84,6 +84,23 @@ t('server/src/sessions.js: _runGitCloneInBackground uses child_process.spawn (NO
     'spawnSync must not appear anywhere in _runGitCloneInBackground — Phase 3 is async-only.');
 });
 
+t('server/src/sessions.js: _runGitCloneInBackground sets cwd to the session workspace so the git credential helper resolves the owning user', () => {
+  // User-reported first-clone failure: `git clone` failed in ~0.1s with
+  // "could not read Username". The spawn inherited the SERVER cwd (/app),
+  // so scripts/git-credential-myco.sh (bug-81) couldn't derive the
+  // myco-user from $(pwd) — its bug-92 store-wide fallback then found
+  // multiple distinct codehub tokens (one per user) and, being genuinely
+  // ambiguous, emitted nothing → git aborted without a username. Running
+  // git from the session workspace (dirname of the clone target ==
+  // rec.absCwd) lets the helper pin the correct user.
+  const src = _read('server/src/sessions.js');
+  const at = src.search(/function\s+_runGitCloneInBackground\s*\(/);
+  assert.ok(at > -1, '_runGitCloneInBackground must be defined.');
+  const body = sliceFn(src, at);
+  assert.match(body, /cwd\s*:\s*path\.dirname\(projectAbs\)/,
+    'spawn options must set cwd: path.dirname(projectAbs) so git runs from the session workspace (credential-helper user resolution)');
+});
+
 t('server/src/sessions.js: background driver streams stderr to appendChatMessage', () => {
   const src = _read('server/src/sessions.js');
   const at = src.search(/function\s+_runGitCloneInBackground\s*\(/);

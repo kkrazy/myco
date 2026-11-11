@@ -1,0 +1,122 @@
+# myco Helm chart 默认值 —— 全部可通过 -f/--set 覆盖。
+#
+# 一键部署（master 252 上）：
+#   helm upgrade --install myco ./myco -n myco --create-namespace \
+#     --set image.repository=registry-cbu.huawei.com/<ns>/myco \
+#     --set image.tag=20261017 \
+#     --set-file envFile=/data/myco/state/.env
+#
+# envFile 是最省事的凭据注入方式：直接把源机 Docker state 的 .env
+# （https://helm.sh/docs/topics/vaults_and_secrets/ 由 --set-file 原样读入，
+#  不经命令行/history）。也可以不用 envFile，改用已有 Secret：
+#   --set envFromSecret=myco-env  （要求该 Secret 已存在于 namespace）
+
+# ---- 镜像 ----
+image:
+  repository: ""            # 必填，如 registry-cbu.huawei.com/namespace/myco
+  tag: ""                   # 必填，如 20261017
+  pullPolicy: IfNotPresent
+
+# ---- 拉镜像凭据（registry-cbu.huawei.com 需认证时填）----
+imagePullSecrets: []
+#  - name: myco-registry
+
+# ---- 调度 ----
+# 固定 master：Local PV 的 nodeAffinity 与这个 nodeSelector 双保险。
+# kubernetes.io/hostname 的取值是节点的实际主机名——在 master 上
+# `kubectl get nodes -o custom-columns=N:.metadata.name` 确认后填入。
+# 当前集群 hostname 直接用 IP：master=7.242.106.252（worker：
+# 7.242.106.110 / 7.242.109.33）。若节点是命名主机（如 node-252），
+# 需同步改这里的 nodeSelector、storage.node 两处。
+nodeSelector:
+  kubernetes.io/hostname: "7.242.106.252"
+
+# master 的 control-plane:NoSchedule 污点必须容忍（设计即固定调度 master）
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+# ---- 网络 ----
+hostNetwork: true           # Caddy 直接监听宿主 80（等价 docker -p 80:80）。
+                             # 固定 true：改 false 需自行加 Service/Ingress
+
+# ---- 存储（Local PV，252 本机 2T /data 盘）----
+# capacity 只影响 PV 对象里的数字，不做真实配额（Local PV 不裁剪写入），
+# 三个 size 之和 ≈ 2T 是给调度器的展示值。
+storage:
+  storageClassName: local-data
+  createStaticPVs: true     # chart 代替你创建 PV（目录需先在 252 上手工建好）
+  node: "7.242.106.252"     # 必须与 nodeSelector 的值一致（双保险绑同一节点）
+  volumes:
+    data:                   # 容器 /data：sessions.json, .env, git-tokens.json…
+      hostPath: /data/myco/state
+      size: 1850Gi
+    home:                   # 容器 /root：.claude 配置, .gitconfig
+      hostPath: /data/myco/state/home   # 与 docker 版 -v state/home:/root 同一目录，零搬迁
+      size: 100Gi
+    wks:                    # 容器 /wks：会话工作区 git 检出
+      hostPath: /data/myco/state/wks    # 同上，docker 版布局的子目录
+      size: 150Gi
+
+# ---- 运行环境 ----
+# 方式一（推荐）：--set-file envFile=<路径>，内容 = 源机 Docker state 的 .env
+#   ⚠️ 上集群前先在 .env 里把 NO_PROXY/no_proxy 追加集群网段
+#   （三节点 IP + 10.244.0.0/16 + 10.96.0.0/12），见 docs/deploy/k8s-deploy.md §4
+envFile: ""
+# 方式二：引用已存在的 Secret（kubectl create secret generic myco-env --from-env-file=…）
+envFromSecret: ""
+
+# 固定 env（deployment 模板里硬拼，与 values 无关的镜像默认值）
+# HOST=127.0.0.1 / PORT=3000 / SHELL=/bin/bash 已在 deployment.yaml 写死。
+
+# ---- 内网网关 hosts 映射（docker.md §3 的宿主 /etc/hosts，容器不继承）----
+# 任何新增内网域名同步加这里 + .env 的 NO_PROXY/no_proxy
+hostAliases:
+  - ip: "7.194.47.62"
+    hostnames: ["apigw-mq.huawei.com"]
+  - ip: "10.129.3.241"
+    hostnames: ["pb-dgg.sppsws.huawei.com"]
+  - ip: "7.202.25.45"             # 2026-10-19 任务指定值（此前 100.95.29.121 已失效）
+    hostnames: ["codehub-dg-g.huawei.com"]
+  - ip: "172.19.152.237"
+    hostnames: ["proxy.huawei.com"]
+  - ip: "7.156.115.217"
+    hostnames: ["api.code-agent.rnd.huawei.com"]
+  - ip: "7.237.97.68"
+    hostnames: ["models.ascend.huawei.com"]
+  - ip: "7.221.105.132"            # 2026-11-11 增补：KWE CodeHub git，缺则 clone 504
+    hostnames: ["kwe-g.codehub.huawei.com"]
+
+# ---- 资源 ----
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    cpu: "16"
+    memory: 24Gi
+
+# ---- Caddyfile（与 Docker state 目录的 Caddyfile 一致：:80 反代 :3000）----
+caddyfile: |
+  {
+      servers {
+          protocols h1 h2
+      }
+  }
+
+  :80 {
+      encode gzip
+      reverse_proxy localhost:3000
+  }
+
+# ---- 探活（Caddy->node 反代链路，/auth/check 无需凭据）----
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    failureThreshold: 5
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 6

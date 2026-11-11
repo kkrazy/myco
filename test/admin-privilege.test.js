@@ -22,25 +22,47 @@ function t(name, fn) {
 }
 
 // ─── Privilege Elevation Verification ───────────────────────────────────────
+// Flipped 2026-10-21 (user directive): GLOBAL_OWNER_USERS is now EMPTY,
+// so labxnow / ryan-blues get NO implicit tier on sessions they don't
+// own or have an explicit ACL grant on. Access is explicit-ACL only.
 
-t('sessions.js: isOwnerOrAdmin returns true for "labxnow" (case-insensitive)', () => {
+t('sessions.js: isOwnerOrAdmin returns false for "labxnow" on a non-owned session (carve-out revoked)', () => {
   const { isOwnerOrAdmin } = require('../server/src/sessions');
-  // Even if session does not exist, labxnow gets immediate true
-  assert.strictEqual(isOwnerOrAdmin('any-session-id', 'labxnow'), true);
-  assert.strictEqual(isOwnerOrAdmin('any-session-id', 'LabxNow'), true);
+  // No session, no ACL grant → no implicit owner tier anymore
+  assert.strictEqual(isOwnerOrAdmin('any-session-id', 'labxnow'), false);
+  assert.strictEqual(isOwnerOrAdmin('any-session-id', 'LabxNow'), false);
+  assert.strictEqual(isOwnerOrAdmin('any-session-id', 'ryan-blues'), false);
   assert.strictEqual(isOwnerOrAdmin('nonexistent', 'unrelated-user'), false);
 });
 
-t('sessions.js: isOwnerAdminOrViewer returns true for "labxnow" (case-insensitive)', () => {
+t('sessions.js: isOwnerAdminOrViewer returns false for "labxnow" on a non-owned session (carve-out revoked)', () => {
   const { isOwnerAdminOrViewer } = require('../server/src/sessions');
-  assert.strictEqual(isOwnerAdminOrViewer('any-session-id', 'labxnow'), true);
-  assert.strictEqual(isOwnerAdminOrViewer('any-session-id', 'LabxNow'), true);
+  assert.strictEqual(isOwnerAdminOrViewer('any-session-id', 'labxnow'), false);
+  assert.strictEqual(isOwnerAdminOrViewer('any-session-id', 'LabxNow'), false);
+  assert.strictEqual(isOwnerAdminOrViewer('any-session-id', 'ryan-blues'), false);
   assert.strictEqual(isOwnerAdminOrViewer('nonexistent', 'unrelated-user'), false);
 });
 
 // ─── Allowlist Mutators Verification ────────────────────────────────────────
 
 t('auth.js: allowlist mutators correctly load, add, and remove users', () => {
+  // Own the state (CLAUDE.md §10c): a deployment environment may export
+  // MYCO_DISABLE_ALLOWLIST=1 (this agent sandbox does), which makes
+  // isAllowed() unconditionally true and would false-fail the
+  // post-remove assertion. Force invitation mode for this test.
+  const prevDisable = process.env.MYCO_DISABLE_ALLOWLIST;
+  delete process.env.MYCO_DISABLE_ALLOWLIST;
+  // Own the state dir too (CLAUDE.md §10c): auth.js resolves STATE_DIR
+  // from MYCO_STATE_DIR || ~/.myco. Without this, the mutators write
+  // allowed-github-users.txt into the SHARED ~/.myco — the leftover
+  // (even empty) file then makes every later smoke-server boot flip
+  // isAuthRequired() → true (fs.existsSync branch in auth.js), and the
+  // unauthenticated GET /sessions?all=1 smoke check starts failing 401
+  // on any host that ran this suite once. mkdtemp + restore.
+  const os = require('os');
+  const prevStateDir = process.env.MYCO_STATE_DIR;
+  process.env.MYCO_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'admin-priv-'));
+  try {
   const auth = require('../server/src/auth');
   const tempUser = 'testadminuser_' + Math.floor(Math.random() * 100000);
 
@@ -65,6 +87,11 @@ t('auth.js: allowlist mutators correctly load, add, and remove users', () => {
   // Remove non-existent (idempotent check)
   const reRemoved = auth.removeUserFromAllowlist(tempUser);
   assert.strictEqual(reRemoved, false, 'Removing non-existent user should return false');
+  } finally {
+    if (prevDisable !== undefined) process.env.MYCO_DISABLE_ALLOWLIST = prevDisable;
+    if (prevStateDir !== undefined) process.env.MYCO_STATE_DIR = prevStateDir;
+    else delete process.env.MYCO_STATE_DIR;
+  }
 });
 
 // ─── Static guards and checks on index.js implementation ──────────────────

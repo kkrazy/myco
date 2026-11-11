@@ -1,0 +1,1 @@
+- [hle SDK stall-watchdog bug](hle-sdk-stall-watchdog-bug.md) — `Assignment to constant variable` 根因（stall watchdog）与 HLE_STALL_MS=0 修复

@@ -61,8 +61,15 @@ function buildPrompt({ chatHistory, scrollback, lastMessage }) {
 // process — same ~/.claude/ auth, no PATH dep on the claude binary,
 // faster (no process startup cost). Output: drains the streaming
 // result to a single text string for caller compatibility.
-async function runClaudeP(cwd, promptBody) {
+//
+// Task B: accepts an optional `gw` context `{ user, activeGw }` — when set,
+// the session's active gateway profile (rec.activeGw → gateways.getProfile)
+// is overlaid onto the child env + model, so "自定义模型" applies to these
+// one-shot calls too (mirrors agent-session.js). Omitted → current behaviour.
+async function runClaudeP(cwd, promptBody, gw = {}) {
   const { query } = require('@anthropic-ai/claude-agent-sdk');
+  const { _resolveGateway } = require('./local-claude');
+  const { gwEnv, model } = _resolveGateway(gw && gw.user, gw && gw.activeGw);
   const ac = new AbortController();
   const timer = setTimeout(() => { try { ac.abort(); } catch {} }, TIMEOUT_MS);
   let stream;
@@ -71,10 +78,12 @@ async function runClaudeP(cwd, promptBody) {
       prompt: promptBody,
       options: {
         cwd: cwd || process.cwd(),
+        env: { ...process.env, ...gwEnv },
+        ...(model ? { model } : {}),
         allowedTools: [],          // text-completion only; no tool use
         permissionMode: 'dontAsk', // hard-deny anything not in allowedTools
         settingSources: [],        // skip skills/slash-commands; we want a clean baseline
-        abortSignal: ac.signal,
+        abortController: ac,       // bug-14: `abortController`, not `abortSignal`
       },
     });
   } catch (err) {
@@ -104,8 +113,8 @@ async function runClaudeP(cwd, promptBody) {
   return text || '(claude returned no text)';
 }
 
-function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {
-  return runClaudeP(cwd, buildPrompt({ chatHistory, scrollback, lastMessage }));
+function askAssistant({ cwd, chatHistory, scrollback, lastMessage, gw }) {
+  return runClaudeP(cwd, buildPrompt({ chatHistory, scrollback, lastMessage }), gw);
 }
 
 // ─── file-viewer Claude integration ─────────────────────────────────────────
@@ -229,8 +238,8 @@ function buildFilePrompt({ filePath, fileContent, anchor, history, question }) {
   ].filter(Boolean).join('\n');
 }
 
-function askAboutFile({ cwd, filePath, fileContent, anchor, history, question }) {
-  return runClaudeP(cwd, buildFilePrompt({ filePath, fileContent, anchor, history, question }));
+function askAboutFile({ cwd, filePath, fileContent, anchor, history, question, gw }) {
+  return runClaudeP(cwd, buildFilePrompt({ filePath, fileContent, anchor, history, question }), gw);
 }
 
 module.exports = { askAssistant, askAboutFile, shouldAskAssistant, ASSISTANT_USER, runClaudeP };
