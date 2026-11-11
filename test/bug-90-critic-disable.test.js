@@ -44,8 +44,8 @@ console.log('── bug-90: disable critic gracefully when critic model errors �
 t('critic registry exports a "none" critic in addition to gemini/codex/custom', () => {
   const { critics, getCritic } = require('../server/src/critics');
   const ids = critics.map((c) => c.id).sort();
-  assert.deepStrictEqual(ids, ['codex', 'custom', 'gemini', 'none'].sort(),
-    `expected registry to expose [codex, custom, gemini, none] (got ${JSON.stringify(ids)})`);
+  assert.deepStrictEqual(ids, ['claude', 'codex', 'custom', 'gemini', 'none'].sort(),
+    `expected registry to expose [claude, codex, custom, gemini, none] (got ${JSON.stringify(ids)})`);
   // getCritic('none') must return the no-op plugin, NOT the gemini fallback.
   const noneCritic = getCritic('none');
   assert.ok(noneCritic, 'getCritic("none") must return a plugin');

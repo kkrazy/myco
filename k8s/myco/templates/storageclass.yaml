@@ -1,0 +1,11 @@
+{{- if .Values.storage.createStaticPVs }}
+# local-data StorageClass —— Local PV 的静态 class。
+# provisioner 为内置 no-provisioner：PV 由 chart 创建（见 pv.yaml），
+# volumeBindingMode=WaitForFirstConsumer：等 Pod 调度到 252 后再绑定。
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storage.storageClassName }}
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+{{- end }}

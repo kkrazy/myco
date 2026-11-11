@@ -14,6 +14,27 @@ set -euo pipefail
 # cwd isn't where you think it is.
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/.."
 
+# ─── environment sanitization ────────────────────────────────────────────────
+# The suite must behave identically on a bare CI host and on a machine
+# that ALSO runs a live myco server (a dev box exports MYCO_ALLOW_ALL=1,
+# MYCO_CRITIC_MODEL=none, etc. for its container). Those deployment env
+# vars leak into the suite's node -e / *.test.js child processes and
+# flip otherwise-hermetic assertions: MYCO_ALLOW_ALL=1 makes
+# permissions.decide() return 'allow' where the check wants 'ask';
+# MYCO_CRITIC_MODEL=none trips the bug-90 critic-disabled short-circuit
+# in the bug-71 runtime cases. MYCO_DISABLE_ALLOWLIST=1 (the live deploy
+# default) forces auth.isAllowlistConfigured() to false, breaking the
+# codehub-login allowlist-configured runtime case. MYCO_STATE_DIR=/data
+# points suites at the live container state instead of their mkdtemp
+# tmpState — codehub-login overrides it first, but any suite that
+# forgets would inherit the deploy path. MYCO_AUTH_REQUIRED=1 (the live
+# deploy default) turns on the auth gate for the smoke server, so the
+# unauthenticated `curl /sessions?all=1` gets a 401 and the
+# test_sessions_endpoint check fails. Scrub them all for this
+# script's lifetime.
+unset MYCO_ALLOW_ALL MYCO_CRITIC_MODEL MYCO_DISABLE_ALLOWLIST MYCO_STATE_DIR MYCO_AUTH_REQUIRED
+export MYCO_TEST=1
+
 # ─── shared state ────────────────────────────────────────────────────────────
 PASS=0
 FAIL=0
@@ -141,9 +162,13 @@ ensure_server_deps() {
 #
 #   node_test_result test/foo.test.js "test/foo.test.js (N cases)"
 #
-# The helper returns 0 on pass, 1 on fail (so the caller can keep chaining
-# with `&&`/`||` if needed). It calls pass/fail itself so the existing tally
-# stays accurate. If the pre-run wasn't done (no host node), it falls back
+# The helper ALWAYS returns 0, pass or fail. It calls pass/fail itself, so the
+# tally is already correct; returning nonzero on failure made every bare call
+# site an `set -e` tripwire — the first failing node test aborted the whole
+# suite mid-run (no summary, later sections never ran) instead of being
+# reported and letting the remaining checks run. A blanket `|| true` at 271
+# call sites would be the alternative; a fixed exit status in one place is
+# harder to get wrong. If the pre-run wasn't done (no host node), it falls back
 # to a synchronous `node …` invocation so the script still works on a host
 # that gains node mid-run.
 NODE_TEST_RESULT_DIR=""
@@ -169,13 +194,25 @@ node_test_prelaunch() {
   local max_parallel="${NODE_TEST_PARALLELISM:-10}"
   local running=0
   local f
-  for f in test/*.test.js; do
+  # suites live beside their subject (bench/harness2/*.test.js,
+  # test/knowledge/*.test.js) rather than in test/; include every root.
+  # Keys are basenames, and no file name is shared across the roots, so the
+  # {basename}.exit lookup stays unambiguous.
+  for f in test/*.test.js test/knowledge/*.test.js bench/harness2/*.test.js; do
     [ -f "$f" ] || continue
     local key
     key=$(basename "$f")
     (
-      node "$f" > "$NODE_TEST_RESULT_DIR/$key.out" 2>&1
-      echo "$?" > "$NODE_TEST_RESULT_DIR/$key.exit"
+      # `|| rc=$?` is load-bearing: test.sh runs under `set -euo pipefail`,
+      # which the subshell inherits. A bare `node ...; echo $? > .exit` aborts
+      # on the first nonzero exit, so the .exit file is NEVER WRITTEN for a
+      # failing test — and the waiter below then reports "exceeded 180s budget"
+      # after waiting the full window for a file that will never appear. That
+      # turn a 0.4-second assertion failure into a 3-minute timeout, with the
+      # real cause (and the real exit code) erased from the output.
+      rc=0
+      node "$f" > "$NODE_TEST_RESULT_DIR/$key.out" 2>&1 || rc=$?
+      echo "$rc" > "$NODE_TEST_RESULT_DIR/$key.exit"
     ) &
     running=$((running + 1))
     if [ "$running" -ge "$max_parallel" ]; then
@@ -248,7 +285,7 @@ node_test_result() {
     if [ "$waited" -gt "$NODE_TEST_BUDGET_SEC" ]; then
       fail "$label — background runner exceeded ${NODE_TEST_BUDGET_SEC}s budget; re-run with 'node $f'"
       _show_test_tail "$out_file" BUDGET
-      return 1
+      return 0
     fi
   done
   local code
@@ -259,7 +296,7 @@ node_test_result() {
   else
     fail "$label — exit=$code (re-run standalone: 'node $f')"
     _show_test_tail "$out_file" FAIL
-    return 1
+    return 0
   fi
 }
 
@@ -333,6 +370,18 @@ test_server_js_files() {
     [ -r "server/$f" ] || missing="$missing $f"
   done
   [ -z "$missing" ] && pass "Server JS files readable" || fail "Server JS files (missing:$missing)"
+
+  # bench/hle engine regression guards: stall-window defaults +
+  # buildN2Task Write-tool prompt defense. Standalone runner is
+  # bench/hle/test_engine_config.js; wired here so every full ./test/test.sh
+  # run exercises it too.
+  if have_node && [ -r bench/hle/test_engine_config.js ]; then
+    if node bench/hle/test_engine_config.js >/dev/null 2>&1; then
+      pass "bench/hle: engine stall config + Write-tool prompt guards"
+    else
+      fail "bench/hle: test_engine_config.js red — stall defaults or Write-tool prompt defense regressed"
+    fi
+  fi
 }
 
 test_text_utils() {
@@ -383,6 +432,14 @@ test_phase9_retirement() {
   test -f server/src/attach.js \
     && pass "server/src/attach.js exists (agent-mode WS plumbing)" \
     || fail "server/src/attach.js missing"
+  # Regression: every listener _attachAgentWebSocket registers must be
+  # removed in its ws.on('close') handler. clarify-reply was added by
+  # fr-85 r4 without a matching session.off(), so each reconnect leaked
+  # one listener until Node warned "MaxListenersExceededWarning ...
+  # 11 clarify-reply listeners added to [AgentSession]".
+  grep -q "session.off('clarify-reply', onClarifyReply)" server/src/attach.js \
+    && pass "attach.js: clarify-reply listener removed on ws close (no leak)" \
+    || fail "attach.js: clarify-reply listener leaks on every reconnect"
 
   # Phase 9 step 10 retired the PTY-rawText regex parser. The two
   # PERMISSION_*_RE regexes + extractPermissionTarget were the last
@@ -569,13 +626,442 @@ test_best_practices_template() {
     && pass "attach.js: [agent-attach] diagnostic log present" \
     || fail "attach.js: [agent-attach] diagnostic log present"
   node_test_result test/slash-clear.test.js "test/slash-clear.test.js (4 cases)"
+  # Delm agent-n2 slash commands (features #2/#3): /run-n2 spawns a
+  # dual-agent lane, /compare spawns single + dual lanes simultaneously.
+  # The handler exports + non-crash null-single report path are covered by
+  # the node test below; these greps pin the command registration + the
+  # MYCO_N2 global gate (a string '0' is truthy in JS, so the gate must
+  # treat 0/false as OFF or every default single session wrongly upgrades
+  # to a team — the "默认单 agent" contract).
+  grep -q "names: \['run-n2', 'run-team'\]" server/src/slashcmds.js \
+    && pass "slashcmds: /run-n2 command registered" \
+    || fail "slashcmds: /run-n2 command registered"
+  grep -q "names: \['compare'\]" server/src/slashcmds.js \
+    && pass "slashcmds: /compare command registered" \
+    || fail "slashcmds: /compare command registered"
+  grep -q "'0', 'false'" server/src/sessions.js \
+    && pass "sessions.js: MYCO_N2 global gate treats 0/false as OFF" \
+    || fail "sessions.js: MYCO_N2 global gate treats 0/false as OFF"
+  node_test_result test/slash-n2-compare.test.js "test/slash-n2-compare.test.js (11 cases)"
+  # harness² suites. They existed since P3/P4 but were never wired here, which
+  # is exactly how three fatal bugs (missing `import json`, the
+  # `team-completed` event-name typo, the missing dispatchTask) reached
+  # commit: nothing in CI ran them. `node --test` suites, so they run via
+  # the same background runner as the test/*.test.js files.
+  node_test_result bench/harness2/engine.test.js "bench/harness2/engine.test.js (22 cases)"
+  node_test_result bench/harness2/runner.test.js "bench/harness2/runner.test.js (16 cases)"
+  node_test_result bench/harness2/transcript.test.js "bench/harness2/transcript.test.js (20 cases)"
+  node_test_result test/harness-runner.test.js "test/harness-runner.test.js (25 cases)"
+  node_test_result test/harness-p4-p7.test.js "test/harness-p4-p7.test.js (25 cases)"
+  # multi-lane run-n2 看板 (2026-10-22): concurrent /run-n2 runs keep
+  # SEPARATE boards — keyed lane registry (_teamLanes), laneId/task on
+  # every team-info/board/team-lane-end frame + bridged events, Stop
+  # stops every live lane, attach ships every lane, and the /run-n2
+  # progress + completion lines name the task (单流任务标注).
+  grep -q "_teamLanes" server/src/compare-lanes.js \
+    && pass "compare-lanes: keyed multi-lane registry (_teamLanes) present" \
+    || fail "compare-lanes: keyed multi-lane registry (_teamLanes) present"
+  node_test_result test/team-multilane-boards.test.js "test/team-multilane-boards.test.js (5 cases)"
+  # Client half of the multi-lane contract: per-lane cache + lane picker
+  # (hidden unless >1 lane) + task-labelled stream cards + RLM rightmost.
+  node_test_result test/team-multilane-ui.test.js "test/team-multilane-ui.test.js (9 cases)"
+  # Multi-expert team (专家团): /run-experts + TeamSession roster/expertSkills
+  # override. Guards BOTH directions — the N-expert mode works AND the
+  # default /run-n2 path stays byte-identical (STARTUP_A/B, 2-worker roster).
+  grep -q "names: \['run-experts'\]" server/src/slashcmds.js \
+    && pass "slashcmds: /run-experts command registered" \
+    || fail "slashcmds: /run-experts command registered"
+  grep -q "startTeamLane" server/src/compare-lanes.js \
+    && pass "compare-lanes: startTeamLane (N-expert lane) present" \
+    || fail "compare-lanes: startTeamLane (N-expert lane) present"
+  grep -q "opts.roster" server/src/team-session.js \
+    && pass "team-session: roster override accepted" \
+    || fail "team-session: roster override accepted"
+  node_test_result test/team-multi-experts.test.js "test/team-multi-experts.test.js (8 cases)"
+  # N-path exploration (路径探索 /run-explore): N explorers each deep-dive
+  # one candidate solution path, decentralized board coordination, FORCED
+  # RLM workers with a SHARED per-task Continual-Harness key (self-evolution
+  # accumulates across workers + runs). Guards BOTH directions — explore
+  # mode works AND the default n2 path stays byte-identical.
+  grep -q "names: \['run-explore'\]" server/src/slashcmds.js \
+    && pass "slashcmds: /run-explore command registered" \
+    || fail "slashcmds: /run-explore command registered"
+  grep -q "EXPLORE_MAX_PATHS = 512" server/src/slashcmds.js \
+    && pass "slashcmds: /run-explore max paths = 512" \
+    || fail "slashcmds: /run-explore max paths = 512"
+  grep -q "startExploreLane" server/src/compare-lanes.js \
+    && pass "compare-lanes: startExploreLane (N-path explore lane) present" \
+    || fail "compare-lanes: startExploreLane (N-path explore lane) present"
+  grep -q "opts.explore" server/src/team-session.js \
+    && pass "team-session: explore mode accepted" \
+    || fail "team-session: explore mode accepted"
+  grep -q "harnessKey" server/src/agents/rlm/index.js \
+    && pass "rlm: shared harnessKey plumbing present" \
+    || fail "rlm: shared harnessKey plumbing present"
+  node_test_result test/explore-prompts.test.js "test/explore-prompts.test.js (6 cases)"
+  node_test_result test/explore-lane.test.js "test/explore-lane.test.js (6 cases)"
+  node_test_result test/rlm-harness-shared-key.test.js "test/rlm-harness-shared-key.test.js (5 cases)"
+  node_test_result test/slash-run-explore.test.js "test/slash-run-explore.test.js (8 cases)"
+  # run-explore strategy-switching + interactive-step ledger (§5.1/§5.2 of
+  # docs/arch/agents/explore/run-explore.md): same-action loop detection
+  # (>10 identical tool_use with no successful result → inject a strategy-
+  # switch prompt — NO time hard-limit), per-worker step ledger persisted
+  # to <dir>/steps-<actor>.jsonl for partial-goal verification, and the
+  # n2 path staying byte-identical (n2 followup not implemented yet).
+  grep -q "ExploreLoopDetector" server/src/team-session.js \
+    && pass "team-session: explore loop-detector wired (explore lanes only)" \
+    || fail "team-session: explore loop-detector wired (explore lanes only)"
+  grep -q "DEFAULT_LOOP_THRESHOLD = 10" server/src/explore-loop-detect.js \
+    && pass "explore-loop-detect: same-action threshold defaults to 10 (no time hard-limit)" \
+    || fail "explore-loop-detect: same-action threshold defaults to 10 (no time hard-limit)"
+  grep -q "flushLedger" server/src/explore-loop-detect.js \
+    && pass "explore-loop-detect: interactive-step ledger persists steps-<actor>.jsonl" \
+    || fail "explore-loop-detect: interactive-step ledger persists steps-<actor>.jsonl"
+  node_test_result test/explore-loop-detect.test.js "test/explore-loop-detect.test.js (13 cases)"
+  # Multi-expert team — CRUD + UI half: experts.js rec.experts contract
+  # (validation/uniqueness/cap), the GET/POST/DELETE /sessions/:id/experts
+  # routes (owner-gated, saveStore-persisted), and the Experts (专家团)
+  # tab wiring in index.html/app.js/styles.css. Engine half is
+  # team-multi-experts above.
+  node_test_result test/experts.test.js "test/experts.test.js (11 cases)"
+  # delm-10 RLM mode: /rlm slash command (status/on/off/one-shot lane),
+  # prompts-rlm.js RLM startup prompt (prompt-as-a-variable + recursive
+  # sub-agents), rlm-session.js lane surface, and the sessions.js
+  # rec.rlm respawn wiring — locked so RLM stays an OPT-IN mode that
+  # never disturbs the plain agent / agent-n2 paths.
+  node_test_result test/rlm-mode.test.js "test/rlm-mode.test.js (14 cases)"
+  # delm-10 RLM mode — web UI contract: the 🧠 rlmLane badge on bridged
+  # RLM-lane cards, the rlm-mode-changed state-update handler, and the
+  # .agent-worker-rlm chip style. Pure additive surfaces — a regression
+  # here means /rlm lane events render unbadged or the /rlm on|off
+  # toggle silently desyncs the client.
+  node_test_result test/rlm-ui.test.js "test/rlm-ui.test.js (11 cases)"
+  # 2026-10-26 report: "RLM图标出现，会把单列双列下拉框挤到左侧" — the
+  # 🧠 pill's margin-right:auto squeezed the 布局 dropdown left when the
+  # badge appeared. Locks the margin-left:auto pin + right-aligned row.
+  node_test_result test/rlm-badge-topctl-layout.test.js "test/rlm-badge-topctl-layout.test.js (6 cases)"
+  # RLM hard implementation — spawn ledger (agents/rlm/ledger.js):
+  # append-only JSONL under <cwd>/_myco_/rlm/ledger.jsonl, torn-line
+  # tolerance, pure rebuildRoster lifecycle (spawn/rename/delete),
+  # 32 MiB / 100k caps + head-truncate. The family topology is REBUILT
+  # from the ledger (design §4.3) so the roster survives restarts.
+  node_test_result test/rlm-ledger.test.js "test/rlm-ledger.test.js (8 cases)"
+  # RLM hard implementation — children.js (spawn / collect / depth /
+  # fold): DepthLimitError at MAX_DEPTH=3, shadow AgentSession spawn
+  # with isolated events journal + autonomousPermission, ledger spawn
+  # row, collect folds ONLY the last assistant_text (never the
+  # transcript), timeout → running, deleteChild + teardownChildrenOf
+  # (design §4.2 / §7). spawnAgent stubbed via require.cache.
+  node_test_result test/rlm-children.test.js "test/rlm-children.test.js (8 cases)"
+  # RLM hard implementation — §5.1 n2 overlay wiring: rec.rlm threads
+  # sessions.js → TeamSession → _spawnWorker (rlmN2Addendum, board
+  # precedence WINS), compare-lanes startN2Lane, slashcmds /compare,
+  # /sessions s.rlm + attach rlm-mode-changed initial frame.
+  node_test_result test/rlm-n2-overlay.test.js "test/rlm-n2-overlay.test.js (8 cases)"
+  # RLM switch (task 2026-10-22 revision): session-level ONLY (/rlm
+  # session on|off, rec.rlm). The user-level scope (/rlm user on|off,
+  # store.rlmUsers, GET/POST /api/rlm) was REMOVED — the web dropdown is
+  # session-only (restyled readable .8rem), isRlmEffective is pure
+  # rec.rlm, /rlm user replies with a removal notice.
+  node_test_result test/rlm-switch.test.js "test/rlm-switch.test.js (15 cases)"
+  # RLM hard implementation — REPL kernel (agents/rlm/kernel/*): REAL
+  # child process, protocol v1 handshake, execute round-trip with
+  # top-level await + tail-expression repr, cross-cell namespace
+  # persistence (transformCell), stdout channel separation (user
+  # console.log never corrupts frames), user errors FOLDED not thrown,
+  # snapshot → kill → restart → restore, host_request round-trip incl.
+  # host-error rejection, shutdown kills the child (no zombies).
+  node_test_result test/rlm-kernel.test.js "test/rlm-kernel.test.js (12 cases)"
+  # RLM hard implementation — factory.js (Factory 状态机编排, P3,
+  # prime factory.py semantics): compile-time validation (cycles, unknown
+  # deps, duplicate ids, caps 1024/10/64, failPolicy enum), DAG execution
+  # in dependency order with {{dep}} answer templating, fail policies
+  # (fail_fast abort / continue skip-dependents / escalate flag), per-node
+  # retries, maxParallel wave scheduling. children stubbed via injection.
+  node_test_result test/rlm-factory.test.js "test/rlm-factory.test.js (8 cases)"
+  # RLM switch (task 2026-10-22 revision) — RLM switchable at SESSION
+  # scope only (isRlmEffective/getRlmScope read by
+  # ensureLive / getOrCreateTeamSession / runN2CompareLanes / attach;
+  # user scope removed), slash /rlm session on|off drives the switch,
+  # n2 workers get a REAL kernel MCP server in RLM mode, and the
+  # Continual Harness (rlm.addPrompt → durable prompt-additions.jsonl →
+  # composed into the systemPrompt on respawn) works end-to-end.
+  node_test_result test/rlm-switch-harness.test.js "test/rlm-switch-harness.test.js (14 cases)"
+  # RLM hot toggle (2026-11-11 "RLM 很少被触发" fix): /rlm session on/off
+  # applies to the LIVE session in place (setRlmMode — no kill, lanes
+  # untouched), agent-n2 teams respawn workers, /clear new re-syncs the
+  # engine to rec.rlm, stats normalize lane/child/worker ids + persist
+  # across reaper kills, and the first-turn nudge teaches the kernel
+  # state read.
+  node_test_result test/rlm-hot-toggle.test.js "test/rlm-hot-toggle.test.js (14 cases)"
+  # team-split-view: dual-worker split pane for agent-n2 sessions.
+  # Unit tests lock the server contract (board 'change' events, team
+  # board state-updates with snapshot, worker-tagged tool-progress,
+  # reader-free boardSnapshot, shadow-lane team-info announce + bridge
+  # + team-lane-end, AND the reattach handshake — lane events mirrored
+  # into main.buffer, _teamLane bookkeeping, _shipTeamInfoOnAttach
+  # live/ended/catch-up shapes). Greps lock the client wiring — the
+  # team-info frame handler, the event router, the board state-update
+  # branch, and the split DOM/CSS so a refactor can't silently orphan
+  # one side of the feature.
+  node_test_result test/team-split-view.test.js "test/team-split-view.test.js (10 cases)"
+  # 多列 switch-backfill regression (2026-10-31): 切换 session 以后多列有些
+  # myco 打印不见了 — the worker columns re-populated ONLY from the 16 KB
+  # agent-replay tail, with no older-history fetch path (the 单列 stream had
+  # one, the columns didn't). Locks the _backfillTeamColumnsFromServer
+  # contract: one-shot per session switch, worker-tagged events only,
+  # retired lanes never resurrected, caches re-capped + rebuilt.
+  node_test_result test/team-multicol-switch-backfill.test.js "test/team-multicol-switch-backfill.test.js (8 cases)"
+  # 单列显示 regression (2026-10-23): switching sessions with the saved
+  # layout preference 单列 (stream) blanked the pane — #chat-messages kept a
+  # stale hidden=true from the previous session's split view and nothing
+  # un-hid it until a team frame arrived. Locks the three fix shapes:
+  # _ensureTeamSplitDom un-hides the container, _applyTeamViewMode manages
+  # BOTH panes' hidden flags, _resetUiForNewSession clears the stale flag.
+  node_test_result test/team-stream-reattach.test.js "test/team-stream-reattach.test.js (7 cases)"
+  # stop-button-run-n2 (2026-10-22): the Stop button / Esc / viewer
+  # interrupt must reach a LIVE /run-n2 shadow lane (idle main session
+  # pre-fix tripped the delm-10 busy gate and dropped the frame).
+  # Locks compare-lanes stopN2Lane (reverse-roster worker stop, ended
+  # idempotence, no-zombie retire), the _handleInterrupt gate
+  # composition (lane first, then main iteration), the client
+  # _sendStopAgent/HUD/composer lane gates, and queue cancel-running.
+  node_test_result test/stop-button-run-n2.test.js "test/stop-button-run-n2.test.js (10 cases)"
+  # team-split-taskonly (UX 2026-10-21): dual-column worker frames
+  # print TASKS ONLY (assistant_text / turn_result / fatal — no
+  # tool_use/tool_result/chrome rows), and the 双列↔单列 layout
+  # switch is a segmented control with a sliding thumb + a stateful
+  # floating pill in single-column mode. Unit test locks the
+  # _isTeamColumnVisible filter and the switch markup/CSS wiring.
+  node_test_result test/team-split-taskonly.test.js "test/team-split-taskonly.test.js (13 cases)"
+  # team-split-singlestream (2026-10-23 单列 print regression): in split
+  # mode _routeAgentEvent consumed worker events (return true) so the
+  # single stream never printed them — after a session switch the
+  # agent-replay rebuilt only the stream and the 单列 view was EMPTY
+  # for the whole dual-column run. Fix: split mode renders into the
+  # column AND falls through (return false) so #chat-messages prints
+  # every worker event (myco text + tool calls) in BOTH layouts; the
+  # 双列 task-only policy itself is unchanged. Locks the no-consume
+  # return contract, the surviving column append + cache push, and the
+  # stream-mode fall-through.
+  node_test_result test/team-split-singlestream.test.js "test/team-split-singlestream.test.js (7 cases)"
+  # team-stream-board (2026-10-23 run-n2 单列 看板可见性): the 单列 view
+  # lost the run's board entirely — the queue (任务/子任务), per-item
+  # 认领人 and per-worker busy-tool readout lived ONLY in the hidden
+  # #team-split DOM, so the single timeline showed none of it. Locks:
+  # worker-tagged tool-progress also feeds state.openToolCalls in
+  # stream mode (merged across lanes/workers), the 单列 board card
+  # (_renderTeamStreamBoardCard: queue rows + owner + per-worker
+  # footer, lane-keyed, in-place replace, empty→remove), board-frame +
+  # team-info + lane-end wiring, and the one-line board-change
+  # notices (_appendTeamStreamBoardNotice).
+  node_test_result test/team-stream-board.test.js "test/team-stream-board.test.js (13 cases)"
+  # team-ended-cleanup (2026-10-26 已结束的多列清理): a finished /run-n2
+  # shadow lane must be removed and must NEVER come back — the refresh path
+  # re-announces an ended lane as team-info{ended:true} (not team-lane-end,
+  # which only ships on catch-up) and pre-fix the client re-seeded/froze it
+  # as a persistent "■ 已结束" row that lingered forever (agent-replay then
+  # re-routed worker events to rebuild it). Locks the shared _retireTeamLane
+  # helper + endedLanes bookkeeping, _handleTeamLaneEnd delegation, the
+  # ended-attach RETIRE-instead-of-freeze branch, the _routeAgentEvent
+  # short-circuit (falls through to the 单列 stream, never resurrects), the
+  # _rebuildTeamRows ended-filter, and both teamView init sites resetting
+  # endedLanes:{}.
+  node_test_result test/team-ended-cleanup.test.js "test/team-ended-cleanup.test.js (6 cases)"
+  # run-n2-stray-print (2026-10-30 用户反馈: A/B 都完成了，突然出来一个 A 的
+  # 工具打印): the compare-lanes _bridge forwarded worker agent-events with no
+  # lane-end gate, so worker-A's trailing Bash(git push) tool_use/tool_result
+  # drained AFTER the "✅ /run-n2 完成" terminal and printed into the timeline.
+  # Locks the bridgeEnded gate (armed via onLaneTerminal, before live-emit AND
+  # buffer push) + the _routeAgentEvent laneId-less guard (no phantom record
+  # once a lane retired), plus runtime checks that pre-terminal events still
+  # bridge and a BUSY worker's mid-run turn_result does not arm the gate.
+  node_test_result test/run-n2-stray-print.test.js "test/run-n2-stray-print.test.js (4 cases)"
+  # team-stream-reattach-preserve (2026-10-26 单列 board survives reattach):
+  # switching sessions / refreshing stripped the 单列 view of its 看板/进度
+  # content — the agent-replay handler wiped EVERY non-chat-msg child, and
+  # the stream board card (.team-stream-board) + coordination notices
+  # (.team-ev-card) are NOT re-shipped by the replay, so nothing repainted
+  # them (formatProgress/board info "not printing" in 单列 after reattach).
+  # Fix: the wipe preserves them, and the replay tail re-seeds the card per
+  # LIVE lane from rec.board (skipping retired/ended lanes). Locks the
+  # preserve-guard + re-seed loop shapes and a behavioural wipe check.
+  node_test_result test/team-stream-reattach-preserve.test.js "test/team-stream-reattach-preserve.test.js (5 cases)"
+  # team-autoclose-claim (2026-10-30 看板 stuck un-ticked): a worker ended a
+  # SUCCESS turn without calling mcp__board__done, so its 看板 row stayed ◐
+  # claimed forever and team-complete could never fire (queueState saw a
+  # non-done item) — user saw "任务都完成了但共享看板有些还没打勾". Fix:
+  # TeamSession._autoCloseStaleClaim closes the claim on idle when the last
+  # turn_result was success (one-line summary from the turn text); failed
+  # turns leave the claim. Locks success/failed/no-result close decisions,
+  # team-complete unblocking, and claim ownership isolation.
+  node_test_result test/team-autoclose-claim.test.js "test/team-autoclose-claim.test.js (5 cases)"
+  # team-default-stream (2026-10-23 run-n2 默认单列): the /run-n2 lane
+  # (and every team view) must OPEN in the 单列 stream layout by default.
+  # Pre-fix the no-preference fallback in _resetUiForNewSession was
+  # 'split' — a fresh browser landed straight in 多列 columns, where the
+  # session-switch blank-pane regression (team-stream-reattach) surfaced
+  # on every first attach. Locks: saved preference honoured verbatim,
+  # absent-key + localStorage-throw fallbacks → stream, the boot state
+  # literal → stream, and the dropdown/persist shapes unchanged.
+  node_test_result test/team-default-stream.test.js "test/team-default-stream.test.js (5 cases)"
+  # team-mode-banner (UX 2026-10-28): user report "单、多列切换的内容不太好
+  # 理解，不知道在哪里看进展" — the 布局 dropdown only named the mode; nothing
+  # explained WHAT each mode shows or WHERE 看板 progress lives. Fix adds
+  # #team-mode-banner under #chat-empty: per-mode explainer (单列 = merged
+  # timeline + worker 徽章 + inline 看板 card; 多列 = per-worker columns +
+  # 看板 column), live 看板进展 done/total counter from the lane registry,
+  # and a 布局-dropdown hint. Locks the renderer shape, the three refresh
+  # paths (_applyTeamViewMode / kind:board / team-info), teardown hiding,
+  # and the .team-mode-banner CSS family.
+  node_test_result test/team-mode-banner.test.js "test/team-mode-banner.test.js (11 cases)"
+  # team-mode-ux (2026-10-28 用户反馈「单、多列切换的内容不太好理解，不知道
+  # 在哪里看进展」): locks the switch-UX surfaces — self-explaining dropdown
+  # options (布局 → what each layout shows), the transient switch toast
+  # telling the user WHERE progress lives, and the persistent toolbar
+  # 布局 + 进度 readouts (aggregate done/total 子任务 + running lanes,
+  # refreshed on every apply AND every board snapshot + lane retirement).
+  node_test_result test/team-mode-ux-readouts.test.js "test/team-mode-ux-readouts.test.js (10 cases)"
+  # team-mode-select-persist (2026-10-31 user report: 有时候 run-n2 任务没
+  # 结束 单双列按钮就没了): the 布局 dropdown vanished mid-run because the
+  # lane-retire paths never re-synced its visibility. Locks the
+  # _syncTeamModeSelect helper + its calls from both retire paths.
+  node_test_result test/team-mode-select-persist.test.js "test/team-mode-select-persist.test.js (5 cases)"
+  # team-row-html-undefined (2026-10-23 merge-loss guard): _teamRowHtml once
+  # lost its `const taskLabel = …` + .team-row-badge span in a merge, so it
+  # threw ReferenceError and _rebuildTeamRows aborted — empty lane rows and
+  # a killed attach pipeline. Locks the declaration + badge shapes AND
+  # executes the function in a stubbed sandbox (no ReferenceError, ended
+  # class present).
+  node_test_result test/team-row-html-undefined.test.js "test/team-row-html-undefined.test.js (4 cases)"
+  # team-multicol-resize (UX 2026-10-23 行排列): the 协同 view renders
+  # EVERY task (lane) as its own FULL-WIDTH row [workerA | 共享看板 |
+  # workerB] with FIXED grid tracks — 不支持缩放: the 2026-10-22 drag
+  # machinery (_wireTeamColResize/_teamResizeNeighbors/_applyTeamColWidths,
+  # .team-col-resize handles, myco_team_col_w_* persistence) and the lane
+  # picker (#team-lane-select) are RETIRED. Locks lane-scoped row DOM ids,
+  # _teamRowHtml/_rebuildTeamRows, lane-scoped renderers, and the neutral
+  # -x palette for 3rd+ workers.
+  node_test_result test/team-multicol-resize.test.js "test/team-multicol-resize.test.js (14 cases)"
+  # resizable-columns (2026-10-22, team side retired 2026-10-23): the
+  # /compare overlay columns are drag-resizable — .cmp-col-resize on the
+  # 单 agent column, width persisted (myco_cmp_col_w_single) + restored
+  # on overlay rebuild. Also guards the team view staying resize-FREE
+  # (行排列 rows have fixed widths). Complements team-multicol-resize
+  # (which covers the team row layout in depth).
+  node_test_result test/resizable-columns.test.js "test/resizable-columns.test.js (5 cases)"
+  # refresh-history-backfill: the read path for durable history that the
+  # 16 KB replay window + one-shot frames never covered — GET
+  # /sessions/:id/events pagination (live buffer / events.jsonl tail),
+  # board uiEventLog reattach history on all team-info frame paths, and
+  # the client's dual load-older (chat rows + tool cards).
+  node_test_result test/refresh-history-backfill.test.js "test/refresh-history-backfill.test.js (12 cases)"
+  # delm-10 working-view feature (2026-10-22): session busy/review badge
+  # lives in ONE named helper (renderSessionBusyBadge) consumed by
+  # renderSessionList — no inline duplicates that could drift; exact
+  # '● working' / '◦ to review' chip labels + classes survive; agentBusy
+  # beats agentHasReview; card exposes data-busy + aria-live=polite;
+  # chips carry role=status; styles.css keeps the prefers-reduced-motion
+  # pulse suppression. Static + tiny-eval, sub-second standalone.
+  node_test_result test/session-busy-badge.test.js "test/session-busy-badge.test.js (13 cases)"
+  grep -q "_handleTeamInfoFrame" web/public/app.js \
+    && pass "app.js: team-info frame handler present" \
+    || fail "app.js: team-info frame handler present"
+  grep -q "_routeAgentEvent" web/public/app.js \
+    && pass "app.js: split-view event router present" \
+    || fail "app.js: split-view event router present"
+  grep -q "msg.kind === 'board'" web/public/app.js \
+    && pass "app.js: state-update handles board kind" \
+    || fail "app.js: state-update handles board kind"
+  grep -q "team-split" web/public/styles.css \
+    && pass "styles.css: team-split layout styles present" \
+    || fail "styles.css: team-split layout styles present"
+  grep -q "t: 'team-info'" server/src/attach.js \
+    && pass "attach.js: team-info frame shipped on agent-n2 attach" \
+    || fail "attach.js: team-info frame shipped on agent-n2 attach"
+  grep -q "/sessions/:id/board" server/src/index.js \
+    && pass "index.js: GET /sessions/:id/board endpoint present" \
+    || fail "index.js: GET /sessions/:id/board endpoint present"
+  # team-split-view shadow-lane wiring (/run-n2 · /compare n2 leg ·
+  # queue ◓ button): the lane must announce itself (team-info via
+  # state-update), retire itself (team-lane-end), and the client must
+  # handle both + keep a way back to split view from stream mode
+  # (floating toggle — the toolbar hides with the container).
+  grep -q "kind: 'team-info'" server/src/compare-lanes.js \
+    && pass "compare-lanes.js: startN2Lane announces team-info state-update" \
+    || fail "compare-lanes.js: startN2Lane announces team-info state-update"
+  grep -q "kind: 'team-lane-end'" server/src/compare-lanes.js \
+    && pass "compare-lanes.js: team-lane-end shipped on lane terminal" \
+    || fail "compare-lanes.js: team-lane-end shipped on lane terminal"
+  grep -q "_handleTeamLaneEnd" web/public/app.js \
+    && pass "app.js: team-lane-end handler present" \
+    || fail "app.js: team-lane-end handler present"
+  # View-mode dropdown (多列/单列): replaces the old segmented switch +
+  # stream-only floating pill. _ensureTeamModeSelect creates it inside
+  # #chatpane-topctl-row (same line as the RLM switch) and it stays
+  # visible in BOTH modes so stream mode always has a way back.
+  grep -q "team-mode-select" web/public/app.js \
+    && pass "app.js: team view-mode dropdown present (way back to 多列 from 单列)" \
+    || fail "app.js: team view-mode dropdown present (way back to 多列 from 单列)"
+  # team-split-view reattach handshake: a refresh / session re-switch
+  # must rebuild the split view. Three legs: lane worker events mirror
+  # into the main replay buffer, the lane is recorded on the main
+  # session for the attach-time re-announce, and the attach path ships
+  # the team frames BEFORE agent-replay (router gates on
+  # state.teamView.active — replay-first leaves the columns empty).
+  # Frozen-view fix (run-history persistence): the mirror must be the
+  # RE-STAMPED copy (main seq, workerSeq stripped) pushed in the SAME
+  # listener that live-emits — a second listener pushing the raw ev
+  # re-broke afterSeq catch-up + replay ordering — AND it must persist
+  # via _persistEventToDisk so a server restart doesn't lose the run.
+  grep -q "mainSession.buffer.push(out)" server/src/compare-lanes.js \
+    && pass "compare-lanes.js: lane worker events mirrored (re-stamped) into main replay buffer" \
+    || fail "compare-lanes.js: lane worker events mirrored (re-stamped) into main replay buffer"
+  grep -q "_persistEventToDisk(out)" server/src/compare-lanes.js \
+    && pass "compare-lanes.js: mirrored lane events persist to main events.jsonl" \
+    || fail "compare-lanes.js: mirrored lane events persist to main events.jsonl"
+  # a6d379d merged the ended+live lane frame paths into ONE loop; the
+  # flag is now computed per lane (`ended: Boolean(laneRec.ended)`) —
+  # same contract, dynamic shape. Keep the literal check out.
+  grep -q "ended: Boolean(laneRec.ended)" server/src/attach.js \
+    && pass "attach.js: ended-lane attach ships frozen team-info (ended:true)" \
+    || fail "attach.js: ended-lane attach ships frozen team-info (ended:true)"
+  grep -q "laneEnded" web/public/app.js \
+    && pass "app.js: frozen-run state (laneEnded) present" \
+    || fail "app.js: frozen-run state (laneEnded) present"
+  grep -q "team-split-ended" web/public/styles.css \
+    && pass "styles.css: frozen-run chrome (team-split-ended) present" \
+    || fail "styles.css: frozen-run chrome (team-split-ended) present"
+  grep -q "_teamLane" server/src/compare-lanes.js \
+    && pass "compare-lanes.js: lane recorded on main session (_teamLane)" \
+    || fail "compare-lanes.js: lane recorded on main session (_teamLane)"
+  grep -q "_shipTeamInfoOnAttach" server/src/attach.js \
+    && pass "attach.js: _shipTeamInfoOnAttach reattach handshake present" \
+    || fail "attach.js: _shipTeamInfoOnAttach reattach handshake present"
+  # Ordering guard: in BOTH attach paths the handshake call must
+  # precede the _shipAgentReplay call (sed range = the fn body).
+  ship_before_replay() {
+    local fn="$1"
+    local body
+    body=$(awk "/^function ${fn}\\(/,/^}/" server/src/attach.js)
+    local ship_at replay_at
+    ship_at=$(grep -n "_shipTeamInfoOnAttach" <<<"$body" | head -1 | cut -d: -f1)
+    replay_at=$(grep -n "_shipAgentReplay" <<<"$body" | head -1 | cut -d: -f1)
+    [ -n "$ship_at" ] && [ -n "$replay_at" ] && [ "$ship_at" -lt "$replay_at" ]
+  }
+  ship_before_replay _attachAgentWebSocket \
+    && pass "attach.js: team-info ships BEFORE agent-replay (owner attach)" \
+    || fail "attach.js: team-info ships BEFORE agent-replay (owner attach)"
+  ship_before_replay attachViewerWebSocket \
+    && pass "attach.js: team-info ships BEFORE agent-replay (viewer attach)" \
+    || fail "attach.js: team-info ships BEFORE agent-replay (viewer attach)"
   # Chat-routing rewrite (2026-05-14): plain text → agent by default;
   # @<known-user> → chat-only mention with highlight. The static greps
   # below + the regression test guard the invariants of that routing.
   grep -q "_detectMentionTarget" server/src/attach.js \
     && pass "attach.js: _detectMentionTarget helper present" \
     || fail "attach.js: _detectMentionTarget helper present"
-  grep -q "meta = { kind: 'mention'" server/src/attach.js \
+  grep -q "kind: 'mention', mentionUser" server/src/attach.js \
     && pass "attach.js: mention messages stamped with meta.kind=mention" \
     || fail "attach.js: mention messages stamped with meta.kind=mention"
   if grep -q "names: \['m'\]" server/src/slashcmds.js; then
@@ -981,6 +1467,25 @@ test_best_practices_template() {
     || fail "migrate-plan-ids.js moved out of repo root (lives under scripts/)"
   node_test_result test/migrate-plan-ids.test.js "test/migrate-plan-ids.test.js (4 cases)"
   node_test_result test/chat-routing.test.js "test/chat-routing.test.js (7 cases)"
+  # fr:model-gateway — `/model gw:` must take effect on the next reply
+  # (agent-session iteration cold-start on gateway change + display cache
+  # refresh). Static guards; 5 cases.
+  node_test_result test/gateway-restart.test.js "test/gateway-restart.test.js (5 cases)"
+  # bug-92 unanswered-question tracker (pendingQuestions module + attach
+  # wiring). Pure-function unit tests; 9 cases.
+  node_test_result test/pending-questions.test.js "test/pending-questions.test.js (13 cases)"
+  # bug-92 /clear persistence — wipe rec.chat AND the replay sources so an
+  # F5 doesn't resurrect the cleared chat. Behavioural + static; 3 cases.
+  node_test_result test/chat-clear-persistence.test.js "test/chat-clear-persistence.test.js (3 cases)"
+  # bug-37/gateway stop-buttons — Stop retires on iteration_aborted/exit/
+  # idle/fatal-grace, and attach ships claude-running to retire a phantom
+  # stop; /model gw: switch display + iteration cold-start. 6 cases.
+  node_test_result test/bug-37-stop-button-state.test.js "test/bug-37-stop-button-state.test.js (6 cases)"
+  # token-meter ctx-fill regression — the context chip showed impossible
+  # "3.6m/200k ctx" values because turn_result usage is turn-cumulative.
+  # Locks the server ctxFill (per-request assistant usage) + client
+  # meter wiring. 9 cases.
+  node_test_result test/token-meter-ctx-fill.test.js "test/token-meter-ctx-fill.test.js (9 cases)"
 }
 
 test_conv_view_css() {
@@ -1466,6 +1971,13 @@ test_new_session_readonly() {
   pcre_match "#chatpane\.chat-main-view\s*\{[\s\S]{0,400}inset:\s*0" web/public/styles.css \
     && pass "styles.css: chatpane fills main pane (inset:0, Phase 3)" \
     || fail "styles.css: chatpane still right-anchored sidebar"
+  # 2026-10-23 user report ("太远"): #chatpane's padding-top must use the
+  # slim --chatpane-top-pad (10 + chrome-btn + 6, tracks mobile via
+  # --chrome-btn-size), NOT the taller --pane-header-h — otherwise the
+  # topctl dropdown row sits too far below the fixed chrome icon band.
+  pcre_match "#chatpane\.chat-main-view\s*\{[\s\S]{0,600}padding-top:\s*calc\(env\(safe-area-inset-top, 0px\)\s*\+\s*var\(--top-strip, 0px\)\s*\+\s*var\(--chatpane-top-pad\)\)" web/public/styles.css \
+    && pass "styles.css: chatpane top pad uses --chatpane-top-pad (topctl row sits tight under icon band)" \
+    || fail "styles.css: chatpane padding-top must use --chatpane-top-pad, not --pane-header-h"
   pcre_match "\.artifact-main-view\s+\.artifact-body[\s\S]{0,400}max-width:\s*880px" web/public/styles.css \
     && pass "styles.css: artifact-body centered + max-width 880px (Phase 3)" \
     || fail "styles.css: artifact-body not centered"
@@ -1497,6 +2009,9 @@ test_new_session_readonly() {
       const fakeHome = path.join(tmpRoot, 'home');
       fs.mkdirSync(fakeHome, { recursive: true });
       process.env.HOME = fakeHome;
+      // os.homedir() resolves HOME on POSIX but USERPROFILE on Windows —
+      // setting only HOME leaves the lookup pointing at the real user dir.
+      process.env.USERPROFILE = fakeHome;
       const sessions = require('./server/src/sessions');
       const legacyMemDir = path.join(fakeHome, '.claude', 'projects', sessions.encodeCwdForClaude(sessionCwd), 'memory');
       fs.mkdirSync(legacyMemDir, { recursive: true });
@@ -1516,6 +2031,28 @@ test_new_session_readonly() {
     " >/dev/null 2>&1 \
       && pass "_migrateLegacyMemory copies legacy memory + is idempotent" \
       || fail "_migrateLegacyMemory smoke test failed"
+    # The cwd -> slug encoder feeds every ~/.claude/projects/<slug>/ lookup
+    # (transcript mirror, legacy memory migration, dedupe context). It must
+    # flatten EVERY separator: a Windows cwd is C:\Users\me\proj, and a
+    # slash-only rewrite leaves ':' and the backslash inside ONE path segment,
+    # which mkdir rejects — the mirror then silently never lands.
+    node -e "
+      const enc = require('./server/src/sessions').encodeCwdForClaude;
+      const SEP = String.fromCharCode(92);
+      const cases = [
+        ['/wks/kkrazy/myco-kkrazy-6bd8b83e', '-wks-kkrazy-myco-kkrazy-6bd8b83e'],
+        ['C:' + SEP + 'Users' + SEP + 'me' + SEP + 'proj', 'C--Users-me-proj'],
+        [SEP + SEP + 'srv' + SEP + 'share', '--srv-share'],
+        ['', ''],
+      ];
+      for (const c of cases) {
+        const got = enc(c[0]);
+        if (got !== c[1]) throw new Error('encodeCwdForClaude(' + JSON.stringify(c[0]) + ') = ' + JSON.stringify(got) + ', expected ' + JSON.stringify(c[1]));
+      }
+      if (enc(null) !== '') throw new Error('encodeCwdForClaude(null) must be empty, got ' + JSON.stringify(enc(null)));
+    " >/dev/null 2>&1 \
+      && pass "encodeCwdForClaude flattens POSIX + Windows separators and drive colons" \
+      || fail "encodeCwdForClaude leaves a separator/colon in the slug (Windows mirror + memory migration break)"
   else
     skip "_migrateLegacyMemory smoke test (no host node)"
   fi
@@ -1825,6 +2362,53 @@ test_no_pipe_to_grep_q_antipattern() {
   fi
 }
 
+# RLM hard implementation (myco-rlm-design.md §3/§7) static guards:
+#   ① the migrated modules rlm-session.js / prompts-rlm.js must stay
+#      deleted — their require-sites now point at agents/rlm;
+#   ② the n2 RLM addendum keeps its PRECEDENCE declaration ("WINS on
+#      conflicts") so the board protocol is never weakened;
+#   ③ the agent-n2 TeamSession consumes rec.rlm (§5.1 — the old code
+#      ignored /rlm for n2 sessions);
+#   ④ run-n2/compare lanes read rec.rlm.
+test_rlm_hard_impl_migration() {
+  ! [ -e server/src/rlm-session.js ] \
+    && pass "agents/rlm: rlm-session.js stays deleted (migrated to agents/rlm)" \
+    || fail "agents/rlm: server/src/rlm-session.js must not exist (migrated to agents/rlm/)"
+  ! [ -e server/src/prompts-rlm.js ] \
+    && pass "agents/rlm: prompts-rlm.js stays deleted (migrated to agents/rlm/prompt.js)" \
+    || fail "agents/rlm: server/src/prompts-rlm.js must not exist (migrated to agents/rlm/prompt.js)"
+  ! grep -rq "require('./rlm-session')\|require('./prompts-rlm')" server/src \
+    && pass "agents/rlm: no stale require('./rlm-session'|'./prompts-rlm') in server/src" \
+    || fail "agents/rlm: stale require of deleted rlm-session/prompts-rlm in server/src"
+  grep -q 'WINS on conflicts' server/src/agents/rlm/prompt.js \
+    && pass "agents/rlm: rlmN2Addendum keeps the PRECEDENCE declaration (board wins)" \
+    || fail "agents/rlm: rlmN2Addendum lost the 'WINS on conflicts' precedence line (§8 risk 5)"
+  grep -q 'rlm: isRlmEffective(rec)' server/src/sessions.js \
+    && pass "agents/rlm: getOrCreateTeamSession consumes the effective RLM state (§5.1 n2 gap closed, session|user scope)" \
+    || fail "agents/rlm: TeamSession no longer receives the effective rlm state — /rlm on broken for agent-n2"
+  grep -q 'rlmN2Addendum(),' server/src/team-session.js \
+    && pass "agents/rlm: worker startup prompt appends the RLM addendum when rlm on" \
+    || fail "agents/rlm: TeamSession._spawnWorker no longer applies the RLM addendum"
+  grep -q "isRlmEffective(rec)" server/src/slashcmds.js \
+    && pass "agents/rlm: /run-n2 + /compare lanes read the effective rlm state per run" \
+    || fail "agents/rlm: runN2CompareLanes no longer reads the effective rlm state"
+  grep -q "kind: 'rlm-mode-changed'" server/src/attach.js \
+    && pass "agents/rlm: attach initial frame ships rlm + scope (§5.2 badge survives refresh)" \
+    || fail "agents/rlm: attach.js no longer ships rlm on the initial frame"
+  grep -q 's.rlm = !!(rec && sessionsMod.isRlmEffective(rec))' server/src/index.js \
+    && pass "agents/rlm: /sessions payload carries effective s.rlm (§5.2 sidebar badge)" \
+    || fail "agents/rlm: /sessions payload lost s.rlm"
+  grep -q '_updateRlmBadge' web/public/app.js \
+    && pass "agents/rlm: app.js defines + calls _updateRlmBadge" \
+    || fail "agents/rlm: app.js lost _updateRlmBadge"
+  grep -q 'rlm-badge' web/public/styles.css \
+    && pass "agents/rlm: styles.css ships the .rlm-badge style" \
+    || fail "agents/rlm: styles.css lost the .rlm-badge style"
+  grep -q "toolName.startsWith('mcp__rlm__')" server/src/agent-session.js \
+    && pass "agents/rlm: mcp__rlm__* kernel tools auto-allowed in _preToolUseHook" \
+    || fail "agents/rlm: mcp__rlm__ auto-allow lost — every rlm_eval would prompt"
+}
+
 # bug-66 single-main invariant guard. The ONLY function allowed to
 # write rec.mainProject (or record.mainProject) is
 # artifacts.setMainProject. Any other server/ assignment regresses the
@@ -1940,6 +2524,186 @@ run_static_checks() {
   test_no_pipe_to_grep_q_antipattern
   test_no_direct_main_project_write
   test_lastCriticReview_paired_with_stageState
+  test_rlm_hard_impl_migration
+  test_harness_pull_verb
+  test_harness_staging_size
+  test_harness_reuse_guard
+}
+
+# /harness pull — the agent's output, not the harness.
+#
+# /harness adopt installs the HARNESS and nothing else, so a user optimising the
+# ALGORITHM got the casket and not the pearl: the code the rollout actually
+# wrote stayed buried in the run's workspace. pull lists, filters and copies it.
+# The filter has to keep three kinds of file apart (task inputs / harness /
+# agent output), so a regression that silently copies task inputs back or drops
+# a MODIFIED seed would look like success. Guard the verb, the export, and the
+# "--all" comparison path.
+test_harness_pull_verb() {
+  hresult=server/src/harness-result.js
+  scmds=server/src/slashcmds.js
+  body=$(sed -n '/^function listDeliverables(/,/^}/p' "$hresult")
+  scope=$(sed -n "/if (verb === 'pull') {/,/^  }$/p" "$scmds")
+
+  grep -q '^function listDeliverables(' "$hresult" \
+    && pass "harness pull: listDeliverables exists" \
+    || fail "harness pull: listDeliverables exists"
+  grep -q 'harnessWritten.has(norm)' <<<"$body" \
+    && pass "harness pull: harness-written files excluded (that is adopt's job)" \
+    || fail "harness pull: harness-written files excluded (that is adopt's job)"
+  grep -q 'now === seeded.get(norm)' <<<"$body" \
+    && pass "harness pull: untouched task inputs excluded" \
+    || fail "harness pull: untouched task inputs excluded"
+  grep -q "status: 'modified'" <<<"$body" \
+    && pass "harness pull: a MODIFIED seed is kept as the deliverable" \
+    || fail "harness pull: a MODIFIED seed is kept as the deliverable"
+  grep -q 'siblingRuns' <<<"$body$scope" \
+    && pass "harness pull: --all can enumerate every candidate run" \
+    || fail "harness pull: --all can enumerate every candidate run"
+  grep -q "if (verb === 'pull')" "$scmds" \
+    && pass "harness pull: the verb is wired into handleHarness" \
+    || fail "harness pull: the verb is wired into handleHarness"
+}
+
+# A task's own data must actually reach the agent.
+#
+# _restricted_project() capped every staged file at 2 MB. That number was picked
+# to keep bulk content out of the PROPOSER's context, but the staged dir is also
+# the agent's task input — so a codec task whose corpus is twelve 5-51 MB
+# Silesia files ran with no data at all. Measured on the test server the agent
+# spent its first tool calls on `find /` and found the corpus only because a
+# sibling session happened to share the box. A silently dropped corpus is
+# indistinguishable from a task that never had one, so both halves are pinned:
+# the capability, and the report naming what was left out.
+test_harness_staging_size() {
+  pyfile=vendor/harness2/harness2/benchmarks/myco.py
+  # A PATH hit is not a working interpreter: on Windows `python3` resolves to the
+  # Microsoft Store stub, which exits 49 having run nothing (the same trap that
+  # already cost this project a round on py_compile). Probe by executing.
+  local py=""
+  local cand
+  for cand in python3 python; do
+    command -v "$cand" >/dev/null 2>&1 || continue
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then py="$cand"; break; fi
+  done
+  if [ -z "$py" ]; then
+    skip "harness2 staging size (no working python)"
+    return 0
+  fi
+
+  local body stage
+  body=$(sed -n '/def _restricted_project/,/^    def _stage/p' "$pyfile")
+  # `_stage` returns early on the cached path, so a range ending at "return dest"
+  # stops before the write. Bound it at the next method definition instead.
+  stage=$(sed -n '/def _stage/,/def execute/p' "$pyfile")
+
+  grep -q 'MYCO_STAGE_MAX_FILE_MB' <<<"$body" \
+    && pass "harness2 staging: per-file cap is configurable, not a hardcoded 2MB" \
+    || fail "harness2 staging: per-file cap is configurable, not a hardcoded 2MB"
+  grep -q 'MYCO_STAGE_MAX_TOTAL_MB' <<<"$body" \
+    && pass "harness2 staging: whole-copy cap is separate and configurable" \
+    || fail "harness2 staging: whole-copy cap is separate and configurable"
+  grep -q 'skipped.json' "$pyfile" \
+    && pass "harness2 staging: skipped files are recorded for reporting" \
+    || fail "harness2 staging: skipped files are recorded for reporting"
+  # The report must live beside seeded.json, never inside the staged task dir —
+  # anything there is copied into the workspace as if it were project content.
+  grep -q 'meta / "skipped.json"' <<<"$stage" \
+    && pass "harness2 staging: report written under the meta dir, not the task dir" \
+    || fail "harness2 staging: report written under the meta dir, not the task dir"
+  # A corpus that is dropped silently is indistinguishable from one that never
+  # existed, so the skip has to be announced on stderr too.
+  grep -q 'not staged' <<<"$body" \
+    && pass "harness2 staging: dropped inputs are announced on stderr" \
+    || fail "harness2 staging: dropped inputs are announced on stderr"
+
+  # A staged task is a full project copy, so it must not live in /tmp: in the
+  # container that is ~10 GB of overlay while /data is the host's ~2 TB. One
+  # Silesia-sized task was 202 MB before the rollout copies.
+  root=$(sed -n '/def _stage_root/,/def _task_dir/p' "$pyfile")
+  grep -q 'MYCO_STAGE_ROOT' <<<"$root" \
+    && pass "harness2 staging: root overridable via MYCO_STAGE_ROOT" \
+    || fail "harness2 staging: root overridable via MYCO_STAGE_ROOT"
+  grep -q 'harness2-task-cache' <<<"$root" \
+    && pass "harness2 staging: defaults to the data volume, not /tmp" \
+    || fail "harness2 staging: defaults to the data volume, not /tmp"
+  grep -q 'tempfile.gettempdir()' <<<"$root" \
+    && pass "harness2 staging: /tmp stays as the no-data-volume fallback" \
+    || fail "harness2 staging: /tmp stays as the no-data-volume fallback"
+  # A rollout that died in argv parsing still leaves a run DIRECTORY, and
+  # `_roll_bases` used `run_dir.exists()` as its success test — so a sweep with
+  # every label rejected ran for minutes of proposer calls against empty
+  # trajectories. Both halves are pinned: the adapter's verdict, and the
+  # schedule's use of it.
+  grep -q 'def rollout_ok' "$pyfile" \
+    && pass "harness2 rollout: adapter distinguishes ran from merely-existing" \
+    || fail "harness2 rollout: adapter distinguishes ran from merely-existing"
+  grep -q '_rollout_ran' vendor/harness2/harness2/core/schedule.py \
+    && pass "harness2 rollout: schedule asks the adapter, not the filesystem" \
+    || fail "harness2 rollout: schedule asks the adapter, not the filesystem"
+  # The namespace tag becomes a run-id segment, and the runner rejects ids over
+  # 64 chars because the id is a path. The long form produced 71 and killed
+  # every rollout before the model was called.
+  tag=$(sed -n '/^function sweepTagFor/,/^}/p' server/src/harness-runner.js)
+  grep -q "split('-').pop()" <<<"$tag" \
+    && pass "harness2 rollout: sweep tag keeps run ids under the 64-char limit" \
+    || fail "harness2 rollout: sweep tag keeps run ids under the 64-char limit"
+
+  # Behaviour tests, when the package is importable from here.
+  if [ -d vendor/harness2/harness2 ]; then
+    local out code
+    out=$(cd vendor/harness2 && "$py" -m unittest tests.test_myco_bench.StagingSizeTest tests.test_myco_bench.StageRootTest tests.test_myco_bench.RolloutOkTest 2>&1)
+    code=$?
+    if [ "$code" -eq 0 ]; then
+      pass "harness2 staging: behaviour cases green"
+    else
+      fail "harness2 staging: behaviour cases green (large input staged, drops reported) — exit=$code"
+      printf '%s\n' "$out" | tail -20
+    fi
+  else
+    skip "harness2 staging: behaviour tests (vendor/harness2 missing)"
+  fi
+}
+
+# A re-run must not inherit the previous attempt's solution.
+#
+# run ids are stable per (namespace, task, label), so a re-run lands on the SAME
+# run directory. myco-runner.js only called mkdirSync(recursive) — no clear — so
+# the previous run's `sol/` stayed put. isDelivered tests every workspace file
+# against the TASK-DIR seed hashes, and a leftover sol/zcomp.c is not seeded, so
+# it counted as "an added file" and the base rollout reported delivered with
+# zero work. The sweep would then blind-select against a candidate that did
+# nothing. (The user's intent — continue last round's work — is served by
+# seeding it as an input via `/harness pull --to sol`, where the seed hash makes
+# "delivered" mean CHANGED, not present.)
+test_harness_reuse_guard() {
+  runner=bench/harness2/myco-runner.js
+  body=$(sed -n '/async function runOne/,/progress({ stage: .materialise/p' "$runner")
+
+  grep -q 'fs.rmSync(runDir' <<<"$body" \
+    && pass "harness2 runner: a re-used run dir is cleared before materialise" \
+    || fail "harness2 runner: a re-used run dir is cleared before materialise"
+  # The delete has to stay inside outDir; a relative path escaping it would rm
+  # an unrelated tree.
+  grep -q "path.relative(opts.outDir, runDir)" <<<"$body" \
+    && pass "harness2 runner: the clear is contained to the output root" \
+    || fail "harness2 runner: the clear is contained to the output root"
+
+  # Liveness must be per-worker: a team-wide stamp let one busy worker mask a
+  # peer that went silent holding a claim (sw-20261031-163112: worker-B quiet at
+  # 18:52:51, worker-A emitted until 19:15:54, team killed 485s later with a
+  # complete solution already on disk).
+  ts=server/src/team-session.js
+  grep -q '_lastActivityBy' "$ts" \
+    && pass "team: liveness is tracked per worker" \
+    || fail "team: liveness is tracked per worker"
+  stall=$(sed -n '/_stallCheck() {/,/^  }$/p' "$ts")
+  grep -q 'stuckWorkers' <<<"$stall" \
+    && pass "team: a stalled team reports WHICH worker is stuck" \
+    || fail "team: a stalled team reports WHICH worker is stuck"
+  grep -q 'board.done' <<<"$stall" \
+    && pass "team: a worker holding a claim is told to close it" \
+    || fail "team: a worker holding a claim is told to close it"
 }
 
 # ─── feature checks ──────────────────────────────────────────────────────────
@@ -2642,6 +3406,16 @@ test_chat_window() {
   # Pins the server contract that bug-9's client load-older flow
   # depends on.
   node_test_result test/chat-history-window.test.js "test/chat-history-window.test.js (10 cases)"
+  # whatsnew banner + modal ("功能上新"): versioned docs/whatsnew/*.md
+  # served by GET /whatsnew (latest wins), banner dismissal is
+  # per-version in localStorage, detail modal renders via marked with
+  # a history dropdown for archived versions.
+  node_test_result test/whatsnew-banner.test.js "test/whatsnew-banner.test.js (14 cases)"
+  # Regression (整体界面混乱): the banner's #app.has-whatsnew hook
+  # originally flipped #app to flex-direction:column, stacking the
+  # sidebar above the main pane. Locks the grid-overlay fix + the
+  # --top-strip shift of the fixed top chrome below the banner.
+  node_test_result test/whatsnew-banner-layout.test.js "test/whatsnew-banner-layout.test.js (4 cases)"
   # bug-7 round 2 regression: the agent-replay WS frame must dedup
   # identical events from session.buffer before shipping. Suspected
   # upstream is _hydrateBufferFromDisk overlapping with the SDK's
@@ -2691,6 +3465,13 @@ test_chat_window() {
   # file-mirror fallback + the rec.artifacts.plan hydration side-
   # effect + the in-memory-wins-first contract + the try/catch.
   node_test_result test/bug-74-find-plan-item-file-mirror-fallback.test.js "test/bug-74-find-plan-item-file-mirror-fallback.test.js (10 cases)"
+  # plan-run-done-autotick regression: a SUCCESSFUL dispatched run must
+  # tick the plan item (item.done=true) — user report "任务都完成了,
+  # 界面打印完成,但共享看板任务有些还没打勾". Pre-fix only the manual
+  # Close button set done; the run-stamp path never did. Locks the
+  # success-flip + !done idempotence guard + _myco_/plan.json mirror +
+  # error-runs-stay-open contract.
+  node_test_result test/plan-run-done-autotick.test.js "test/plan-run-done-autotick.test.js (6 cases)"
   # bug-13 regression: chrome batch messages (agent-event frames) +
   # exit notifications must reach share-link viewers, not just the
   # session owner. Locks attachViewerWebSocket to subscribe + unsub
@@ -3302,6 +4083,26 @@ test_chat_window() {
   # against the helper, the cleanup scan, the boot-time loadStore
   # cleanup, and the importExistingTranscripts skip end-to-end.
   node_test_result test/bug-80-no-nested-session-duplicates.test.js "test/bug-80-no-nested-session-duplicates.test.js (11 cases)"
+  # delm-10 ghost sessions (kkrazy report): after a page refresh,
+  # sessions that weren't the user's — and sessions already deleted —
+  # reappeared in the sidebar. Two root causes: (1) removeSession only
+  # dismissed rec.absCwd, but the agent runs at <absCwd>/<mainProject>
+  # (resolveAgentCwd), so that transcript mirror re-imported the deleted
+  # session on next boot via importExistingTranscripts' exact-match
+  # dismissal; fix = dismiss the agent cwd too + prefix-aware
+  # _isUnderDismissedCwd check in the importer. (2) GET /sessions called
+  # listSessions(isAuthRequired() ? user : null) — the null path listed
+  # EVERY session for unauthenticated/auth-bypass requests; fix =
+  # always pass the user. Plus the client-side purge of stale
+  # myco_shares entries on delete. r2 (worker-B): (3) GLOBAL_OWNER_USERS
+  # granted kkrazy owner tier on every session → foreign sessions in his
+  # sidebar; fix = remove kkrazy from the Set. (4) the ?share= loop had
+  # NO access check, so localStorage-persisted share tokens (== session
+  # ids) resurrected deleted/foreign sessions as shared:true on every
+  # refresh; fix = gate on resolveAccessTier. 11 cases: static + runtime
+  # guards (live-repro verified: post-fix kkrazy sees zero foreign and
+  # zero deleted sessions).
+  node_test_result test/delm-10-ghost-session-regression.test.js "test/delm-10-ghost-session-regression.test.js (11 cases)"
   # bug-81 (git credential bridge): pre-fix `git push` ignored tokens
   # set via /setpat or OAuth — the myco token store at
   # /data/git-tokens.json was disjoint from git's credential resolution
@@ -3444,6 +4245,15 @@ test_chat_window() {
   # local-branch shouldRewrite still uses the threshold, and a fr-81
   # marker exists.
   node_test_result test/fr-81-r1-always-rewrite-remote.test.js "test/fr-81-r1-always-rewrite-remote.test.js (3 cases)"
+  # CodeHub remote target: the user's /fr @myco was routing to the
+  # hardcoded GitHub kkrazy/myco alias. Since @myco is a dedicated
+  # github-exclusive target, this adds a separate @codehub → codehub
+  # s00791175/myco-test target AND GitLab-v4 codehub issue support
+  # (createIssue/fetchIssues/closeIssue previously returned "unknown
+  # provider" for codehub). Locks: the new REMOTE_TARGETS entry, the
+  # codehub dispatchers, and the httpsJson-injected create/fetch/close
+  # behavior.
+  node_test_result test/fr-codehub-target.test.js "test/fr-codehub-target.test.js (11 cases)"
   # fr-81 Phase B.1: auto-promote a freshly-filed remote issue into a
   # local plan item carrying meta.remoteUrl. The user-confirmed
   # promotion model — every successful /feature or /fr @target call
@@ -4135,6 +4945,17 @@ test_chat_window() {
   # minimum horizontal margin on both rules + a marker comment near
   # both so a future restyle can't silently revert.
   node_test_result test/composer-side-spacing.test.js "test/composer-side-spacing.test.js (4 cases)"
+  # chatpane topctl floating placement (2026-10-23 user report): with
+  # no run-queue strip the RLM + 单列/双列 control row sat pinned in
+  # the top band reserved for the queue, visually far from the chat
+  # input. Fix: #chatpane.no-queue-floating (toggled by
+  # _updateTopctlRowPlacement in app.js, driven by BOTH
+  # _refreshTopctlRow and _renderRunQueueStrip) re-orders the row to
+  # sit right above the composer; a visible queue drops the class and
+  # the row returns to the reserved top band. Locks the CSS re-order
+  # rule, the class-toggle logic + its two call sites, and the DOM
+  # nesting the descendant selector depends on.
+  node_test_result test/chatpane-topctl-floating.test.js "test/chatpane-topctl-floating.test.js (7 cases)"
   # fr-38: per-session strict-mode gate. When `/strict on`, claude-
   # bound chat messages MUST include a [run:plan#<id>] marker (the
   # user's affirmation that the turn is backed by an approved td/fr/
@@ -4182,6 +5003,13 @@ test_chat_window() {
   # /critic slash command + owner+admin gate + status-open-to-all, app.js
   # 🔕 Disable critic button on error verdicts + POST wire, styles.css.
   node_test_result test/bug-90-critic-disable.test.js "test/bug-90-critic-disable.test.js (14 cases)"
+  # Task B: "走本机 claude / 自定义模型" on every direct Claude/Gemini call site.
+  # Locks: the shared local-claude helper + gateway overlay, the 本机 Claude
+  # critic plugin + registry entry + composer dropdown, critique.js threading
+  # rec.activeGw into runCritique, anthropic.js localFallback when no
+  # ANTHROPIC_API_KEY, and btw/claude-cli/extractor/attach/whatsnext/slashcmds
+  # passing the session active gateway to one-shot calls.
+  node_test_result test/local-claude-options.test.js "test/local-claude-options.test.js (11 cases)"
   # bug-91: git-credential-myco.sh hard-coded username=x-access-token for
   # every provider, breaking gitee pushes (gitee validates the username
   # against the token's owning account and returns a misleading 403
@@ -4191,6 +5019,15 @@ test_chat_window() {
   # (giteeLogin + gitee/<owner>/<repo>.login), listAllPats/listRepos
   # skip the sidecars, /setgiteelogin slash command + owner+admin gate.
   node_test_result test/bug-91-credential-helper-provider-username.test.js "test/bug-91-credential-helper-provider-username.test.js (20 cases)"
+  # bug-88: /git clone reuses the stored clone PAT automatically (per-repo
+  # slot first, then user-level) instead of failing with "could not read
+  # Username" on a private repo. Locks: _hostFromCloneUrl classification
+  # (github/gitee/codehub, https+ssh, .git), the rewrite contract (respects
+  # explicitly embedded credentials, non-clone + ssh pass through, flags
+  # between clone and URL preserved, gitee uses the bug-91 login as the
+  # username), handleGit running from ctx.absCwd, and the redaction
+  # contract (the token never appears in the echoed command or output).
+  node_test_result test/bug-88-git-clone-reuses-token.test.js "test/bug-88-git-clone-reuses-token.test.js (18 cases)"
   # fr-105: auto-derive + store the gitee login from /setpat's validated
   # fetchUser response, so /setgiteelogin becomes optional in the common
   # case where the token was set via /setpat. Locks: gitee path stores
@@ -4355,6 +5192,13 @@ test_chat_window() {
   # is NOT on the list (negative guard against a careless refactor
   # adding it back).
   node_test_result test/fr-45-sdkopts-lint.test.js "test/fr-45-sdkopts-lint.test.js (13 cases)"
+  # stream-idle-watchdog-env (2026-11-09 fec-n2-37 postmortem): the CLI's
+  # built-in per-request stream-idle watchdog must be armed for SDK-direct
+  # AgentSessions (CLAUDE_ENABLE_STREAM_WATCHDOG=1 + 15-min default window,
+  # 10-min floor) so a hung gateway request self-heals via internal retry
+  # instead of sitting silent for an hour+. Locks the agent-session.js env
+  # overlay + the deploy.sh --set-stream-idle-timeout plumbing.
+  node_test_result test/stream-idle-watchdog-env.test.js "test/stream-idle-watchdog-env.test.js (7 cases)"
   # bug-40 (user-reported): special chars in a prompt (LaTeX / unicode)
   # 400 the NEXT turn with "thinking or redacted_thinking blocks in the
   # latest assistant message cannot be modified". Root cause: the fr-55
@@ -4427,6 +5271,12 @@ test_chat_window() {
   # slashcmds.js; client renders pinned chip strip at top of chat pane
   # plus per-item button.
   node_test_result test/fr-48-run-queue.test.js "test/fr-48-run-queue.test.js (22 cases)"
+  # Run-queue agent-n2 resume: the queue strip gains a ◓ agent-n2 button
+  # (POST /sessions/:id/queue/n2 → compare-lanes.startN2Lane) that runs the
+  # next pending plan item through the DUAL-agent lane instead of a plain
+  # single-agent rerun. Locks the artifacts route + app.js button/handler +
+  # styles.css rule so the wiring can't silently regress.
+  node_test_result test/queue-n2-resume.test.js "test/queue-n2-resume.test.js (3 cases)"
   # fr-48 follow-up: unified queue dispatch — every plan-item invocation
   # (▶ Run button, POST /artifact/run, /artifact/vote auto-quorum)
   # flows through runQueue. _enqueueAndKickIfIdle in artifacts.js is
@@ -4456,6 +5306,14 @@ test_chat_window() {
   # iteration_aborted/fatal was correct but USELESS without this:
   # _activeRunItem must be set to begin with.
   node_test_result test/fr-48-dispatch-marker.test.js "test/fr-48-dispatch-marker.test.js (4 cases)"
+  # run-queue enhancement: per-item RERUN (↻) + per-item CANCEL (⏹ on a
+  # running entry). Adds POST /queue/:itemId/rerun (re-dispatch a
+  # failed/cancelled entry as a fresh pending, 409 while another runs)
+  # and POST /queue/:itemId/cancel (interrupt SDK iteration of a running
+  # entry + markCancelled — no auto-pause, unlike a failure). Clients
+  # show ↻/⏹/× per-chip buttons. runQueue.markCancelled is the new pure
+  # helper, exported next to markFinished.
+  node_test_result test/fr-48-queue-rerun-cancel.test.js "test/fr-48-queue-rerun-cancel.test.js (11 cases)"
   # fr-51 (run-queue stall): two failure modes that left the queue
   # stuck on bug-13's dispatch in session myco-kkrazy-f80476dd —
   #  (1) handleQCancel removed the running head but never called
@@ -4544,6 +5402,63 @@ test_chat_window() {
   # Soon badge until OAuth is wired up. Click + keyboard activation
   # neutralized so it can't try to navigate to /auth/github/start.
   node_test_result test/login-github-soon-badge.test.js "test/login-github-soon-badge.test.js (6 cases)"
+  # CodeHub third login method + forced login screen (feature). Static
+  # guards pin the auth-gate flag, the /auth/login codehub branch, and the
+  # frontend provider dropdown; the node test covers the auth-gate runtime.
+  grep -q "MYCO_AUTH_REQUIRED" server/src/auth.js \
+    && pass "auth.js: MYCO_AUTH_REQUIRED recoded (forced login switch)" \
+    || fail "auth.js: MYCO_AUTH_REQUIRED recoded (forced login switch)"
+  grep -q "'0', 'false'" server/src/auth.js \
+    && pass "auth.js: MYCO_AUTH_REQUIRED gate treats 0/false as OFF" \
+    || fail "auth.js: MYCO_AUTH_REQUIRED gate treats 0/false as OFF"
+  grep -q "gitHosts.fetchUser({ provider: 'codehub', token: pat })" server/src/index.js \
+    && pass "index.js: /auth/login has a codehub provider branch" \
+    || fail "index.js: /auth/login has a codehub provider branch"
+  grep -q 'id="login-pat-provider"' web/public/index.html \
+    && pass "index.html: login modal provider dropdown present" \
+    || fail "index.html: login modal provider dropdown present"
+  grep -q '<option value="codehub">CodeHub</option>' web/public/index.html \
+    && pass "index.html: login provider dropdown includes CodeHub" \
+    || fail "index.html: login provider dropdown includes CodeHub"
+  # Regression: the Config ▸ PATs pane must render a user-level row for
+  # CodeHub, not just github/gitee. /config/pats already returns
+  # userLevel.codehub (git-tokens.js listAllPats) and /auth/login validates
+  # CodeHub tokens, but the pane's provider list was hardcoded to
+  # ['github','gitee'] — so a CodeHub user had no UI path to set the
+  # user-level token that /feature and /bug fall back to.
+  grep -q "const userLevelProviders = \['github', 'gitee', 'codehub'\]" web/public/app.js \
+    && pass "app.js: Config PATs pane renders a user-level row for codehub" \
+    || fail "app.js: Config PATs pane omits the codehub user-level row"
+  grep -q "userLevelProviders.some(p => ul\[p\] && ul\[p\].present)" web/public/app.js \
+    && pass "app.js: Config PATs empty-state accounts for every user-level provider" \
+    || fail "app.js: Config PATs empty-state hardcodes providers (misses codehub)"
+  # Regression: git must bypass the enterprise proxy for the intranet
+  # CodeHub host. git reads NO_PROXY for nothing — only its own per-URL
+  # config — so the entrypoint's global http.proxy sent every codehub
+  # clone through the MITM proxy, which answers 504 ("CONNECT tunnel
+  # failed") for a host it cannot reach. Session creation then died with
+  # "git clone failed (exit 128). Project dir is empty."
+  grep -q 'http.https://\${_gh}.proxy' docker/docker-entrypoint.sh \
+    && pass "entrypoint: per-URL git proxy bypass for intranet hosts" \
+    || fail "entrypoint: missing per-URL proxy bypass — codehub clones go through the proxy"
+  grep -q 'MYCO_GIT_DIRECT_HOSTS' docker/docker-entrypoint.sh \
+    && pass "entrypoint: MYCO_GIT_DIRECT_HOSTS override knob present" \
+    || fail "entrypoint: MYCO_GIT_DIRECT_HOSTS override knob missing"
+  grep -q 'codehub-dg-g.huawei.com' docker/docker-entrypoint.sh \
+    && pass "entrypoint: codehub-dg-g.huawei.com in the default direct-git list" \
+    || fail "entrypoint: codehub-dg-g.huawei.com not in the default direct-git list"
+  # Regression: entrypoint must export GLOBAL_AGENT_NO_PROXY so child
+  # processes that never run index.js (notably the `claude` CLI spawned
+  # by agent-session.js) bypass the enterprise proxy for intranet hosts.
+  # Without it, api.code-agent.rnd.huawei.com goes through the MITM
+  # proxy → 504, and every agent turn dies with "API Error: HIS Proxy
+  # Notification". mycod patches index.js at boot so its own requests
+  # are fine, but the claude subprocess inherits PID 1 env, which had
+  # GLOBAL_AGENT_HTTP_PROXY but no GLOBAL_AGENT_NO_PROXY.
+  grep -q 'GLOBAL_AGENT_NO_PROXY' docker/docker-entrypoint.sh \
+    && pass "entrypoint: GLOBAL_AGENT_NO_PROXY exported for claude subprocess" \
+    || fail "entrypoint: GLOBAL_AGENT_NO_PROXY missing — claude CLI will proxy intranet API calls"
+  node_test_result test/codehub-login.test.js "test/codehub-login.test.js (8 cases)"
   # bug-23 (tool_result rendered as its own claude-style bubble) was
   # REVERSED by bug-38 r2 — tool_result now folds back INTO the chrome
   # batch with tool_use + hook_allow. The original
@@ -4759,6 +5674,15 @@ test_chat_window() {
   # only at end). Any non-arrow keystroke exits browsing (keeps recalled
   # text); Esc explicitly clears. Per-session reset via _resetUiForNewSession.
   node_test_result test/fr-78-chat-input-history.test.js "test/fr-78-chat-input-history.test.js (12 cases)"
+  # delm-1 (user-reported 2026-10-23): composer arrow-key recall must
+  # only surface what THIS user typed into the composer — never rows the
+  # interface printed (run-queue auto-dispatch bodies, login-callback
+  # echoes, assistant replies) nor a teammate's inputs. Server stamps
+  # meta.fromUserInput:true on the canonical handleChatMessage path;
+  # client hydrate gates on that flag + r.user === state.chatUser and
+  # prefers meta.recallText (raw question banked before the clarify
+  # LLM wrap).
+  node_test_result test/delm1-input-history-provenance.test.js "test/delm1-input-history-provenance.test.js (11 cases)"
   # td-31: Docker files consolidated under docker/ folder. Pins the
   # move (Dockerfile + docker-entrypoint.sh under docker/, none at
   # root), the Dockerfile's internal COPY uses the new build-context-
@@ -4800,6 +5724,144 @@ test_chat_window() {
   # + triggerFileDownload helpers including the stopPropagation guard
   # so a download click doesn't ALSO open the file viewer.
   node_test_result test/files-git-decorators.test.js "test/files-git-decorators.test.js (12 cases)"
+  # td-copy-path: Files-page right-click context menu with Copy
+  # relative path / Copy absolute path / Download. Static guards pin
+  # the client contract: contextmenu binding on tree <li>s, menu item
+  # construction, abs-cwd prefixing, clipboard fallback for plain-HTTP
+  # (non-secure-context) deployments, dismissal wiring, and CSS.
+  node_test_result test/files-copy-path-contextmenu.test.js "test/files-copy-path-contextmenu.test.js (8 cases)"
+  # delm-10: Files-page create file / create folder. Functional guards
+  # on files.js createDir/createFile (containment, no-clobber, ERR_EXISTS,
+  # traversal rejection) + static guards on the owner-only routes, the
+  # #files-new-folder / #files-new-file header buttons, app.js wiring,
+  # client-side name validation, read-only guest block, and CSS.
+  node_test_result test/delm-10-files-create.test.js "test/delm-10-files-create.test.js (11 cases)"
+  # delm-10: skill selection + upload/import. Functional guards on
+  # skills.js (containment, no-clobber, front-matter parsing, wrapper-
+  # dir unwrapping, traversal rejection) + static guards on the
+  # viewer/owner route tiers, the toggle→null clearing rule, the
+  # sdkOpts.skills 'all' fallback + setSkills live path, sessions.js
+  # re-seeding, and the client panel wiring.
+  node_test_result test/delm-10-skills.test.js "test/delm-10-skills.test.js (16 cases)"
+  # User legibility report (白底黑字): all dropdowns white-bg/dark-text.
+  # Guards the global `select, select option` rule + the per-site select
+  # rules so no later restyle re-introduces a dark/low-contrast bg.
+  node_test_result test/dropdown-light-theme.test.js "test/dropdown-light-theme.test.js (4 cases)"
+  # 前端审查 (支持选中复制): interface text must be selectable — sidebar
+  # cards, HUD title, verdict panel, plan item text, chat messages.
+  node_test_result test/ui-text-selectable.test.js "test/ui-text-selectable.test.js (6 cases)"
+  # Session sidebar drag-reorder (user ask: 拖动改变顺序): guards the
+  # localStorage order contract (myco_session_order), the
+  # refreshSessions re-sort (3s poll must not snap the order back),
+  # the _wireSessionDrag HTML5 DnD wiring, and the CSS markers.
+  node_test_result test/session-drag-reorder.test.js "test/session-drag-reorder.test.js (6 cases)"
+  # delm-10 scope extension: skill upload visibility (session / user
+  # / global). Functional guards on skills.js symlink support
+  # (listSkills follows links, linkSkill no-clobber + missing target,
+  # deleteSkill link-safe) + static guards on the three-store routing
+  # in index.js (scope on POST /skills + /skills/import, merged GET
+  # with scope tags, link-on-toggle, ?scope on DELETE).
+  node_test_result test/delm-10-skill-scope.test.js "test/delm-10-skill-scope.test.js (16 cases)"
+  # delm-10 market: the cross-user skill market. Functional guards on
+  # skill-market.js (store index, publish direct/from-dir, install
+  # no-clobber, uploader-or-code delete with constant-time compare +
+  # throttle, symlinked helpers never copied) + static guards on the
+  # five /skill-market routes + the 403/429 error mapping.
+  node_test_result test/delm-10-skill-market.test.js "test/delm-10-skill-market.test.js (16 cases)"
+  # delm-11 market: the layered EXPERT/TEAM/MCP market. Functional
+  # guards on server/src/market.js (personal store per user+type,
+  # publish-only-visibility, install no-clobber, uploader-or-shared-
+  # code delete) + static guards on the ten /market routes incl. the
+  # personal-before-:type route precedence and the SHARED delete-code
+  # file (same file skill-market reads).
+  node_test_result test/delm-11-market.test.js "test/delm-11-market.test.js (17 cases)"
+  # delm-11 market UI: the layered market (Skill/专家/专家团/MCP category
+  # row) with per-category intro + icons, one-click publish as the only
+  # market-visibility path, and the private-entry editor.
+  node_test_result test/delm-11-market-ui.test.js "test/delm-11-market-ui.test.js (10 cases)"
+  # delm-11 market UI fixes (2026-10-23): the skill Publish… button
+  # hides outside the skill category (it publishes a SKILL regardless
+  # of category), the My/Market scope tabs hide in the MCP category
+  # (single catalog, no scope split), and renaming a private draft
+  # DELETEs the old-named draft instead of forking it.
+  node_test_result test/delm-11-market-ui-fixes.test.js "test/delm-11-market-ui-fixes.test.js (5 cases)"
+  # mcp-market: the MCP server marketplace (skill-pack model — each
+  # entry installs as SKILL.md packs into the session's .claude/skills,
+  # reusing the delm-10 skill engine; no MCP gateway process).
+  # Functional guards on server/src/mcp/market.js (catalog metadata,
+  # builtin guide bodies, publish validation + collision refusal,
+  # install/skip-collision/uninstall idempotence, uploader-only
+  # delete) + static guards on the six /mcp-market routes.
+  node_test_result test/delm-mcp-market.test.js "test/delm-mcp-market.test.js (10 cases)"
+  # mcp-market UI: the Skills panel's MCP tab (card grid, install/
+  # uninstall actions, detail preview, installed badging via the
+  # /sessions installedMcp enrichment) in web/public.
+  node_test_result test/delm-mcp-market-ui.test.js "test/delm-mcp-market-ui.test.js (9 cases)"
+  # harness market tab usability: the Harness 市场 category button
+  # must actually bind (dead-tab fix — CATS loop), carry its own
+  # subtitle, hide +New… and the My/Market scope tabs; the chrome
+  # #btn-skills title introduces the whole market panel.
+  node_test_result test/market-harness-tab.test.js "test/market-harness-tab.test.js (6 cases)"
+  # market panel usability: the MCP catalog's 导入文档… button must be
+  # a real labeled button (dedicated #mcp-import-open style + file-plus
+  # glyph, not the row-scoped .skill-install ghost) and the "N server
+  # tools" card tag must actually render (_publicEntry exposes
+  # sdkTools); the fixed #mcp-import-dialog overlay must not be
+  # trapped by a transformed/filter ancestor.
+  node_test_result test/market-panel-usability.test.js "test/market-panel-usability.test.js (6 cases)"
+  # mcp-market SDK-tool layer (additive): the per-session myco_mcp
+  # in-process SDK MCP server exposing INSTALLED entries' sdkTools as
+  # mcp__myco_mcp__<entry>_<tool> tools. Guards: sdkTools declared
+  # shape + handler coverage, createMarketMcpServer null-on-empty /
+  # null-on-guide-only / tool-set per install, install/uninstall route
+  # rec.installedMcp persistence + live-session apply, agent-session
+  # constructor seed / setInstalledMcp / iteration merge / preToolUse
+  # auto-allow, sessions.js respawn seeding at all 3 spawn sites.
+  node_test_result test/delm-mcp-sdk-tools.test.js "test/delm-mcp-sdk-tools.test.js (14 cases)"
+  # delm-10 deletion security: DELETE across all skill stores.
+  # Functional guards on skills.js deleteSkillShared (uploader-meta
+  # gate for user scope, uploader-or-code for global, fail-safe on a
+  # lost meta record, meta sits next to the dir) + the ONE shared
+  # delete-code file ($MYCO_STATE_DIR/skill-market/delete-code, 0600,
+  # constant-time compare) + static guards that the DELETE route gates
+  # shared scopes, cleans session links, and maps ERR_FORBIDDEN→403.
+  node_test_result test/delm-10-skill-delete.test.js "test/delm-10-skill-delete.test.js (14 cases)"
+  # delm-10 scope/market UI: upload-visibility selector, scope badges,
+  # tabs, market install/publish/delete wiring in web/public.
+  node_test_result test/delm-10-skill-scope-ui.test.js "test/delm-10-skill-scope-ui.test.js (16 cases)"
+  # delm-10 busy indicator: the session sidebar must show an obvious
+  # pulsing "working" chip (no symbol prefix, redesigned 2026-10-22) on the session whose agent is actively
+  # streaming. Guards all three layers: AgentSession.isBusy() mirrors
+  # _iterating, GET /sessions enriches s.agentBusy from the live
+  # session, and renderSessionList + styles.css emit/ animate the
+  # .session-busy-badge (with prefers-reduced-motion opt-out).
+  node_test_result test/delm-10-session-busy-indicator.test.js "test/delm-10-session-busy-indicator.test.js (4 cases)"
+  # delm-10 stale-working-badge fix: the "working" chip must not
+  # linger after the conversation ends. When the agent's turn
+  # terminates (turn_result / abort / fatal), AgentSession stamps
+  # _lastDoneAt; GET /sessions pairs it with rec.agentSeenAt to flip
+  # the chip to a steady amber "to review"; opening the session
+  # (attach or POST /sessions/:id/viewed) clears it. Guards the
+  # server enrichment, the viewed route, the client badge + clear
+  # paths, and the CSS.
+  node_test_result test/delm-10-agent-done-review-badge.test.js "test/delm-10-agent-done-review-badge.test.js (9 cases)"
+  # delm-10 stop session-busy gate: the HUD/composer/Esc Stop must
+  # only interrupt the ATTACHED session, and only while its agent is
+  # genuinely working. Locks state.claudeRunning lifecycle (attach
+  # frame both polarities, arm on turn start, clear on retire/switch),
+  # the HUD render+click gate, the _sendStopAgent final gate, and the
+  # server-side isBusy() gate on all three interrupt paths
+  # (owner frame, viewer frame, typed-esc).
+  node_test_result test/delm-10-stop-session-busy-gate.test.js "test/delm-10-stop-session-busy-gate.test.js (12 cases)"
+  # delm-10 queue visibility: the run-queue must not "disappear" when
+  # the user switches sessions. The queue persists server-side on
+  # rec.runQueue and re-ships on attach; the fix adds per-session
+  # open-queue counts (s.queueOpen/s.queueRunning) to GET /sessions +
+  # a .session-queue-badge in the sidebar (3s poll) so queued work in
+  # OTHER sessions stays visible. Locks the strip repopulation path
+  # (runQueue frame handler), the bug-27 switch clearing, the attach
+  # snapshot, and the runQueue module's read-doesn't-mutate contract.
+  node_test_result test/delm-10-queue-visibility.test.js "test/delm-10-queue-visibility.test.js (8 cases)"
   # td-4: per-(user, repo) PAT storage + github/gitee provider dispatch
   # for /feature, /bug. Locks the storage shape (per-repo entry wins,
   # user-level fallback for OAuth-issued github tokens), detectHost's
@@ -4811,6 +5873,13 @@ test_chat_window() {
   # github.js back-compat shim's user-level setToken path so the OAuth
   # callback keeps working.
   node_test_result test/gitee-host-dispatch.test.js "test/gitee-host-dispatch.test.js (31 cases)"
+  # Research mode + domain knowledge base (server/src/knowledge/). Locks the
+  # gate: outside research mode there is no KB MCP server, no prompt
+  # injection and no write-back; the HTTP client fails open when the
+  # standalone kb-service is down. The service itself is tested separately
+  # by kb-service/test/run.js (not part of this suite — it needs no network
+  # but builds a large index).
+  node_test_result test/knowledge/research-mode.test.js "test/knowledge/research-mode.test.js (17 cases)"
   # 2026-05-17 chat persistence + cross-device + ordering contract.
   # Locks the four pillars documented in CLAUDE.md → "Chat persistence
   # & cross-device consistency": (1) every device sees identical
@@ -4821,6 +5890,18 @@ test_chat_window() {
   # getChatHistory, and the agent-replay client handler. Touching any
   # of those interfaces without keeping this test green is a regression.
   node_test_result test/chat-persistence-contract.test.js "test/chat-persistence-contract.test.js (25 cases)"
+  # 2026-11-04 lossless client chat cap — user report: "早期信息会丢失，
+  # 部分信息也会丢失" (early + partial messages lost before session close).
+  # Locks the fix: byte-cap evictions stash into state.chatEvicted (never
+  # drop), CHAT_HARD_CAP DOM rips record _domRippedBelowSeq so the events
+  # backfill can re-fetch them, and the reveal path restores stashed rows
+  # before hitting the server. Red-flips if the client reverts to the
+  # silent-drop cap.
+  node_test_result test/lossless-chat-cap.test.js "test/lossless-chat-cap.test.js (9 cases)"
+  # 2026-11-04 chat-emit-persistence — server-side twin of the lossless-cap
+  # fix: asserts every live 'chat' emit path also lands in rec.chat
+  # (persist-before-broadcast), so no printed row vanishes on refresh.
+  node_test_result test/chat-emit-persistence.test.js "test/chat-emit-persistence.test.js (11 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
@@ -5423,6 +6504,25 @@ test_pat_login_flow() {
     pass "PAT login: Gitee token stashed in git-tokens.json"
   else
     fail "PAT login: Gitee token NOT stashed (got git-tokens.json)"
+  fi
+
+  # Positive (CodeHub — third login method): explicit provider:"codehub" +
+  # the test seam resolves test-codehub-token-<login> to a codehub login.
+  # Same mint + stash end state as github/gitee.
+  body=$(curl -s -X POST "http://127.0.0.1:$PERSIST_PORT/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"token":"test-codehub-token-alice","provider":"codehub"}' 2>/dev/null)
+  grep -q '"ok":true' <<<"$body" && pass "PAT login: alice (CodeHub) → ok" \
+    || fail "PAT login: alice (CodeHub) → ok (got: $body)"
+  grep -q '"login":"alice"' <<<"$body" && pass "PAT login: CodeHub returns user.login" \
+    || fail "PAT login: CodeHub returns user.login (got: $body)"
+
+  # Verify stashed CodeHub token in git-tokens.json under the codehub slot.
+  _toks=$(docker exec "$PERSIST_NAME" cat /data/git-tokens.json)
+  if grep -q '"codehub": "test-codehub-token-alice"' <<<"$_toks"; then
+    pass "PAT login: CodeHub token stashed in git-tokens.json"
+  else
+    fail "PAT login: CodeHub token NOT stashed (got git-tokens.json)"
   fi
 
   # Negative: PAT for a non-allowlisted login → 403 with hint.

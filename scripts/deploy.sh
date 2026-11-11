@@ -16,13 +16,21 @@
 #   $MYCO_STATE_DIR/allowed-github-users.txt   one GitHub login per line
 #   $MYCO_STATE_DIR/.env                       MYCO_GH_CLIENT_ID, MYCO_GH_CLIENT_SECRET, MYCO_PUBLIC_ORIGIN
 #
+#   The allowlist file is seeded but enforcement is DISABLED by default:
+#   deploy writes MYCO_DISABLE_ALLOWLIST=1 into .env, so any valid provider
+#   login (GitHub/Gitee/CodeHub) is admitted. To restore invitation mode:
+#   ./scripts/deploy.sh --enforce-allowlist    (writes MYCO_DISABLE_ALLOWLIST=0 + restarts, no build/ship)
+#
 # Usage:
 #   ./scripts/deploy.sh                                # full deploy (test → build → ship → swap → verify)
 #   ./scripts/deploy.sh --skip-tests                   # skip the pre-flight smoke test
 #   ./scripts/deploy.sh --dry-run                      # plan only; no image transfer or swap
 #   ./scripts/deploy.sh --allow-github-user <login>    # add a GitHub login to the allowlist (no build/ship)
+#   ./scripts/deploy.sh --enforce-allowlist            # re-enable allowlist enforcement (no build/ship)
 #   ./scripts/deploy.sh --set-oauth <id>:<secret>      # write OAuth client_id/secret into .env (no build/ship)
 #   ./scripts/deploy.sh --set-anthropic-key sk-ant-…   # write ANTHROPIC_API_KEY into .env + restart (no build/ship)
+#   ./scripts/deploy.sh --set-stream-idle-timeout <min> # write CLAUDE_STREAM_IDLE_TIMEOUT_MS into .env + restart (no build/ship)
+#            ^ minimum 10 minutes (floor enforced by agent-session.js); default 15
 #   MYCO_DEPLOY_HOST=user@host \
 #   MYCO_STATE_DIR=/path/on/remote ./scripts/deploy.sh
 #
@@ -54,8 +62,10 @@ SKIP_TESTS=0
 SKIP_POST_CHECKS=0
 DRY_RUN=0
 ADD_ALLOW=""
+ENFORCE_ALLOWLIST=0
 SET_OAUTH=""
 SET_ANTHROPIC_KEY=""
+SET_STREAM_IDLE_TIMEOUT=""
 
 # Populated by verify_deploy; consumed by post_deploy_checks so the
 # HTTP probes can hit the same domain the version-stamp probe used.
@@ -111,12 +121,18 @@ parse_args() {
       --allow-github-user)     [ -n "${2:-}" ] || die "--allow-github-user requires a GitHub login"
                                ADD_ALLOW="$2"; shift 2 ;;
       --allow-github-user=*)   ADD_ALLOW="${1#--allow-github-user=}"; shift ;;
+      --enforce-allowlist)     ENFORCE_ALLOWLIST=1; shift ;;
       --set-oauth)             [ -n "${2:-}" ] || die "--set-oauth requires client_id:client_secret"
                                SET_OAUTH="$2"; shift 2 ;;
       --set-oauth=*)           SET_OAUTH="${1#--set-oauth=}"; shift ;;
       --set-anthropic-key)     [ -n "${2:-}" ] || die "--set-anthropic-key requires the key value"
                                SET_ANTHROPIC_KEY="$2"; shift 2 ;;
       --set-anthropic-key=*)   SET_ANTHROPIC_KEY="${1#--set-anthropic-key=}"; shift ;;
+      --set-stream-idle-timeout)
+                               [ -n "${2:-}" ] || die "--set-stream-idle-timeout requires minutes (>= 10)"
+                               SET_STREAM_IDLE_TIMEOUT="$2"; shift 2 ;;
+      --set-stream-idle-timeout=*)
+                               SET_STREAM_IDLE_TIMEOUT="${1#--set-stream-idle-timeout=}"; shift ;;
       --help|-h)
         sed -n '2,28p' "$0" | sed 's/^# \?//'
         exit 0
@@ -244,6 +260,45 @@ REMOTE_SH
   esac
 }
 
+# Upsert MYCO_DISABLE_ALLOWLIST in .env and restart the container so the
+# flag takes effect. --enforce-allowlist writes 0 (invitation mode back
+# on); a full deploy writes 1 (open mode). Echoes written|unchanged.
+set_allowlist_flag_in_env() {
+  local val="$1"
+  step "Setting MYCO_DISABLE_ALLOWLIST=$val in .env"
+  ensure_state_dir
+  local result
+  result=$(remote "V='$val' EF='$STATE_DIR/.env' bash -s" <<'REMOTE_SH'
+    set -e
+    touch "$EF"
+    chmod 600 "$EF"
+    if grep -qE "^MYCO_DISABLE_ALLOWLIST=" "$EF"; then
+      cur=$(sed -n 's/^MYCO_DISABLE_ALLOWLIST=//p' "$EF" | head -1)
+      if [ "$cur" = "$V" ]; then echo unchanged; exit 0; fi
+      tmp=$(mktemp)
+      awk -v v="$V" 'BEGIN{FS=OFS="="} $1=="MYCO_DISABLE_ALLOWLIST" {print "MYCO_DISABLE_ALLOWLIST="v; next} {print}' "$EF" > "$tmp"
+      cat "$tmp" > "$EF"
+      rm -f "$tmp"
+    else
+      printf '%s=%s\n' MYCO_DISABLE_ALLOWLIST "$V" >> "$EF"
+    fi
+    echo written
+REMOTE_SH
+  )
+  case "$result" in
+    written)   ok ".env: MYCO_DISABLE_ALLOWLIST=$val upserted" ;;
+    unchanged) ok ".env: MYCO_DISABLE_ALLOWLIST already $val"; return 0 ;;
+    *)         die "set_allowlist_flag_in_env: unexpected result '$result'" ;;
+  esac
+  step "Restarting $NAME so the new env value takes effect"
+  if remote "docker ps --filter name=^${NAME}\$ --format '{{.Names}}' | grep -q ."; then
+    remote "docker restart '$NAME' >/dev/null"
+    ok "container restarted"
+  else
+    warn "container '$NAME' not running — start it with: ./scripts/deploy.sh"
+  fi
+}
+
 # Idempotently write MYCO_GH_CLIENT_ID and MYCO_GH_CLIENT_SECRET into .env.
 # Re-running with a different secret rotates it. Echoes one of: written
 # (file/keys created or any value changed) | unchanged.
@@ -324,6 +379,56 @@ REMOTE_SH
     written)   ok ".env: ANTHROPIC_API_KEY upserted" ;;
     unchanged) ok ".env: ANTHROPIC_API_KEY already matches — no change"; return 0 ;;
     *)         die "set_anthropic_key_in_env: unexpected result '$result'" ;;
+  esac
+  step "Restarting $NAME so the new env value takes effect"
+  if remote "docker ps --filter name=^${NAME}\$ --format '{{.Names}}' | grep -q ."; then
+    remote "docker restart '$NAME' >/dev/null"
+    ok "container restarted"
+  else
+    warn "container '$NAME' not running — start it with: ./scripts/deploy.sh"
+  fi
+}
+
+# Upsert CLAUDE_ENABLE_STREAM_WATCHDOG + CLAUDE_STREAM_IDLE_TIMEOUT_MS in
+# .env and restart the container. $1 = timeout in MINUTES (>= 10; the floor
+# matches agent-session.js streamIdleWatchdogEnv so the .env value and the
+# code clamp agree). Echoes written|unchanged.
+set_stream_idle_timeout_in_env() {
+  local minutes="$1"
+  [[ "$minutes" =~ ^[0-9]+$ ]] || die "--set-stream-idle-timeout expects integer minutes, got '$minutes'"
+  [ "$minutes" -ge 10 ] || die "--set-stream-idle-timeout floor is 10 minutes (got $minutes)"
+  local ms=$((minutes * 60 * 1000))
+  step "Setting CLAUDE_ENABLE_STREAM_WATCHDOG=1 + CLAUDE_STREAM_IDLE_TIMEOUT_MS=$ms in .env"
+  ensure_state_dir
+  local result
+  result=$(remote "MS='$ms' EF='$STATE_DIR/.env' bash -s" <<'REMOTE_SH'
+    set -e
+    touch "$EF"
+    chmod 600 "$EF"
+    want_w="CLAUDE_ENABLE_STREAM_WATCHDOG=1"
+    want_t="CLAUDE_STREAM_IDLE_TIMEOUT_MS=$MS"
+    cur_w=$(grep -E '^CLAUDE_ENABLE_STREAM_WATCHDOG=' "$EF" | head -1 || true)
+    cur_t=$(grep -E '^CLAUDE_STREAM_IDLE_TIMEOUT_MS=' "$EF" | head -1 || true)
+    if [ "$cur_w" = "$want_w" ] && [ "$cur_t" = "$want_t" ]; then echo unchanged; exit 0; fi
+    tmp=$(mktemp)
+    awk -v w="$want_w" -v t="$want_t" '
+      BEGIN { seen_w = 0; seen_t = 0 }
+      /^CLAUDE_ENABLE_STREAM_WATCHDOG=/   { print w; seen_w = 1; next }
+      /^CLAUDE_STREAM_IDLE_TIMEOUT_MS=/   { print t; seen_t = 1; next }
+      { print }
+      END {
+        if (!seen_w) print w
+        if (!seen_t) print t
+      }' "$EF" > "$tmp"
+    cat "$tmp" > "$EF"
+    rm -f "$tmp"
+    echo written
+REMOTE_SH
+  )
+  case "$result" in
+    written)   ok ".env: stream watchdog on, idle timeout ${minutes}min upserted" ;;
+    unchanged) ok ".env: stream watchdog + ${minutes}min idle timeout already set"; return 0 ;;
+    *)         die "set_stream_idle_timeout_in_env: unexpected result '$result'" ;;
   esac
   step "Restarting $NAME so the new env value takes effect"
   if remote "docker ps --filter name=^${NAME}\$ --format '{{.Names}}' | grep -q ."; then
@@ -588,6 +693,16 @@ main() {
     set_anthropic_key_in_env "$SET_ANTHROPIC_KEY"
     exit 0
   fi
+  if [ -n "$SET_STREAM_IDLE_TIMEOUT" ]; then
+    open_ssh
+    set_stream_idle_timeout_in_env "$SET_STREAM_IDLE_TIMEOUT"
+    exit 0
+  fi
+  if [ "$ENFORCE_ALLOWLIST" = "1" ]; then
+    open_ssh
+    set_allowlist_flag_in_env 0
+    exit 0
+  fi
 
   run_tests
   build_image
@@ -595,6 +710,21 @@ main() {
   ensure_state_dir
   seed_caddyfile
   ensure_allowlist_seed
+  # Default to open mode: the allowlist file stays seeded (entries
+  # preserved for when invitation mode returns) but enforcement is off —
+  # any valid provider login is admitted. Flip back with
+  # --enforce-allowlist.
+  set_allowlist_flag_in_env 1
+  # Stream-idle watchdog (2026-11-09 fec-n2-37 postmortem): seed the
+  # 15-min default into .env on every full deploy. The operator-set
+  # value (via --set-stream-idle-timeout) persists — the seed upsert
+  # is idempotent and only rewrites when the .env values differ from
+  # the defaults, so a customized timeout survives redeploys.
+  if remote "grep -q '^CLAUDE_ENABLE_STREAM_WATCHDOG=1' '$STATE_DIR/.env' 2>/dev/null"; then
+    ok "stream watchdog already configured in .env — keeping operator value"
+  else
+    set_stream_idle_timeout_in_env 15
+  fi
   warn_if_oauth_unset
 
   if [ "$DRY_RUN" = "1" ]; then

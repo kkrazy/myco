@@ -162,7 +162,7 @@ function parseLLMRerank(text, candidateIds) {
 // Single-turn LLM rerank. Returns reordered shortlist (same shape as
 // input), with `.llmRank` stamped. Falls back to the original order on
 // any failure — never throws.
-async function rerankWithLLM(shortlist, cwd) {
+async function rerankWithLLM(shortlist, cwd, gw = {}) {
   if (!Array.isArray(shortlist) || shortlist.length < 2) return shortlist;
   let btw;
   try { btw = require('./btw'); } catch { return shortlist; }
@@ -190,7 +190,8 @@ async function rerankWithLLM(shortlist, cwd) {
 
   let reply;
   try {
-    reply = await btw.runClaudeP(cwd || process.cwd(), prompt);
+    // Task B: use the session's active gateway profile (custom model).
+    reply = await btw.runClaudeP(cwd || process.cwd(), prompt, gw);
   } catch { return shortlist; }
   if (!reply || /^\(claude /.test(reply)) return shortlist;
 
@@ -237,7 +238,7 @@ async function generateWhatsNext(rec, cwd, { now = Date.now() } = {}) {
   let ranked = shortlist;
   let llmReranked = false;
   try {
-    const reordered = await rerankWithLLM(shortlist, cwd);
+    const reordered = await rerankWithLLM(shortlist, cwd, { user: rec && rec.user, activeGw: rec && rec.activeGw });
     if (reordered !== shortlist) {
       ranked = reordered;
       llmReranked = ranked.some((s) => s.llmRank != null);

@@ -130,8 +130,10 @@ t('for-await loop classifies prose-form result + throws synthetic error', () => 
 t('synthetic throw is inside the for-await loop (will be caught by streamErr)', () => {
   // Sanity: the throw sits within the `try { for await … } catch (err) { streamErr = err; }`
   // block so it routes into the existing recovery, not unhandled.
+  // Non-greedy until the loop's OWN catch (prose-form resume detection
+  // grew the loop past the old hand-picked 0,1500 window — §10b).
   const loop = AGENT.match(
-    /for await \(const m of stream\)[\s\S]{0,1500}catch\s*\(\s*err\s*\)\s*\{\s*streamErr\s*=\s*err;/
+    /for await \(const m of stream\)[\s\S]*?catch\s*\(\s*err\s*\)\s*\{\s*streamErr\s*=\s*err;/
   );
   if (!loop || !/throw new Error\(\s*`thinking_block_immutability/.test(loop[0])) {
     throw new Error('synthetic throw not inside the for-await try/catch');

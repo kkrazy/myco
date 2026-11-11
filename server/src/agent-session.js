@@ -63,6 +63,41 @@ const SDK_OPTIONS_ALLOWLIST = new Set([
 // 5000 events ≈ 10 MB; we trim at 12 MB to leave headroom.
 const MAX_EVENTS_FILE_BYTES = 12 * 1024 * 1024;
 
+// Stream-idle watchdog env for the claude-code CLI child (2026-11-09,
+// fec-n2-37 postmortem). The CLI has a built-in per-request watchdog:
+// when a streaming response delivers no SSE chunks for the configured
+// window it aborts THAT fetch and retries internally — turn untouched,
+// no turn_result/iteration_aborted fires, invisible to the team lanes.
+// It is what Claude Code's own --bg sessions run with; SDK-direct
+// sessions (our shape) leave it OFF by default, which is how the
+// 0b1beffc run sat 66 min on a hung gateway request (last event
+// 06:45:46, socket death 07:51:53) with nothing to break the stall.
+//
+// CLAUDE_ENABLE_STREAM_WATCHDOG=1 arms it; CLAUDE_STREAM_IDLE_TIMEOUT_MS
+// sets the window (the CLI clamps to a 5-min floor internally — we
+// enforce a stricter 10-min floor here per the 2026-11-09 decision).
+// Default 15 min: long tool calls (yosys synth, remote ssh) are NOT
+// affected — the watchdog only arms while a request is IN FLIGHT —
+// and a buffering gateway that legitimately holds a whole response
+// gets ample headroom. On breach the cost is one internal retry, not
+// a terminated turn, so a mis-sized window can't prematurely end a
+// /run-n2 lane. Undocumented CLI-internal env (reverse-engineered
+// from the vendored 2.1.142 binary): if a future SDK drops/renames
+// it, the vars are ignored and behaviour degrades to the status quo
+// (fail-open), never worse.
+const STREAM_IDLE_TIMEOUT_DEFAULT_MS = 15 * 60 * 1000;    // 15 min
+const STREAM_IDLE_TIMEOUT_FLOOR_MS = 10 * 60 * 1000;      // 10 min hard floor
+function streamIdleWatchdogEnv() {
+  const raw = Number(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS);
+  const ms = Number.isFinite(raw) && raw > 0
+    ? Math.max(raw, STREAM_IDLE_TIMEOUT_FLOOR_MS)
+    : STREAM_IDLE_TIMEOUT_DEFAULT_MS;
+  return {
+    CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
+    CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(ms),
+  };
+}
+
 // Async iterable backed by a manual push() API. Used as the SDK's
 // streaming-input prompt — every user message landed via .write()
 // pushes a `{type:'user', message:{role:'user', content}}` envelope
@@ -152,6 +187,25 @@ class AgentSession extends EventEmitter {
     // ensureLiveSession from record.user. Optional — falls through to
     // no git env override when missing (default identity wins).
     this.user = opts.user || null;
+    // Per-session active gateway PROFILE NAME (rec.activeGw, forwarded at
+    // spawn/respawn), or null = the system .env gateway. Distinct from the
+    // legacy per-user `active` in gateways.json: each session only uses a
+    // profile the user explicitly opted into via `/model gw:<name>`.
+    this.activeGw = opts.activeGw || null;
+    // fr:model-gateway — the gateway profile name the CURRENT SDK
+    // iteration was built with. base_url / auth_token are baked into
+    // sdkOpts at iteration start and CANNOT change on a live streaming-
+    // input query, so a `/model gw:` switch mid-iteration must make the
+    // next .write() cold-start a fresh query (resume=sdkSessionId). The
+    // .write() hot path compares this.activeGw against this and restarts
+    // on mismatch ("切换模型没有及时生效" — the switch silently never applied
+    // because the iteration lived on with the old gateway env).
+    this._activeGwAtIteration = this.activeGw;
+    // Set when a gateway switch is waiting for the live iteration to
+    // drain; the idle hook then cold-starts a fresh iteration with the
+    // new gwEnv (mirrors fr-86's _pendingRestart, but PRESERVES
+    // sdkSessionId so the conversation resumes on the new gateway).
+    this._pendingGwRestart = false;
     this.cols = opts.cols || 120;                // for resize compat (no-op semantically)
     this.rows = opts.rows || 30;
 
@@ -169,6 +223,49 @@ class AgentSession extends EventEmitter {
     // re-spawns. Mutated live by AgentSession.setModel() which also
     // calls Query.setModel on the in-flight stream (no respawn needed).
     this.modelOverride = opts.modelOverride || null;
+    // delm-10: per-session skill selection (rec.enabledSkills). Array
+    // of skill dir names → sdkOpts.skills pins the SDK's skill context
+    // filter to exactly those. null/undefined → sdkOpts.skills 'all'
+    // (no filter, pre-delm-10 behaviour). Mutated live by setSkills()
+    // (skills toggle route); a mid-iteration change is applied on the
+    // NEXT iteration because streaming-input options are frozen once
+    // query() is invoked.
+    this.enabledSkills = Array.isArray(opts.enabledSkills)
+      ? opts.enabledSkills.slice() : null;
+    // n=2 (TeamSession worker) extension: per-worker Delm board MCP server,
+    // the worker's orchestration systemPrompt (prompts_n2.py STARTUP_A/B),
+    // and its roster role ('worker-A' / 'worker-B'). All null/undefined for
+    // a normal single-agent session → sdkOpts are byte-identical to n=1.
+    this.workerRole = opts.workerRole || null;
+    this.boardMcp = opts.boardMcp || null;
+    this.systemPrompt = opts.systemPrompt || null;
+    // RLM (agents/rlm): optional extra MCP servers for this session
+    // (e.g. the rlm kernel server exposing mcp__rlm__rlm_eval). Merged
+    // into sdkOpts.mcpServers at iteration build — same slot the lean-ctx
+    // + myco + board servers use.
+    this.mcpServers = opts.mcpServers || null;
+    // MCP market (server/src/mcp/): catalog entry names installed in
+    // this session (rec.installedMcp). Each installed entry contributes
+    // (a) guidance SKILLs to the session skill store (installed by the
+    // market route) and (b) real tools to the per-session `myco_mcp`
+    // SDK MCP server built at iteration start. Empty array → no
+    // server → sdkOpts byte-identical to pre-market behaviour.
+    this.installedMcp = Array.isArray(opts.installedMcp) ? opts.installedMcp.slice() : [];
+    // Research mode: knowledge bases mounted on this session (rec.knowledgeBases).
+    // Empty by default → no KB MCP server, no injection, no write-back, and
+    // sdkOpts stay byte-identical to a non-research session.
+    this.knowledgeBases = Array.isArray(opts.knowledgeBases) ? opts.knowledgeBases.slice() : [];
+    // RLM sub-agent spawn context (children.js): { parentSessionId,
+    // depth, maxDepth }. Carried so the child's own kernel host_request
+    // routing can enforce the recursion cap without re-deriving depth.
+    this.rlmSpawn = opts.rlmSpawn || null;
+    // Autonomous background lanes (/run-n2 + /compare shadow workers) set
+    // this so their _preToolUseHook auto-approves EVERY tool — a background
+    // team worker cannot wait on an interactive chat-pane permission prompt
+    // (nobody answers it in a shadow lane, so the agent hangs forever). See
+    // the _preToolUseHook gate below. Interactive single-agent sessions stay
+    // false → unchanged per-tool prompting.
+    this.autonomousPermission = !!opts.autonomousPermission;
     // Latest model + tool list reported by system/init; useful for the
     // attach-snapshot a freshly-connecting client should see.
     this._initSnapshot = null;
@@ -177,6 +274,12 @@ class AgentSession extends EventEmitter {
     // for a live model switch (streaming-input mode, sdk.d.ts:2073).
     // Cleared to null when the iteration ends.
     this._currentQuery = null;
+    // fr:model-gateway — last model value pushed to the SDK via
+    // Query.setModel (live switch). Lets the gateway-profile model take
+    // effect on an in-flight query without re-invoking setModel every
+    // iteration with the same value. Distinct from modelOverride (that is
+    // the per-session /model override; this is just an applied-marker).
+    this._appliedModel = null;
     // bug-21 fix (parallel canUseTool fires): pendingMenus is a
     // Map<hash, menu> rather than a single slot. With parallel tool
     // calls the SDK fires canUseTool for BOTH tools before either is
@@ -224,7 +327,12 @@ class AgentSession extends EventEmitter {
     } catch (err) {
       console.error(`[fr-94] AgentSession could not resolve mycoDir for ${sessionId}: ${err.message}`);
     }
-    this._eventsFile = path.join(_mycoDir || path.join(this.cwd, '_myco_'), 'events.jsonl');
+    // opts.eventsFile lets a TeamSession give each worker its own journal
+    // (e.g. _myco_/events-workerA.jsonl) so n=2 workers don't interleave
+    // lines into the single shared events.jsonl. Null for n=1 → default.
+    this._eventsFileBase = opts.eventsFile || null;
+    this._eventsFile = this._eventsFileBase
+      || path.join(_mycoDir || path.join(this.cwd, '_myco_'), 'events.jsonl');
     this._eventAppendsSinceTrim = 0;
     this._hydrateBufferFromDisk();
 
@@ -238,6 +346,12 @@ class AgentSession extends EventEmitter {
     this._iterating = false;
     this._abortController = null;
     this._iterationDone = null;   // promise resolved when the current iteration ends
+    // delm-10 stale-working-badge fix: wall-clock ms of the last terminal
+    // agent event (turn_result / iteration_aborted / fatal) — i.e. the
+    // moment "working" became "done". GET /sessions pairs this with the
+    // record's agentSeenAt to compute the "to review" badge. Null until
+    // the first terminal event of this process lifetime.
+    this._lastDoneAt = null;
     // bug-40: the most-recent user turn delivered this iteration, kept so a
     // poisoned-resume recovery (resume-failure or thinking-block 400) can
     // redeliver it to the FRESH conversation — a fresh query() has no
@@ -297,6 +411,24 @@ class AgentSession extends EventEmitter {
   // Cap at MAX_ATTEMPTS = 3. AbortError (user-initiated Stop) ALWAYS
   // escapes the retry loop immediately. Non-recoverable errors (auth
   // failures, validation) fatal on the first attempt without retry.
+  // delm-10 busy indicator: true while an SDK query iteration is
+  // streaming (claude is actively working). GET /sessions surfaces
+  // this as agentBusy so the sidebar can render a "working" badge.
+  // _iterating is set true at the top of _ensureIteration and cleared
+  // in its finally-drain (after turn_result lands) — the exact span
+  // the user perceives as "this session is working".
+  isBusy() {
+    return !!this._iterating;
+  }
+
+  // team auto-close (2026-10-30): the most recent turn_result envelope
+  // ({ subtype, result }) or null before the first turn ends. Read-only
+  // consumer: TeamSession._autoCloseStaleClaim distinguishes success
+  // turns (auto-close the claim) from failed ones (leave the claim).
+  lastTurnResult() {
+    return this._lastTurnResult ? Object.assign({}, this._lastTurnResult) : null;
+  }
+
   async _ensureIteration() {
     if (!this.alive || this._iterating) return;
     this._iterating = true;
@@ -358,6 +490,32 @@ class AgentSession extends EventEmitter {
         console.error(`[fr-26] git identity resolve failed for user=${this.user}: ${err.message}`);
       }
 
+      // Per-user model-gateway override (user-set base_url / auth_token /
+      // model profiles, saved via the Config → gateways UI). If the SESSION
+      // actively opted into a profile via `/model gw:<name>`, overlay its
+      // ANTHROPIC_* vars into the child env and prefer its model; otherwise
+      // (this.activeGw is null) the system .env gateway flows through
+      // process.env untouched. The choice is per-session (rec.activeGw →
+      // this.activeGw, set at spawn/respawn + live by /model), read each
+      // iteration so a switch takes effect on the NEXT turn.
+      // Record which gateway this iteration was built with, so .write()
+      // can detect a mid-iteration `/model gw:` switch and cold-start.
+      this._activeGwAtIteration = this.activeGw;
+      let gw = null;
+      try {
+        const gatewaysMod = require('./gateways');
+        gw = (this.user && this.activeGw) ? gatewaysMod.getProfile(this.user, this.activeGw) : null;
+      } catch (err) {
+        console.error(`[agent-session] gateway resolve failed for user=${this.user} name=${this.activeGw}: ${err.message}`);
+      }
+      // Empty fields fall back to process.env (i.e. the system default from
+      // state/.env) because we only overlay non-empty values here.
+      const gwEnv = gw ? {
+        ...(gw.baseUrl ? { ANTHROPIC_BASE_URL: gw.baseUrl } : {}),
+        ...(gw.authToken ? { ANTHROPIC_AUTH_TOKEN: gw.authToken } : {}),
+        ...(gw.model ? { ANTHROPIC_MODEL: gw.model } : {}),
+      } : {};
+
       const sdkOpts = {
         cwd: this.cwd,
         permissionMode: 'default',
@@ -365,8 +523,14 @@ class AgentSession extends EventEmitter {
         // child process. Inherits process.env first so the SDK still
         // sees ANTHROPIC_API_KEY / PATH / etc., then overlays
         // GIT_AUTHOR_* / GIT_COMMITTER_* when the session owner has a
-        // resolvable GitHub identity (see gitEnv block above).
-        env: { ...process.env, ...(gitEnv || {}) },
+        // resolvable GitHub identity (see gitEnv block above). The
+        // user's active gateway profile (gwEnv) is overlaid before
+        // gitEnv so it can point the child at a custom base_url /
+        // auth_token / model. The stream-idle watchdog env overlays
+        // last so an explicit operator override in $STATE_DIR/.env
+        // (already in process.env here) can still win — except the
+        // 10-min floor, which is enforced in streamIdleWatchdogEnv().
+        env: { ...process.env, ...gwEnv, ...(gitEnv || {}), ...streamIdleWatchdogEnv() },
         // bug-14 round 2 (the 1c7ae4c WS-frame fix was correct but
         // insufficient): the SDK's documented option is `abortController`
         // (an AbortController instance), NOT `abortSignal` (an AbortSignal).
@@ -390,6 +554,15 @@ class AgentSession extends EventEmitter {
             // allow-list, then fall through if no match.
             hooks: [(input, toolUseID, ctx) => this._preToolUseHook(input, toolUseID, ctx)],
           }],
+          // Research mode: auto-retrieve domain knowledge for each user
+          // prompt and inject it as additionalContext. Registered only when
+          // the session has mounted KBs, so non-research sessions keep the
+          // exact hook set they had before.
+          ...(this.knowledgeBases.length ? {
+            UserPromptSubmit: [{
+              hooks: [(input) => this._userPromptSubmitHook(input)],
+            }],
+          } : {}),
         },
         // Per-session memory + project settings: redirect the SDK's
         // auto-memory directory from the default $HOME/.claude/projects/
@@ -447,12 +620,117 @@ class AgentSession extends EventEmitter {
           },
         },
       };
+      // RLM kernel MCP server (agents/rlm): merged the same way as the
+      // n2 board server — absent for non-RLM sessions, byte-identical.
+      if (this.mcpServers) sdkOpts.mcpServers = { ...sdkOpts.mcpServers, ...this.mcpServers };
+      // MCP market (server/src/mcp/): when this session has installed
+      // market entries (rec.installedMcp), build the per-session
+      // `myco_mcp` SDK MCP server exposing their catalog tools
+      // (mcp__myco_mcp__<entry>_<tool>). No installs → createMarketMcpServer
+      // returns null and sdkOpts stays untouched (byte-identical).
+      if (Array.isArray(this.installedMcp) && this.installedMcp.length > 0) {
+        const marketServer = require('./mcp/mcp-server').createMarketMcpServer(this.sessionId, this.installedMcp);
+        if (marketServer) sdkOpts.mcpServers = { ...sdkOpts.mcpServers, myco_mcp: marketServer };
+      }
+      // Research mode: mount the knowledge-base MCP server. It is a thin
+      // proxy to the standalone KB service (server/src/knowledge/client.js);
+      // myco itself holds no index. No mounted KBs → no server → sdkOpts
+      // byte-identical to a non-research session.
+      if (Array.isArray(this.knowledgeBases) && this.knowledgeBases.length > 0) {
+        const kbServer = require('./knowledge/mcp').createKbMcpServer(this.sessionId, this.knowledgeBases);
+        if (kbServer) sdkOpts.mcpServers = { ...sdkOpts.mcpServers, myco_kb: kbServer };
+      }
       if (this.sdkSessionId) sdkOpts.resume = this.sdkSessionId;
-      // fr-102: per-session model override. When unset, the SDK uses its
-      // default; when set, it accepts an alias ('sonnet'/'opus'/'haiku')
-      // or full ID ('claude-sonnet-4-6'). The SDK validates this server-
-      // side — invalid names surface in system/init error events.
-      if (this.modelOverride) sdkOpts.model = this.modelOverride;
+      // delm-10: skill selection. sdk.d.ts: `skills?: string[] | 'all'` —
+      // the single place to turn skills on; the SDK adds the Skill tool
+      // itself when this is set (adding 'Skill' to allowedTools is
+      // deprecated). A selection (this.enabledSkills) pins the context
+      // filter to exactly those skill names; null → 'all' so every
+      // project skill stays visible (pre-delm-10 behaviour).
+      sdkOpts.skills = (Array.isArray(this.enabledSkills) && this.enabledSkills.length > 0)
+        ? this.enabledSkills.slice() : 'all';
+      // c5 (harness2-integration §2): sub-agent surface. Load
+      // <cwd>/.claude/agents/*.md into the SDK's `agents` option — the
+      // one c1..c8 component this repo had no wiring for. `agents` was
+      // already in SDK_OPTIONS_ALLOWLIST but never assigned, so project
+      // sub-agent definitions were silently invisible to the SDK and the
+      // Task tool only had its built-in general-purpose agent.
+      //
+      // Empty store (the common case) → sdkOpts.agents stays UNSET, so
+      // sessions that ship no sub-agents are byte-identical to pre-c5.
+      // loadAgents fails open: a malformed agent file is logged and
+      // skipped, never fatal (a config typo must not block a session).
+      const loadedAgents = require('./subagents').loadAgents(this.cwd);
+      if (Object.keys(loadedAgents.agents).length > 0) {
+        sdkOpts.agents = loadedAgents.agents;
+        console.log(`[subagents] ${this.sessionId} loaded: ${require('./subagents').describeLoaded(loadedAgents)}`);
+      }
+      for (const s of loadedAgents.skipped) {
+        console.error(`[subagents] ${this.sessionId} skipped ${s.file}: ${s.reason}`);
+      }
+      // c4 + c7 (harness2-integration §2): per-session tool guidance.
+      // The guidance file (.claude/tool_guidance.md) is project steering —
+      // "run this script first", "never touch that directory" — kept OUT of
+      // CLAUDE.md on purpose: CLAUDE.md is the committed convention pack,
+      // while guidance is per-turn runtime steering that a harness tuner
+      // rewrites constantly. The c7 script listing is appended to the same
+      // block so the agent knows what exists without having to `ls` for it.
+      const toolGuidance = require('./tool-guidance');
+      const harnessScripts = require('./harness-scripts');
+      const loadedGuidance = toolGuidance.loadToolGuidance(this.cwd);
+      const discoveredScripts = harnessScripts.listHarnessScripts(this.cwd).scripts;
+      const guidanceParts = [];
+      if (loadedGuidance.text) guidanceParts.push(loadedGuidance.text);
+      const scriptsSection = harnessScripts.renderScriptsSection(discoveredScripts, this.cwd);
+      if (scriptsSection) guidanceParts.push(scriptsSection);
+      const guidanceBlock = guidanceParts.length
+        ? toolGuidance.renderGuidanceBlock(guidanceParts.join('\n\n'), loadedGuidance.path || this.cwd)
+        : null;
+      if (guidanceBlock) {
+        console.log(`[tool-guidance] ${this.sessionId} ${loadedGuidance.text ? 'guidance' : 'scripts only'}, ${discoveredScripts.length} script(s)`);
+      }
+      // c8 (harness2-integration §2): declarative hook tree from
+      // .claude/hooks.json. Data, not code — see harness-hooks.js's header
+      // for why loading executable hooks from a workspace would be an RCE
+      // grant. Merged AFTER the built-in PreToolUse (allow/deny list)
+      // matcher so a project rule can add to it but never disable it.
+      const harnessHooks = require('./harness-hooks');
+      const loadedHooks = harnessHooks.loadHooks(this.cwd);
+      const projectHooks = harnessHooks.buildHooksOption(loadedHooks, this.cwd, this.sessionId);
+      for (const [event, matchers] of Object.entries(projectHooks)) {
+        sdkOpts.hooks[event] = (sdkOpts.hooks[event] || []).concat(matchers);
+      }
+      if (Object.keys(projectHooks).length > 0) {
+        console.log(`[harness-hooks] ${this.sessionId} project hooks: ${Object.keys(projectHooks).join(',')}`);
+      }
+      for (const skip of loadedHooks.skipped) {
+        console.error(`[harness-hooks] ${this.sessionId} skipped ${skip.where}: ${skip.reason}`);
+      }
+      // fr:model-gateway model resolution. The retired per-session /model
+      // override is NOT honored (always purged to null; a stale value only
+      // ever caused wrong-model requests). Priority:
+      //   1. the ACTIVE gateway profile's `model` (per-user, gw computed
+      //      above), else
+      //   2. the SYSTEM default model from state/.env (ANTHROPIC_MODEL), so
+      //      `default` uses the configured model (e.g. glmmoedsa) instead of
+      //      the SDK's hardcoded default, else
+      //   3. leave sdkOpts.model unset → the SDK picks its own default.
+      if (gw && gw.model) sdkOpts.model = gw.model;
+      else if (process.env.ANTHROPIC_MODEL) sdkOpts.model = process.env.ANTHROPIC_MODEL;
+      // n=2 (TeamSession worker): attach the worker's per-actor Delm board
+      // MCP server + orchestration systemPrompt (prompts_n2 STARTUP_A/B).
+      // Null for a normal single-agent session → these lines are no-ops,
+      // so n=1 behaviour is unchanged.
+      if (this.boardMcp) sdkOpts.mcpServers = { ...sdkOpts.mcpServers, board: this.boardMcp };
+      // c4: fold the tool-guidance block into the system prompt. Three
+      // shapes matter (see tool-guidance.composeSystemPrompt): no guidance →
+      // the option is left exactly as before; no existing prompt → the SDK's
+      // claude_code preset with `append`, so Claude Code's built-in prompt
+      // survives; an existing custom prompt (n=2 workers) → plain
+      // concatenation. `undefined` back means "nothing to set".
+      const composedPrompt = toolGuidance.composeSystemPrompt(
+        this.systemPrompt || undefined, guidanceBlock);
+      if (composedPrompt !== undefined) sdkOpts.systemPrompt = composedPrompt;
 
       // fr-45: lint sdkOpts keys against the SDK's documented Options
       // type. Logs (does not throw) on unknown keys — silent-typo
@@ -470,6 +748,27 @@ class AgentSession extends EventEmitter {
         // _currentQuery slot is cleared at iteration end so a stale
         // handle from a dead stream can't be invoked.
         this._currentQuery = stream;
+        // fr:model-gateway — force the EFFECTIVE model (the /model session
+        // override wins, else the user's active gateway profile model) onto
+        // the just-created query. sdkOpts.model seeds a NEW query, but a
+        // RESUMED conversation can keep its original init model; calling
+        // Query.setModel here (after query() returns, when _currentQuery is
+        // live) guarantees the switch even on resume. _appliedModel dedupes.
+        // Effective model = active gateway profile's model, else the system
+        // default ANTHROPIC_MODEL from state/.env (so `default` pushes the
+        // configured model onto a resumed query, not the SDK default).
+        const effModel = (gw && gw.model ? gw.model : undefined)
+          || process.env.ANTHROPIC_MODEL || undefined;
+        if (this._appliedModel !== effModel && typeof stream.setModel === 'function') {
+          try {
+            await stream.setModel(effModel || undefined);
+            this._appliedModel = effModel;
+            console.log(`[gateway] live setModel(${effModel || 'default'}) on session ${this.sessionId}`);
+          } catch (err) {
+            console.error(`[gateway] live setModel failed for ${this.sessionId}: ${err && err.message ? err.message : err}`);
+            // Not fatal — the next query() carries sdkOpts.model regardless.
+          }
+        }
       } catch (err) {
         initErr = err;
       }
@@ -570,6 +869,20 @@ class AgentSession extends EventEmitter {
             const detail = String(m.result || '').slice(0, 200);
             throw new Error(`thinking_block_immutability (prose-form result): ${detail}`);
           }
+          // bug: symmetric resume-miss detection. When the SDK can't find
+          // the resume= conversation ("Claude Code returned an error result:
+          // No conversation found with session ID: <uuid>") it likewise EMITS
+          // the failure as a normal `result` event (result:<error text>)
+          // instead of throwing — so fr-44's thrown-streamErr recovery never
+          // runs and the session stays wedged: every turn re-resumes the
+          // same dead id and errors identically (seen after /run-n2 spawns
+          // shadow workers sharing the workspace). Detect the prose form and
+          // throw so the _isResumeFailure(streamErr) branch below drops the
+          // resume, redelivers, and retries with a fresh conversation.
+          if (m && m.type === 'result' && sdkOpts.resume && this._isResumeFailureMessage(m.result)) {
+            const detail = String(m.result || '').slice(0, 200);
+            throw new Error(`resume_unavailable (prose-form result): ${detail}`);
+          }
         }
       } catch (err) {
         streamErr = err;
@@ -663,6 +976,19 @@ class AgentSession extends EventEmitter {
     if (this.alive && this._pendingRestart) {
       this._executeRestart();
     }
+    // fr:model-gateway — deferred gateway-switch restart. The .write()
+    // path stashed the next user envelope + tore down the old (old-
+    // gateway) iteration when it saw this.activeGw ≠ _activeGwAtIteration.
+    // Now that the iteration has fully drained, cold-start a fresh one so
+    // the envelope is delivered against the NEW gateway env (resume=
+    // sdkSessionId preserved — unlike _executeRestart, we do NOT null the
+    // conversation). _ensureIteration re-reads this.activeGw when it
+    // rebuilds gwEnv.
+    if (this.alive && this._pendingGwRestart && this._pendingPrePush && this._pendingPrePush.length) {
+      this._pendingGwRestart = false;
+      console.log(`[gateway] ${this.sessionId} applying gateway switch (restart iteration with new env)`);
+      this._ensureIteration();
+    }
   }
 
   // fr-45: validate sdkOpts keys against the SDK_OPTIONS_ALLOWLIST.
@@ -693,10 +1019,22 @@ class AgentSession extends EventEmitter {
   // be added here. When this returns true on the FIRST attempt with
   // sdkOpts.resume set, _ensureIteration clears sdkSessionId + retries
   // once with a fresh conversation (multica's resolveSessionID pattern).
+  // bug: match the resume-miss wording on a PLAIN TEXT STRING so the
+  // prose-form detection in the for-await loop (SDK surfaces the error as a
+  // `result` event with `result:<error-text>` instead of throwing) can reuse
+  // the exact same pattern — see bug-40 r2 for the analogous thinking-block
+  // helper. "No conversation found with session ID: <uuid>" is the SDK's
+  // real wording (ordered "no conversation found"; the older
+  // "conversation not found" branch never matched it → hard fatal instead of
+  // fr-44's clear-sdkSessionId-and-retry).
+  _isResumeFailureMessage(text) {
+    if (!text || typeof text !== 'string') return false;
+    return /session not found|invalid session.?id|could not load conversation|conversation not found|no conversation found|no such session|session expired/i.test(text);
+  }
+
   _isResumeFailure(err) {
     if (!err) return false;
-    const msg = String((err && err.message) || '');
-    return /session not found|invalid session.?id|could not load conversation|conversation not found|no such session|session expired/i.test(msg);
+    return this._isResumeFailureMessage(String((err && err.message) || ''));
   }
 
   // bug-40: classify the Anthropic API's thinking-block-immutability 400.
@@ -848,6 +1186,12 @@ class AgentSession extends EventEmitter {
             && sessionsMod.getSessionRecord(this.sessionId);
           if (rec) {
             rec.sdkSessionId = this.sdkSessionId;
+            // Delm n=2: keep per-worker sessions too so a TeamSession can
+            // resume each worker's transcript across a restart.
+            if (this.workerRole) {
+              if (!rec.sdkSessions) rec.sdkSessions = {};
+              rec.sdkSessions[this.workerRole] = this.sdkSessionId;
+            }
             sessionsMod.saveStore();
           }
         } catch (err) {
@@ -866,6 +1210,16 @@ class AgentSession extends EventEmitter {
       return;
     }
     if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
+      // Token-meter fix (2026-10-21): the SDK `result` message's
+      // usage is CUMULATIVE across every API request the turn made
+      // (~18 tool-iterations x a 200k context ≈ 3.6M), so using it
+      // as "context-window fill" showed nonsense like "3.6M/200k".
+      // Each `assistant` message carries `m.message.usage` — the
+      // per-request usage of the LAST API call, whose
+      // input_tokens + cache_read + cache_creation IS the current
+      // context fill. Stash the latest one; the `result` branch
+      // emits it as ctxFill on turn_result.
+      if (m.message.usage) this._lastAssistantUsage = m.message.usage;
       for (const block of m.message.content) {
         if (block.type === 'text') {
           const txt = block.text || '';
@@ -1004,15 +1358,38 @@ class AgentSession extends EventEmitter {
         }
         this._pendingClarify = null;
       }
+      // team auto-close (2026-10-30): stash the last turn_result so a
+      // TeamSession idle handler can tell a SUCCESS turn from a failed
+      // one when deciding whether to auto-close a stale board claim
+      // (看板 ✓ vs stuck ◐). Read-only accessor below.
+      this._lastTurnResult = { subtype: m.subtype, result: m.result };
       this._emit({
         type: 'turn_result',
         subtype: m.subtype,
         result: m.result,
         usage: m.usage,
+        // ctxFill: the LAST API request's context-window fill
+        // (input + cache_read + cache_creation tokens), not the
+        // turn-cumulative usage above. See the assistant-branch
+        // stash comment + _computeCtxFill for why the meter needs
+        // this. Passes the cumulative result usage + numTurns so
+        // the Huawei-gateway fallback (no per-request assistant
+        // usage) can estimate average-request context instead of
+        // shipping the impossible cumulative sum.
+        ctxFill: this._computeCtxFill(m.usage, m.num_turns),
         totalCostUsd: m.total_cost_usd,
         durationMs: m.duration_ms,
         numTurns: m.num_turns,
       });
+      // Research mode: mine this turn for reusable findings and write them
+      // back to the mounted knowledge bases. Fire-and-forget — the turn is
+      // already complete from the user's perspective, and a failed
+      // extraction must never surface as an error in the conversation.
+      if (this.knowledgeBases.length) {
+        this._maybeWriteKnowledge(m).catch((err) => {
+          console.error(`[kb-writer] ${this.sessionId} write-back failed: ${err.message}`);
+        });
+      }
       return;
     }
     if (m.type === 'rate_limit_event') {
@@ -1069,6 +1446,24 @@ class AgentSession extends EventEmitter {
       const toolName = input && input.tool_name;
       const toolInput = input && input.tool_input;
       const tool_use_id = input && input.tool_use_id;
+      // Autonomous background lanes (/run-n2 + /compare shadow workers):
+      // auto-allow EVERY tool so the team worker never blocks on an
+      // unanswered chat-pane permission prompt. n=2's bash/write hang was a
+      // Shadow-lane worker sitting on a canUseTool menu nobody clicks. Shadow
+      // lanes operate on their own copy of the task in the session workspace,
+      // so full autonomy is the intended (Delm-style) contract.
+      if (this.autonomousPermission) {
+        const reason = `autonomous ${this.workerRole || 'shadow'} worker — auto-allowed`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'} (autonomous)`);
+        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
       // myco's own MCP tools (mcp__myco__*) are auto-allowed —
       // they're internal server-side mutations and the user
       // shouldn't see a permission prompt every time claude
@@ -1084,6 +1479,92 @@ class AgentSession extends EventEmitter {
             permissionDecisionReason: reason,
           },
         };
+      }
+      // MCP market tools (mcp__myco_mcp__*): auto-allowed — the user
+      // explicitly installed the market entry that provides them, so
+      // consent is already recorded at install time (the market UI
+      // confirms before POST /mcp-market/install). Tool handlers run
+      // server-side with the session's stored tokens.
+      if (typeof toolName === 'string' && toolName.startsWith('mcp__myco_mcp__')) {
+        const reason = `MCP market tool (${toolName})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'} (mcp-market)`);
+        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
+      // Research mode: knowledge-base tools (mcp__myco_kb__*) are
+      // read-mostly lookups against the team's own KB, plus `remember`
+      // which only writes into the project's git-tracked _myco_/knowledge/.
+      // Prompting for each search would make research mode unusable.
+      if (this.knowledgeBases.length && require('./knowledge/hooks').isKbToolName(toolName)) {
+        const reason = `knowledge base tool (${toolName})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'} (kb)`);
+        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
+      // n=2: the Delm board MCP tools (mcp__board__*) are internal cross-
+      // worker coordination — auto-allowed for the same reason as mcp__myco__.
+      if (this.boardMcp && typeof toolName === 'string' && toolName.startsWith('mcp__board__')) {
+        const reason = `board MCP tool (${toolName})`;
+        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
+      // RLM kernel tools (mcp__rlm__*): auto-allowed — they're the
+      // session's own persistent-namespace surface (rlm_eval etc.).
+      // The kernel is NOT a sandbox (prompt says so): the code cells may
+      // run Bash/Edit inside, and THOSE calls keep the normal permission
+      // flow — only the rlm_eval dispatch itself is auto-allowed.
+      if (typeof toolName === 'string' && toolName.startsWith('mcp__rlm__')) {
+        const reason = `rlm kernel MCP tool (${toolName})`;
+        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: reason,
+          },
+        };
+      }
+      // c7: running a script the project itself shipped under
+      // .myco_harness/scripts/ is pre-approved. The matcher is strict (see
+      // harness-scripts.isHarnessScriptInvocation): exact `python3
+      // <discovered path>` with no shell metacharacters and no -c/-m, so this
+      // cannot be used to smuggle a second command past the allow list.
+      if (toolName === 'Bash') {
+        try {
+          const cmd = toolInput && toolInput.command;
+          if (require('./harness-scripts').isHarnessScriptInvocation(cmd, this.cwd)) {
+            const reason = `project harness script (${String(cmd).slice(0, 80)})`;
+            console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'} (harness-script)`);
+            this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'allow',
+                permissionDecisionReason: reason,
+              },
+            };
+          }
+        } catch (e) {
+          console.error(`[agent-hook] ${this.sessionId} harness-script check threw: ${e.message}`);
+        }
       }
       const inputForMatching = _matchingInputFor(toolName, toolInput);
       // Lazy-require to dodge the pty.js → sessions.js → agent-session.js
@@ -1112,10 +1593,15 @@ class AgentSession extends EventEmitter {
         this._emit({ type: 'hook_deny', toolName, tool_use_id, reason });
         // Mirror the legacy menuMod.autoRespondToMenu chat note so the
         // user knows WHY their session's deny rule fired.
+        // chat-print-persistence fix (2026-11-04): also appendChatMessage
+        // so the note survives refresh / reconnect (emit alone vanished).
         try {
           const ASSISTANT = 'claude';
           const txt = `🚫 auto-denied \`${toolName}(${inputForMatching || ''})\` (matched session deny list). Run \`/deny\` / \`/allow\` to mutate.`;
-          this.emit('chat', { user: ASSISTANT, text: txt, ts: new Date().toISOString(), meta: { kind: 'menu-auto', verb: 'deny', toolName } });
+          const msg = { user: ASSISTANT, text: txt, ts: new Date().toISOString(), meta: { kind: 'menu-auto', verb: 'deny', toolName } };
+          const sessionsMod = require('./sessions');
+          if (sessionsMod.appendChatMessage) sessionsMod.appendChatMessage(this.sessionId, msg);
+          this.emit('chat', msg);
         } catch {}
         return {
           hookSpecificOutput: {
@@ -1271,6 +1757,132 @@ class AgentSession extends EventEmitter {
     // resolveMenuSubmit delete the specific hash on settle.
     this.pendingMenus.set(subHash, menu);
     this.emit('menu', menu);
+  }
+
+  // delm-10: update the per-session skill selection. Called by the
+  // skills toggle route (index.js _applySkillsToLiveSession) after
+  // rec.enabledSkills is persisted — the record stays the single
+  // source of truth; this only refreshes the live cache the next
+  // _ensureIteration reads when building sdkOpts.skills.
+  // No-op semantics on an in-flight iteration: streaming-input query
+  // options are frozen at query() time, so the change takes effect on
+  // the next turn (same liveness model as a model-override between
+  // iterations).
+  setSkills(names) {
+    this.enabledSkills = Array.isArray(names) ? names.slice() : null;
+    const applied = this.enabledSkills ? this.enabledSkills.join(', ') : '(all skills)';
+    console.log(`[skills] ${this.sessionId} selection updated → ${applied}${this._iterating ? ' (applies next turn)' : ''}`);
+    return { ok: true, enabledSkills: this.enabledSkills ? this.enabledSkills.slice() : null };
+  }
+
+  // MCP market: update the installed-entry list from the market
+  // routes (install/uninstall). Same liveness model as setSkills —
+  // streaming-input options are frozen at query() time, so the change
+  // lands on the NEXT iteration. The rec is the source of truth; this
+  // live cache only shapes the next _ensureIteration's mcpServers.
+  setInstalledMcp(names) {
+    this.installedMcp = Array.isArray(names) ? names.slice() : [];
+    const applied = this.installedMcp.join(', ') || '(none)';
+    console.log(`[mcp-market] ${this.sessionId} installed MCP entries → ${applied}${this._iterating ? ' (applies next turn)' : ''}`);
+    return { ok: true, installedMcp: this.installedMcp.slice() };
+  }
+
+  // RLM hot toggle (2026-11-11: "/rlm on 后 RLM 很少被触发"). Arm/disarm
+  // the RLM engine IN PLACE on a live session — the same liveness model
+  // as setSkills/setInstalledMcp: systemPrompt + mcpServers are read at
+  // every _ensureIteration, so the switch lands on the NEXT turn without
+  // killing the session object. Attached WS clients, lane bridges
+  // (/run-n2, /compare, /rlm <task>) and the run queue all hold THIS
+  // object — killing it would deafen every attached client until they
+  // reconnect, which is why the toggle is in-place instead of kill+respawn.
+  //
+  // rlm=true  (arm):
+  //   - compose the RLM contract prompt (rlmPrompt() + Continual-Harness
+  //     additions) as this.systemPrompt;
+  //   - wire the per-session rlm kernel MCP server (mcp__rlm__rlm_eval)
+  //     onto this.mcpServers (agents/rlm rlmKernelManager, lazy child);
+  //   - stamp mode='rlm' (sidebar badge + lane UI read it);
+  //   - inject ONE nudge turn so the model opens by reading kernel
+  //     `state` instead of ignoring the new tools (usage-report fix:
+  //     the engine change alone wasn't enough, the model needs an
+  //     explicit first prompt).
+  //
+  // rlm=false (disarm): restore the pre-arm systemPrompt + mode, drop
+  // the rlm MCP server key. The kernel child (if any) stays for its
+  // remaining consumers — shutdownRlmKernel owns its lifecycle.
+  //
+  // Idempotent: arm-when-armed / disarm-when-plain are no-ops, so a
+  // double toggle or a respawn race can't stack prompts or servers.
+  setRlmMode(rlm, rec) {
+    const want = rlm === true;
+    if (this._rlmApplied === want) {
+      console.log(`[rlm-hot] ${this.sessionId} setRlmMode(${want}) no-op (already ${want ? 'armed' : 'plain'})`);
+      return { ok: true, kind: 'no-op', rlm: want };
+    }
+    if (want) {
+      const rlmMod = require('./agents/rlm');
+      const mcp = require('./agents/rlm/mcp');
+      const { rlmPrompt } = require('./agents/rlm/prompt');
+      const harness = require('./agents/rlm/harness');
+      this._preRlmSystemPrompt = this.systemPrompt;
+      this._preRlmMode = this.mode || 'agent';
+      const harnessKey = (rec && rec.harnessKey) || null;
+      const harnessSection = harness.composeHarnessSection(
+        this.cwd, harnessKey || this.sessionId);
+      this.systemPrompt = rlmPrompt() + harnessSection;
+      const manager = rlmMod.rlmKernelManager(this.sessionId, {
+        cwd: this.cwd,
+        harnessKey,
+      });
+      this.mcpServers = Object.assign({}, this.mcpServers, {
+        rlm: mcp.createServer({ manager, sessionId: this.sessionId }),
+      });
+      this.mode = 'rlm';
+      this._rlmApplied = true;
+      console.log(`[rlm-hot] ${this.sessionId} ARMED in-place (next turn runs the RLM kernel engine)`);
+      // First-turn nudge: without an explicit opener the model routinely
+      // ignores the newly-available rlm_eval tool and keeps answering from
+      // the transcript — the "RLM 很少被触发" symptom. One short turn that
+      // forces a state read breaks the inertia. Skipped when a turn is
+      // already in flight (the queued user message becomes the opener).
+      if (!this._iterating) {
+        this.write(rlmMod.RLM_FIRST_TURN_NUDGE);
+        console.log(`[rlm-hot] ${this.sessionId} first-turn nudge dispatched`);
+      }
+    } else {
+      this.systemPrompt = this._preRlmSystemPrompt !== undefined
+        ? this._preRlmSystemPrompt : null;
+      this.mode = this._preRlmMode || 'agent';
+      if (this.mcpServers) {
+        const next = Object.assign({}, this.mcpServers);
+        delete next.rlm;
+        this.mcpServers = Object.keys(next).length ? next : null;
+      }
+      this._rlmApplied = false;
+      console.log(`[rlm-hot] ${this.sessionId} DISARMED in-place (next turn runs the plain engine)`);
+    }
+    return { ok: true, kind: 'applied', rlm: want };
+  }
+  // Research mode: update the mounted knowledge bases from the /kb and
+  // /research routes. Same liveness model as setInstalledMcp — SDK options
+  // are frozen at query() time, so the change lands on the next iteration.
+  setKnowledgeBases(names) {
+    this.knowledgeBases = Array.isArray(names) ? names.slice() : [];
+    const applied = this.knowledgeBases.join(', ') || '(none)';
+    console.log(`[kb] ${this.sessionId} knowledge bases → ${applied}${this._iterating ? ' (applies next turn)' : ''}`);
+    return { ok: true, knowledgeBases: this.knowledgeBases.slice() };
+  }
+
+  // UserPromptSubmit hook — research mode only. The body lives in
+  // server/src/knowledge/hooks.js; this method is the SDK-facing shim.
+  async _userPromptSubmitHook(input) {
+    return require('./knowledge/hooks').userPromptSubmitHook(this, input);
+  }
+
+  // Turn-end knowledge write-back (research mode only). The body lives in
+  // server/src/knowledge/hooks.js; this method is the call site.
+  async _maybeWriteKnowledge(m) {
+    return require('./knowledge/hooks').maybeWriteKnowledge(this, m);
   }
 
   // Multi-select toggle for AskUserQuestion. Flips the n-th option's
@@ -1665,6 +2277,15 @@ class AgentSession extends EventEmitter {
 
   _emit(event) {
     const stamped = { ts: new Date().toISOString(), ...event };
+    // delm-10 stale-working-badge fix: stamp the wall-clock moment a
+    // terminal agent event lands — the exact point "working" became
+    // "done". GET /sessions compares this (_lastDoneAt) against the
+    // record's agentSeenAt (last user review) to decide the sidebar's
+    // "to review" badge. Abort + fatal count as done too: the user
+    // needs to see what happened before the interrupt/error.
+    if (event && (event.type === 'turn_result' || event.type === 'iteration_aborted' || event.type === 'fatal')) {
+      this._lastDoneAt = Date.now();
+    }
     // Monotonic per-session sequence number. Used by the client to
     // sort chat-pane rows independently of ts (more robust under
     // clock drift / out-of-order delivery / missing ts). Same
@@ -1744,6 +2365,49 @@ class AgentSession extends EventEmitter {
     if (c.includes(s)) return true;
     if (s.includes(c) && c.length >= Math.floor(s.length * 0.9)) return true;
     return false;
+  }
+
+  // Token-meter fix (2026-10-21): current context-window fill, from
+  // the LAST assistant message's per-request usage. The SDK `result`
+  // usage is cumulative across the whole turn (every API request),
+  // which is why the old meter showed impossible values like
+  // "3.6M/200k ctx". Fills = input + cache_read + cache_creation:
+  // on a cached request input_tokens excludes the cached prefix, so
+  // all three sum to what the model actually saw. Falls back to the
+  // result usage (single-request turns, e.g. cached fast-path
+  // replies with no streamed assistant message) and to 0 otherwise.
+  //
+  // Huawei-gateway fix (2026-10-22): on the enterprise gateway the
+  // assistant messages carry NO per-request usage (verified live:
+  // 0 stashes across a 3.9M-token session), so the primary path
+  // above never fires and the client fallback re-derives the fill
+  // from the CUMULATIVE result usage — reintroducing "3.9m/200k".
+  // When no per-request usage exists, estimate the fill as the
+  // cumulative result usage divided by the number of API requests
+  // the turn made (numTurns from the SDK result) — the AVERAGE
+  // request's context. An honest estimate that cannot exceed the
+  // window, instead of a nonsense cumulative sum.
+  _computeCtxFill(resultUsage, numTurns) {
+    const u = this._lastAssistantUsage;
+    if (u && typeof u === 'object') {
+      const inTok = Number(u.input_tokens) || 0;
+      const cacheR = Number(u.cache_read_input_tokens) || 0;
+      const cacheC = Number(u.cache_creation_input_tokens) || 0;
+      if (inTok || cacheR || cacheC) return inTok + cacheR + cacheC;
+    }
+    // Huawei-gateway fallback: cumulative result usage ÷ requests.
+    const r = resultUsage;
+    if (r && typeof r === 'object') {
+      const inTok = Number(r.input_tokens) || 0;
+      const cacheR = Number(r.cache_read_input_tokens) || 0;
+      const cacheC = Number(r.cache_creation_input_tokens) || 0;
+      const total = inTok + cacheR + cacheC;
+      if (total > 0) {
+        const requests = Number(numTurns) > 1 ? Number(numTurns) : 1;
+        return Math.max(1, Math.round(total / requests));
+      }
+    }
+    return null;
   }
 
   _persistAssistantTextToRecChat(text) {
@@ -1952,8 +2616,27 @@ class AgentSession extends EventEmitter {
     // result text against any text already streamed via assistant
     // messages this turn).
     this._currentTurnAssistantText = '';
+    // Token-meter fix: fresh slate for the per-request usage stash —
+    // each turn's ctxFill must reflect only THIS turn's assistant
+    // messages, not a stale one from the previous turn.
+    this._lastAssistantUsage = null;
     this._emit({ type: 'turn_start', prompt: trimmed.slice(0, 200) });
     if (this._iterating && this._msgQueue) {
+      // fr:model-gateway — a `/model gw:` switch (this.activeGw changed
+      // since this iteration was built with _activeGwAtIteration) cannot
+      // apply to the LIVE query: base_url/auth are baked into sdkOpts at
+      // iteration start. Rather than feed the new user message into the
+      // old-gateway query, stash it and restart the iteration so the next
+      // query cold-starts with the new gwEnv (resume=sdkSessionId keeps
+      // the conversation) — "切换模型没有及时生效" / "怎么会说自己是claude".
+      if (this.activeGw !== this._activeGwAtIteration) {
+        if (!this._pendingPrePush) this._pendingPrePush = [];
+        this._pendingPrePush.push(envelope);
+        this._pendingGwRestart = true;
+        if (this._abortController) { try { this._abortController.abort(); } catch {} }
+        if (this._msgQueue) { try { this._msgQueue.close(); } catch {} }
+        return; // the drain → idle hook cold-starts a fresh iteration
+      }
       // Hot path: SDK is already iterating, just push.
       this._msgQueue.push(envelope);
       return;
@@ -1984,7 +2667,8 @@ class AgentSession extends EventEmitter {
     } catch (err) {
       console.error(`[AgentSession] failed to resolve mycoDir during CWD update for ${this.sessionId}: ${err.message}`);
     }
-    this._eventsFile = path.join(_mycoDir || path.join(this.cwd, '_myco_'), 'events.jsonl');
+    this._eventsFile = this._eventsFileBase
+      || path.join(_mycoDir || path.join(this.cwd, '_myco_'), 'events.jsonl');
   }
 
   kill() {

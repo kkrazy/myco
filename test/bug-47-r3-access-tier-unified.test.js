@@ -109,10 +109,15 @@ t('server/src/sessions.js hardcoded labxnow/kkrazy/ryan-blues carve-out lives ON
   const carveOuts = src.match(/labxnow[^/]*?kkrazy[^/]*?ryan-blues|labxnow[^/]*?ryan-blues[^/]*?kkrazy|kkrazy[^/]*?labxnow[^/]*?ryan-blues|ryan-blues[^/]*?labxnow[^/]*?kkrazy/g) || [];
   assert.ok(carveOuts.length <= 1,
     `the labxnow/kkrazy/ryan-blues hardcoded carve-out must live in exactly one code-level place (resolveAccessTier) — found ${carveOuts.length} occurrences in non-comment portions of sessions.js. Duplicates drift (bug-47 r3).`);
-  // Sanity: the carve-out must still EXIST somewhere in code —
-  // otherwise we regressed labxnow's intended global access.
-  assert.ok(/['"]labxnow['"]/.test(src),
-    'the labxnow carve-out must still exist somewhere in code in sessions.js (preserves the user\'s intent that labxnow has global access; bug-47 r3 unifies the rule, doesn\'t remove it).');
+  // r3 (2026-10-21): the carve-out is RETIRED entirely (user request —
+  // labxnow + ryan-blues removed alongside kkrazy). The GLOBAL_OWNER_USERS
+  // Set must still EXIST as the single source of truth (so any future
+  // carve-out has exactly one place to live) but must be EMPTY — explicit
+  // ACL grants (/share, /admin) are the only cross-user access path now.
+  const m = src.match(/GLOBAL_OWNER_USERS\s*=\s*new Set\(\[([^\]]*)\]\)/);
+  assert.ok(m, 'GLOBAL_OWNER_USERS Set must still exist (single source of truth for any future carve-out)');
+  assert.ok(!/['"`](labxnow|kkrazy|ryan-blues)['"`]/.test(m[1]),
+    `GLOBAL_OWNER_USERS must be EMPTY — the hardcoded global carve-out is retired (2026-10-21); use explicit ACL grants (/share, /admin) instead. Set=${m[1]}`);
 });
 
 // ── index.js: fileApiPreamble uses the new helper ──

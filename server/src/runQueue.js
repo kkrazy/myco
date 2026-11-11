@@ -72,6 +72,17 @@ function removeFromQueue(rec, itemId, opts = {}) {
   return true;
 }
 
+// Drop every TERMINAL entry (success/failed/cancelled) — running +
+// pending stay. Returns the count dropped. The "一键清空已完成"
+// (clear-finished) counterpart to clearQueue: wipes finished history
+// chips without touching what's queued or in flight.
+function removeFinished(rec) {
+  _ensureQueueFields(rec);
+  const len = rec.runQueue.length;
+  rec.runQueue = rec.runQueue.filter((e) => !TERMINAL_STATUSES.has(e.status));
+  return len - rec.runQueue.length;
+}
+
 // Drop every PENDING entry (running + terminal stay). Returns the
 // count dropped. Useful for a "stop everything" / "wipe queue" UX.
 function clearQueue(rec) {
@@ -118,6 +129,19 @@ function markFinished(rec, itemId, success) {
   return entry;
 }
 
+// Mark a running entry cancelled (user interrupted it individually). Unlike
+// markFinished, this does NOT auto-pause the queue — the user explicitly
+// stopped THIS task, not the whole pipeline; the next pending entry may
+// still advance. Returns the updated entry or null if no running match.
+function markCancelled(rec, itemId) {
+  _ensureQueueFields(rec);
+  const entry = rec.runQueue.find((e) => e.itemId === itemId && e.status === 'running');
+  if (!entry) return null;
+  entry.status = 'cancelled';
+  entry.finishedAt = new Date().toISOString();
+  return entry;
+}
+
 // Force-pause the queue (no auto-advance until resumed). Idempotent.
 function pauseQueue(rec) {
   _ensureQueueFields(rec);
@@ -150,9 +174,11 @@ module.exports = {
   addToQueue,
   removeFromQueue,
   clearQueue,
+  removeFinished,
   peekNextPending,
   markRunning,
   markFinished,
+  markCancelled,
   pauseQueue,
   resumeQueue,
   getQueueState,

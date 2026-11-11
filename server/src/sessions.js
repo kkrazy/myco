@@ -204,16 +204,55 @@ function removeSession(id) {
   if (rec && rec.absCwd) {
     store.dismissed = store.dismissed || [];
     if (!store.dismissed.includes(rec.absCwd)) store.dismissed.push(rec.absCwd);
+    // delm-10 ghost-session fix (kkrazy report): the agent often runs
+    // at <absCwd>/<mainProject> (resolveAgentCwd), which leaves a SECOND
+    // transcript mirror at ~/.claude/projects/<encoded-cwd-with-mainProject>/.
+    // The dismissal check in importExistingTranscripts only string-matched
+    // the transcript cwd against dismissed[], so that sibling mirror
+    // re-imported the deleted session on the next boot — the "deleted
+    // session came back" symptom. Record the resolved agent cwd too, and
+    // _isUnderDismissedCwd makes the import check prefix-aware so ANY
+    // transcript under the deleted workspace is refused.
+    try {
+      const agentCwd = resolveAgentCwd(rec);
+      if (agentCwd && agentCwd !== rec.absCwd && !store.dismissed.includes(agentCwd)) {
+        store.dismissed.push(agentCwd);
+      }
+    } catch { /* resolveAgentCwd is defensive; ignore */ }
   }
   delete store.sessions[id];
   saveStore();
+}
+
+// delm-10 ghost-session fix: is `cwd` inside (or equal to) a workspace
+// the user has deleted? dismissed[] holds the absCwds of every removed
+// session (plus their agent cwds). A transcript anywhere under a
+// dismissed root belongs to a deleted session and must NEVER be
+// re-imported — exact-match equality is not enough because subagent /
+// main-project runs write transcripts at deeper paths.
+function _isUnderDismissedCwd(cwd, store) {
+  if (!cwd || !store || !Array.isArray(store.dismissed)) return false;
+  const target = path.resolve(cwd);
+  for (const d of store.dismissed) {
+    if (typeof d !== 'string' || !d) continue;
+    const root = path.resolve(d);
+    const rel = path.relative(root, target);
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return true;
+  }
+  return false;
 }
 function getSessionRecord(id) { return loadStore().sessions[id] || null; }
 
 // ─── claude transcript helpers ──────────────────────────────────────────────
 
 function projectsDir() { return path.join(os.homedir(), '.claude', 'projects'); }
-function encodeCwdForClaude(cwd) { return cwd.replace(/\//g, '-'); }
+// Claude's transcript/memory mirror lives at ~/.claude/projects/<cwd-slug>/.
+// The slug flattens separators to '-'. On Windows the cwd is `C:\a\b`,
+// so '\' and ':' must collapse too — leaving either one builds a segment
+// mkdir can't create.
+function encodeCwdForClaude(cwd) {
+  return String(cwd || '').replace(/[\\/:]/g, '-');
+}
 
 // One-shot copy of legacy SDK auto-memory into the per-session
 // .claude/memory/ folder. Pre-2026-05-15 the SDK pooled memory under
@@ -635,7 +674,24 @@ function getSessionViewers(sessionId) {
 //
 // To revoke the carve-out, delete the `GLOBAL_OWNER_USERS` check
 // inside this function — that's the one place it lives now.
-const GLOBAL_OWNER_USERS = new Set(['labxnow', 'kkrazy', 'ryan-blues']);
+//
+// delm-10 ghost-session fix r2 (kkrazy report, 2026-10-20): 'kkrazy'
+// was REMOVED from the carve-out. The set granted every one of these
+// logins owner-tier on EVERY session in the store, so kkrazy's sidebar
+// listed sessions belonging to other users (and, combined with the
+// share-token replay, sessions he had already closed) — exactly the
+// "refresh the page and sessions that aren't mine / that I deleted
+// come back" report. A dev-mode shortcut that shape-shifts into a
+// multi-user privacy leak is not worth keeping; the intended access
+// for these users is the explicit ACL (/share, /admin), which works
+// unchanged.
+//
+// r3 (2026-10-21): 'labxnow' + 'ryan-blues' REMOVED as well (user
+// request — the carve-out is retired entirely). The Set is kept as
+// the single source of truth so a future carve-out (if ever needed)
+// has exactly one place to live; explicit ACL grants (/share, /admin)
+// are the only cross-user access path now.
+const GLOBAL_OWNER_USERS = new Set([]);
 
 function resolveAccessTier(sessionId, user) {
   if (!user) return null;
@@ -874,6 +930,18 @@ function _runGitCloneInBackground(sessionId, projectAbs, gitUrl) {
   try {
     child = spawn('git', ['clone', '--progress', gitUrl, projectAbs], {
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Run git from the SESSION WORKSPACE (path.dirname(projectAbs) ==
+      // rec.absCwd) — NOT the server's cwd. The git credential helper
+      // (scripts/git-credential-myco.sh, bug-81) derives the owning
+      // myco-user from $(pwd) by matching /wks/<user>/<session-id>/….
+      // Without a cwd, git inherits the server process cwd (/app), the
+      // helper can't resolve a user, and its bug-92 store-wide fallback
+      // finds MULTIPLE distinct codehub tokens (one per user) → emits
+      // nothing → `git clone` aborts in ~0.1s with
+      // "could not read Username" (user-reported first-clone failure).
+      // absolute projectAbs is the clone destination, so cwd here only
+      // affects the helper's pwd detection — never the clone target.
+      cwd: path.dirname(projectAbs),
     });
   } catch (err) {
     _markCloneFailed(sessionId, `✗ git clone could not start: ${err.message}`);
@@ -1135,6 +1203,19 @@ async function spawnSession(rawCwd, user = 'default', opts = {}) {
   const session = spawnAgent(id, {
     cwd: agentCwd, cols, rows, user,
     modelOverride: record.modelOverride || null,
+    // Per-session active gateway (profile name), or null = system default.
+    // A brand-new session is null → runs on the system .env gateway until the
+    // user manually picks a profile via /model gw:<name>.
+    activeGw: record.activeGw || null,
+    // delm-10: seed the skill selection so a record with enabledSkills
+    // set (via the skills UI before the first turn) filters iteration 1.
+    enabledSkills: Array.isArray(record.enabledSkills) ? record.enabledSkills.slice() : null,
+    // MCP market: seed installed entries (rec.installedMcp) so the
+    // myco_mcp SDK MCP server exposes their catalog tools from turn 1.
+    installedMcp: Array.isArray(record.installedMcp) ? record.installedMcp.slice() : [],
+    // Research mode: mounted knowledge bases (rec.knowledgeBases).
+    // Empty for non-research sessions → no KB MCP server, no injection.
+    knowledgeBases: Array.isArray(record.knowledgeBases) ? record.knowledgeBases.slice() : [],
   });
   ptyMod._registerExternalSession(id, session);
   return { id, cwd: record.cwd, mode };
@@ -1203,7 +1284,8 @@ async function ensureLiveSession(sessionId) {
   // pre-Phase-8 claudeSessionId becomes the sdkSessionId so the SDK's
   // resume picks up the same JSONL transcript (the SDK + claude-cli
   // share the ~/.claude/projects/<enc>/<uuid>.jsonl storage).
-  if (rec.mode !== 'agent') {
+  // agent-n2 (Delm team) is a valid agent variant — never migrate it.
+  if (rec.mode !== 'agent' && rec.mode !== 'agent-n2') {
     rec.mode = 'agent';
     if (!rec.sdkSessionId && rec.claudeSessionId) rec.sdkSessionId = rec.claudeSessionId;
     saveStore();
@@ -1229,7 +1311,60 @@ async function ensureLiveSession(sessionId) {
   if (rec.cloneState !== 'pending') {
     injectBestPracticesIntoClaudeMd(liveCwd);
   }
+  // Delm n=2 auto-upgrade: a plain agent session becomes a team when the
+  // owner opted in per-session (rec.n2) or the operator set MYCO_N2 (global
+  // default — the user's "每次 ▶ Run 都启用双agent"). Only fires on a fresh
+  // respawn (the early live-session return above means no WS is attached),
+  // so an in-flight single-agent session is never swapped under a connected
+  // client.
+  // Global MYCO_N2 gate must treat '0'/'false' as OFF — process.env values
+  // are strings, and '0' is truthy in JS, so a bare truthiness check would
+  // wrongly upgrade every default (single) session to a team.
+  const n2Global = process.env.MYCO_N2 && !['0', 'false'].includes(String(process.env.MYCO_N2).toLowerCase());
+  if (rec.mode === 'agent' && (rec.n2 === true || n2Global)) {
+    rec.mode = 'agent-n2';
+    saveStore();
+    console.log(`[ensureLive] ${sessionId} upgraded to agent-n2 (Delm team)`);
+  }
+  // Delm n=2: an agent-n2 session is a TeamSession. Build (or fetch) the
+  // dual-worker team instead of a single AgentSession so the WS attach
+  // and run-queue both see the two-worker session. getOrCreateTeamSession
+  // also wires the team's run-queue terminal handling (team-complete →
+  // plan.json outcome + queue advance).
+  if (rec.mode === 'agent-n2') {
+    return getOrCreateTeamSession(sessionId, rec);
+  }
   const { spawnAgent } = require('./agent-session');
+  // delm-10 RLM mode: when the session opted in via `/rlm on`
+  // (rec.rlm === true),
+  // respawn the main session with the RLM startup prompt
+  // (prompt-as-a-variable + recursive sub-agent calling) as its
+  // SDK systemPrompt. Same AgentSession engine — only the orchestration
+  // prompt differs — so every other mode (agent / agent-n2) and all
+  // attach/run-queue plumbing is unchanged. /rlm off clears rec.rlm.
+  if (isRlmEffective(rec)) {
+    const { spawnRlmAgent } = require('./agents/rlm');
+    const session = spawnRlmAgent(sessionId, {
+      cwd: liveCwd,
+      resumeSdkSessionId: rec.sdkSessionId || null,
+      user: rec.user || null,
+      modelOverride: rec.modelOverride || null,
+      activeGw: rec.activeGw || null,
+      enabledSkills: Array.isArray(rec.enabledSkills) ? rec.enabledSkills.slice() : null,
+      installedMcp: Array.isArray(rec.installedMcp) ? rec.installedMcp.slice() : [],
+      // Research mode: mounted knowledge bases (rec.knowledgeBases).
+      // Empty for non-research sessions → no KB MCP server, no injection.
+      knowledgeBases: Array.isArray(rec.knowledgeBases) ? rec.knowledgeBases.slice() : [],
+      // The MAIN session stays interactive: keep the normal permission
+      // flow (chat-pane menu cards) rather than the background-lane
+      // autonomous default in spawnRlmAgent.
+      autonomousPermission: false,
+    });
+    session.mode = 'rlm';
+    ptyMod._registerExternalSession(sessionId, session);
+    console.log(`[ensureLive] respawned RLM agent for ${sessionId} cwd=${liveCwd} resume=${rec.sdkSessionId || 'none'}`);
+    return session;
+  }
   const session = spawnAgent(sessionId, {
     cwd: liveCwd,
     resumeSdkSessionId: rec.sdkSessionId || null,
@@ -1240,6 +1375,17 @@ async function ensureLiveSession(sessionId) {
     // re-spawns. Without this, every respawn would silently revert to
     // the SDK default while rec.modelOverride sat stale on disk.
     modelOverride: rec.modelOverride || null,
+    // Per-session active gateway survives restarts: re-seed rec.activeGw so
+    // the respawned session keeps whichever profile the user opted into
+    // (null → system default).
+    activeGw: rec.activeGw || null,
+    // delm-10: re-seed the skill selection so a respawned session keeps
+    // the user's enabled-skills filter across restarts / reaper re-spawns.
+    enabledSkills: Array.isArray(rec.enabledSkills) ? rec.enabledSkills.slice() : null,
+    installedMcp: Array.isArray(rec.installedMcp) ? rec.installedMcp.slice() : [],
+    // Research mode: mounted knowledge bases (rec.knowledgeBases).
+    // Empty for non-research sessions → no KB MCP server, no injection.
+    knowledgeBases: Array.isArray(rec.knowledgeBases) ? rec.knowledgeBases.slice() : [],
   });
   ptyMod._registerExternalSession(sessionId, session);
   console.log(`[ensureLive] respawned agent for ${sessionId} cwd=${liveCwd} resume=${rec.sdkSessionId || 'none'}`);
@@ -1259,6 +1405,50 @@ async function ensureLiveSession(sessionId) {
     console.error(`[ensureLive] supersede sweep failed: ${err.message}`);
   }
   return session;
+}
+
+// Delm n=2: lazily build (or reuse) the dual-worker TeamSession for a
+// session. reg.mode is pinned to 'agent-n2' and per-worker SDK ids are
+// kept on rec.sdkSessions so a server restart resumes today's transcripts.
+// Any previously-live single-agent session for the id is replaced — the
+// team exposes the same event surface, so the WS attach + run-queue see
+// a single (team) session object.
+async function getOrCreateTeamSession(sessionId, rec) {
+  const live = ptyMod.getSession(sessionId);
+  if (live && live.mode === 'agent-n2' && live.alive) return live;
+  if (live) { try { ptyMod.killSession(sessionId); } catch {} }
+
+  const { TeamSession } = require('./team-session');
+  const liveCwd = resolveAgentCwd(rec);
+  const team = new TeamSession(sessionId, {
+    cwd: liveCwd,
+    user: rec.user || null,
+    task: (typeof rec.label === 'string' && rec.label) ? rec.label : '',
+    eventsDir: path.join(liveCwd, '_myco_'),
+    resumeSessions: (rec.sdkSessions && typeof rec.sdkSessions === 'object') ? rec.sdkSessions : null,
+    // §5.1: /rlm on must reach agent-n2 sessions too. Pre-fix the n2
+    // branch early-returned BEFORE the RLM branch so rec.rlm was silently
+    // ignored for team sessions. Now the TeamSession itself carries the
+    // flag and appends the RLM addendum to both workers' startup prompts.
+    rlm: isRlmEffective(rec),
+  });
+  ptyMod._registerExternalSession(sessionId, team);
+  rec.mode = 'agent-n2';
+  rec.sdkSessions = {
+    'worker-A': (team.workers && team.workers['worker-A'] && team.workers['worker-A'].sdkSessionId) || null,
+    'worker-B': (team.workers && team.workers['worker-B'] && team.workers['worker-B'].sdkSessionId) || null,
+  };
+  saveStore();
+  // Wire the team's run-queue terminal handling (team-complete /
+  // team-failed → plan.json outcome + queue advance). attach.js owns
+  // _wireTeamRunQueue; it's a no-op if unregistered on this module build.
+  if (typeof ptyMod._wireTeamRunQueue === 'function') {
+    try { ptyMod._wireTeamRunQueue(sessionId, team); } catch (err) {
+      console.error(`[team] run-queue wiring failed for ${sessionId}: ${err.message}`);
+    }
+  }
+  console.log(`[team] created TeamSession for ${sessionId} cwd=${liveCwd} resume={worker-A:${(rec.sdkSessions['worker-A'] || '').slice(0,8) || 'none'}, worker-B:${(rec.sdkSessions['worker-B'] || '').slice(0,8) || 'none'}}`);
+  return team;
 }
 
 // bug-66: Best-effort workspace purge on session delete. Removes the
@@ -1366,6 +1556,15 @@ async function importExistingTranscripts() {
     if (haveCwds.has(cwd)) continue;
 
     if (store.dismissed && store.dismissed.includes(cwd)) continue;
+
+    // delm-10 ghost-session fix: also refuse any transcript whose cwd
+    // lives UNDER a dismissed (deleted-session) workspace. Exact-match
+    // misses the <absCwd>/<mainProject> and subagent mirrors, which
+    // previously re-imported deleted sessions on the next boot.
+    if (_isUnderDismissedCwd(cwd, store)) {
+      console.log(`[delm-10] importExistingTranscripts: skipping ${cwd} — inside a dismissed (deleted-session) workspace`);
+      continue;
+    }
 
     // bug-80: skip transcripts whose cwd lives INSIDE another already-
     // registered session's workspace. These are subagent / sub-shell
@@ -1799,6 +1998,91 @@ function deleteFileChatMessage(sessionId, relPath, messageId) {
   return removed;
 }
 
+// ---- RLM switch: session-level effective-mode helpers ----
+// RLM is switchable at ONE scope (task 2026-10-22 revision): the
+// per-session flag rec.rlm, driven by `/rlm on|off` (alias
+// `/rlm session on|off`), takes effect on respawn. The user-level
+// scope (store.rlmUsers + `/rlm user on|off`) was removed.
+
+// Effective RLM state for a session record — the session flag
+// rec.rlm decides (legacy semantics unchanged).
+function isRlmEffective(rec) {
+  if (!rec) return false;
+  return rec.rlm === true;
+}
+
+// Which scope is currently driving RLM for a session record — 'session'
+// when rec.rlm is on, else null (RLM off). Kept so existing frame
+// consumers keep working; the 'user' scope no longer exists.
+function getRlmScope(rec) {
+  if (!rec) return null;
+  if (rec.rlm === true) return 'session';
+  return null;
+}
+
+// RLM hot toggle (2026-11-11: user report "RLM 功能很少被触发，应该是开启后
+// 大量触发的"). Pre-fix `/rlm session on` only wrote rec.rlm + broadcast the
+// badge — the LIVE session kept running the plain engine because
+// ensureLiveSession early-returns on `live && live.alive`, so the RLM branch
+// only fired after a reaper kill / container restart. This helper applies
+// the toggle to the LIVE session object IN PLACE, called by the /rlm slash
+// handler right after rec.rlm is persisted.
+//
+//   single-agent session → live.setRlmMode(rlm, rec)
+//     (agent-session.js): swaps systemPrompt + mcpServers for the NEXT
+//     SDK iteration. No kill — attached WS clients, lane bridges and
+//     the run queue all hold the same object, killing it would deafen
+//     every client until reconnect.
+//   agent-n2 TeamSession  → team.rlm = rlm + _respawnWorkers()
+//     so both workers re-spawn through spawnRlmAgent/AgentSession with
+//     (or without) the RLM overlay. Mid-flight: interrupt first (a
+//     worker mid-turn would otherwise finish on the old engine).
+//
+// Deliberately NEVER touches compare-lanes lane logic — /run-n2 +
+// /compare + /rlm <task> read rec.rlm at LANE START, so an off session
+// keeps plain lanes and an on session gets RLM lanes on the next run,
+// byte-identical to before either way.
+//
+// Returns a small result object for the slash reply / tests; never
+// throws (a missing/broken live session just means the next respawn
+// picks the flag up — rec.rlm is the source of truth).
+function applyRlmModeToLiveSession(sessionId, rec) {
+  const rlm = isRlmEffective(rec);
+  const live = ptyMod.getSession(sessionId);
+  if (!live || !live.alive) {
+    console.log(`[rlm-hot] ${sessionId} no live session — rec.rlm=${rlm} applies on next respawn`);
+    return { ok: true, kind: 'deferred-to-respawn', rlm };
+  }
+  try {
+    // agent-n2 team: flip the team flag + respawn both workers through
+    // _spawnWorker (which branches on this.rlm → spawnRlmAgent vs plain
+    // AgentSession). Mid-flight turns are interrupted first so no worker
+    // finishes a task on the old engine.
+    if (live.mode === 'agent-n2') {
+      live.rlm = rlm;
+      if (typeof live._respawnWorkers === 'function') {
+        if (typeof live.isBusy === 'function' && live.isBusy() && typeof live.interrupt === 'function') {
+          try { live.interrupt(); } catch {}
+        }
+        live._respawnWorkers();
+      }
+      console.log(`[rlm-hot] ${sessionId} agent-n2 team toggled → rlm=${rlm} (workers respawned)`);
+      return { ok: true, kind: 'team-respawned', rlm };
+    }
+    if (typeof live.setRlmMode === 'function') {
+      const out = live.setRlmMode(rlm, rec);
+      return { ok: true, kind: out && out.kind === 'no-op' ? 'no-op' : 'applied', rlm };
+    }
+    // A live object without the method (older shape / stub) — the flag
+    // still applies on the next respawn via ensureLiveSession.
+    console.log(`[rlm-hot] ${sessionId} live session lacks setRlmMode — deferred to respawn`);
+    return { ok: true, kind: 'deferred-to-respawn', rlm };
+  } catch (err) {
+    console.error(`[rlm-hot] ${sessionId} apply failed: ${err.message} — deferred to respawn`);
+    return { ok: false, kind: 'error', error: err.message, rlm };
+  }
+}
+
 // Use Object.assign so the existing module.exports object is mutated rather
 // than replaced. pty.js captures this exports object during the circular
 // require, so a replacement would leave its reference pointing at the empty
@@ -1827,6 +2111,15 @@ Object.assign(module.exports, {
   // badge and the replay are guaranteed to agree.
   hasPendingVerdict,
   ensureLiveSession,
+  // delm-10: skill-selection persistence. The skills routes in
+  // index.js mutate rec.enabledSkills + persist via putSession — the
+  // same write path spawnSession uses, so the toggle survives
+  // restarts and the live-session cache stays subordinate to the record.
+  putSession,
+  // Delm n=2: lazily build/reuse the dual-worker TeamSession + wire its
+  // run-queue terminal handling. Used by ensureLiveSession (agent-n2
+  // sessions) and the run-queue upgrade path.
+  getOrCreateTeamSession,
   sessionBelongsToUser,
   deleteSession,
   // fr-39: per-session admin delegation
@@ -1883,4 +2176,17 @@ Object.assign(module.exports, {
   _migrateLegacyMemory,
   // bug-66: exposed for the workspace-purge regression test.
   _removeWorkspaceForDeletedSession,
+  // delm-10 ghost-session fix: removeSession isn't otherwise exported
+  // (deleteSession wraps it); the regression test drives it directly to
+  // assert dismissed[] records both absCwd + the agent cwd.
+  removeSession,
+  _isUnderDismissedCwd,
+  // RLM switch: session-level effective-mode helpers (used by
+  // ensureLive, getOrCreateTeamSession, the /rlm slash handler and
+  // the attach state frames).
+  isRlmEffective,
+  getRlmScope,
+  // RLM hot toggle: apply the just-persisted rec.rlm to the LIVE
+  // session object (in-place arm/disarm — no kill, lanes untouched).
+  applyRlmModeToLiveSession,
 });

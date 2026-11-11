@@ -94,6 +94,13 @@ t('retryLastCritique falls back to last.userPrompt when opts.userPrompt is empty
 // ─────────────────────────────────────────────────────────────────
 
 const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-bug71-'));
+// Hermetic: this suite stubs gemini.runCritique and asserts REAL critic
+// calls fire. A host running the server with MYCO_CRITIC_MODEL=none (the
+// /critic off deployment default) would trip the bug-90 critic-disabled
+// short-circuit in triggerGeminiCritique and make the runtime cases fail
+// with "0 !== 1". Pin the critic to gemini for this process — the env
+// leak is environmental, not a code regression.
+process.env.MYCO_CRITIC_MODEL = 'gemini';
 process.env.MYCO_WORKSPACE = path.join(TMP_ROOT, 'wks');
 process.env.MYCO_STATE_DIR = path.join(TMP_ROOT, 'state');
 process.env.HOME = path.join(TMP_ROOT, 'home');

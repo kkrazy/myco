@@ -138,7 +138,10 @@ t('static guard: handleGit still runs git with the ctx-supplied cwd (execFile ch
   assert.ok(body, 'handleGit body must be locatable');
   assert.ok(/execFile\s*\(\s*['"]git['"]/.test(body),
     'handleGit must invoke execFile("git", ...)');
-  assert.ok(/cwd:\s*\w/.test(body),
+  // \w-only match broke when bug-88 made the value a parenthesized
+  // expr (`cwd: (ctx && ctx.absCwd) || rec.absCwd`) — accept a word
+  // char OR an open paren; the guard's intent is "a cwd option exists".
+  assert.ok(/cwd:\s*[\w(]/.test(body),
     'execFile options must include a cwd so git runs in the right dir');
 });
 

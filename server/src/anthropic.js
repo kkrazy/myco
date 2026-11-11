@@ -12,8 +12,23 @@ const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_TIMEOUT_MS = 30000;
 
-function callAnthropic({ system, userMessage, model = DEFAULT_MODEL, maxTokens = 200, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function callAnthropic({ system, userMessage, model = DEFAULT_MODEL, maxTokens = 200, timeoutMs = DEFAULT_TIMEOUT_MS, localFallback } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Task B: "走本机 claude" fallback — when the host has no
+  // ANTHROPIC_API_KEY (so the raw api.anthropic.com call would fail or be
+  // skipped), route through the local claude (container ~/.claude/ auth,
+  // optionally overlaid with the caller's active gateway profile) so the
+  // summarizer keeps working. Return contract is identical (text or null).
+  if (!apiKey && localFallback) {
+    return require('./local-claude').callLocalClaude({
+      system,
+      userMessage,
+      cwd: localFallback.cwd,
+      user: localFallback.user,
+      activeGw: localFallback.activeGw,
+      timeoutMs,
+    });
+  }
   if (!apiKey) return Promise.resolve(null);
   if (!userMessage) return Promise.resolve(null);
 

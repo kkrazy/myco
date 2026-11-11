@@ -16,54 +16,19 @@
 
 const DEFAULT_TIMEOUT_MS = 120000;
 
-async function callClaudeCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function callClaudeCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, user, activeGw } = {}) {
   if (!userMessage) return null;
-  const { query } = require('@anthropic-ai/claude-agent-sdk');
-  const ac = new AbortController();
-  const timer = setTimeout(() => {
-    try { ac.abort(); } catch {}
-    console.error(`[claude-cli] timed out after ${timeoutMs}ms`);
-  }, timeoutMs);
-
-  const options = {
-    cwd: cwd || process.cwd(),
-    allowedTools: [],          // pure text generation
-    permissionMode: 'dontAsk',
-    settingSources: [],
-    abortSignal: ac.signal,
-  };
-  if (system) options.appendSystemPrompt = system;
-
-  let stream;
-  try {
-    stream = query({ prompt: userMessage, options });
-  } catch (err) {
-    clearTimeout(timer);
-    console.error(`[claude-cli] sdk init failed: ${err.message}`);
-    return null;
-  }
-  let finalText = '';
-  let assistantText = '';
-  try {
-    for await (const m of stream) {
-      if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
-        for (const b of m.message.content) {
-          if (b.type === 'text') assistantText += b.text;
-        }
-      }
-      if (m.type === 'result') {
-        finalText = typeof m.result === 'string' ? m.result : '';
-      }
-    }
-  } catch (err) {
-    clearTimeout(timer);
-    if (ac.signal.aborted) return null;
-    console.error(`[claude-cli] sdk error: ${err.message || String(err)}`);
-    return null;
-  }
-  clearTimeout(timer);
-  const text = (finalText || assistantText).trim();
-  return text || null;
+  // Task B: delegate to the shared one-shot local-claude helper so the
+  // extractor can run on the session's active gateway profile (custom model)
+  // like the main agent does. Null-on-failure contract is unchanged.
+  return require('./local-claude').callLocalClaude({
+    system,
+    userMessage,
+    cwd,
+    user,
+    activeGw,
+    timeoutMs,
+  });
 }
 
 module.exports = { callClaudeCli };

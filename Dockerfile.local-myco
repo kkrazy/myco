@@ -1,0 +1,52 @@
+# Incremental local build for the myco-local container.
+# Base = the CURRENT RUNNING image (myco:local-new24) so all baked runtime
+# behaviour is kept; only working-tree source is overlaid to ship this
+# layer:
+#   - Task B: "走本机 claude / 自定义模型" on every direct Claude/Gemini call
+#     site — shared server/src/local-claude.js helper (SDK query + optional
+#     session gateway overlay), a 本机 Claude critic plugin
+#     (server/src/critics/claude.js, selectable in the composer critic
+#     dropdown), critique.js threads rec.activeGw into runCritique,
+#     anthropic.js gets a localFallback (no ANTHROPIC_API_KEY → local claude)
+#     for the summarizer, and btw/claude-cli + their callers pass the active
+#     gateway to one-shot calls. Regression: test/local-claude-options.test.js.
+#   - Run-queue agent-n2: the queue strip gains a ◓ agent-n2 button that runs
+#     the next pending plan item through the DUAL-agent lane
+#     (POST /sessions/:id/queue/n2 in server/src/artifacts.js →
+#     compare-lanes.startN2Lane; pending → running → success). UI: app.js +
+#     styles.css (.runqueue-n2-resume, cyan tint). Regression:
+#     test/queue-n2-resume.test.js.
+#   - CodeHub compatibility audit: all no-remote + user-level token hint
+#     messages now include codehub-dg-g.huawei.com (slashcmds.js); @myco
+#     follow-current-project via detectHost; regression: test/fr-codehub-
+#     target.test.js.
+#   - @myco follow-current-project: /fr /bug /td @myco now detectHost the
+#     session's own project and file against IT (codehub/gitee/github),
+#     falling back to the fixed GitHub target only when no remote resolves.
+#     (server/src/slashcmds.js handleRemoteIssue).
+#   - Remote-issues header/link labels route through _remoteProviderLabel
+#     so gitee/codehub projects no longer render "GitHub" in the Plan view
+#     (web/public/app.js); codehub no-token hint points at /setpat @codehub.
+#     Regression: test/fr-codehub-target.test.js.
+# (The NO_PROXY change — add 7.216.246.115 for the DS gateway — is applied at
+# docker-run time, not in the image. Container creation MUST pass --add-host
+# for the internal Huawei gateways — see docs/deploy.md §4.2; dropping them
+# breaks in-container DNS for api.code-agent.rnd.huawei.com.)
+FROM myco:local-new24
+# sshpass for outbound SSH from inside sessions (Alpine repo via proxy
+# build-args — HTTP_PROXY/HTTPS_PROXY/NO_PROXY passed at docker build time).
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+RUN apk add --no-cache sshpass
+COPY server/src ./server/src
+COPY scripts ./scripts
+COPY web/public ./web/public
+# docs/whatsnew — served by GET /whatsnew (server/src/index.js WHATSNEW_DIR
+# resolves to /app/docs/whatsnew). Without this COPY the endpoint returns
+# available:false and the "功能上新" banner never shows.
+COPY docs ./docs
+COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+RUN date -u +%Y-%m-%dT%H:%M:%SZ > /app/web/public/build.txt
+ENTRYPOINT ["/docker-entrypoint.sh"]

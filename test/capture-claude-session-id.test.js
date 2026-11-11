@@ -24,6 +24,7 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-cap-'));
 process.env.MYCO_STATE_DIR = tmpRoot;
 process.env.MYCO_WORKSPACE = path.join(tmpRoot, 'wks');
 process.env.HOME = tmpRoot;       // captureClaudeSessionId derives projectsDir from os.homedir()
+process.env.USERPROFILE = tmpRoot; // ...which prefers USERPROFILE on Windows
 fs.mkdirSync(process.env.MYCO_WORKSPACE, { recursive: true });
 fs.mkdirSync(path.join(tmpRoot, '.claude', 'projects'), { recursive: true });
 
@@ -40,7 +41,10 @@ function t(name, fn) {
 }
 
 function projDirFor(absCwd) {
-  return path.join(tmpRoot, '.claude', 'projects', absCwd.replace(/\//g, '-'));
+  // Share the product's encoder instead of hand-rolling `replace(/\//g,'-')`:
+  // on Windows the cwd is `C:\...` and the old form left `:` + `\` in a
+  // path segment, so the fixture landed somewhere the reader never looks.
+  return path.join(tmpRoot, '.claude', 'projects', sessionsMod.encodeCwdForClaude(absCwd));
 }
 
 async function writeJsonl(absCwd, uuid, ageOffsetMs = 0) {

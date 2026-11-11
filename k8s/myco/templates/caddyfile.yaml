@@ -1,0 +1,10 @@
+# Caddyfile ConfigMap —— 内容默认与 Docker state 目录的 Caddyfile 一致
+# （:80 无域名反代 :3000，不申请公开证书）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-caddyfile
+  namespace: {{ .Release.Namespace }}
+data:
+  Caddyfile: |
+{{ .Values.caddyfile | indent 4 }}

@@ -170,9 +170,12 @@ t('CSS: #btn-manual shares the sidebar-button styling', () => {
 });
 
 t('CSS: #manual-modal has overlay + dialog styling', () => {
-  assert.ok(/#manual-modal\s*\{[^}]*position:\s*fixed/.test(CSS),
+  // #manual-modal shares its overlay rule with #whatsnew-modal
+  // (selector group `#manual-modal,\n#whatsnew-modal {`), so the regex
+  // must span past the comma to the shared declaration block.
+  assert.ok(/#manual-modal,\s*#whatsnew-modal\s*\{[^}]*position:\s*fixed/.test(CSS),
     'modal must use position: fixed for full-viewport overlay');
-  assert.ok(/#manual-modal\s*\{[^}]*background:\s*rgba\(/.test(CSS),
+  assert.ok(/#manual-modal,\s*#whatsnew-modal\s*\{[^}]*background:\s*rgba\(/.test(CSS),
     'modal overlay must have a dim background');
   assert.ok(/#manual-body/.test(CSS),
     '#manual-body must have scrollable styling');

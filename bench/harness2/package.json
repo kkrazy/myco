@@ -1,0 +1,13 @@
+{
+  "name": "myco-harness2-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Blocking CLI that Harness²'s MycoSubstrate spawns: runs isolated myco AgentSessions against a harness tree and emits one contract-shaped JSON line (see CONTRACT.md)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.142"
+  }
+}

@@ -380,6 +380,64 @@ async function writeFile(absRoot, relPath, { content, expectedMtimeMs }) {
   return { mtimeMs: newSt.mtimeMs, size: newSt.size };
 }
 
+// delm-10: create a new empty directory under relPath (relative to the
+// currently browsed dir). Containment via safeJoin; refuses to
+// overwrite an existing entry (EEXIST → ERR_EXISTS). Intermediate
+// parents are NOT auto-created (mkdir, not mkdirp) so a typo can't
+// silently build a deep tree.
+async function createDir(absRoot, relPath) {
+  const raw = (relPath == null ? '' : String(relPath)).trim();
+  if (raw === '' || raw === '.' || raw === './') {
+    throw err('ERR_BAD_INPUT', 'name required');
+  }
+  if (path.basename(raw) === '..' || raw.split('/').includes('..')) {
+    throw err('ERR_BAD_INPUT', 'invalid name');
+  }
+  const abs = await safeJoin(absRoot, raw);
+  try {
+    await fsp.mkdir(abs, { mode: 0o755 });
+  } catch (e) {
+    if (e.code === 'EEXIST') throw err('ERR_EXISTS', 'already exists');
+    if (e.code === 'EACCES' || e.code === 'EPERM') throw err('ERR_PERM', e.message);
+    if (e.code === 'ENOENT') throw err('ERR_NOT_FOUND', 'parent folder missing');
+    throw e;
+  }
+  const st = await fsp.stat(abs);
+  return { created: true, kind: 'dir', path: raw, mtimeMs: st.mtimeMs };
+}
+
+// delm-10: create a new (optionally non-empty) file under relPath.
+// Empty content + 'overwrite:false' default → refuses to clobber an
+// existing file (EEXIST → ERR_EXISTS). Containment + symlink rules
+// match writeFile (ERR_OUTSIDE / ERR_SYMLINK_WRITE).
+async function createFile(absRoot, relPath, { content = '' } = {}) {
+  const raw = (relPath == null ? '' : String(relPath)).trim();
+  if (raw === '' || raw === '.' || raw === './') {
+    throw err('ERR_BAD_INPUT', 'name required');
+  }
+  if (typeof content !== 'string') throw err('ERR_BAD_INPUT', 'content must be string');
+  if (Buffer.byteLength(content, 'utf8') > MAX_READ_BYTES) {
+    throw err('ERR_TOO_LARGE', 'content exceeds max size');
+  }
+  const abs = await safeJoin(absRoot, raw);
+  let st;
+  try { st = await fsp.lstat(abs); }
+  catch (e) {
+    if (e.code !== 'ENOENT') {
+      if (e.code === 'EACCES' || e.code === 'EPERM') throw err('ERR_PERM', e.message);
+      throw e;
+    }
+    st = null; // target doesn't exist — the expected case
+  }
+  if (st) {
+    if (st.isSymbolicLink()) throw err('ERR_SYMLINK_WRITE', 'refusing to write through symlink');
+    throw err('ERR_EXISTS', 'already exists');
+  }
+  await fsp.writeFile(abs, content, { encoding: 'utf8', mode: 0o644, flag: 'wx' });
+  const newSt = await fsp.stat(abs);
+  return { created: true, kind: 'file', path: raw, mtimeMs: newSt.mtimeMs, size: newSt.size };
+}
+
 // fr-77: flat list of all git-status-changed files at the project root.
 // Powers the file explorer's bottom "Changed files" section. Reuses
 // _gitStatusMap (so we don't re-fork git status). Returns:
@@ -736,4 +794,4 @@ async function rejectFile(absRoot, relPath) {
   return { ok: true, path: relPath, action: 'rejected', mode: 'reverted' };
 }
 
-module.exports = { safeJoin, listDir, readFile, writeFile, listChangedFiles, readDiff, acceptFile, rejectFile };
+module.exports = { safeJoin, listDir, readFile, writeFile, createDir, createFile, listChangedFiles, readDiff, acceptFile, rejectFile };

@@ -84,9 +84,16 @@ function _projectRootForRec(rec) {
 
 // Look up the token for (user, provider, owner, repo) via the same
 // path /feature + /bug use. Returns the token string or null.
+//
+// NOTE: gitTokens.getToken has a POSITIONAL signature
+//   getToken(user, provider, owner, repo)   (not an options object).
+// Passing one object as `user` used to make _normalizeProvider see
+// `provider === undefined` → returned null for EVERY provider, so the
+// Plan-view remote-issues panel always showed "no token on file". This
+// is the fixed, positional call.
 function _resolveToken({ user, provider, owner, repo }) {
   try {
-    const t = gitHosts.getToken({ user, provider, owner, repo });
+    const t = gitHosts.getToken(user, provider, owner, repo);
     return (t && typeof t === 'string') ? t : null;
   } catch { return null; }
 }
