@@ -1,0 +1,43 @@
+# Build from existing myco:latest to avoid pulling base image through proxy.
+# Use: docker build -f Dockerfile.local -t myco:latest .
+FROM myco:latest
+
+# Proxy support: Docker build should pass --build-arg http_proxy/https_proxy
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ENV http_proxy=$http_proxy https_proxy=$https_proxy no_proxy=$no_proxy
+
+# lean-ctx is ALREADY baked into the base myco:latest (docker/Dockerfile
+# line 46 installs it), so re-downloading it here is unnecessary AND hangs
+# behind slow proxies (the github release curl stalls). Dropped.
+
+# Bring in the current working-tree source for scripts + server/src +
+# web/public so the incremental local image ships the LATEST code. The base
+# myco:latest layer may be stale (its docker/Dockerfile COPYs are baked at
+# base build time, and Dockerfile.local does NOT re-copy them by default).
+# Without these, a local rebuild would silently keep old
+# scripts/git-credential-myco.sh / server/src/*.js / web/public/app.js.
+# `FROM myco:latest` keeps node_modules intact, so these COPYs are cheap and
+# only touch source files. (web/public carries the frontend — incl. the
+# single-user "no login screen" change in app.js.)
+COPY scripts ./scripts
+COPY server/src ./server/src
+COPY web/public ./web/public
+# docs/whatsnew — served by GET /whatsnew (server/src/index.js WHATSNEW_DIR
+# resolves to /app/docs/whatsnew). Without this COPY the endpoint returns
+# available:false and the "功能上新" banner never shows.
+COPY docs ./docs
+
+# Copy updated entrypoint with proxy configuration
+# Note: the entrypoint lives under docker/ in this repo — COPY with the
+# root-context path (the pre-fix `COPY docker-entrypoint.sh` failed with
+# "not found" since there is no root-level copy).
+COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Refresh the build timestamp
+RUN date -u +%Y-%m-%dT%H:%M:%SZ > /app/web/public/build.txt
+
+# Restore entrypoint
+ENTRYPOINT ["/docker-entrypoint.sh"]

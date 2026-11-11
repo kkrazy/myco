@@ -1,0 +1,41 @@
+{
+  "name": "@myco/cli",
+  "version": "0.1.0",
+  "description": "Combined CLI + chat client for the myco session manager. Bash-installable; VSCode integration lights up when a VSCode window is running.",
+  "keywords": [
+    "myco",
+    "cli",
+    "chat",
+    "ai",
+    "claude",
+    "developer-tools",
+    "shell-integration"
+  ],
+  "author": "kkrazy",
+  "license": "MIT",
+  "homepage": "https://github.com/kkrazy/myco",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kkrazy/myco",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/kkrazy/myco/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "bin": {
+    "myco": "./index.js"
+  },
+  "main": "./index.js",
+  "files": [
+    "index.js",
+    "src/",
+    "share/",
+    "README.md"
+  ],
+  "dependencies": {
+    "ws": "^8.14.2"
+  }
+}

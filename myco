@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Launcher for the myco CLI. Reuses the server's node_modules so we don't
+# need a separate npm install for the `ws` dependency.
+set -e
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export NODE_PATH="$DIR/server/node_modules${NODE_PATH:+:$NODE_PATH}"
+exec node "$DIR/cli/index.js" "$@"

@@ -1,0 +1,36 @@
+node_modules/
+*.log
+/tmp/
+.DS_Store
+.env
+._*
+nohup.out
+.tls/
+.tls.bak.*
+.claude/scheduled_tasks.lock
+# fr-55: lean-ctx + the Claude SDK both write per-machine state
+# (Allow-always picks, lean-ctx PostToolUse hooks) into
+# .claude/settings.local.json. Keep it untracked so it doesn't
+# bleed across machines / users.
+.claude/settings.local.json
+_myco_/
+
+# harness2: sweep artifacts, snapshots, pidfiles, logs (per-session, not repo state)
+_harness_/
+
+# python bytecode from the harness2 adapter / its tests
+__pycache__/
+*.pyc
+
+# Pre-fetched external binaries copied into the Docker image (caddy/lean-ctx
+go through the proxy unreliably at build time). arm64. Not for git.
+build-assets/
+
+# kb-service: the built index is a derived artifact (hundreds of MB) and is
+# rebuilt from the corpus. The Markdown notes under <KB_ROOT>/<kb>/notes/ are
+# authoritative and SHOULD be committed when KB_ROOT points inside the project.
+kb-service/kb-data/
+kb-data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

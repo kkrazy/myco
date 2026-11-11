@@ -1,0 +1,17 @@
+{
+  "name": "myco-kb-service",
+  "version": "1.0.0",
+  "description": "Standalone domain knowledge base + retrieval service for myco research mode. SQLite FTS5 + optional vector search; Markdown-first write-back.",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "build:math": "node bin/kb.js build --corpus ../math --kb math",
+    "test": "node test/run.js"
+  },
+  "dependencies": {}
+}

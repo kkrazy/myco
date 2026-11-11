@@ -1,0 +1,32 @@
+{{- $envMode := include "myco.envMode" . }}
+myco release "{{ .Release.Name }}" 已部署到 namespace "{{ .Release.Namespace }}"。
+
+镜像：{{ include "myco.image" . }}
+调度：固定节点 {{ .Values.storage.node }}（Local PV nodeAffinity + nodeSelector 双保险）
+网络：hostNetwork —— Caddy 直接监听 {{ .Values.storage.node }} 宿主 80 端口
+存储：Local PV ×{{ len .Values.storage.volumes }}（reclaimPolicy=Retain，卸载不删数据）
+
+{{- if eq $envMode "envFile" }}
+env 注入：Secret {{ .Release.Name }}-env（来自 --set-file envFile，内容明文可被 kubeconfig 持有者读取）
+{{- else }}
+env 注入：引用已有 Secret {{ .Values.envFromSecret }}
+{{- end }}
+
+下一步验证（详见 docs/deploy/k8s-deploy.md §6）：
+
+  kubectl -n {{ .Release.Namespace }} get pods -o wide
+  # 期望：1/1 Running，NODE 列 = {{ .Values.storage.node }}，IP 是宿主网段
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ .Release.Name }} -- grep code-agent /etc/hosts
+  # 期望：7.156.115.217 api.code-agent.rnd.huawei.com（hostAliases 生效）
+
+  curl -s -o /dev/null -w "HTTP %{http_code}\n" http://{{ .Values.storage.node }}/auth/check
+  # 期望：HTTP 200
+
+如果 Pod 一直 Pending / ContainerCreating：
+  kubectl -n {{ .Release.Namespace }} describe pod   ← 看 Events（目录没建？镜像在拉？）
+  {{ if .Values.storage.createStaticPVs }}确认 {{ .Values.storage.node }} 上已手工建好：
+{{- range $name, $v := .Values.storage.volumes }}
+    {{ $v.hostPath }}   ({{ $name }})
+{{- end }}
+{{- end }}

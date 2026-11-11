@@ -1,0 +1,1627 @@
+// Plan / Arch / Test artifact routes.
+//
+// Server-side extraction of pending todos, architectural notes, and test
+// plans from the running session's JSONL transcript via the Anthropic API
+// (extractor.callClaudeCli). Stored under rec.artifacts[type] on the
+// session record. Checking a Plan item or hitting the per-item quorum
+// dispatches it back to the running Claude session via the canonical
+// chat-message path in attach.handleChatMessage — the dispatched text
+// carries a `[run:<type>#<id>]` marker which attach.js uses to bind the
+// next turn_result's outcome (status + cost + summary + final text) to
+// the originating item's runs[] + comments[].
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+const { extractArtifact } = require('./extractor');
+const { saveStore, isOwnerOrAdmin } = require('./sessions');
+const runQueue = require('./runQueue');
+const pendingQuestions = require('./pendingQuestions');
+
+const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
+
+// Type glyph used in the chat-message title when an artifact item is
+// dispatched. Mirrors the chrome buttons in index.html (📋/🧪/🏗️) so
+// the chat row visually matches the artifact pane the item came from.
+const ARTIFACT_TYPE_GLYPH = { plan: '📋', test: '🧪', arch: '🏗️' };
+
+// Build the text that lands in BOTH the chat history (for viewer
+// awareness) AND the running Claude session as a user message. The
+// dispatched text is what claude will execute on, so we want it short
+// and direct — comments come last so they augment, not bury, the
+// instruction. A `[run:<type>#<id>]` marker (added by the client when
+// it composes the dispatch, see web/public/app.js onArtifactItemRun)
+// is what binds the eventual turn_result back to this item; the text
+// the server emits is the human-readable body.
+//
+//   [📋 Plan item · submitted by @kkrazy]
+//   {item.text}
+//
+//   Comments:
+//   - @alice: …
+//   - @bob: …
+function _artifactLabel(type) {
+  return type === 'plan' ? 'Plan item' : type === 'test' ? 'Test item' : 'Item';
+}
+function _artifactCommentsBlock(item) {
+  const comments = Array.isArray(item.comments) ? item.comments : [];
+  if (!comments.length) return [];
+  const lines = ['', 'Comments:'];
+  for (const c of comments) {
+    if (!c || !c.text) continue;
+    const author = c.user ? `@${c.user}` : 'anon';
+    const body = String(c.text).replace(/\s+/g, ' ').trim();
+    lines.push(`- ${author}: ${body}`);
+  }
+  return lines;
+}
+// bug-36: claude only saw the one-line title and the comments —
+// item.description (the Problem/Expected/Actual body fr-80 r6 added
+// when it rewrites a long input) was silently dropped. Without the
+// body, claude often re-derived (or invented) the issue's context
+// instead of using what the user actually wrote. Both builders
+// (Run/Fix/Implement/Do AND the quorum auto-fire) need the same fix.
+function _artifactDescriptionBlock(item) {
+  const desc = item && typeof item.description === 'string'
+    ? item.description.trim()
+    : '';
+  if (!desc) return [];
+  // Blank line separator before the body so it reads as a distinct
+  // section from the title row above.
+  return ['', desc];
+}
+function buildArtifactRunText(type, item, user) {
+  const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
+  // fr-48 bugfix: prepend the [run:<type>#<id>] marker. attach.js
+  // handleChatMessage parses this marker to set session._activeRunItem,
+  // which is what the agent-event listener uses to bind subsequent
+  // terminal events (turn_result / iteration_aborted / fatal) back to
+  // the queue entry. WITHOUT this marker the queue dispatch path never
+  // set _activeRunItem and queue entries stayed `running` forever.
+  // Conditional on item.id being truthy — guards legacy / synthetic
+  // call sites that build dispatch text without a backing plan item.
+  const runMarkerPrefix = item && item.id ? `[run:${type}#${item.id}] ` : '';
+  const header = `${runMarkerPrefix}[${glyph} ${_artifactLabel(type)} · submitted by @${user}]`;
+  // bug-36: ORDER is header → title (item.text) → description (body)
+  //         → comments. Description must come BEFORE comments so the
+  //         issue body is what claude reads first.
+  return [
+    header,
+    item.text || '',
+    ..._artifactDescriptionBlock(item),
+    ..._artifactCommentsBlock(item),
+  ].join('\n');
+}
+function buildArtifactQuorumText(type, item) {
+  const glyph = ARTIFACT_TYPE_GLYPH[type] || '·';
+  const voters = (item.voters || []).map((v) => `@${v}`).join(', ');
+  // fr-48 bugfix: same marker prepend (conditional on id) as
+  // buildArtifactRunText — the quorum auto-fire goes through the same
+  // handleChatMessage path and needs _activeRunItem set.
+  const runMarkerPrefix = item && item.id ? `[run:${type}#${item.id}] ` : '';
+  const header = `${runMarkerPrefix}[${glyph} ${_artifactLabel(type)} · quorum reached (${(item.voters || []).length} voters: ${voters})]`;
+  // bug-36: same description ordering as buildArtifactRunText.
+  return [
+    header,
+    item.text || '',
+    ..._artifactDescriptionBlock(item),
+    ..._artifactCommentsBlock(item),
+  ].join('\n');
+}
+
+// All three artifacts (plan / test / arch) are mirrored into
+// `<session-cwd>/_myco_/` so the project can be committed and shared
+// across sessions. The mirror is the source of truth on read: a
+// teammate cloning the repo and starting a fresh myco session sees the
+// same plan items, test plan, and architecture notes that the original
+// author left behind. Hand-editing the files works too — myco reads on
+// the next GET and reconciles the in-memory copy.
+//
+// Files in _myco_/:
+//   plan.json          — items + comments + voters + done state
+//   test.json          — items + comments + done state (no votes)
+//   architecture.md    — long-form arch markdown
+//   README.md          — explainer for humans browsing the repo
+//
+// Backward compat: an existing root-level `<cwd>/architecture.md` (from
+// the pre-_myco_ layout) is still readable as a fallback.
+const MYCO_DIR = '_myco_';
+const LEGACY_ARCH_FILE = 'architecture.md';   // root-of-project, pre-_myco_
+const ARTIFACT_FILE_BY_TYPE = {
+  plan: 'plan.json',
+  test: 'test.json',
+  arch: 'architecture.md',
+};
+
+// Directory names skipped when scanning for a nested project root.
+// Keeps the scan cheap and avoids latching onto non-project dirs.
+// Names starting with `.` are also skipped.
+const NESTED_SCAN_SKIP = new Set([
+  'node_modules', 'vendor', 'dist', 'build', 'target',
+  '__pycache__', 'coverage', '.cache', '.next', '.nuxt',
+]);
+
+// Locate the project root that owns _myco_/ for this session. The
+// project is identified by a `.git/` directory — that's the unambiguous
+// marker that "this directory is a checked-out repo." Two supported
+// layouts:
+//
+//   1. Session.absCwd IS the project root:
+//        /wks/kkrazy/myco/.git/
+//        /wks/kkrazy/myco/_myco_/plan.json
+//
+//   2. Session.absCwd is a workspace ABOVE the project — the project
+//      lives one level deeper, matching <wks>/<user>/<session>/<project>:
+//        /wks/kkrazy/myco2/myco/.git/
+//        /wks/kkrazy/myco2/myco/_myco_/plan.json
+//
+// When neither layout has a .git/ — i.e. the session's cwd isn't a
+// repo and doesn't contain a repo — return null. The artifact code
+// then skips the file mirror entirely; there's no project to share
+// with, so writing _myco_/ would be meaningless.
+function findProjectRoot(rec) {
+  if (!rec || !rec.absCwd) return null;
+  // bug-72: during fr-94 Phase 3's async-clone window, the project
+  // subdir is pre-created EMPTY (see _kickoffGitCloneAsync) and the
+  // real `git clone` runs one setImmediate tick later. If anything
+  // populates the subdir in that gap — e.g. AgentSession's
+  // _persistEventToDisk mkdirs `<projectSubdir>/_myco_/` for
+  // events.jsonl — git clone fails with "destination path … already
+  // exists and is not an empty directory" (exit 128). Return null
+  // during clone-pending so callers fall back to the WRAPPER:
+  //   · AgentSession._eventsFile → `<rec.absCwd>/_myco_/events.jsonl`
+  //     (the fallback baked into the constructor + updateCwd is
+  //     `path.join(this.cwd, '_myco_')`, and this.cwd is the wrapper
+  //     during clone-pending via resolveAgentCwd's same-shape guard).
+  //   · ensureMycoDir / writeArtifactToFile → no-op (returns false /
+  //     null), which is fine; the user can't author plan/test/arch
+  //     during the clone-pending window anyway.
+  // After clone success, _runGitCloneInBackground flips cloneState
+  // to 'success' AND renames the wrapper-level `_myco_/` into the
+  // freshly-cloned project subdir AND calls AgentSession.updateCwd,
+  // restoring the post-fr-94 layout.
+  if (rec.cloneState === 'pending') return null;
+  // fr-94 Phase 1: rec.mainProject (explicit designated main project)
+  // takes precedence over auto-detection. Set at session creation via
+  // the spawn modal's "Git clone URL OR new project name" field. When
+  // present and the directory exists, it's the canonical project root
+  // for this session — period.
+  if (rec.mainProject && typeof rec.mainProject === 'string' && rec.mainProject.trim()) {
+    const candidate = path.join(rec.absCwd, rec.mainProject.trim());
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {}
+    // fr-94 Phase 1 r1 (critique response): if rec.mainProject is set
+    // but the directory doesn't exist, RETURN NULL (skip the artifact
+    // mirror) instead of silently falling through to auto-detect.
+    // Pre-r1 behavior silently routed _myco_/ to whatever auto-detect
+    // picked next — which on a multi-repo workspace could land
+    // plan.json/critic.md/events.jsonl in a completely different
+    // project than the user explicitly designated, causing
+    // hard-to-debug ghost writes. Logging here is loud enough that a
+    // hand-edited stale mainProject surfaces quickly.
+    console.warn(`[fr-94] rec.mainProject="${rec.mainProject}" but ${candidate} does not exist — artifact mirror skipped for ${rec.id || '?'} (fix: delete or correct rec.mainProject in /data/sessions.json)`);
+    return null;
+  }
+  // Direct hit: session.absCwd is itself a checkout. Kept for the
+  // pre-fr-94 "the session IS the project" layout — those sessions
+  // have no mainProject AND no subdir, so this is the only branch
+  // that resolves them.
+  try {
+    if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory()) return rec.absCwd;
+  } catch {}
+  // bug-66: the legacy sibling-subdir auto-detect scan is RETIRED.
+  // It produced non-deterministic resolution on multi-repo
+  // workspaces — same rec, different reads, different paths,
+  // because the alphabetical-first .git/-marked subdir could
+  // change as files appeared/disappeared. _myco_/ (plan, memory,
+  // events) is now ONLY anchored at <absCwd>/<rec.mainProject>/_myco_
+  // (or absCwd directly when the session IS the project). Legacy
+  // multi-repo sessions hit this null path until
+  // migrateMainProjectIfNeeded runs on next attach — which now
+  // deterministically picks alphabetical-first + persists.
+  return null;
+}
+
+function resolveMycoDir(rec) {
+  const projectRoot = findProjectRoot(rec);
+  if (!projectRoot) return null;
+  return path.join(projectRoot, MYCO_DIR);
+}
+
+// bug-66: the ONLY function allowed to write rec.mainProject. Enforces
+// the single-main invariant — every session has exactly one main
+// project, and once set it can't be silently replaced. Use this from
+// spawnSession (initial set) and migrateMainProjectIfNeeded (legacy
+// auto-cure). Any other writer is a bug; the static guard
+// `test_no_direct_main_project_write` in ./test/test.sh fails the
+// build if a `rec.mainProject = …` or `record.mainProject = …`
+// assignment lands outside this function.
+//
+// Throws:
+//   - if rec.mainProject is already non-empty AND differs from the
+//     incoming name (the "no second main" guard — bug-66's core
+//     invariant). Idempotent same-name re-set is a no-op.
+//   - if name is empty / non-string after trim
+//   - if the resolved <absCwd>/<name> doesn't exist as a directory
+//     (defense against ghost-anchoring _myco_/ at a path that won't
+//     accept writes)
+//
+// Returns the trimmed name that was assigned, so callers can chain
+// (e.g. `record.mainProject = setMainProject(record, raw)` reads as
+// "validated assignment").
+function setMainProject(rec, name) {
+  if (!rec || typeof rec !== 'object') {
+    throw new Error('setMainProject: rec is required');
+  }
+  if (!rec.absCwd || typeof rec.absCwd !== 'string') {
+    throw new Error(`setMainProject: rec.absCwd is required (rec.id=${rec.id || '?'})`);
+  }
+  const trimmed = (typeof name === 'string' ? name.trim() : '');
+  if (!trimmed) {
+    throw new Error(`setMainProject: name must be a non-empty string (rec.id=${rec.id || '?'})`);
+  }
+  if (rec.mainProject && typeof rec.mainProject === 'string' && rec.mainProject.trim()) {
+    if (rec.mainProject.trim() === trimmed) return trimmed; // idempotent no-op
+    throw new Error(
+      `setMainProject: rec.mainProject="${rec.mainProject}" already set — refusing to overwrite with "${trimmed}" ` +
+      `(bug-66 single-main invariant; rec.id=${rec.id || '?'}). ` +
+      `Each session has exactly one main project; spawn a new session to work on a different project.`
+    );
+  }
+  const candidate = path.join(rec.absCwd, trimmed);
+  try {
+    if (!fs.statSync(candidate).isDirectory()) {
+      throw new Error(`setMainProject: ${candidate} is not a directory (rec.id=${rec.id || '?'})`);
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      throw new Error(`setMainProject: ${candidate} does not exist (rec.id=${rec.id || '?'})`);
+    }
+    throw err;
+  }
+  rec.mainProject = trimmed;
+  return trimmed;
+}
+
+// fr-94 Phase 2: lazy migration helper. For sessions spawned before
+// fr-94 Phase 1 landed (no rec.mainProject set), run the same
+// subdir-scan that findProjectRoot does, and pick a main project:
+//   - no candidates → leave rec.mainProject unset. findProjectRoot's
+//     "session IS the project" branch covers the absCwd-is-a-repo
+//     case; everything else resolves to null until the user spawns
+//     a fresh session with the field set.
+//   - exactly one candidate → set rec.mainProject = candidate.
+//     Subsequent resolveMycoDir calls hit the explicit override path
+//     through findProjectRoot's Phase 1 branch.
+//   - multiple candidates → bug-66: was previously "bail with a
+//     warning" (left rec.mainProject unset → the retired auto-detect
+//     fallback re-picked alphabetical-first on every read, so the
+//     same rec resolved to different paths over time as siblings
+//     appeared/disappeared). Now: deterministically pick
+//     alphabetical-first, persist via setMainProject, and log
+//     loudly so the user sees which project the system claimed. If
+//     the choice is wrong, hand-editing /data/sessions.json
+//     overrides it (single source of truth from then on).
+// Returns true iff the migration set a new value.
+function migrateMainProjectIfNeeded(rec, saveStoreFn) {
+  if (!rec || !rec.absCwd) return false;
+  if (rec.mainProject && String(rec.mainProject).trim()) return false;
+  // Session itself IS the project? Don't migrate — findProjectRoot
+  // already returns absCwd for this case; setting mainProject would
+  // be a no-op (Phase 1 r1 checks `if (rec.mainProject && trim())`,
+  // and the empty string fails the truthy check anyway).
+  try {
+    if (fs.statSync(path.join(rec.absCwd, '.git')).isDirectory()) return false;
+  } catch {}
+  // Subdir scan — same filter as findProjectRoot.
+  let candidates = [];
+  try {
+    candidates = fs.readdirSync(rec.absCwd, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !NESTED_SCAN_SKIP.has(d.name))
+      .map((d) => d.name)
+      .filter((name) => {
+        try { return fs.statSync(path.join(rec.absCwd, name, '.git')).isDirectory(); }
+        catch { return false; }
+      })
+      .sort();
+  } catch {}
+  if (candidates.length === 0) return false;
+  const pick = candidates[0];
+  if (candidates.length > 1) {
+    console.warn(`[fr-94 Phase 2 / bug-66] ${rec.id || '?'}: multiple project candidates under ${rec.absCwd} (${candidates.join(', ')}) — deterministically claiming alphabetical-first "${pick}" for rec.mainProject. Hand-edit /data/sessions.json if the wrong project was picked.`);
+  } else {
+    console.log(`[fr-94 Phase 2] ${rec.id || '?'}: auto-migrated rec.mainProject = "${pick}" (sole .git/-marked subdir under ${rec.absCwd}).`);
+  }
+  try {
+    setMainProject(rec, pick);
+  } catch (err) {
+    console.error(`[fr-94 Phase 2] setMainProject(${pick}) refused: ${err && err.message ? err.message : err}`);
+    return false;
+  }
+  if (typeof saveStoreFn === 'function') {
+    try { saveStoreFn(); }
+    catch (err) { console.error(`[fr-94 Phase 2] saveStore after migrate failed: ${err && err.message ? err.message : err}`); }
+  }
+  return true;
+}
+
+function mycoDirPath(rec) {
+  return resolveMycoDir(rec);
+}
+
+function artifactFilePath(rec, type) {
+  const dir = mycoDirPath(rec);
+  if (!dir) return null;
+  const fname = ARTIFACT_FILE_BY_TYPE[type];
+  if (!fname) return null;
+  return path.join(dir, fname);
+}
+
+function legacyArchFilePath(rec) {
+  const projectRoot = findProjectRoot(rec);
+  if (!projectRoot) return null;
+  return path.join(projectRoot, LEGACY_ARCH_FILE);
+}
+
+function ensureMycoDir(rec) {
+  const dir = mycoDirPath(rec);
+  if (!dir) return false;
+  try { fs.mkdirSync(dir, { recursive: true }); return true; }
+  catch (err) {
+    console.error(`[artifact] failed to mkdir ${dir}: ${err.message}`);
+    return false;
+  }
+}
+
+// Parse a single _myco_/<type> file off disk into the in-memory shape.
+// Returns null if the file is absent OR malformed (JSON parse failure on
+// plan/test). Arch gets a synthetic updatedAt from the file mtime since
+// markdown doesn't carry it. Plan/test JSON should already have one,
+// but we backfill from mtime if missing for sanity.
+function readArtifactFromFile(rec, type) {
+  const p = artifactFilePath(rec, type);
+  if (!p) return null;
+  let stat, body;
+  try { stat = fs.statSync(p); body = fs.readFileSync(p, 'utf8'); }
+  catch { return null; }
+  if (type === 'arch') {
+    return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
+  }
+  try {
+    const parsed = JSON.parse(body);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Array.isArray(parsed.items)) return null;
+    if (!parsed.updatedAt) parsed.updatedAt = new Date(stat.mtimeMs).toISOString();
+    return parsed;
+  } catch (err) {
+    console.error(`[artifact] failed to parse ${p}: ${err.message}`);
+    return null;
+  }
+}
+
+function writeArtifactToFile(rec, type, artifact) {
+  if (!artifact) return false;
+  if (!ensureMycoDir(rec)) return false;
+  const p = artifactFilePath(rec, type);
+  if (!p) return false;
+  try {
+    const body = type === 'arch'
+      ? String(artifact.markdown || '')
+      : JSON.stringify(artifact, null, 2) + '\n';
+    fs.writeFileSync(p, body);
+    return true;
+  } catch (err) {
+    console.error(`[artifact] failed to write ${p}: ${err.message}`);
+    return false;
+  }
+}
+
+// One-shot README explaining what _myco_/ is. Written lazily the first
+// time the dir is created so a teammate browsing the repo via GitHub
+// (or `ls`) understands what they're looking at. We DO NOT overwrite
+// an existing README — the user may have customised it.
+const MYCO_README_BODY = `# _myco_
+
+This directory holds the **plan / test / architecture artifacts** for this
+project, surfaced by [myco](https://github.com/kkrazy/myco) (the Claude
+Code dashboard).
+
+Files here are safe to **commit and push** — they migrate to other
+sessions (or other developers) cloning this repo.
+
+## Files
+
+- \`plan.json\` — open and completed plan items, including comments + voters.
+- \`test.json\` — verification plan items + comments.
+- \`architecture.md\` — long-form architecture notes (editable directly).
+
+Generated and rewritten on each artifact mutation (refresh, mark, vote,
+comment, item delete). Hand-editing the files is fine — myco reads them
+on the next load and reconciles with the in-memory copy.
+`;
+function writeMycoReadmeIfMissing(rec) {
+  const dir = mycoDirPath(rec);
+  if (!dir) return;
+  const p = path.join(dir, 'README.md');
+  try { if (fs.existsSync(p)) return; } catch { return; }
+  try { fs.writeFileSync(p, MYCO_README_BODY); }
+  catch (err) { console.error(`[artifact] failed to write README at ${p}: ${err.message}`); }
+}
+
+// Backward-compat reader for the pre-_myco_ root-level architecture.md.
+// Used only when _myco_/architecture.md is absent.
+function readLegacyArchFromFile(rec) {
+  const p = legacyArchFilePath(rec);
+  if (!p) return null;
+  let stat, body;
+  try { stat = fs.statSync(p); body = fs.readFileSync(p, 'utf8'); }
+  catch { return null; }
+  return { markdown: body, updatedAt: new Date(stat.mtimeMs).toISOString() };
+}
+
+// Plan items only — see autoFireIfQuorum below. Two distinct voters
+// auto-dispatch the run; arch is unactionable, test items don't run.
+const AUTO_EXECUTE_VOTE_THRESHOLD = 2;
+const COMMENT_TEXT_MAX = 1000;
+const COMMENTS_PER_ITEM_MAX = 50;
+// fr-101: plan-item tags. Tags are a freeform string[] on each item —
+// users can attach categorical labels (frontend, auth, mobile-only, …)
+// for at-a-glance filtering / grouping. Normalization is opinionated
+// (trim → lowercase, ascii-allow-only) so 'Frontend' / 'frontend' /
+// 'FRONTEND' all collapse to one canonical tag. Cap matches the spirit
+// of COMMENTS_PER_ITEM_MAX — small ceiling guards plan.json bloat.
+const TAGS_PER_ITEM_MAX = 20;
+const TAG_MAX_LEN = 32;
+const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+function normalizeTag(raw) {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim().toLowerCase();
+  if (!t) return null;
+  if (t.length > TAG_MAX_LEN) return null;
+  if (!TAG_PATTERN.test(t)) return null;
+  return t;
+}
+
+function emptyArtifact(type) {
+  if (type === 'arch') return { markdown: '', updatedAt: null };
+  return { items: [], updatedAt: null };
+}
+
+// "Does this artifact carry real content worth mirroring to disk?"
+// Gates the backfill-on-first-read path so we don't litter a project
+// with empty _myco_/plan.json files just because a viewer flipped to
+// the Plan tab on a session that's never had any items.
+function _artifactHasContent(artifact) {
+  if (!artifact) return false;
+  if (Array.isArray(artifact.items) && artifact.items.length > 0) return true;
+  if (typeof artifact.markdown === 'string' && artifact.markdown.trim()) return true;
+  return false;
+}
+
+// Mutation endpoints (refresh / run / mark / vote / comment / plan-merge /
+// delete-item / delete-comment) operate on rec.artifacts[type] — which
+// can drift away from the on-disk _myco_/<type>.<ext> file when:
+//   - the project is on a different host and the file was edited
+//     externally (git pull, hand-edit),
+//   - or the absCwd is a wrapper dir whose <project>/_myco_/ was never
+//     loaded into memory because no GET /artifact ever ran in this
+//     server lifetime.
+// Resolution: at the TOP of every mutation, refresh rec.artifacts[type]
+// from the file if the file has content. The file is the version-
+// controlled source of truth; in-memory just shadows it. No file write,
+// no saveStore — the caller's mutation will write through both via
+// persistArtifact when it finishes.
+function _loadArtifactIntoRecFromFile(rec, type) {
+  if (!rec || !type) return;
+  const fromFile = readArtifactFromFile(rec, type);
+  if (!fromFile) return;
+  const prev = rec.artifacts && rec.artifacts[type];
+  const prevCount = prev && Array.isArray(prev.items) ? prev.items.length : 0;
+  const nextCount = Array.isArray(fromFile.items) ? fromFile.items.length : 0;
+  if (!rec.artifacts) rec.artifacts = {};
+  rec.artifacts[type] = fromFile;
+  if (prevCount !== nextCount) {
+    console.log(`[artifact] sync ${type} rec.artifacts from file (${prevCount} → ${nextCount} items, sid=${rec.id || '?'})`);
+  }
+}
+
+function persistArtifact(rec, type, artifact) {
+  if (!rec.artifacts) rec.artifacts = {};
+  rec.artifacts[type] = artifact;
+  saveStore();
+  // Mirror to <cwd>/_myco_/<type>.<ext> so the project can be committed
+  // and shared. Write happens on every mutation — files are small, and
+  // a teammate cloning the repo gets the latest plan/test/arch state
+  // without any session-state migration step. The README is written
+  // lazily so newcomers browsing the dir understand what it is.
+  writeArtifactToFile(rec, type, artifact);
+  writeMycoReadmeIfMissing(rec);
+}
+
+function findItem(rec, type, itemId) {
+  const artifact = rec.artifacts && rec.artifacts[type];
+  if (!artifact || !Array.isArray(artifact.items)) return null;
+  return artifact.items.find((it) => it.id === itemId) || null;
+}
+
+function ensureVoterAndCommentFields(item) {
+  if (!Array.isArray(item.voters)) item.voters = [];
+  if (!Array.isArray(item.comments)) item.comments = [];
+  // fr-101: lazy-init tags too, so legacy plan items materialize the
+  // field on first read without a separate schema migration step.
+  if (!Array.isArray(item.tags)) item.tags = [];
+}
+
+function reqUser(req, ctx) { return req.user || ctx.rec.user || 'unknown'; }
+
+// Wire the routes onto the express app. `deps` carries the shared auth
+// preamble + the chat-dispatch hooks that live in index.js / pty.js — the
+// artifact module stays decoupled from auth and PTY plumbing.
+function register(app, deps) {
+  const { fileApiPreamble, getPtySession, handleChatMessage } = deps;
+
+  // Push an artifact replace to every attached client. Called from every
+  // mutation route (refresh, run, mark, vote, comment, item delete) so
+  // concurrent viewers see voter counts / comment threads / item lists
+  // update without a round-trip. Silently no-ops if the PTY session
+  // isn't tracked (cleared / exited).
+  function broadcastArtifact(sessionId, type, artifact) {
+    const session = getPtySession(sessionId);
+    if (!session) return;
+    session.emit('state-update', {
+      kind: 'artifact',
+      artifactType: type,
+      artifact,
+    });
+  }
+
+  // GET — return the persisted artifact (or an empty stub of the right shape).
+  // For type=arch we prefer the on-disk <cwd>/architecture.md when present
+  // so a user (or claude) editing the file is the source of truth, not the
+  // sessions.json copy. The Arch tab auto-loads from this path so the user
+  // doesn't have to click Refresh to see content that already exists in
+  // the project.
+  app.get('/sessions/:id/artifact', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    // Read priority for all three types:
+    //   1. <cwd>/_myco_/<type>.<ext>    — canonical, version-controlled
+    //   2. <cwd>/architecture.md         — pre-_myco_ legacy (arch only)
+    //   3. rec.artifacts[type]           — in-memory state-dir fallback
+    // When the file is present we mirror into rec.artifacts so other
+    // code paths (UI cache, refresh, legacy clients) stay consistent.
+    const fromFile = readArtifactFromFile(ctx.rec, type);
+    if (fromFile) {
+      persistArtifact(ctx.rec, type, fromFile);
+      return res.json({ artifact: fromFile });
+    }
+    if (type === 'arch') {
+      const fromLegacy = readLegacyArchFromFile(ctx.rec);
+      if (fromLegacy) {
+        persistArtifact(ctx.rec, type, fromLegacy);
+        return res.json({ artifact: fromLegacy });
+      }
+    }
+    // Backfill path: file is absent but rec.artifacts already has
+    // content from a pre-_myco_ session (or a session that never
+    // mutated since the _myco_ deploy). Eagerly write it to
+    // <cwd>/_myco_/<type>.<ext> so the user sees the directory in
+    // the file explorer immediately AND can `git add _myco_/` to
+    // share with teammates. Without this, the dir only appears on
+    // the next mutation (refresh/check/vote/comment).
+    const stored = ctx.rec.artifacts && ctx.rec.artifacts[type];
+    if (stored && _artifactHasContent(stored)) {
+      persistArtifact(ctx.rec, type, stored);
+    }
+    res.json({ artifact: stored || emptyArtifact(type) });
+  });
+
+  // Re-extract via `claude -p` in the session's cwd.
+  app.post('/sessions/:id/artifact/refresh', async (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+    let artifact;
+    try {
+      artifact = await extractArtifact(ctx.rec, type);
+    } catch (err) {
+      console.error(`[artifact] extract failed for ${type}: ${err.message}`);
+      return res.status(500).json({ error: 'extraction failed', detail: err.message });
+    }
+    // Preserve user-typed plan items (added via /fr, /td, /bug slash
+    // commands and tagged source='user') across a refresh — without
+    // this they'd be wiped every time the user clicks the Refresh
+    // button on the Plan tab, defeating the whole purpose of letting
+    // users hand-add classified items.
+    const previous = ctx.rec.artifacts && ctx.rec.artifacts[type];
+    if (previous && Array.isArray(previous.items) && Array.isArray(artifact.items)) {
+      const userItems = previous.items.filter((it) => it && it.source === 'user');
+      if (userItems.length) {
+        // User items first so they stay near the top of their layer
+        // group after the client groups by `layer`.
+        artifact.items = [...userItems, ...artifact.items];
+      }
+    }
+    // persistArtifact also mirrors to <cwd>/_myco_/<type>.<ext> on disk,
+    // so a teammate cloning the repo sees the fresh extraction without
+    // needing a session-state migration step.
+    persistArtifact(ctx.rec, type, artifact);
+    broadcastArtifact(ctx.id, type, artifact);
+    // Plan refresh additionally runs an LLM dedupe scan over the merged
+    // (user + extracted) item set and returns proposals so the client
+    // can render an Apply/Dismiss callout. Failures here are non-fatal
+    // — the refresh response still carries the artifact; mergeProposals
+    // is just empty or annotated with an error string. See
+    // slashcmds.dedupePlanItems for the prompt + JSON-parse logic.
+    let mergeProposals = [];
+    let mergeError = null;
+    if (type === 'plan') {
+      try {
+        const slashcmds = require('./slashcmds');
+        const result = await slashcmds.dedupePlanItems(artifact.items, ctx.rec.absCwd);
+        if (result && result.error) {
+          mergeError = result.error;
+          console.error(`[artifact] dedupe scan returned error: ${result.error}`);
+        }
+        mergeProposals = (result && Array.isArray(result.groups)) ? result.groups : [];
+      } catch (err) {
+        mergeError = err.message;
+        console.error(`[artifact] dedupe scan threw: ${err.message}`);
+      }
+    }
+    res.json({ artifact, mergeProposals, mergeError });
+  });
+
+  // Dispatch a Plan or Test item to the running Claude session as a
+  // chat message via the canonical chat pipeline (so it shows up in
+  // the discussion history and broadcasts to read-only viewers). The
+  // dispatched text carries the `[run:<type>#<id>]` marker so
+  // attach.handleChatMessage can bind the next turn_result back to
+  // this item.
+  // fr-48 unification: every plan-item dispatch flows through the
+  // queue. /artifact/run, the chat-pane ▶ Run button, the quorum
+  // auto-fire, and the /queue slash command all funnel through
+  // _enqueueAndKickIfIdle. The queue is the SINGLE source of truth
+  // for "what claude is working on" — chip strip + status auto-
+  // advance + pause-on-failure all come for free.
+  //
+  // Result: an idle queue + Run click = immediate dispatch (queue
+  // kicks the head). A busy queue + Run click = appended to tail,
+  // auto-dispatched on completion of the current head.
+  function _enqueueAndKickIfIdle(ctx, type, itemId, user, opts = {}) {
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return { ok: false, status: 404, error: 'no such item' };
+    let entry;
+    try {
+      entry = runQueue.addToQueue(ctx.rec, itemId, type, user);
+    } catch (err) {
+      return { ok: false, status: 409, error: err.message };
+    }
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    // Kick if idle (no running entry + not paused). The turn_result
+    // hook in attach.js handles all subsequent advances.
+    const hasRunning = ctx.rec.runQueue.some((e) => e.status === 'running');
+    if (!hasRunning && !ctx.rec.runQueuePaused) {
+      const session = getPtySession(ctx.id);
+      if (session) {
+        try {
+          runQueue.markRunning(ctx.rec, itemId);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+          const dispatchText = opts.text || buildArtifactRunText(type, item, user);
+          handleChatMessage(ctx.id, session, opts.dispatchUser || user, dispatchText);
+        } catch (err) {
+          console.error(`[runQueue] kick dispatch failed: ${err.message}`);
+        }
+      }
+    }
+    return { ok: true, entry, item, kicked: !hasRunning && !ctx.rec.runQueuePaused };
+  }
+
+  app.post('/sessions/:id/artifact/run', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch is not actionable' });
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'dispatch requires owner or admin' });
+    }
+    const result = _enqueueAndKickIfIdle(ctx, type, itemId, user);
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    // Preserve the pre-fr-48 response shape (item + artifact) so any
+    // existing client / curl caller sees the same JSON. The new
+    // `queued`/`kicked` fields are additive.
+    res.json({
+      ok: true,
+      item: result.item,
+      artifact: ctx.rec.artifacts[type],
+      queued: true,
+      kicked: result.kicked,
+    });
+  });
+
+  // Manual check/uncheck — no dispatch.
+  app.post('/sessions/:id/artifact/mark', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const done = String(req.query.done || '') === '1';
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch has no items' });
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    const beforeDone = !!item.done;
+    item.done = done;
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    // fr-81 Phase B.4: write-back on local close. When done flips
+    // FALSE → TRUE AND the item carries meta.remoteUrl (set by Phase
+    // B.1's auto-promote), also close the upstream issue. Skips:
+    //   · done flipping the other direction (uncheck) — out of scope.
+    //   · meta.closedUpstreamAt already set — idempotency.
+    //   · meta.closedRemotely — upstream is already closed (Phase B.3
+    //     mirror flipped us; no point trying to close it again).
+    // Best-effort: fire-and-forget. A failure logs but doesn't block
+    // the HTTP response — the local close already happened.
+    if (!beforeDone && done && type === 'plan'
+        && item.meta && item.meta.remoteUrl
+        && !item.meta.closedUpstreamAt && !item.meta.closedRemotely) {
+      const writeUser = user;
+      _fireRemoteCloseAsync(ctx.id, ctx.rec, type, item, writeUser);
+    }
+    res.json({ ok: true, item });
+  });
+
+  // fr-81 Phase B.4: fire-and-forget upstream close. Extracted so the
+  // /artifact/mark route stays readable + the test can monkey-patch
+  // gitHosts.closeIssue without touching the route handler.
+  function _fireRemoteCloseAsync(sessionId, rec, type, item, writeUser) {
+    const provider = item.meta.remoteProvider;
+    const owner = item.meta.remoteOwner;
+    const repo = item.meta.remoteRepo;
+    const number = item.meta.remoteNumber;
+    if (!provider || !owner || !repo || !number) {
+      console.log(`[fr-81 Phase B.4] skipping write-back for ${item.id}: meta missing provider/owner/repo/number (legacy auto-promote row?)`);
+      return;
+    }
+    const gitHosts = require('./git-hosts');
+    const token = typeof gitHosts.getToken === 'function'
+      ? gitHosts.getToken(writeUser, provider, owner, repo)
+      : null;
+    if (!token) {
+      console.log(`[fr-81 Phase B.4] skipping write-back for ${provider} ${owner}/${repo}#${number}: no token on file for @${writeUser}`);
+      return;
+    }
+    gitHosts.closeIssue({ provider, token, owner, repo, number }).then((result) => {
+      if (result && result.ok) {
+        item.meta.closedUpstreamAt = new Date().toISOString();
+        persistArtifact(rec, type, rec.artifacts[type]);
+        broadcastArtifact(sessionId, type, rec.artifacts[type]);
+        console.log(`[fr-81 Phase B.4] closed upstream ${provider} ${owner}/${repo}#${number}`);
+      } else {
+        console.error(`[fr-81 Phase B.4] write-back failed for ${provider} ${owner}/${repo}#${number}: ${(result && result.error) || 'unknown'}`);
+      }
+    }).catch((err) => {
+      console.error(`[fr-81 Phase B.4] write-back threw for ${provider} ${owner}/${repo}#${number}: ${err.message}`);
+    });
+  }
+
+  // Toggle a vote on a Plan item; auto-dispatch the run if the per-item
+  // voter set hits AUTO_EXECUTE_VOTE_THRESHOLD distinct users. Test items
+  // only carry votes (no auto-fire); arch items can't be voted on.
+  //
+  // fr-48 unification: auto-fire flows through the queue too. The
+  // quorum text (which names the voters) is passed as opts.text to
+  // _enqueueAndKickIfIdle so the dispatched chat message still
+  // surfaces the social context.
+  function autoFireIfQuorum(ctx, type, item) {
+    if (item.done) return null;
+    if (type !== 'plan') return null;
+    if (item.voters.length < AUTO_EXECUTE_VOTE_THRESHOLD) return null;
+    const session = getPtySession(ctx.id);
+    if (!session) return { err: 'session not running, vote stored but not dispatched' };
+    const result = _enqueueAndKickIfIdle(ctx, type, item.id, 'auto-quorum', {
+      text: buildArtifactQuorumText(type, item),
+      dispatchUser: 'auto-quorum',
+    });
+    if (!result.ok) return { err: `dispatch failed: ${result.error}` };
+    return { fired: true, queued: true, kicked: result.kicked };
+  }
+
+  // bug-46: voting on plan items is cross-user by design — every
+  // item carries a `voters` array and AUTO_EXECUTE_VOTE_THRESHOLD
+  // (2) auto-dispatches when a SECOND distinct user upvotes.
+  // Pre-bug-46 this endpoint used fileApiPreamble('viewer'), which
+  // rejected any authenticated user who wasn't the session owner /
+  // admin / explicit viewer — making the cross-user quorum impossible
+  // for anyone not pre-added to rec.viewers[]. bug-46 changes the
+  // tier to 'authed', a new carve-out (see index.js fileApiPreamble)
+  // that accepts ANY signed-in user. Auth is still required so a
+  // drive-by anonymous request still 401s. Worst-case abuse:
+  // signed-in user with a session id can vote on plan items —
+  // bounded by the idempotent toggle (one vote per user) and small
+  // quorum threshold.
+  app.post('/sessions/:id/artifact/vote', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'authed');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be voted on' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+
+    const user = reqUser(req, ctx);
+    const idx = item.voters.indexOf(user);
+    let action;
+    if (idx >= 0) { item.voters.splice(idx, 1); action = 'removed'; }
+    else          { item.voters.push(user);    action = 'added'; }
+
+    const autoFired = action === 'added' ? autoFireIfQuorum(ctx, type, item) : null;
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    res.json({
+      ok: true,
+      item,
+      action,
+      threshold: AUTO_EXECUTE_VOTE_THRESHOLD,
+      autoFired: !!(autoFired && autoFired.fired),
+      note: autoFired && autoFired.err ? autoFired.err : null,
+    });
+  });
+
+  // bug-46 follow-up: comments on plan items are cross-user by the
+  // same collaborative design as voting. User: "the comment function
+  // should allow anyone logged in to add." Same single-line carve-
+  // out as the vote endpoint above — 'authed' tier requires auth
+  // but bypasses fr-87's owner/admin/viewer gate. Anti-abuse: comments
+  // are append-only text; per-user rate limits can be added later
+  // if drive-by spam materialises.
+  app.post('/sessions/:id/artifact/comment', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'authed');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const text = String((req.body && req.body.text) || '').trim();
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be commented' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!text) return res.status(400).json({ error: 'comment text required' });
+    if (text.length > COMMENT_TEXT_MAX) return res.status(400).json({ error: `comment too long (max ${COMMENT_TEXT_MAX} chars)` });
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+
+    const comment = {
+      id: crypto.randomBytes(6).toString('hex'),
+      user: reqUser(req, ctx),
+      text,
+      ts: new Date().toISOString(),
+    };
+    item.comments.push(comment);
+    if (item.comments.length > COMMENTS_PER_ITEM_MAX) {
+      item.comments = item.comments.slice(-COMMENTS_PER_ITEM_MAX);
+    }
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, comment, item });
+  });
+
+  // Apply a merge proposal generated by the dedupe scan. Body: { ids: [...] }
+  // — the listed plan items must all be the same layer (Feature/Todo/Bug).
+  // The lowest-numbered prefixed id becomes the canonical; the others'
+  // bodies are appended with a divider and their ids land in
+  // canonical.mergedFrom. See slashcmds.mergePlanItems for the
+  // mutation; this endpoint just wraps it with persist + broadcast.
+  app.post('/sessions/:id/artifact/plan/merge', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : null;
+    if (!ids || ids.length < 2) {
+      return res.status(400).json({ error: 'body.ids must be an array of ≥ 2 item ids' });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    let result;
+    try {
+      const slashcmds = require('./slashcmds');
+      result = slashcmds.mergePlanItems(ctx.rec, ids);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    persistArtifact(ctx.rec, 'plan', ctx.rec.artifacts.plan);
+    broadcastArtifact(ctx.id, 'plan', ctx.rec.artifacts.plan);
+    res.json({
+      ok: true,
+      artifact: ctx.rec.artifacts.plan,
+      merged: {
+        canonical: result.canonical.id,
+        absorbed: result.absorbed,
+        layer: result.layer,
+      },
+    });
+  });
+
+  // bug-49: DELETE /artifact/item route removed. The trash button
+  // that called it was the only client caller; bug-49 replaces that
+  // button with the existing close affordance (.artifact-item-close
+  // → POST /artifact/mark), so hard-deleting a plan item is no
+  // longer reachable from the UI. Per CLAUDE.md §1 (delete code
+  // that no longer has a caller), the server-side endpoint is
+  // removed with the button. /artifact/mark remains the lifecycle
+  // path: close = mark done (item stays in array with all history),
+  // reopen = unmark.
+  //
+  // bug-49 r1 critique response (Gemini flagged a "potential data
+  // loss if hard-delete was an intended feature"): the critique
+  // misreads the data-flow direction. The removed trash button was
+  // the ONLY data-loss path in the UI — `artifact.items.filter(it
+  // => it.id !== itemId)` permanently nuked the item plus every
+  // vote / comment / run-summary attached to it. The surviving
+  // close-via-mark path is the OPPOSITE: it sets `it.done = true`
+  // and leaves the record intact. Removing the trash button +
+  // route ELIMINATES the data-loss surface, doesn't create one. No
+  // other route in this file or elsewhere in server/src/ writes a
+  // similar `items.filter(...)` deletion against the plan/test
+  // artifacts (a `git log` audit of `artifact.items` confirms this
+  // was the sole hard-delete code path). If a legitimate admin-
+  // only hard-delete need surfaces later (GDPR purge, spam
+  // cleanup), reintroduce a fresh route gated by `isOwnerOrAdmin`
+  // + an explicit `require=true` query param — the diff is ~20
+  // lines, the git history of this commit has the exact prior
+  // implementation. Do NOT silently restore the old route or its
+  // UI button — that's the failure mode bug-49 was filed against.
+
+  app.delete('/sessions/:id/artifact/comment', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const commentId = String(req.query.commentId || '');
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId || !commentId) return res.status(400).json({ error: 'itemId + commentId required' });
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    const user = reqUser(req, ctx);
+    // fr-46: extend auth to allow owner+admin to delete ANY comment (not just
+    // session owner, not just author). Authors can still delete their own
+    // (existing behavior preserved). Admin coverage mirrors fr-39's
+    // delegated-admin model: granting /admin should include comment-deletion
+    // authority over the same plan-item surface.
+    const isAdmin = isOwnerOrAdmin(ctx.id, user);
+    const before = item.comments.length;
+    item.comments = item.comments.filter((c) => !(c.id === commentId && (c.user === user || isAdmin)));
+    if (item.comments.length === before) return res.status(403).json({ error: 'not your comment and not owner/admin' });
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, item });
+  });
+
+  // fr-46: PATCH item text — edit the body of an existing plan item.
+  // Auth: owner+admin only (matches fr-39 delegated-admin model). On first
+  // edit we snapshot the original text into item.meta.originalText; later
+  // edits don't overwrite that snapshot, so the very-first version stays
+  // recoverable for audit / accidental-rewrite recovery.
+  app.patch('/sessions/:id/artifact/item', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const text = String((req.body && req.body.text) || '').trim();
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (type === 'arch') return res.status(400).json({ error: 'arch items can\'t be edited via this route' });
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!text) return res.status(400).json({ error: 'text required' });
+    if (text.length > 64 * 1024) return res.status(400).json({ error: `text too long (max ${64 * 1024} chars)` });
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'edit requires owner or admin' });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    if (!item.meta) item.meta = {};
+    if (item.meta.originalText === undefined) {
+      item.meta.originalText = item.text;
+    }
+    item.text = text;
+    item.meta.editedBy = user;
+    item.meta.editedAt = new Date().toISOString();
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, item });
+  });
+
+  // fr-46: PATCH comment text — edit an existing comment.
+  // Auth: owner+admin only. Stamps comment.meta.editedBy/editedAt so the
+  // UI can render a small "edited by X at T" badge.
+  app.patch('/sessions/:id/artifact/comment', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const type = String(req.query.type || '');
+    const itemId = String(req.query.itemId || '');
+    const commentId = String(req.query.commentId || '');
+    const text = String((req.body && req.body.text) || '').trim();
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    if (!itemId || !commentId) return res.status(400).json({ error: 'itemId + commentId required' });
+    if (!text) return res.status(400).json({ error: 'text required' });
+    if (text.length > COMMENT_TEXT_MAX) return res.status(400).json({ error: `comment too long (max ${COMMENT_TEXT_MAX} chars)` });
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'edit requires owner or admin' });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    const comment = item.comments.find((c) => c.id === commentId);
+    if (!comment) return res.status(404).json({ error: 'no such comment' });
+    comment.text = text;
+    if (!comment.meta) comment.meta = {};
+    comment.meta.editedBy = user;
+    comment.meta.editedAt = new Date().toISOString();
+    persistArtifact(ctx.rec, type, ctx.rec.artifacts[type]);
+    broadcastArtifact(ctx.id, type, ctx.rec.artifacts[type]);
+    res.json({ ok: true, comment, item });
+  });
+
+  // fr-101: plan-item tags — add. Cross-user collaborative by design
+  // (same 'authed' tier as vote+comment): any signed-in user can tag
+  // a plan item without needing owner/admin status. Idempotent — if
+  // the (normalized) tag is already on the item, returns ok without
+  // mutating. Caps at TAGS_PER_ITEM_MAX to prevent plan.json bloat.
+  app.post('/sessions/:id/artifact/tag', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'authed');
+    if (!ctx) return;
+    const itemId = String((req.body && req.body.itemId) || req.query.itemId || '');
+    const rawTag = String((req.body && req.body.tag) || req.query.tag || '');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const tag = normalizeTag(rawTag);
+    if (!tag) {
+      return res.status(400).json({
+        error: `invalid tag (must be 1-${TAG_MAX_LEN} chars, [a-z0-9][a-z0-9_-]*)`,
+      });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    const item = findItem(ctx.rec, 'plan', itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    if (item.tags.includes(tag)) {
+      return res.json({ ok: true, item, action: 'noop' });
+    }
+    if (item.tags.length >= TAGS_PER_ITEM_MAX) {
+      return res.status(400).json({
+        error: `too many tags on this item (max ${TAGS_PER_ITEM_MAX})`,
+      });
+    }
+    item.tags.push(tag);
+    persistArtifact(ctx.rec, 'plan', ctx.rec.artifacts.plan);
+    broadcastArtifact(ctx.id, 'plan', ctx.rec.artifacts.plan);
+    res.json({ ok: true, item, action: 'added', tag });
+  });
+
+  // fr-101: plan-item tags — remove. 'authed' tier (same as add) so
+  // any signed-in user can clean up tags. Missing-tag is a 200 no-op
+  // (not 404) so the UI doesn't need to track which tags are real
+  // before firing a delete (handles double-click + race conditions).
+  app.delete('/sessions/:id/artifact/tag', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'authed');
+    if (!ctx) return;
+    const itemId = String(req.query.itemId || '');
+    const rawTag = String(req.query.tag || '');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const tag = normalizeTag(rawTag);
+    if (!tag) return res.status(400).json({ error: 'invalid tag' });
+    _loadArtifactIntoRecFromFile(ctx.rec, 'plan');
+    const item = findItem(ctx.rec, 'plan', itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    ensureVoterAndCommentFields(item);
+    const before = item.tags.length;
+    item.tags = item.tags.filter((t) => t !== tag);
+    const action = item.tags.length < before ? 'removed' : 'noop';
+    if (action === 'removed') {
+      persistArtifact(ctx.rec, 'plan', ctx.rec.artifacts.plan);
+      broadcastArtifact(ctx.id, 'plan', ctx.rec.artifacts.plan);
+    }
+    res.json({ ok: true, item, action, tag });
+  });
+
+  // fr-48: run-queue routes. Per-session queue of plan items for
+  // sequential auto-dispatch. Auth: owner+admin only (mirrors fr-46 /
+  // fr-39). Auto-advance lives in attach.js's turn_result hook —
+  // these routes just mutate state + broadcast.
+  function broadcastRunQueue(sessionId, rec) {
+    const session = getPtySession(sessionId);
+    if (!session) return;
+    session.emit('state-update', {
+      kind: 'runQueue',
+      state: runQueue.getQueueState(rec),
+    });
+  }
+
+  // bug-92: push the unanswered-question state to every attached client.
+  function broadcastPendingQuestions(sessionId, rec) {
+    const session = getPtySession(sessionId);
+    if (!session) return;
+    session.emit('state-update', {
+      kind: 'pending-questions',
+      state: pendingQuestions.getState(rec),
+    });
+  }
+
+  // POST /queue/add — append a plan item to the queue. If the queue
+  // is otherwise idle (no running entry, not paused), AND this is the
+  // first pending entry, immediately dispatch it via the existing
+  // [run:plan#<id>] marker path. This makes /queue fr-43 behave like
+  // /run-then-watch from the user's POV.
+  app.post('/sessions/:id/queue/add', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const itemId = String((req.body && req.body.itemId) || '').trim();
+    const type = String((req.body && req.body.type) || 'plan');
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!ARTIFACT_TYPES.includes(type)) return res.status(400).json({ error: 'unknown type' });
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    _loadArtifactIntoRecFromFile(ctx.rec, type);
+    const item = findItem(ctx.rec, type, itemId);
+    if (!item) return res.status(404).json({ error: 'no such item' });
+    let entry;
+    try {
+      entry = runQueue.addToQueue(ctx.rec, itemId, type, user);
+    } catch (err) {
+      return res.status(409).json({ error: err.message });
+    }
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    // Kick the queue if idle. The attach.js turn_result hook handles
+    // post-first auto-advance; we trigger the FIRST dispatch here.
+    const hasRunning = ctx.rec.runQueue.some((e) => e.status === 'running');
+    if (!hasRunning && !ctx.rec.runQueuePaused) {
+      const session = getPtySession(ctx.id);
+      if (session) {
+        try {
+          runQueue.markRunning(ctx.rec, itemId);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+          handleChatMessage(ctx.id, session, user, buildArtifactRunText(type, item, user));
+        } catch (err) {
+          console.error(`[runQueue] initial dispatch failed: ${err.message}`);
+        }
+      }
+    }
+    res.json({ ok: true, entry, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // DELETE /queue/:itemId — remove a pending entry (or drop a terminal
+  // entry from history). Throws 409 if the entry is currently running.
+  app.delete('/sessions/:id/queue/:itemId', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    let removed;
+    try {
+      removed = runQueue.removeFromQueue(ctx.rec, itemId);
+    } catch (err) {
+      return res.status(409).json({ error: err.message });
+    }
+    if (!removed) return res.status(404).json({ error: 'no such queue entry' });
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/clear — drop every pending entry. Running + terminal
+  // entries are preserved.
+  app.post('/sessions/:id/queue/clear', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const removed = runQueue.clearQueue(ctx.rec);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, removed, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/resume — unpause the queue (after a failure auto-pause
+  // OR an explicit /qpause). If a pending entry exists, dispatch it
+  // immediately (same kick-on-resume logic as the initial add path).
+  app.post('/sessions/:id/queue/resume', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    runQueue.resumeQueue(ctx.rec);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    const next = runQueue.peekNextPending(ctx.rec);
+    if (next) {
+      const item = findItem(ctx.rec, next.type, next.itemId);
+      const session = getPtySession(ctx.id);
+      if (item && session) {
+        try {
+          runQueue.markRunning(ctx.rec, next.itemId);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+          handleChatMessage(ctx.id, session, user, buildArtifactRunText(next.type, item, user));
+        } catch (err) {
+          console.error(`[runQueue] resume-dispatch failed: ${err.message}`);
+        }
+      }
+    }
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/n2 — run the NEXT pending queue entry through the DUAL-agent
+  // (agent-n2) lane instead of the single-agent chat dispatch. The user can
+  // build a plan item (queued for single-agent run) and instead run it with
+  // worker-A + worker-B for broader coverage. Reuses the queue lifecycle:
+  // pending → markRunning → (N2 lane completes) → markFinished(success).
+  // Unlike /queue/resume (single agent), this is independent of the paused
+  // flag — it drives the lane directly, then flips the queue entry.
+  app.post('/sessions/:id/queue/n2', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const entry = Array.isArray(ctx.rec.runQueue)
+      ? ctx.rec.runQueue.find((e) => e.status === 'pending')
+      : null;
+    if (!entry) return res.status(409).json({ error: 'no pending queue item to run with agent-n2' });
+    const itemId = entry.itemId;
+    _loadArtifactIntoRecFromFile(ctx.rec, entry.type);
+    const item = findItem(ctx.rec, entry.type, itemId);
+    if (!item) return res.status(404).json({ error: `item ${itemId} no longer exists in the artifact` });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(500).json({ error: 'no live session to dispatch' });
+    const cwd = ctx.root || process.cwd();
+    const task = buildArtifactRunText(entry.type, item, user);
+    runQueue.markRunning(ctx.rec, itemId);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    try {
+      const cl = require('./compare-lanes');
+      const fs = require('fs');
+      const dir = cl.timestampedDir(cwd, 'n2');
+      fs.mkdirSync(dir, { recursive: true });
+      const lane = cl.startN2Lane({ cwd, user, task, dir, mainSession: session, mainSessionId: ctx.id, laneTag: null });
+      let done = false;
+      cl.onLaneTerminal(lane.lane, true, () => {
+        if (done) return;
+        done = true;
+        try {
+          runQueue.markFinished(ctx.rec, itemId, true);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+        } catch (err) {
+          console.error(`[runQueue-n2] finish-update failed for ${ctx.id} ${itemId}: ${err.message}`);
+        }
+      });
+      console.log(`[runQueue-n2] ${ctx.id} running ${itemId} through dual-agent lane`);
+    } catch (err) {
+      console.error(`[runQueue-n2] ${ctx.id} ${itemId} dispatch failed: ${err.message}`);
+      runQueue.markFinished(ctx.rec, itemId, false);
+      saveStore();
+      broadcastRunQueue(ctx.id, ctx.rec);
+    }
+    res.json({ ok: true, itemId, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/:itemId/rerun — dispatch ONE queue entry immediately,
+  // regardless of whether it's waiting (pending) or terminal (failed /
+  // cancelled). The "↻" button on a failed/waiting chip. Rejects if
+  // something else is already running (we can't run two queue entries
+  // concurrently — the turn_result hook correlates by _activeRunItem).
+  app.post('/sessions/:id/queue/:itemId/rerun', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const entry = ctx.rec.runQueue && ctx.rec.runQueue.find((e) => e.itemId === itemId);
+    if (!entry) return res.status(404).json({ error: 'no such queue entry' });
+    if (entry.status !== 'pending' && !runQueue.TERMINAL_STATUSES.has(entry.status)) {
+      return res.status(409).json({ error: `item ${itemId} is ${entry.status} and cannot be rerun` });
+    }
+    const alreadyRunning = (ctx.rec.runQueue || []).some((e) => e.status === 'running');
+    if (alreadyRunning) {
+      return res.status(409).json({ error: 'another queue task is running — stop it or wait before rerunning' });
+    }
+    // A terminal entry (failed/cancelled) re-runs as a FRESH pending entry
+    // so the prior record stays for audit (addToQueue keeps terminal
+    // entries in place and only rejects non-terminal duplicates). A
+    // pending entry is dispatched as-is.
+    let target = entry;
+    if (runQueue.TERMINAL_STATUSES.has(entry.status)) {
+      try {
+        target = runQueue.addToQueue(ctx.rec, entry.itemId, entry.type, user);
+      } catch (err) {
+        return res.status(409).json({ error: err.message });
+      }
+    }
+    if (ctx.rec.runQueuePaused) runQueue.resumeQueue(ctx.rec);
+    _loadArtifactIntoRecFromFile(ctx.rec, entry.type);
+    const item = findItem(ctx.rec, entry.type, entry.itemId);
+    if (!item) return res.status(404).json({ error: `item ${entry.itemId} no longer exists in the artifact` });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(500).json({ error: 'no live session to dispatch' });
+    runQueue.markRunning(ctx.rec, target.itemId);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    try {
+      console.log(`[runQueue] ${ctx.id} rerun ${target.itemId} (prior status was ${entry.status})`);
+      handleChatMessage(ctx.id, session, user, buildArtifactRunText(target.type, item, user));
+    } catch (err) {
+      console.error(`[runQueue] rerun dispatch failed for ${ctx.id} ${target.itemId}: ${err.message}`);
+    }
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/:itemId/cancel — per-item cancel. Running entry: call
+  // session.interrupt() (like Stop) and mark it cancelled (the terminal
+  // iteration_aborted listener sees a 'cancelled' — not 'running' — entry
+  // and leaves it alone, so no double update). Waiting/failed/cancelled:
+  // drop the entry from the queue. This is the individual counterpart to
+  // the global "Clear pending".
+  app.post('/sessions/:id/queue/:itemId/cancel', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const entry = ctx.rec.runQueue && ctx.rec.runQueue.find((e) => e.itemId === itemId);
+    if (!entry) return res.status(404).json({ error: 'no such queue entry' });
+    if (entry.status === 'running') {
+      const session = getPtySession(ctx.id);
+      // stop-vs-run-n2: a lane-dispatched entry (◍ agent-n2 run button)
+      // iterates a SHADOW TeamSession, not the main session — stop the
+      // lane too, or the cancel marks the entry cancelled while the
+      // lane's workers keep running.
+      try { require('./compare-lanes').stopN2Lane(session); } catch {}
+      if (session && typeof session.interrupt === 'function') {
+        try { session.interrupt(); } catch {}
+      }
+      runQueue.markCancelled(ctx.rec, itemId);
+      console.log(`[runQueue] ${ctx.id} cancelled running entry ${itemId} by @${user}`);
+    } else {
+      try {
+        runQueue.removeFromQueue(ctx.rec, itemId, { force: true });
+      } catch (err) {
+        return res.status(409).json({ error: err.message });
+      }
+    }
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/clear-finished — one-click wipe of every TERMINAL entry
+  // (success / failed / cancelled), leaving running + pending intact.
+  // The "一键清空已完成" button. Returns how many were dropped.
+  app.post('/sessions/:id/queue/clear-finished', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const removed = runQueue.removeFinished(ctx.rec);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, removed, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/rerun — re-kick every failed unanswered
+  // question through the live session (the "↻ rerun" button on the
+  // unanswered strip). Auto-rerun only covers `fatal`; this covers the
+  // manual kick for anything the auto-rerun couldn't (incl. aborted).
+  app.post('/sessions/:id/questions/rerun', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question rerun requires owner or admin' });
+    }
+    const session = getPtySession(ctx.id);
+    const failed = pendingQuestions.getOpen(ctx.rec).filter((e) => e.status === 'failed');
+    if (!session || !failed.length) {
+      res.json({ ok: true, reran: 0, state: pendingQuestions.getState(ctx.rec) });
+      return;
+    }
+    let reran = 0;
+    for (const e of failed) {
+      pendingQuestions.requeue(ctx.rec, e.qid);
+      try {
+        console.log(`[pending-q] ${ctx.id} ${e.qid} manual rerun (label "${String(e.text).slice(0, 60)}")`);
+        session.write(e.text);
+        reran++;
+      } catch (err) {
+        console.error(`[pending-q] manual rerun failed for ${ctx.id} ${e.qid}: ${err.message}`);
+      }
+    }
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, reran, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/clear — 一键清空: drop every OPEN
+  // (pending + failed) unanswered question; answered history is kept.
+  // Running UI: the "一键清空未回答·N" button on the unanswered strip.
+  app.post('/sessions/:id/questions/clear', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question clear requires owner or admin' });
+    }
+    const removed = pendingQuestions.clearOpen(ctx.rec);
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, removed, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/:qid/rerun — 单独重试 ONE unanswered
+  // question through the live session (the ↻ on each chip). Unlike the
+  // bulk /questions/rerun (failed-only), this targets a specific qid.
+  app.post('/sessions/:id/questions/:qid/rerun', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question rerun requires owner or admin' });
+    }
+    const qid = String(req.params.qid || '').trim();
+    if (!qid) return res.status(400).json({ error: 'qid required' });
+    const e = ctx.rec.pendingQuestions && ctx.rec.pendingQuestions.find((x) => x.qid === qid);
+    if (!e) return res.status(404).json({ error: 'no such question' });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(500).json({ error: 'no live session to dispatch' });
+    pendingQuestions.requeue(ctx.rec, qid);
+    try {
+      console.log(`[pending-q] ${ctx.id} ${qid} individual rerun (label "${String(e.text || '').slice(0, 60)}")`);
+      session.write(e.text);
+    } catch (err) {
+      console.error(`[pending-q] individual rerun failed for ${ctx.id} ${qid}: ${err.message}`);
+    }
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/:qid/clear — 单独清理 ONE question from
+  // the unanswered queue entirely (the × on each chip).
+  app.post('/sessions/:id/questions/:qid/clear', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question clear requires owner or admin' });
+    }
+    const qid = String(req.params.qid || '').trim();
+    if (!qid) return res.status(400).json({ error: 'qid required' });
+    const removed = pendingQuestions.removeQuestion(ctx.rec, qid);
+    if (!removed) return res.status(404).json({ error: 'no such question' });
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/critic — save active critic model
+  app.post('/sessions/:id/critic', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'critic configuration requires owner or admin' });
+    }
+    const { modelId } = req.body || {};
+    ctx.rec.criticModel = modelId || 'gemini';
+    saveStore();
+    
+    const session = getPtySession(ctx.id);
+    if (session) {
+      session.emit('state-update', { kind: 'critic-model-changed', modelId: ctx.rec.criticModel });
+    }
+    res.json({ ok: true, modelId: ctx.rec.criticModel });
+  });
+}
+
+module.exports = {
+  register,
+  ARTIFACT_TYPES,
+  AUTO_EXECUTE_VOTE_THRESHOLD,
+  buildArtifactRunText,
+  buildArtifactQuorumText,
+  // fr-94 Phase 1: resolveMycoDir + findProjectRoot promoted to public
+  // exports so OTHER server modules (agent-session.js, critique.js,
+  // index.js) stop hand-rolling `path.join(absCwd, '_myco_', …)` —
+  // they all delegate to the single source of truth here. Without
+  // this, every consumer had its own concept of "where _myco_/ lives"
+  // and they drifted (e.g. agent-session wrote events.jsonl to
+  // session-root while artifacts wrote plan.json to the project
+  // subdir — exactly the inconsistency fr-94 fixes).
+  MYCO_DIR,
+  resolveMycoDir,
+  findProjectRoot,
+  // bug-66: the only function allowed to write rec.mainProject.
+  // Single-main-per-session invariant lives here; every caller
+  // that wants to set the field MUST go through this chokepoint.
+  // The static guard `test_no_direct_main_project_write` in
+  // ./test/test.sh fails the build if any server/ file lands a
+  // direct `rec.mainProject = …` outside this helper.
+  setMainProject,
+  // fr-94 Phase 2: lazy migration for legacy sessions spawned
+  // before fr-94 Phase 1 landed. Called from attach.js
+  // _attachAgentWebSocket once per WS connect; idempotent (no-op
+  // when rec.mainProject is already set).
+  migrateMainProjectIfNeeded,
+  // bug-74: promoted from __test to the public surface — attach.js's
+  // _findPlanItemInRec uses it as a file-mirror fallback when the
+  // in-memory rec.artifacts.plan lookup misses. Pre-bug-74 the
+  // in-memory miss silently no-op'd, breaking [run:plan#X] dispatch
+  // for items present only in _myco_/plan.json (e.g. items added by
+  // a sibling session or hand-edited). Still safe to call from
+  // tests via the __test namespace below.
+  readArtifactFromFile,
+  // _myco_/ persistence helpers — exported for unit tests that exercise
+  // the file-mirror path without spinning up the full express + sessions
+  // plumbing. Not part of the public route surface.
+  __test: {
+    MYCO_DIR,
+    mycoDirPath,
+    resolveMycoDir,
+    findProjectRoot,
+    setMainProject,
+    migrateMainProjectIfNeeded,
+    artifactFilePath,
+    readArtifactFromFile,
+    writeArtifactToFile,
+    writeMycoReadmeIfMissing,
+    readLegacyArchFromFile,
+    _loadArtifactIntoRecFromFile,
+  },
+};
