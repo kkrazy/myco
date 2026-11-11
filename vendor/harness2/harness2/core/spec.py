@@ -43,17 +43,29 @@ _BARE_ID_CHANNELS = ("claude_cli", "claude_local")
 
 @dataclass(frozen=True)
 class ChannelSpec:
-    """How to reach one model, on one proposer/selector channel."""
+    """How to reach one model, on one proposer/selector channel.
+
+    `timeout` is the per-session wall clock. `None` (the default) resolves to
+    HARNESS2_CHANNEL_TIMEOUT, else 3600. The agg composition phase reads
+    ~1.2 MB of mandatory evidence (~100 turns at gateway latency) before its
+    first edit; run-2's 4 agg sessions all died at 3600 s mid-read with zero
+    edits, while run-1's re-run needed 4271 s and succeeded only against a
+    7200 s wall — so sweeps with agg pools set the env var to 7200.
+    """
 
     kind: str
     model: ModelId
     effort: str = "high"
     steps: int = 120
-    timeout: int = 3600
+    timeout: int | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in CHANNELS:
             raise ValueError(f"unknown channel {self.kind!r}; expected one of {CHANNELS}")
+        if self.timeout is None:
+            object.__setattr__(
+                self, "timeout", config.env_int("HARNESS2_CHANNEL_TIMEOUT", 3600)
+            )
 
 
 def resolve_channel_model(
@@ -62,9 +74,13 @@ def resolve_channel_model(
     *,
     effort: str = "high",
     steps: int = 120,
-    timeout: int = 3600,
+    timeout: int | None = None,
 ) -> ChannelSpec:
-    """The one channel->model mapping; a lone override of either raises."""
+    """The one channel->model mapping; a lone override of either raises.
+
+    `timeout=None` (the default) defers to the ChannelSpec default, which
+    resolves HARNESS2_CHANNEL_TIMEOUT (falling back to 3600).
+    """
     use_default = kind is None and model is None
     if (kind is None) != (model is None):
         raise ValueError(

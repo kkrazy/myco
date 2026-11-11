@@ -47,6 +47,28 @@ def _same_content(a: Path, b: Path) -> bool:
         return False
 
 
+def _looks_like_text(p: Path, *, sniff: int = 4096) -> bool:
+    """True when the file plausibly holds human-readable text.
+
+    Size is not a text filter: a PGO+LTO `libmyco.a` came in under the 512 KB
+    deliverable cap and `errors="replace"` laundered it into `produced.md` as
+    ~790 KB of mojibake — evidence the agg/selector sessions then had to wade
+    through (measured on n2lz4: pool produced.md 50-80% replacement chars).
+    Binary artifacts announce themselves early: a NUL byte or undecodable
+    UTF-8 in the first `sniff` bytes catches every .a/.o/.gcda/.pyc seen so
+    far while passing every real source/markdown deliverable.
+    """
+    try:
+        with p.open("rb") as fh:
+            head = fh.read(sniff)
+        if b"\x00" in head:
+            return False
+        head.decode("utf-8")
+        return True
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def _project_root() -> Path:
     explicit = os.environ.get("HARNESS2_MYCO_PROJECT", "").strip()
     if not explicit:
@@ -557,6 +579,8 @@ class MycoAdapter:
                     continue
             try:
                 if p.stat().st_size > 512 * 1024:
+                    continue
+                if not _looks_like_text(p):
                     continue
                 out[key] = p.read_text(encoding="utf-8", errors="replace")
             except OSError:

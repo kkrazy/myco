@@ -207,3 +207,138 @@ test('a tool_use with no name degrades to "tool" rather than vanishing', () => {
   const out = t.renderEventsFromText(jsonl({ type: 'tool_use', input: { x: 1 } }));
   assert.strictEqual(out, '[ACTION] tool({"x":1})');
 });
+
+// ── mergeTeamEvents (D2) ───────────────────────────────────────────────────
+//
+// The team trajectory is the only window an improvement session has into how
+// two workers coordinated. These tests pin the three properties the design
+// calls out: chronological interleave across sources, worker attribution by
+// source file, and the board as first-class evidence — plus the defensive
+// rules (dirty lines skip; conflicts are observations, not errors).
+
+function writeJournal(dir, name, rows) {
+  const f = path.join(dir, name);
+  fs.writeFileSync(f, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8');
+  return f;
+}
+
+function teamFiles(dir) {
+  return [
+    { file: path.join(dir, 'events-worker-A.jsonl'), worker: 'worker-A' },
+    { file: path.join(dir, 'events-worker-B.jsonl'), worker: 'worker-B' },
+  ];
+}
+
+test('mergeTeamEvents interleaves workers chronologically with worker= tags', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  writeJournal(dir, 'events-worker-A.jsonl', [
+    { ts: '2026-11-02T10:00:00.000Z', type: 'tool_use', name: 'Bash', input: { command: 'ls' } },
+    { ts: '2026-11-02T10:00:05.000Z', type: 'tool_result', content: 'a.js' },
+  ]);
+  writeJournal(dir, 'events-worker-B.jsonl', [
+    { ts: '2026-11-02T10:00:02.000Z', type: 'tool_use', name: 'Read', input: { file: 'a.js' } },
+  ]);
+  const out = t.mergeTeamEvents(teamFiles(dir), path.join(dir, 'board.jsonl'), {});
+  const lines = out.split('\n');
+  assert.strictEqual(lines.length, 3);
+  assert.ok(lines[0].includes('worker=worker-A') && lines[0].includes('tool=Bash'),
+    'the first action is worker-A\'s, tagged by source file');
+  assert.ok(lines[1].includes('worker=worker-B') && lines[1].includes('tool=Read'),
+    'worker-B\'s 10:00:02 action must sit BETWEEN worker-A\'s two lines');
+  assert.ok(lines[2].includes('worker=worker-A'), 'worker-A\'s observation closes the interleave');
+  assert.ok(lines[0].includes('"command":"ls"'), 'tool input survives tagging');
+});
+
+test('board rows render as kind=board observations at their own timestamps', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  writeJournal(dir, 'events-worker-A.jsonl', [
+    { ts: '2026-11-02T10:00:01.000Z', type: 'tool_use', name: 'Bash', input: { command: 'grep x' } },
+  ]);
+  writeJournal(dir, 'board.jsonl', [
+    { sequence: 1, timeNs: Date.parse('2026-11-02T10:00:00.000Z'), actor: 'worker-A', kind: 'claim', payload: { item: 'q-1' } },
+    { sequence: 2, timeNs: Date.parse('2026-11-02T10:00:02.000Z'), actor: 'worker-A', kind: 'done', payload: { item: 'q-1', summary: 'fixed the off-by-one' } },
+  ]);
+  const out = t.mergeTeamEvents(teamFiles(dir), path.join(dir, 'board.jsonl'), {});
+  const lines = out.split('\n');
+  assert.strictEqual(lines.length, 3);
+  assert.ok(lines[0].startsWith('[OBSERVATION] worker=board kind=board event=claim'),
+    'the claim at 10:00:00 sorts BEFORE the 10:00:01 tool call');
+  assert.ok(lines[0].includes('actor=worker-A') && lines[0].includes('item="q-1"'));
+  assert.ok(lines[2].includes('event=done') && lines[2].includes('summary="fixed the off-by-one"'),
+    'the done row carries its summary — the coordination outcome an improver reads');
+});
+
+test('a board conflict renders as an observation, never an [ERROR]', () => {
+  // Routine coordination read as a defect would make every reflection
+  // "fix" conflicts that are the system working as designed.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  writeJournal(dir, 'board.jsonl', [
+    { sequence: 1, timeNs: 1700000000000, actor: 'worker-B', kind: 'apply',
+      payload: { id: 'e-9', applied: false, decisions: { 'src/a.js': 'conflict' },
+                 conflicts: { 'src/a.js': { reason: 'local edits' } } } },
+  ]);
+  const out = t.mergeTeamEvents([], path.join(dir, 'board.jsonl'), {});
+  assert.ok(out.includes('event=apply'), out);
+  assert.ok(out.includes('verdict="conflict"'), 'the verdict must be visible');
+  assert.ok(out.includes('conflicts="src/a.js"'), 'which paths conflicted must be visible');
+  assert.ok(!out.includes('[ERROR]'), 'a conflict is coordination, not a defect');
+});
+
+test('dirty JSONL lines skip without failing the whole trajectory', () => {
+  // A container kill mid-append leaves a truncated last line; one bad line
+  // must not discard the steps leading up to the crash — those are exactly
+  // the evidence an improvement session needs.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  const f = path.join(dir, 'events-worker-A.jsonl');
+  fs.writeFileSync(f,
+    JSON.stringify({ ts: '2026-11-02T10:00:00.000Z', type: 'tool_use', name: 'Bash', input: { command: 'ls' } }) + '\n' +
+    '{"ts": "2026-11-02T10:00:01.000Z", "type": "tool_resu', 'utf8');
+  writeJournal(dir, 'board.jsonl', [
+    { sequence: 1, timeNs: 1700000000000, actor: 'worker-A', kind: 'note',
+      payload: { type: 'FACT', text: 'corpus is 12 files' } },
+  ]);
+  const out = t.mergeTeamEvents(teamFiles(dir), path.join(dir, 'board.jsonl'), {});
+  assert.ok(out.includes('tool=Bash'), 'the clean line survives');
+  assert.ok(out.includes('kind=board event=note'), 'the board line survives');
+  assert.ok(!out.includes('tool_resu'), 'the truncated line does not leak raw');
+});
+
+test('missing files render as EMPTY, not an exception', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  const out = t.mergeTeamEvents(teamFiles(dir), path.join(dir, 'board.jsonl'), {});
+  assert.strictEqual(out, t.EMPTY);
+});
+
+test('mergeTeamEvents enforces the obs_trunc floor and tail-truncates like the single-agent path', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  assert.throws(() => t.mergeTeamEvents([], '', { obsTrunc: 999 }), /fabricates defects/);
+  writeJournal(dir, 'events-worker-A.jsonl',
+    Array.from({ length: 30 }, (_, i) => ({
+      ts: `2026-11-02T10:00:0${i % 10}.${String(i).padStart(3, '0')}Z`,
+      type: 'tool_result', content: 'x'.repeat(1000) })));
+  const full = t.mergeTeamEvents(teamFiles(dir), '', {});
+  const out = t.mergeTeamEvents(teamFiles(dir), '', { maxChars: 5000 });
+  assert.ok(out.length < 5200, 'the cap holds');
+  assert.ok(out.startsWith(full.slice(0, 100)), 'the EARLY steps survive, the tail is dropped');
+  assert.ok(out.includes(t.TRUNC_FMT(full.length - 5000)), 'the truncation marker says what was dropped');
+});
+
+test('same-timestamp records keep deterministic file order (worker-A before worker-B before board)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-team-'));
+  const ts = '2026-11-02T10:00:00.000Z';
+  writeJournal(dir, 'events-worker-A.jsonl', [
+    { ts, type: 'tool_use', name: 'Bash', input: { command: 'a' } },
+  ]);
+  writeJournal(dir, 'events-worker-B.jsonl', [
+    { ts, type: 'tool_use', name: 'Bash', input: { command: 'b' } },
+  ]);
+  writeJournal(dir, 'board.jsonl', [
+    { sequence: 1, timeNs: Date.parse(ts), actor: 'worker-A', kind: 'claim', payload: { item: 'q-1' } },
+  ]);
+  const out = t.mergeTeamEvents(teamFiles(dir), path.join(dir, 'board.jsonl'), {});
+  const lines = out.split('\n');
+  assert.strictEqual(lines.length, 3);
+  assert.ok(lines[0].includes('"command":"a"'));
+  assert.ok(lines[1].includes('"command":"b"'));
+  assert.ok(lines[2].includes('event=claim'), 'deterministic order: A, then B, then board');
+});

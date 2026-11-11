@@ -559,6 +559,87 @@ class RegistrationTest(unittest.TestCase):
                       "check.py must source its choices from _common, not a copy")
 
 
+class ExtraEditableTest(unittest.TestCase):
+    """The n2 team components must be on MYCO_SURFACE's editable surface (D1).
+
+    `read_tree` bounces any off-surface file, and `_accept_tree`
+    (recursion.py) rejects the whole proposal when `rejected` is non-empty.
+    Before the `extra_editable` field, a tree carrying `board_guidance.md`
+    failed with a naming-rules message that had nothing to do with the real
+    cause — the n2 components were untunable by construction.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="myco-extra-editable-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # Importing the substrate must not depend on a live project/task env;
+        # pin the pair anyway so a developer's exported HARNESS2_MYCO_TASK
+        # cannot leak a staging path into an unrelated test.
+        self._saved = {k: os.environ.get(k) for k in ("HARNESS2_MYCO_PROJECT", "HARNESS2_MYCO_TASK")}
+        os.environ["HARNESS2_MYCO_PROJECT"] = str(self.tmp)
+        os.environ["HARNESS2_MYCO_TASK"] = "extra editable probe"
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_n2_files_pass_read_tree(self):
+        from harness2.core import tree as HT
+        from harness2.substrate.myco import MYCO_SURFACE
+
+        ws = self.tmp / "ws"
+        ws.mkdir()
+        (ws / "systemprompt.md").write_text("# role\n", encoding="utf-8")
+        for name in ("worker_a_startup.md", "worker_b_startup.md", "board_guidance.md"):
+            (ws / name).write_text(f"# {name}\n", encoding="utf-8")
+        (ws / "not_on_surface.txt").write_text("nope\n", encoding="utf-8")
+
+        rejected: list[str] = []
+        tree = HT.read_tree(MYCO_SURFACE, ws, rejected=rejected)
+        self.assertEqual(rejected, ["not_on_surface.txt"],
+                         "only the genuinely off-surface file may be rejected")
+        for name in ("worker_a_startup.md", "worker_b_startup.md", "board_guidance.md"):
+            self.assertIn(name, tree, f"{name} must be readable from an improver workspace")
+
+    def test_n2_files_are_not_always_on(self):
+        # They ride the `n2:` sentinel path in engine.js and must never be
+        # composed into the single-agent system prompt text.
+        from harness2.substrate.myco import MYCO_SURFACE
+
+        self.assertEqual(set(MYCO_SURFACE.extra_editable),
+                         {"worker_a_startup.md", "worker_b_startup.md", "board_guidance.md"})
+        for name in MYCO_SURFACE.extra_editable:
+            self.assertNotIn(name, MYCO_SURFACE.always_on,
+                             f"{name} must not be always-on: it never reaches CLAUDE.md")
+
+    def test_surface_without_extra_editable_still_rejects(self):
+        # The field is opt-in: a surface that sets nothing keeps the old rules.
+        from harness2.core import tree as HT
+        from harness2.substrate.myco import MYCO_SURFACE
+
+        import dataclasses
+        bare = dataclasses.replace(MYCO_SURFACE, extra_editable=())
+        ws = self.tmp / "bare-ws"
+        ws.mkdir()
+        (ws / "board_guidance.md").write_text("# board\n", encoding="utf-8")
+        rejected: list[str] = []
+        HT.read_tree(bare, ws, rejected=rejected)
+        self.assertEqual(rejected, ["board_guidance.md"])
+
+    def test_write_tree_materialises_n2_files(self):
+        # The staged harness dir must carry the files into the next rollout,
+        # where readN2Components() picks them up.
+        from harness2.core import tree as HT
+        from harness2.substrate.myco import MYCO_SURFACE
+
+        tree = {"systemprompt.md": "# role\n", "board_guidance.md": "# board\n"}
+        dest = HT.write_tree(MYCO_SURFACE, tree, self.tmp / "staged")
+        self.assertEqual((dest / "board_guidance.md").read_text(encoding="utf-8"), "# board\n")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
@@ -758,6 +839,25 @@ class DeliverableDetectTest(unittest.TestCase):
             (ws / "sol" / "zcomp.c").write_text("/* SEED */" + chr(10), encoding="utf-8")
         a, run_dir = self._run(swap)
         self.assertIn("sol/zcomp.c", a.deliverable_files(run_dir))
+
+    def test_a_small_binary_build_artifact_is_not_a_deliverable(self):
+        # Size is not a text filter: a PGO+LTO static lib lands under the 512 KB
+        # cap and errors="replace" laundered it into produced.md as mojibake the
+        # agg/selector sessions had to wade through (n2lz4: 50-80% replacement
+        # chars in pool evidence). NUL bytes are the binary tell.
+        def build(ws):
+            (ws / "libmyco.a").write_bytes(b"!<arch>\x00\x00" + b"\x00" * 64)
+        a, run_dir = self._run(build)
+        self.assertNotIn("libmyco.a", a.deliverable_files(run_dir),
+                         "binary artifacts must not enter the selector's evidence")
+
+    def test_a_utf8_text_artifact_under_the_cap_is_a_deliverable(self):
+        # The fix must not over-filter: real source a run produced still ships.
+        def vendored(ws):
+            (ws / "lz4_core.c").write_text("int lz4_core(void) { return 0; }" + chr(10),
+                                           encoding="utf-8")
+        a, run_dir = self._run(vendored)
+        self.assertIn("lz4_core.c", a.deliverable_files(run_dir))
 
 
 class StagingKeyTest(unittest.TestCase):

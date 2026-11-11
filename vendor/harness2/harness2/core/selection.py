@@ -307,9 +307,22 @@ def run_selection(
     ids = ", ".join(sorted(sel.id_map))
     reference_only = bool(getattr(adapter, "deliverable_assets_reference_only", False))
     a_line, a_evid = _evidence_block(asset_names, adapter, reference_only)
+    # D6: a surface with n2 components can produce team rollouts, so the
+    # selector gets the team judging criteria. `getattr` because the adapter
+    # protocol exposes `substrate.surface()` but tests hand over stubs.
+    surface = None
+    try:
+        surface = adapter.substrate.surface()
+    except AttributeError:
+        pass
+    team_note = (
+        P._TEAM_SELECT_NOTE
+        if surface is not None and getattr(surface, "extra_editable", ())
+        else ""
+    )
     mission = "\n\n".join(
         [
-            P.select(bp, len(pool), pool_kind=pool_kind, assets_note=a_line),
+            P.select(bp, len(pool), pool_kind=pool_kind, assets_note=a_line, team_note=team_note),
             "# YOUR EVIDENCE\n\nIt is on disk. Read it -- do not answer from this message alone.\n\n"
             "context/task.md                 the instructions\n"
             "context/source/                 task source materials, when supplied\n"

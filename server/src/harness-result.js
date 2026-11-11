@@ -163,6 +163,26 @@ function _runsRoot(cwd) {
 
 // ── diff ───────────────────────────────────────────────────────────────────
 
+// The on-disk home for adopted n2 team components (D4). The interactive
+// /run-n2 lane (compare-lanes.js startN2Lane) reads its startup/board
+// overrides from here, so an adopted team harness takes effect on the next
+// lane — the same "adopt → next turn" promise the single-agent components
+// keep via CLAUDE.md.
+function _n2AdoptedPath(sentinel) {
+  return path.join('.myco_harness', 'n2', `${sentinel.slice('n2:'.length)}.md`);
+}
+
+// Resolve a harness tree path to its session-cwd destination. Returns null
+// for unmapped files. `n2:` sentinels map to the adopted-n2 dir instead of
+// leaking as literal `n2:*` files — adopt, diff and snapshot must agree on
+// this, or rollback restores the wrong thing.
+function _resolveHarnessPath(engine, norm) {
+  const mapped = engine.mapHarnessPath(norm);
+  if (!mapped) return null;
+  if (mapped.startsWith('n2:')) return _n2AdoptedPath(mapped);
+  return mapped;
+}
+
 // Walk a harness tree (chosen run dir / workspace) and return
 // { path: rel, status: 'added'|'modified'|'removed', content }
 // compared to the current session cwd. Components that the harness
@@ -187,7 +207,7 @@ function diffHarness(harnessDir, cwdRoot) {
       guardrailsText = _readSafe(path.join(harnessDir, rel));
       continue;
     }
-    const mapped = engine.mapHarnessPath(norm);
+    const mapped = _resolveHarnessPath(engine, norm);
     if (!mapped) continue;
     const src    = path.join(harnessDir, rel);
     const dst    = path.join(cwdRoot, mapped);
@@ -276,10 +296,13 @@ async function adoptHarness(harnessDir, cwdRoot) {
     written.push('CLAUDE.md');
   }
 
-  // 4. Copy every other mapped component.
+  // 4. Copy every other mapped component. n2 components land in
+  // .myco_harness/n2/ (D4): writing the raw `n2:` sentinel as a filename was
+  // the bug — junk files no consumer reads, and the tuned team components
+  // silently lost.
   for (const rel of otherFiles) {
     const norm   = rel.split(path.sep).join('/');
-    const mapped = engine.mapHarnessPath(norm);
+    const mapped = _resolveHarnessPath(engine, norm);
     if (!mapped) continue;
 
     const src = path.join(harnessDir, rel);
@@ -332,7 +355,7 @@ async function _snapshot(harnessDir, cwdRoot) {
     if (norm === 'guardrails.md') {
       targets.push('CLAUDE.md'); // we append to CLAUDE.md
     } else {
-      const mapped = engine.mapHarnessPath(norm);
+      const mapped = _resolveHarnessPath(engine, norm);
       if (mapped) targets.push(mapped.split(path.sep).join('/'));
     }
 

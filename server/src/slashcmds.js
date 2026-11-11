@@ -2743,7 +2743,10 @@ function handleHarness(ctx) {
         rolloutTimeoutS,
         onProgress: (p) => {
           if (p.stage === 'done') return;
-          const bits = [p.stage, p.run].filter(Boolean).join(' ');
+          // D5: in n2 sweeps the worker is half the story — "which half of
+          // the team is acting" — and dropping it made the pane show two
+          // interleaved agents as one anonymous stream.
+          const bits = [p.stage, p.run, p.worker].filter(Boolean).join(' ');
           if (!bits) return;
           try {
             // D1 fix: bare `session` was not in scope here, causing a
@@ -2768,7 +2771,9 @@ function handleHarness(ctx) {
     ctx.reply([
       `⚙ Started sweep \`${started.id}\` (k=${k}, parallel${rolloutMode === 'n2' ? ', n2' : ''})${started.pid ? `, pid ${started.pid}` : ''}.`,
       '',
-      `_A k=1 sweep runs about 4 rollouts and 3 improvement sessions._`,
+      rolloutMode === 'n2'
+        ? '_Team mode: each rollout runs TWO workers sharing a board — expect ≈2× model cost per rollout and ≈2× trajectory tokens. A k=1 sweep runs about 4 rollouts and 3 improvement sessions._'
+        : '_A k=1 sweep runs about 4 rollouts and 3 improvement sessions._',
       '`/harness status` · `/harness cancel` · results land in `_harness_/sweeps/`',
     ].join('\n'));
     return;
@@ -2809,13 +2814,17 @@ function handleHarness(ctx) {
     }
     hResult.adoptHarness(dir, cwd).then(async ({ adopted, snapshot }) => {
       const snapshotFile = await hResult.saveSnapshot(snapshot, cwd, sel.chosen_run_id || id || 'sweep');
+      const n2Files = adopted.filter(f => f.startsWith('.myco_harness/n2/'));
       ctx.reply([
         `✓ Adopted harness from sweep — ${adopted.length} file(s) written.`,
         '',
         adopted.map(f => `  • \`${f}\``).join('\n'),
+        n2Files.length
+          ? `\n_n2 components installed — the next \`/run-n2\` in this session runs with them._`
+          : '',
         '',
         `_Snapshot saved as \`${require('path').basename(snapshotFile)}\`. Use \`/harness rollback\` to undo._`,
-      ].join('\n'));
+      ].filter(Boolean).join('\n'));
     }).catch(e => {
       ctx.reply(`(/harness adopt failed: ${e.message})`);
     });

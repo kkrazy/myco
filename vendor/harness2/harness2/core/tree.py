@@ -57,6 +57,12 @@ class SurfaceSpec:
     compile_skill_scripts: bool = False
     reject_empty_always_on: bool = False
 
+    # Exact paths on the editable surface that fit no regex family above and
+    # are NOT always-on (myco's n2 team components are the case today). They
+    # are never composed into always-on text; the substrate's own machinery
+    # consumes them. Empty on every surface that does not opt in.
+    extra_editable: tuple[str, ...] = ()
+
     stubs: tuple[tuple[str, str], ...] = ()
 
 
@@ -96,6 +102,8 @@ def is_allowed(surface: SurfaceSpec, rel: str) -> bool:
     except ValueError:
         return False
     if rel in surface.always_on:
+        return True
+    if rel in surface.extra_editable:
         return True
     if surface.hooks_file is not None and rel == surface.hooks_file:
         return True

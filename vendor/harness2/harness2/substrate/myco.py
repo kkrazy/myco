@@ -99,6 +99,14 @@ MYCO_SURFACE = SurfaceSpec(
     plugin_dir=None,
     hooks_file=None,
     compile_skill_scripts=True,
+    # The n2 team components (D1): consumed by the team-rollout lane via the
+    # `n2:` sentinel path in engine.js, never composed into always-on text —
+    # which is why they are extra_editable, not always_on.
+    extra_editable=(
+        "worker_a_startup.md",
+        "worker_b_startup.md",
+        "board_guidance.md",
+    ),
     stubs=(
         (
             "scripts/README.md",

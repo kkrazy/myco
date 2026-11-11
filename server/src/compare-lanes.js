@@ -187,6 +187,24 @@ function startSingleLane({ cwd, user, task, dir, mainSession, mainSessionId, lan
 // Dual-agent (agent-n2) shadow lane: an isolated TeamSession. dispatchTask
 // fans the task out to worker-A + worker-B (shared in-memory DelmBoard).
 // Worker events carry `worker` from TeamSession._relay.
+//
+// Adopted n2 components (D4): /harness adopt installs a tuned team harness's
+// worker startup + board guidance under `.myco_harness/n2/`; reading them
+// here is what makes "adopt takes effect on the next /run-n2" hold for team
+// mode. Absent files fall back to the canonical prompts-n2-shared.js text,
+// so a session that never adopted anything is byte-identical to before.
+function _adoptedN2Components(cwd) {
+  const read = (name) => {
+    try { return fs.readFileSync(path.join(cwd, '.myco_harness', 'n2', name), 'utf8') || null; }
+    catch { return null; }
+  };
+  return {
+    workerAStartup: read('worker_a_startup.md'),
+    workerBStartup: read('worker_b_startup.md'),
+    boardGuidance:  read('board_guidance.md'),
+  };
+}
+
 function startN2Lane({ cwd, user, task, dir, mainSession, mainSessionId, laneTag = N2, rlm }) {
   const shadowId = `${mainSessionId}-cmp-n2`;
   const laneId = _newLaneId('n2');
@@ -196,6 +214,7 @@ function startN2Lane({ cwd, user, task, dir, mainSession, mainSessionId, laneTag
     user,
     task,
     eventsDir: dir,
+    ..._adoptedN2Components(cwd),
     // §5.1: a lane fired while the session is in RLM mode runs its
     // workers with the RLM addendum (lane reads rec.rlm per run).
     rlm: rlm === true,

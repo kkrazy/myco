@@ -155,6 +155,32 @@ test('unmapped components are reported, not dropped', () => {
   assert.ok(!fs.existsSync(path.join(cwd, 'plugin')));
 });
 
+test('n2 components are prompt overrides, never files on disk', () => {
+  // worker_a_startup.md / worker_b_startup.md / board_guidance.md map to the
+  // 'n2:*' sentinels. They reach the rollout through readN2Components →
+  // TeamSession, so materialiseHarness must SKIP them: writing them as
+  // literal 'n2:*' files (a) litters the agent's workspace, (b) false-
+  // positives isDelivered for every n2 rollout, and (c) leaks the sentinel
+  // text into the selector's candidate evidence. Found by the n2 smoke run.
+  const h = tmp('harness');
+  const cwd = tmp('cwd');
+  write(h, 'systemprompt.md', '# role\n');
+  write(h, 'worker_a_startup.md', 'you are worker-A\n');
+  write(h, 'worker_b_startup.md', 'you are worker-B\n');
+  write(h, 'board_guidance.md', 'board rules\n');
+  const r = engine.materialiseHarness(h, cwd);
+  assert.deepStrictEqual(r.unmapped, [], 'n2 sentinels are mapped, not unmapped');
+  const onDisk = fs.readdirSync(cwd);
+  assert.ok(!onDisk.some((f) => f.startsWith('n2:')),
+    `no 'n2:*' sentinel file may land in the workspace, saw ${onDisk}`);
+  assert.deepStrictEqual(r.written, ['CLAUDE.md'], 'only the real components are written');
+  // The overrides still reach the runner through the dedicated reader.
+  const c = engine.readN2Components(h);
+  assert.strictEqual(c.workerAStartup, 'you are worker-A\n');
+  assert.strictEqual(c.workerBStartup, 'you are worker-B\n');
+  assert.strictEqual(c.boardGuidance, 'board rules\n');
+});
+
 test('materialiseHarness with no harness dir is a no-op', () => {
   const cwd = tmp('cwd');
   const r = engine.materialiseHarness(null, cwd);

@@ -335,6 +335,40 @@ KEEP_BASE is a real answer, not a failure. Adaptation that the evidence does not
 regression: it costs context and buys nothing."""
 
 
+# D3: team (n2) trajectories. Appended to every myco improvement prompt so an
+# improver can read the worker=/kind=board grammar the team renderer emits
+# (bench/harness2/lib/transcript.js mergeTeamEvents) and knows WHICH component
+# each kind of team evidence belongs in. Single-agent substrates never see it.
+_TEAM_TRAJECTORY_NOTE = """\
+# READING A TEAM TRAJECTORY
+
+Rollouts on this task may run as a TWO-WORKER team sharing a board. Those trajectories carry a
+worker dimension the single-agent ones do not:
+
+- `[ACTION] worker=worker-A tool=Bash input={...}` -- worker-A acted; `worker=worker-B` likewise.
+- `[OBSERVATION] worker=board kind=board event=claim item="q-1"` -- a BOARD event, the shared
+  coordination trail: `item` (work published), `claim` (work taken), `done` (work finished, with
+  its summary), `note` (peer cross-checks, FACT or FAIL), `apply` (a peer applied another's
+  work; `verdict="conflict"` means two workers touched the same file and the later one had to
+  reconcile), `status`, `wait`.
+- `[ASSISTANT] worker=worker-A ...` -- that worker's reasoning.
+
+Read the two workers as ONE interleaved chronology, not two separate sessions: what makes a
+team work is B reacting to what A published, and the interleaving is where that shows.
+
+What GOOD team behaviour looks like: a non-overlapping initial split of the work, peer
+cross-check notes (FACT/FAIL) on each other's results, few `wait` events, and no
+`verdict="conflict"` that a cleaner split would have avoided. A worker that produced nothing
+while its peer carried the task is a startup-prompt failure, not a task failure.
+
+Where to change what:
+- coordination was the failure (overlapping work, conflicts, waits, one worker idle) -->
+  `board_guidance.md` (how the workers use the board) or `worker_a_startup.md` /
+  `worker_b_startup.md` (what each worker does first).
+- the split was fine but the work was wrong --> the ordinary component files, exactly as in a
+  single-agent trajectory."""
+
+
 def _work(bp: BenchPrompts) -> str:
     return f"# THE WORK\n\n{bp.work.strip()}"
 
@@ -527,6 +561,8 @@ The harness is a tree of components. Each has a different runtime cost and a dif
 | `skills/<name>/SKILL.md` | a reusable workflow | name+description advertised; the BODY is read ON DEMAND |
 | `sub_agents/<name>/AGENT.md` | a delegated agent role | spawned in its OWN context via the Task tool, returns text |
 | `scripts/<name>.py` | a deterministic helper | run ON DEMAND as `python3 .myco_harness/scripts/<name>.py`, pre-approved |
+| `worker_a_startup.md` / `worker_b_startup.md` | team mode (n2 rollouts): each worker's first instructions | ONLY in n2 rollouts -- injected into that worker's system prompt at team start; never composed into `CLAUDE.md` |
+| `board_guidance.md` | team mode (n2 rollouts): how the workers use the shared board | ONLY in n2 rollouts -- replaces the canonical board commands in both workers' prompts; never composed into `CLAUDE.md` |
 
 The always-on cap on this surface is 12,000 characters, lower than the other substrates:
 myco prepends its own best-practices block and the Claude Code preset prompt, so the project's
@@ -568,6 +604,8 @@ your work is used, however good it is.
 | `skills/<name>/SKILL.md` | c6 reusable workflow | name+description advertised; the BODY is read ON DEMAND |
 | `sub_agents/<name>/AGENT.md` | c5 delegated agent role | spawned in its OWN context, returns text |
 | `scripts/<name>.py` | c7 deterministic helper | run ON DEMAND as `python3 .myco_harness/scripts/<name>.py` |
+| `worker_a_startup.md` / `worker_b_startup.md` | n2 team mode: each worker's first instructions | ONLY in n2 rollouts -- injected into that worker's system prompt; NEVER in `CLAUDE.md` |
+| `board_guidance.md` | n2 team mode: how the workers use the shared board | ONLY in n2 rollouts -- replaces the canonical board commands; NEVER in `CLAUDE.md` |
 
 ## The one on-demand lever that is easy to get wrong
 
@@ -693,6 +731,9 @@ class _SurfaceText:
     inv: str
     dom: str
     tts_surface: str
+    # D3: team-trajectory reading guidance for substrates whose rollouts can
+    # run as two-worker teams (myco n2). Empty everywhere else.
+    team_note: str = ""
 
 
 def _build_surface_texts() -> dict[str, _SurfaceText]:
@@ -731,6 +772,7 @@ def _build_surface_texts() -> dict[str, _SurfaceText]:
                 "trigger line in the same edit.",
             ),
             tts_surface=myco_tts,
+            team_note=_TEAM_TRAJECTORY_NOTE,
         ),
         "opencode": _SurfaceText(
             surface_md=_SURFACE_OPENCODE,
@@ -806,6 +848,8 @@ def _tts_propose(bp: BenchPrompts, dim: str, st: _SurfaceText, *, k: int, index:
     ]
     if bp.yardstick.strip():
         parts.append(f"# WHAT GOOD PROCESS LOOKS LIKE HERE\n\n{bp.yardstick.strip()}")
+    if st.team_note:
+        parts.append(st.team_note)
     parts += [ANSWER_FREE, EVIDENCE_BOUNDARY, st.tts_surface]
     return _tidy("\n\n".join(parts))
 
@@ -861,6 +905,7 @@ def _tts_aggregate(bp: BenchPrompts, st: _SurfaceText, *, k: int, index: int) ->
             if bp.yardstick.strip()
             else []
         ),
+        *([st.team_note] if st.team_note else []),
         ANSWER_FREE,
         EVIDENCE_BOUNDARY,
         st.tts_surface,
@@ -873,7 +918,7 @@ def _tts_aggregate(bp: BenchPrompts, st: _SurfaceText, *, k: int, index: int) ->
     return _tidy("\n\n".join(parts))
 
 
-def _tts_select(bp: BenchPrompts, n: int, pool_kind: str, assets_note: str) -> str:
+def _tts_select(bp: BenchPrompts, n: int, pool_kind: str, assets_note: str, team_note: str = "") -> str:
     """select(), in the tts pack's words: its own three criteria supersede `selection_lead`,
     `selection_conformance` and `selection_checks` rather than layering on them.
     """
@@ -912,6 +957,7 @@ def _tts_select(bp: BenchPrompts, n: int, pool_kind: str, assets_note: str) -> s
                 "attempts of differing quality, better than each other in different respects, and it is "
                 "entirely possible that the plainest one is the best answer. Pick the best available "
                 "answer, not the most elaborate one.",
+                *([team_note] if team_note else []),
                 ANSWER_FREE_SELECT,
                 EVIDENCE_BOUNDARY_SELECT,
                 "# OUTPUT FORMAT\n\nFirst the reasoning, then the choice as the very last thing:\n\n"
@@ -988,6 +1034,8 @@ def propose(
     ]
     if bp.yardstick.strip():
         parts.append(f"# WHAT GOOD PROCESS LOOKS LIKE HERE\n\n{bp.yardstick.strip()}")
+    if st.team_note:
+        parts.append(st.team_note)
     parts += [ANSWER_FREE, EVIDENCE_BOUNDARY, st.surface_md]
     return _tidy("\n\n".join(parts))
 
@@ -1049,6 +1097,7 @@ def aggregate(bp: BenchPrompts, surface: SurfaceSpec | str, *, k: int = 1, index
                     if bp.yardstick.strip()
                     else []
                 ),
+                *([st.team_note] if st.team_note else []),
                 ANSWER_FREE,
                 EVIDENCE_BOUNDARY,
                 st.surface_md,
@@ -1102,6 +1151,7 @@ def compose_round(bp: BenchPrompts, surface: SurfaceSpec | str, *, t: int, k: in
                 + "\n\nHere `KEEP_BASE` means keep the CURRENT checkpoint in `context/harness/` "
                 "unchanged; it does not restore the original harness. In `<notes>`, identify which "
                 "rounds' edits survive and which were dropped or restored.",
+                *([st.team_note] if st.team_note else []),
                 ANSWER_FREE,
                 EVIDENCE_BOUNDARY,
                 st.surface_md,
@@ -1139,14 +1189,44 @@ VALUE_TAIL = (
 )
 
 
-def select(bp: BenchPrompts, n: int, pool_kind: str = "mixed", assets_note: str = "") -> str:
+# D6: selection semantics when the candidates are TEAM runs. The selector
+# still judges artifacts first, but on a team substrate the coordination trail
+# is evidence about the HARNESS, so two rules are added: same artifact with
+# less board friction wins, and a stalled worker is a data point, not an
+# automatic disqualification. Passed in by run_selection when the surface has
+# n2 components; empty (absent) everywhere else.
+_TEAM_SELECT_NOTE = """\
+# WHEN THE RUNS WERE TEAMS
+
+Some or all candidates may come from two-worker team runs. Where a candidate's evidence shows a
+team trail (worker-tagged actions, board events), judge BOTH the artifact and the coordination:
+
+- Two candidates with equally good artifacts: the one produced with less board friction --
+  a cleaner initial split, peer cross-checks instead of silent duplication, few waits, no
+  avoidable conflicts -- is the better HARNESS, and that is what you are choosing between here.
+- A run where one worker delivered while the other stalled is NOT automatically a failed
+  candidate: judge the artifact on its merits, and note the stalled worker -- a worker that
+  never engaged is a property of the team harness (its startup prompt), and choosing that
+  candidate says the coordination problem is worth fixing in the next tuning pass.
+- Do not reward visible EFFORT (many board events, long waits, rework) over the result; read
+  friction as cost, not as diligence."""
+
+
+def select(
+    bp: BenchPrompts,
+    n: int,
+    pool_kind: str = "mixed",
+    assets_note: str = "",
+    team_note: str = "",
+) -> str:
     """Blind selection over candidate outputs, substrate-free; `pool_kind` picks the anonymity
-    block, `assets_note` names any per-candidate rendered evidence selection copied.
+    block, `assets_note` names any per-candidate rendered evidence selection copied,
+    `team_note` adds team-mode judging criteria (D6) when the surface runs teams.
     """
     if pool_kind not in ("mixed", "finals"):
         raise ValueError(f"unknown pool_kind {pool_kind!r}; expected 'mixed' or 'finals'")
     if bp.prompt_pack == "tts":
-        return _tts_select(bp, n, pool_kind, assets_note)
+        return _tts_select(bp, n, pool_kind, assets_note, team_note=team_note)
     return _tidy(
         "\n\n".join(
             [
@@ -1191,6 +1271,7 @@ def select(bp: BenchPrompts, n: int, pool_kind: str = "mixed", assets_note: str 
                 + ("" if bp.selection_conformance == "full" else VALUE_TAIL)
                 + "Length and polish are not merits in themselves. A shorter, correct, complete, "
                 "exactly-shaped answer beats a longer one with a gap or an embellishment.",
+                *([team_note] if team_note else []),
                 _checks(bp),
                 ANSWER_FREE_SELECT,
                 EVIDENCE_BOUNDARY_SELECT,

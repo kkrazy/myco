@@ -648,7 +648,7 @@ test_best_practices_template() {
   # `team-completed` event-name typo, the missing dispatchTask) reached
   # commit: nothing in CI ran them. `node --test` suites, so they run via
   # the same background runner as the test/*.test.js files.
-  node_test_result bench/harness2/engine.test.js "bench/harness2/engine.test.js (22 cases)"
+  node_test_result bench/harness2/engine.test.js "bench/harness2/engine.test.js (23 cases)"
   node_test_result bench/harness2/runner.test.js "bench/harness2/runner.test.js (16 cases)"
   node_test_result bench/harness2/transcript.test.js "bench/harness2/transcript.test.js (20 cases)"
   node_test_result test/harness-runner.test.js "test/harness-runner.test.js (25 cases)"
@@ -2528,6 +2528,7 @@ run_static_checks() {
   test_harness_pull_verb
   test_harness_staging_size
   test_harness_reuse_guard
+  test_harness_n2_roundtrip
 }
 
 # /harness pull — the agent's output, not the harness.
@@ -2652,12 +2653,12 @@ test_harness_staging_size() {
   # Behaviour tests, when the package is importable from here.
   if [ -d vendor/harness2/harness2 ]; then
     local out code
-    out=$(cd vendor/harness2 && "$py" -m unittest tests.test_myco_bench.StagingSizeTest tests.test_myco_bench.StageRootTest tests.test_myco_bench.RolloutOkTest 2>&1)
+    out=$(cd vendor/harness2 && "$py" -m unittest tests.test_myco_bench.StagingSizeTest tests.test_myco_bench.StageRootTest tests.test_myco_bench.RolloutOkTest tests.test_myco_bench.ExtraEditableTest tests.test_myco_bench.DeliverableDetectTest tests.test_channel_timeout tests.prompts_test 2>&1)
     code=$?
     if [ "$code" -eq 0 ]; then
       pass "harness2 staging: behaviour cases green"
     else
-      fail "harness2 staging: behaviour cases green (large input staged, drops reported) — exit=$code"
+      fail "harness2 staging: behaviour cases green (large input staged, drops reported, n2 surface editable) — exit=$code"
       printf '%s\n' "$out" | tail -20
     fi
   else
@@ -6865,6 +6866,50 @@ print_summary() {
     exit 1
   fi
   echo "  All good!"
+}
+
+# n2 adopt round trip (D4) + team sweep defaults (D5).
+#
+# Two silent failures here, both verified on develop @ ffd836c:
+#   1. adoptHarness copied `n2:` SENTINEL STRINGS as filenames — a tuned team
+#      harness "adopted" into junk files nothing reads, and the interactive
+#      /run-n2 lane kept the canonical prompts. The market path skipped the
+#      sentinels; the adopt path was missed.
+#   2. `/harness run --n2` defaulted k=1: a single team rollout per harness
+#      gives the blind selection no contrast, so the sweep pays full cost and
+#      cannot select. And the pane collapsed the two workers into one
+#      anonymous progress stream.
+test_harness_n2_roundtrip() {
+  hresult=server/src/harness-result.js
+  lanes=server/src/compare-lanes.js
+  scmds=server/src/slashcmds.js
+
+  grep -q "function _n2AdoptedPath" "$hresult" \
+    && grep -q "\.myco_harness.*n2" "$hresult" \
+    && pass "harness n2: adopt maps n2 sentinels to .myco_harness/n2/" \
+    || fail "harness n2: adopt maps n2 sentinels to .myco_harness/n2/"
+  # all three consumers (diff, adopt copy, snapshot) must share the resolver,
+  # or rollback restores the wrong paths
+  [ "$(grep -c '_resolveHarnessPath' "$hresult")" -ge 4 ] \
+    && pass "harness n2: diff/adopt/snapshot agree on the n2 path resolver" \
+    || fail "harness n2: diff/adopt/snapshot agree on the n2 path resolver"
+  grep -q "startsWith('n2:')" "$hresult" \
+    && pass "harness n2: n2: sentinels never reach the filesystem as filenames" \
+    || fail "harness n2: n2: sentinels never reach the filesystem as filenames"
+  grep -q "_adoptedN2Components" "$lanes" \
+    && grep -q "worker_a_startup.md" "$lanes" \
+    && pass "harness n2: /run-n2 lane reads adopted n2 components" \
+    || fail "harness n2: /run-n2 lane reads adopted n2 components"
+
+  grep -q "let k = 1" "$scmds" \
+    && pass "harness n2: k defaults to 1 in every mode (--k overrides, 1-4)" \
+    || fail "harness n2: k defaults to 1 in every mode (--k overrides, 1-4)"
+  grep -q "p.stage, p.run, p.worker" "$scmds" \
+    && pass "harness n2: progress lines carry the worker" \
+    || fail "harness n2: progress lines carry the worker"
+  grep -q "≈2× model cost per rollout" "$scmds" \
+    && pass "harness n2: team-mode cost note in the run confirmation" \
+    || fail "harness n2: team-mode cost note in the run confirmation"
 }
 
 # ─── main ────────────────────────────────────────────────────────────────────

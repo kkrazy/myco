@@ -344,24 +344,24 @@ async function realRun(opts) {
     // even a crashed rollout usually has the steps leading up to the crash,
     // and that is exactly the evidence an improvement session needs.
     //
-    // G4 fix: n2 mode writes per-worker event files (events-worker-A.jsonl /
-    // events-worker-B.jsonl) via TeamSession. The single-agent events.jsonl is
-    // never written, so renderEventsFile returns an error string for every n2
-    // run. Concatenate both worker files (worker-A first) when running n2.
+    // D2: n2 mode writes per-worker event files (events-worker-A.jsonl /
+    // events-worker-B.jsonl) plus the shared board journal (board.jsonl) via
+    // TeamSession. The single-agent events.jsonl is never written, so the
+    // single-agent renderer returns an error string for every n2 run.
+    // mergeTeamEvents interleaves all three by timestamp with worker= tags,
+    // so cross-worker causality and the coordination trail stay readable.
     let rendered;
     const n2Mode = (opts.mode || '').toLowerCase() === 'n2';
     try {
       if (n2Mode) {
-        const workerAFile = path.join(runDir, 'events-worker-A.jsonl');
-        const workerBFile = path.join(runDir, 'events-worker-B.jsonl');
-        const partA = transcript.renderEventsFile(workerAFile, { obsTrunc, argsTrunc });
-        const partB = transcript.renderEventsFile(workerBFile, { obsTrunc, argsTrunc });
-        rendered = [
-          '=== Worker A ===',
-          partA,
-          '=== Worker B ===',
-          partB,
-        ].join('\n');
+        rendered = transcript.mergeTeamEvents(
+          [
+            { file: path.join(runDir, 'events-worker-A.jsonl'), worker: 'worker-A' },
+            { file: path.join(runDir, 'events-worker-B.jsonl'), worker: 'worker-B' },
+          ],
+          path.join(runDir, 'board.jsonl'),
+          { obsTrunc, argsTrunc }
+        );
       } else {
         rendered = transcript.renderEventsFile(eventsFile, { obsTrunc, argsTrunc });
       }

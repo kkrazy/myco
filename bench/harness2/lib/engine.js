@@ -176,11 +176,22 @@ function materialiseHarness(harnessDir, cwd) {
   if (!harnessDir) return result;
   for (const rel of walkFiles(harnessDir)) {
     const norm = rel.split(path.sep).join('/');
+    // n2 components (mapHarnessPath returns the 'n2:…' sentinel) are prompt
+    // overrides, not files: the runner reads them separately via
+    // readN2Components and injects them into the TeamSession constructor.
+    // Writing them to disk (a) litters the agent's workspace with literal
+    // 'n2:*' files, (b) false-positives isDelivered for every n2 rollout,
+    // and (c) leaks the sentinel text into the selector's candidate
+    // evidence. Skip them here.
+    const mapped = mapHarnessPath(rel);
+    if (typeof mapped === 'string' && mapped.startsWith(N2_SENTINEL_PREFIX)) {
+      continue;
+    }
     if (norm === 'guardrails.md') {
       result.guardrails = fs.readFileSync(path.join(harnessDir, rel), 'utf8');
       continue;
     }
-    const dst = mapHarnessPath(rel);
+    const dst = mapped;
     if (!dst) { result.unmapped.push(norm); continue; }
     const abs = path.join(cwd, dst);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
