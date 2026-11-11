@@ -444,7 +444,15 @@ ${fileContextBlock}${historyBlock}${userFollowupBlock}`;
   for (const specialty of specialties) {
     const systemPromptForSpecialty = systemPromptPrefix + specialty.systemSuffix;
     console.log(`[critique] Invoking critic "${critic.name}" (${critic.id}) — specialty=${specialty.id} for item ${item.id} (${label}${isRetry ? ', retry' : ''})...`);
-    const verdict = await critic.runCritique(userPrompt, systemPromptForSpecialty);
+    // Task B: thread the session's gateway context (rec.activeGw) into the
+    // critic so a local-claude critic (critics/claude.js) can overlay the
+    // same custom model/gateway as the main agent. The 3rd arg is ignored by
+    // the gemini/codex/custom/none critics — backward compatible.
+    const verdict = await critic.runCritique(userPrompt, systemPromptForSpecialty, {
+      user: rec && rec.user,
+      activeGw: rec && rec.activeGw,
+      cwd: rec && rec.absCwd,
+    });
     const specialtyIsError = _looksLikeCriticError(verdict);
     const specialtyIsAgreed = !specialtyIsError && verdict.includes('✓ AGREED');
     console.log(`[critique] "${critic.name}" specialty=${specialty.id} complete for ${item.id} (${label}). Agreement=${specialtyIsAgreed} isError=${specialtyIsError}`);

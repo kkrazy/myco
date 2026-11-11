@@ -186,16 +186,35 @@ t('runtime: no token for this user/host → helper emits NOTHING (git falls thro
     `bug-81: helper must emit NOTHING (no password= line) when no token matches — git falls through to the next helper / prompt. Found unexpected password line in:\n${out.stdout}`);
 });
 
-t('runtime: cwd outside /wks/<user>/… → helper emits NOTHING (safe fallthrough)', () => {
+// bug-92: when the session reaper removes the workspace, git's cwd no
+// longer matches /wks/<user>/… Pre-fix this emitted nothing even when a
+// valid token WAS on file → git failed with "could not read Username"
+// in ~0.2s. Post-fix: if every matching credential collapses to a SINGLE
+// distinct token we emit it — a single-user store is unambiguous, so it
+// resolves even with no cwd match (the reaped-session case).
+t('runtime: cwd outside /wks/<user>/… + single-user store → emits credential (bug-92)', () => {
   if (!fs.existsSync(HELPER) || (fs.statSync(HELPER).mode & 0o111) === 0) {
     throw new Error('skipped — helper script missing');
   }
   seedTokens({ [USER]: { github: 'ghp_user_level' } });
   const stdin = 'protocol=https\nhost=github.com\npath=kkrazy/myco.git\n\n';
-  const outsideCwd = TMP;   // not under /wks/<user>/…
-  const out = runHelper({ stdin, cwd: outsideCwd });
+  const out = runHelper({ stdin, cwd: TMP });   // not under /wks/<user>/…
+  assert.ok(out.stdout.includes('password=ghp_user_level\n'),
+    `bug-92: with a single distinct token on file, the reaped-cwd fallback must still emit it (losing the session dir must not drop a valid credential). Got:\n${out.stdout}`);
+});
+
+// bug-92 safety: keep bug-81's original guarantee when the store is
+// genuinely ambiguous — multiple users with distinct tokens and no cwd
+// to pick between them → emit nothing (never guess an identity).
+t('runtime: cwd outside /wks/<user>/… + ambiguous multi-user store → emits NOTHING', () => {
+  if (!fs.existsSync(HELPER) || (fs.statSync(HELPER).mode & 0o111) === 0) {
+    throw new Error('skipped — helper script missing');
+  }
+  seedTokens({ [USER]: { github: 'ghp_user_level' }, 'someone-else': { github: 'ghp_other' } });
+  const stdin = 'protocol=https\nhost=github.com\npath=kkrazy/myco.git\n\n';
+  const out = runHelper({ stdin, cwd: TMP });
   assert.ok(!out.stdout.includes('password='),
-    `bug-81: when cwd doesn't match /wks/<user>/…, the helper can't disambiguate which user's tokens to use — must emit nothing (safe fallthrough). Got:\n${out.stdout}`);
+    `bug-92: with multiple distinct tokens and no cwd to disambiguate, must emit nothing (not guess an identity). Got:\n${out.stdout}`);
 });
 
 t('runtime: gitee host → looks up under github\'s sibling provider slot', () => {

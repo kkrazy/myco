@@ -46,20 +46,21 @@ console.log('── fr-55: lean-ctx MCP integration ──');
 // Dockerfile: install lean-ctx + multi-arch Caddy
 // ──────────────────────────────────────────────────────────────────────
 
-t('Dockerfile installs lean-ctx from upstream release tarball', () => {
-  // Proxy-fix commit 6ab2ea6 switched the install from `npm install -g
-  // lean-ctx-bin` to a direct `curl` of the release tarball — npm
-  // doesn't reliably honor the corporate proxy / self-signed cert
-  // environment some users build in. The contract that matters to
-  // downstream callers is unchanged: `lean-ctx` resolves on PATH at
-  // runtime. This test just pins that the install step is present in
-  // some form so a future Dockerfile refactor doesn't silently drop
-  // it. Mechanism is intentionally loose — npm OR curl is fine, both
-  // ship a working binary.
+t('Dockerfile installs lean-ctx from a staged tarball', () => {
+  // Install-mechanism history: npm -g (original) → curl of the upstream
+  // release tarball (proxy-fix 6ab2ea6) → COPY of build-assets/lean-ctx.tar.gz
+  // (deploy-adjust feeb637, 2026-11-02: the build-time corporate proxy drops
+  // the download entirely, so deploy-local.sh stages the tarball on the HOST
+  // and the Dockerfile COPYs it in — the build step is network-free).
+  // The contract that matters to downstream callers is unchanged: `lean-ctx`
+  // resolves on PATH at runtime. This test pins that the install step is
+  // present in some form so a future Dockerfile refactor doesn't silently
+  // drop it. Mechanism is intentionally loose — npm OR curl OR COPY is fine.
   const hasNpm  = /npm\s+install\s+-g\s+lean-ctx-bin/.test(DOCKERFILE);
   const hasCurl = /curl\s+[^\n]*lean-ctx[^\n]*\.tar\.gz/.test(DOCKERFILE);
-  assert.ok(hasNpm || hasCurl,
-    'Dockerfile must install lean-ctx (either `npm install -g lean-ctx-bin` or `curl … lean-ctx-…tar.gz`)');
+  const hasCopy = /COPY\s+build-assets\/lean-ctx\.tar\.gz/.test(DOCKERFILE);
+  assert.ok(hasNpm || hasCurl || hasCopy,
+    'Dockerfile must install lean-ctx (`npm install -g lean-ctx-bin`, `curl … lean-ctx-…tar.gz`, or `COPY build-assets/lean-ctx.tar.gz`)');
 });
 
 t('Dockerfile symlinks lean-ctx into /usr/local/bin', () => {
@@ -79,16 +80,31 @@ t('Dockerfile smoke-tests lean-ctx after install (catches arch mismatch at build
 
 t('Dockerfile Caddy install is arch-aware (amd64 + arm64)', () => {
   // Pre-fr-55 the Caddy URL hardcoded `arch=amd64`, making the image
-  // amd64-only. fr-55 enhancement: detect via uname -m.
-  assert.ok(/uname\s+-m/.test(DOCKERFILE),
-    'Dockerfile must call uname -m to pick the Caddy arch');
-  assert.ok(/x86_64\)[^;]*CADDY_ARCH=amd64/.test(DOCKERFILE),
-    'x86_64 → amd64 mapping must exist');
-  assert.ok(/aarch64\)[^;]*CADDY_ARCH=arm64/.test(DOCKERFILE),
-    'aarch64 → arm64 mapping must exist');
-  // Make sure the hardcoded amd64 is GONE.
+  // amd64-only. fr-55 enhancement: detect via uname -m. Deploy-adjust
+  // feeb637 (2026-11-02) then moved the download OUT of the Dockerfile
+  // entirely: the corporate proxy drops the codeload URL mid-download,
+  // so scripts/deploy-local.sh stages the per-arch caddy binary into
+  // build-assets/ on the HOST and the Dockerfile COPYs it in. The arch
+  // decision now lives in deploy-local.sh's staging step, not here —
+  // so the Dockerfile-side contract is just "caddy comes from
+  // build-assets/ and lands executable at /usr/bin/caddy".
+  const hasStagedCaddy = /COPY\s+build-assets\/caddy\s+\/usr\/bin\/caddy/.test(DOCKERFILE)
+    && /chmod\s+\+x\s+\/usr\/bin\/caddy/.test(DOCKERFILE);
+  const hasInlineArch = /uname\s+-m/.test(DOCKERFILE)
+    && /x86_64\)[^;]*CADDY_ARCH=amd64/.test(DOCKERFILE)
+    && /aarch64\)[^;]*CADDY_ARCH=arm64/.test(DOCKERFILE);
+  assert.ok(hasStagedCaddy || hasInlineArch,
+    'Dockerfile must obtain caddy either arch-aware inline (uname -m → CADDY_ARCH) or via the per-arch build-assets/ staging that deploy-local.sh prepares');
+  // Make sure the hardcoded amd64 download URL is GONE either way.
   assert.ok(!/api\/download\?os=linux&arch=amd64/.test(DOCKERFILE),
-    'the hardcoded `arch=amd64` Caddy URL must be replaced with the dynamic $CADDY_ARCH');
+    'the hardcoded `arch=amd64` Caddy URL must not come back (it made the image amd64-only)');
+  // Staged path: the arch decision lives in deploy-local.sh — pin that
+  // it consults uname -m so the staged binary matches the build host.
+  if (hasStagedCaddy && !hasInlineArch) {
+    const dep = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'deploy-local.sh'), 'utf8');
+    assert.ok(/uname\s+-m/.test(dep),
+      'with staged caddy, scripts/deploy-local.sh must detect arch via uname -m before staging build-assets/');
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────────

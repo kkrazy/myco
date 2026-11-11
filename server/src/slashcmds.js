@@ -1,4 +1,3 @@
-// Slash-command dispatcher for the discussion pane. Commands start with /
 // at the start of a chat message. Each handler receives a context and is
 // expected to emit one or more chat messages back via `reply(text)`.
 //
@@ -14,6 +13,14 @@ const permissions = require('./permissions');
 // the initial module.exports, so destructuring at require-time gets undefined.
 const sessionsMod = require('./sessions');
 
+// ── research mode + domain knowledge base ───────────────────────────────
+// Handlers live in server/src/knowledge/commands.js so every KB-facing
+// concern stays in one folder; registered here only.
+const knowledgeCommands = require('./knowledge/commands');
+const handleResearch = knowledgeCommands.handleResearch;
+const handleKb = knowledgeCommands.handleKb;
+
+
 const ASSISTANT_USER = 'claude';
 
 // fr-80: cross-context "@<target>" routing for /fr, /bug, /td. When a
@@ -27,7 +34,17 @@ const ASSISTANT_USER = 'claude';
 //   Feature → enhancement   Bug → bug   Todo → todo
 const REMOTE_TARGETS = {
   myco: { provider: 'github', owner: 'kkrazy', repo: 'myco' },
+  // codehub twin — the user's own Huawei intranet repo (s00791175/myco-test).
+  // `/fr @codehub`, `/bug @codehub`, `/td @codehub` file to CodeHub using
+  // a codehub codehost PAT (/setpat @codehub <token>) or the user-level
+  // codehub token slot. Distinct from `@myco` (GitHub kkrazy/myco), which
+  // is the dedicated public alias.
+  codehub: { provider: 'codehub', owner: 's00791175', repo: 'myco-test' },
 };
+// Human-readable provider name for messages (token-missing hints, error
+// labels, /setpat guidance). Single source so codehub reads "CodeHub",
+// not "GitHub"/"Gitee".
+const _PROVIDER_LABEL = { github: 'GitHub', gitee: 'Gitee', codehub: 'CodeHub' };
 const REMOTE_LABEL_BY_LAYER = {
   Feature: ['enhancement'],
   Bug:     ['bug'],
@@ -206,6 +223,18 @@ const COMMANDS = [
     handler: handleQStatus,
   },
   {
+    names: ['harness'],
+    summary: 'Run and control a Harness² sweep for this project (owner+admin; spends model budget).',
+    usage: '/harness run [--n2] [--k <1-4>] [--timeout <5h|300m|1800>] <task>  |  /harness status [id]  |  /harness cancel  |  /harness diff  |  /harness adopt  |  /harness pull  |  /harness rollback  |  /harness publish',
+    handler: handleHarness,
+  },
+  {
+    names: ['harness-market'],
+    summary: 'Browse and install tuned harness configs from the market. /harness-market list | install <name> | info <name>',
+    usage: '/harness-market list  |  /harness-market install <name>  |  /harness-market info <name>',
+    handler: handleHarnessMarket,
+  },
+  {
     names: ['qcancel'],
     summary: 'Remove a pending plan item from the run-queue (cannot remove a currently-running entry).',
     usage: '/qcancel fr-43',
@@ -233,6 +262,15 @@ const COMMANDS = [
     usage: '/whatsnext · /next · /next force',
     handler: handleWhatsNext,
   },
+  // bug-92: list the session's unanswered user questions (pending +
+  // failed). Read-only — re-kick via the strip's ↻ rerun button or
+  // POST /sessions/:id/questions/rerun.
+  {
+    names: ['pq'],
+    summary: 'List unanswered user questions (pending + failed) so none get forgotten.',
+    usage: '/pq',
+    handler: handlePQ,
+  },
   // fr-54: pass-through to the underlying `git` CLI. Owner+admin only.
   // Runs in the session's workspace; no allowlist, no PAT injection
   // (use /setpat or PAT-in-URL for private repos).
@@ -242,13 +280,18 @@ const COMMANDS = [
     usage: '/git status · /git log --oneline -10 · /git clone https://… · /git fetch origin',
     handler: handleGit,
   },
-  // fr-102: switch the Claude model used for this session. Bare /model
-  // opens a picker popover; /model <id> sets it; /model default clears.
-  // Owner+admin can set; everyone can read (mirrors /strict).
+  // fr:model-gateway — switch the model gateway used for this session.
+  // Bare /model opens a picker popover listing the user's per-user gateway
+  // profiles + `default` (system .env); the sessions model is governed by
+  // the active profile's `model` (or the system default). Typed commands:
+  // /model gw:<name> activates a profile, /model gw:default resets it.
+  // Power users can still set a per-session model override via
+  // /model <sonnet|opus|haiku|full-id> (and clear with /model default).
+  // Owner+admin can change; everyone can read (mirrors /strict).
   {
     names: ['model'],
-    summary: 'Switch the Claude model for this session (sonnet / opus / haiku / full ID). Owner+admin to change.',
-    usage: '/model · /model <sonnet|opus|haiku|claude-…> · /model default',
+    summary: 'Switch the model gateway / model. Bare /model opens the picker; /model gw:<name> activates a profile; /model <alias> is a per-session override. Owner+admin to change.',
+    usage: '/model · /model gw:<name> · /model gw:default · /model <sonnet|opus|haiku|claude-…>',
     handler: handleModel,
   },
   // fr-103: refresh the Claude subscription credential without leaving
@@ -272,6 +315,90 @@ const COMMANDS = [
     summary: 'Enable/disable the critic for this session. Use /critic off when the critic model keeps erroring.',
     usage: '/critic · /critic status · /critic off · /critic on',
     handler: handleCritic,
+  },
+  // Delm agent-n2: run the given task through a DUAL-AGENT team lane
+  // (worker-A + worker-B) without switching the main session's mode. The
+  // team's activity is bridged into the current chat pane tagged with
+  // worker-A / worker-B (see compare-lanes.js). The main session stays a
+  // plain single-agent session.
+  {
+    names: ['run-n2', 'run-team'],
+    summary: 'Run a task through a DUAL-AGENT (worker-A + worker-B) team lane in this session',
+    usage: '/run-n2 <task>',
+    handler: handleRunN2,
+  },
+  // Multi-expert team (专家团): run the task through a team lane whose
+  // roster is the session's SAVED EXPERTS (created in the Experts UI),
+  // each defined by its skills (chosen from the skill market) instead of
+  // the fixed STARTUP_A/B roles. Same board/queue collaboration core as
+  // /run-n2. /run-experts with no args lists the saved experts.
+  {
+    names: ['run-experts'],
+    summary: 'Run a task through the session expert team (each expert = its skills from the skill market)',
+    usage: '/run-experts <task>',
+    handler: handleRunExperts,
+  },
+  // N-path exploration (路径探索): run the task through N parallel
+  // explorers (path-1..path-N), each deep-diving ONE candidate solution
+  // path, coordinated decentralized via the shared board. Workers run the
+  // RLM engine with a SHARED per-task Continual-Harness store, so
+  // self-authored rules accumulate across workers and across runs of the
+  // same task. A per-path evidence report is written to _myco_/explore/.
+  // Usage: '/run-explore <task>' (default 4 paths) or '/run-explore <N> <task>' (2..512).
+  {
+    names: ['run-explore'],
+    summary: 'Run a task through N parallel explorers, each deep-diving one candidate solution path',
+    usage: '/run-explore [N] <task>',
+    handler: handleRunExplore,
+  },
+  // Delm 双单对比: run one task through BOTH a single-agent lane and a
+  // dual-agent lane simultaneously; the frontend shows them side by side
+  // and a compare report is written to _myco_/compare/ when both finish.
+  {
+    names: ['compare'],
+    summary: 'Run a task through single-agent AND dual-agent lanes simultaneously for comparison',
+    usage: '/compare <task>',
+    handler: handleCompare,
+  },
+  // delm-10 RLM mode (Recursive Language Model, modeled on Prime
+  // Intellect's prime-agent: prompt-as-a-variable + programmatic
+  // recursive sub-agent calling). Forms:
+  //   /rlm                    — status: is this session in persistent RLM mode?
+  //   /rlm on|off             — session-level toggle (alias for session on|off);
+  //                            takes effect on the next respawn (rec.rlm). Owner+admin.
+  //   /rlm session on|off     — explicit session-level toggle.
+  //   /rlm <task>             — run ONE task through a background RLM lane now
+  //                            (same shape as /run-n2 — main mode untouched).
+  //   (/rlm user on|off was REMOVED — RLM is session-level only.)
+  {
+    names: ['rlm'],
+    summary: 'RLM mode (prompt-as-a-variable + recursive sub-agents). /rlm session on|off toggles this session; /rlm <task> runs one task through an RLM lane.',
+    usage: '/rlm · /rlm on · /rlm off · /rlm session on · /rlm <task>',
+    handler: handleRlm,
+  },
+  // Research mode + domain knowledge base. Research mode is the ONLY gate
+  // for KB access: a normal session never mounts the KB MCP server, never
+  // injects retrieved context, and never writes knowledge back.
+  //   /research                — status
+  //   /research on|off         — toggle research mode for this session
+  //   /kb                      — mounted KBs + service health
+  //   /kb use <name>           — mount a KB (enables research mode)
+  //   /kb off                  — unmount all KBs
+  //   /kb search <query>       — run a retrieval and show the hits
+  //   /kb notes [kind]         — list local knowledge items
+  //   /kb verify|deprecate <slug>
+  //   /kb rebuild              — reindex local notes from Markdown
+  {
+    names: ['research'],
+    summary: 'Research mode: mount domain knowledge bases, auto-retrieve on each prompt, and write findings back. /research on|off.',
+    usage: '/research · /research on · /research off',
+    handler: handleResearch,
+  },
+  {
+    names: ['kb'],
+    summary: 'Domain knowledge base: /kb use <name> · /kb search <query> · /kb notes · /kb verify <slug> · /kb rebuild',
+    usage: '/kb · /kb use <name> · /kb off · /kb search <query> · /kb notes · /kb verify <slug> · /kb rebuild',
+    handler: handleKb,
   },
   {
     names: ['help'],
@@ -534,7 +661,13 @@ async function _rewritePlanItemAsync(sessionId, itemId, originalText, layer, ctx
   const btw = require('./btw');
   let rewritten;
   try {
-    rewritten = await btw.runClaudeP(cwd, `${_PLAN_REWRITE_SYSTEM}\n\n${userPrompt}`);
+    // Task B: pass the session's active gateway profile so the /fr /bug
+    // rewrite runs on the same custom model the user selected via `/model gw:`.
+    const sessionRec = sessionsMod.getSessionRecord(ctx.sessionId);
+    rewritten = await btw.runClaudeP(cwd, `${_PLAN_REWRITE_SYSTEM}\n\n${userPrompt}`, {
+      user: ctx.user,
+      activeGw: sessionRec && sessionRec.activeGw,
+    });
   } catch (err) {
     rewritten = null;
   }
@@ -791,7 +924,11 @@ function _loadProjectContext(cwd) {
   // each memory file with a one-line hook. Inline the index then a few
   // of the linked entries up to the byte budget.
   try {
-    const encoded = cwd.replace(/\//g, '-');
+    // Same encoding the SDK uses for ~/.claude/projects/<encoded-cwd>/
+    // (sessions.encodeCwdForClaude). Both separators must be normalised:
+    // on Windows a raw `C:\Users\me\proj` produces a path segment
+    // containing ':', which mkdir cannot create.
+    const encoded = sessionsMod.encodeCwdForClaude(cwd);
     const memDir = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory');
     const indexPath = path.join(memDir, 'MEMORY.md');
     const indexTxt = fs.readFileSync(indexPath, 'utf8');
@@ -829,7 +966,7 @@ function _loadProjectContext(cwd) {
 // auto-memory directory are inlined before the item list so claude can
 // use project-specific synonyms, conventions, and past decisions when
 // deciding whether two items refer to the same underlying concern.
-async function dedupePlanItems(items, cwd) {
+async function dedupePlanItems(items, cwd, gw = {}) {
   const eligible = (items || []).filter((it) => it && it.id && PLAN_LAYER_PREFIX[it.layer]);
   if (eligible.length < 2) {
     return { groups: [], skipped: 'fewer than 2 eligible items (need prefixed ids in Feature/Todo/Bug)' };
@@ -866,7 +1003,9 @@ async function dedupePlanItems(items, cwd) {
   const btw = require('./btw');
   let raw;
   try {
-    raw = await btw.runClaudeP(cwd || process.cwd(), promptBody);
+    // Task B: pass the session's active gateway profile so /dedupe uses the
+    // same custom model selected via /model gw:.
+    raw = await btw.runClaudeP(cwd || process.cwd(), promptBody, gw);
   } catch (err) {
     return { groups: [], error: 'claude call failed: ' + err.message };
   }
@@ -911,7 +1050,7 @@ async function handleDedupe(ctx) {
     return;
   }
   ctx.reply('🔍 asking claude to scan for dedupe candidates… (one moment)');
-  const result = await dedupePlanItems(items, ctx.absCwd);
+  const result = await dedupePlanItems(items, ctx.absCwd, { user: ctx.user, activeGw: rec && rec.activeGw });
   if (result.error) {
     if (result.raw) {
       ctx.reply([
@@ -1057,10 +1196,21 @@ function handleTaskSkip(ctx) {
 // here the target is a fixed repo unrelated to the session's cwd, so
 // no `git remote get-url` is run.
 async function handleRemoteIssue(ctx, layer, targetName, description, alias, shouldRewrite) {
-  const target = REMOTE_TARGETS[targetName];
+  let target = REMOTE_TARGETS[targetName];
   if (!target) {                 // defensive — caller already validated
     ctx.reply(`(unknown @target \`@${targetName}\`)`);
     return;
+  }
+  // `@myco` follows the CURRENT session project. The user works on their
+  // own codehub/gitee/github repo and expects `/fr @myco` (and /bug, /td)
+  // to file AGAINST THAT project, not the hardcoded GitHub kkrazy/myco.
+  // Detect the session remote first; fall back to the fixed GitHub target
+  // only when no remote resolves (e.g. a session with no git origin).
+  if (targetName === 'myco') {
+    const host = await gitHosts.detectHost(ctx.absCwd);
+    if (host && host.provider && host.owner && host.repo) {
+      target = { ...target, provider: host.provider, owner: host.owner, repo: host.repo };
+    }
   }
   const labels = REMOTE_LABEL_BY_LAYER[layer] || [];
   const cmdName = layer === 'Feature' ? 'fr' : layer === 'Bug' ? 'bug' : 'td';
@@ -1084,7 +1234,13 @@ async function handleRemoteIssue(ctx, layer, targetName, description, alias, sho
         '',
         'Rewrite the description following the system prompt format.',
       ].join('\n');
-      const rewritten = await btw.runClaudeP(cwd, `${_PLAN_REWRITE_SYSTEM}\n\n${userPrompt}`);
+      // Task B: run the remote-issue rewrite on the session's active gateway
+      // profile (same custom model as the main agent).
+      const sessionRec = sessionsMod.getSessionRecord(ctx.sessionId);
+      const rewritten = await btw.runClaudeP(cwd, `${_PLAN_REWRITE_SYSTEM}\n\n${userPrompt}`, {
+        user: ctx.user,
+        activeGw: sessionRec && sessionRec.activeGw,
+      });
       // fr-80 r6: parse the TITLE/DESCRIPTION shape directly — keeps
       // the GitHub issue title and body in lockstep with the local plan
       // item's text/description (same source, same parse).
@@ -1140,11 +1296,21 @@ async function handleRemoteIssue(ctx, layer, targetName, description, alias, sho
       );
       return;
     }
+    const providerLabel = _PROVIDER_LABEL[target.provider] || target.provider;
+    // Per-provider "where do I get a token" guidance — codehub is an
+    // intranet GitLab-family host, so it has no OAuth flow here and
+    // users create a PAT in their CodeHub profile.
+    let guidance;
+    if (target.provider === 'codehub') {
+      guidance = 'Generate a PAT in your CodeHub profile settings (scope: `api`) and';
+    } else if (target.provider === 'gitee') {
+      guidance = 'Generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: `issues`) and';
+    } else {
+      guidance = 'Sign in via GitHub OAuth to get a user-level token, or';
+    }
     ctx.reply(
-      `(no ${target.provider === 'github' ? 'GitHub' : 'Gitee'} token on file for @${ctx.user} for ${target.owner}/${target.repo}. ` +
-      `${target.provider === 'github'
-          ? 'Sign in via GitHub OAuth to get a user-level token, or'
-          : 'Generate a PAT at https://gitee.com/profile/personal_access_tokens and'} ` +
+      `(no ${providerLabel} token on file for @${ctx.user} for ${target.owner}/${target.repo}. ` +
+      `${guidance} ` +
       `run \`/setpat @${targetName} <token>\` from any session.)`
     );
     return;
@@ -1153,7 +1319,7 @@ async function handleRemoteIssue(ctx, layer, targetName, description, alias, sho
     provider: target.provider, token, owner: target.owner, repo: target.repo, title, body, labels,
   });
   if (result.error) {
-    const label = target.provider === 'gitee' ? 'Gitee' : 'GitHub';
+    const label = _PROVIDER_LABEL[target.provider] || target.provider;
     // fr-80 r2: GitHub 403 "Resource not accessible by personal access
     // token" almost always means the token's scope is insufficient for
     // issues:write on this repo (common with OAuth tokens missing the
@@ -1256,7 +1422,7 @@ async function handleIssue(ctx, { kind, labels }) {
   const host = await gitHosts.detectHost(ctx.absCwd);
   if (!host) {
     ctx.reply(
-      `(could not detect a github.com or gitee.com remote for this session's cwd: ${ctx.absCwd}. ` +
+      `(could not detect a github.com / gitee.com / codehub-dg-g.huawei.com remote for this session's cwd: ${ctx.absCwd}. ` +
       `\`/${kind}\` requires \`git remote get-url origin\` to point at one of those hosts.)`
     );
     return;
@@ -1265,19 +1431,20 @@ async function handleIssue(ctx, { kind, labels }) {
   // fallback (only github has one — gitee has no OAuth flow yet).
   const token = gitHosts.getToken(ctx.user, host.provider, host.owner, host.repo);
   if (!token) {
-    if (host.provider === 'github') {
-      ctx.reply(
-        `(no GitHub token on file for @${ctx.user} for ${host.owner}/${host.repo}. ` +
-        `Sign out and back in via GitHub to refresh the OAuth token (must include \`repo\` scope), ` +
-        `or run \`/setpat <token>\` to save a per-repo PAT.)`
-      );
+    const providerLabel = _PROVIDER_LABEL[host.provider] || host.provider;
+    let guidance;
+    if (host.provider === 'codehub') {
+      guidance = 'Generate a PAT in your CodeHub profile settings (scope: `api`)';
+    } else if (host.provider === 'gitee') {
+      guidance = 'Generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: `issues`)';
     } else {
-      ctx.reply(
-        `(no Gitee PAT on file for @${ctx.user} for ${host.owner}/${host.repo}. ` +
-        `Generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`) ` +
-        `and run \`/setpat <token>\` from this session.)`
-      );
+      guidance = 'Sign out and back in via GitHub to refresh the OAuth token (must include `repo` scope)';
     }
+    ctx.reply(
+      `(no ${providerLabel} token on file for @${ctx.user} for ${host.owner}/${host.repo}. ` +
+      `${guidance}, ` +
+      `or run \`/setpat <token>\` to save a per-repo PAT.)`
+    );
     return;
   }
   const body = [
@@ -1291,7 +1458,7 @@ async function handleIssue(ctx, { kind, labels }) {
     token, owner: host.owner, repo: host.repo, title, body, labels,
   });
   if (result.error) {
-    const label = host.provider === 'gitee' ? 'Gitee' : 'GitHub';
+    const label = _PROVIDER_LABEL[host.provider] || host.provider;
     ctx.reply(`(${label} error: ${result.error}${result.status ? ` [HTTP ${result.status}]` : ''})`);
     return;
   }
@@ -1355,7 +1522,7 @@ async function handleListPat(ctx) {
     host = await gitHosts.detectHost(ctx.absCwd);
     if (!host) {
       ctx.reply(
-        `(no github.com or gitee.com remote in this session's cwd. ` +
+        `(no github.com / gitee.com / codehub-dg-g.huawei.com remote in this session's cwd. ` +
         `Use \`/listpat @<target>\` to inspect aliases for a registered remote target.)`
       );
       return;
@@ -1381,11 +1548,16 @@ async function handleListPat(ctx) {
   } else {
     for (const a of aliases) lines.push(`  • \`${a}\`  → use with \`--as ${a}\``);
   }
-  // Hint: user-level OAuth fallback (github only).
+  // Hint: user-level OAuth fallback (github / codehub).
   if (host.provider === 'github') {
     const userLevelToken = gitHosts.getToken(ctx.user, 'github');
     if (userLevelToken) {
       lines.push(`  • _user-level GitHub OAuth token also present (default fallback when no per-target or aliased PAT)._`);
+    }
+  } else if (host.provider === 'codehub') {
+    const userLevelToken = gitHosts.getToken(ctx.user, 'codehub');
+    if (userLevelToken) {
+      lines.push(`  • _user-level CodeHub token also present (default fallback when no per-target or aliased PAT)._`);
     }
   }
   ctx.reply(lines.join('\n'));
@@ -1396,11 +1568,12 @@ async function handleSetPat(ctx) {
   if (!args) {
     ctx.reply(
       `Usage: /setpat <token>  OR  /setpat @<target> [--as <alias>] <token>\n` +
-      `Saves a PAT for this session's repo (no @target) or for a registered remote target (\`@myco\`).\n` +
+      `Saves a PAT for this session's repo (no @target) or for a registered remote target (\`@myco\`, \`@codehub\`, ...).\n` +
       `\`--as <alias>\` stores under a named alias so multiple PATs (e.g. work / personal accounts) can ` +
       `coexist for the same target. Pick which one to use per command via \`/fr @<target> --as <alias>\`.\n` +
-      `Provider for session form is auto-detected from \`git remote get-url origin\` (github.com or gitee.com).\n` +
-      `For Gitee, generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`).`
+      `Provider for session form is auto-detected from \`git remote get-url origin\` (github.com, gitee.com, or codehub-dg-g.huawei.com).\n` +
+      `For Gitee, generate a PAT at https://gitee.com/profile/personal_access_tokens (scope: \`issues\`).\n` +
+      `For CodeHub, generate a PAT in your CodeHub profile settings (scope: \`api\`).`
     );
     return;
   }
@@ -1450,7 +1623,7 @@ async function handleSetPat(ctx) {
     host = await gitHosts.detectHost(ctx.absCwd);
     if (!host) {
       ctx.reply(
-        `(no github.com or gitee.com remote in this session's cwd: ${ctx.absCwd}. ` +
+        `(no github.com / gitee.com / codehub-dg-g.huawei.com remote in this session's cwd: ${ctx.absCwd}. ` +
         `\`/setpat\` saves a PAT scoped to the current repo; make sure ` +
         `\`git remote get-url origin\` points at one of those hosts, ` +
         `OR use \`/setpat @<target> <token>\` to scope by remote target.)`
@@ -1719,6 +1892,19 @@ function handleClear(ctx) {
       return;
     }
     const result = session.requestRestart();
+    // 2026-11-11 RLM fix: requestRestart nulls sdkSessionId (fresh Claude
+    // conversation) but keeps the SAME AgentSession object — pre-fix the
+    // fresh conversation still ran whatever engine the session was BORN
+    // with, so `/rlm on` + `/clear new` silently stayed plain. Re-sync the
+    // live engine to rec.rlm after the restart so the fresh conversation
+    // runs the engine the record says (ensureLiveSession's branch logic,
+    // applied in-place — attached clients keep their session object).
+    // Note: setRlmMode(true) also fires the first-turn nudge, so an RLM
+    // /clear new opens with the kernel state read.
+    try {
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      if (rec) sessionsMod.applyRlmModeToLiveSession(sessionId, rec);
+    } catch {}
     // Customize the success reply with the actual @user instead of
     // the @USER placeholder the AgentSession uses (it doesn't know
     // which slashcmd invocation triggered it).
@@ -1743,7 +1929,24 @@ function handleClear(ctx) {
     ctx.reply(`(failed to clear chat: ${err.message})`);
     return;
   }
+  // bug-92: /clear must ALSO drop the other sources that re-render the
+  // wiped text on attach, or an F5 brings it all back. rec.chat alone was
+  // not enough — there are three more:
+  //   1. session.buffer — the SDK event tail `_shipAgentReplay` replays
+  //      on every attach/reconnect.
+  //   2. `<cwd>/_myco_/events.jsonl` — re-hydrated back into session.buffer
+  //      by _hydrateBufferFromDisk on a (reaper) restart. (Myco's own
+  //      append log; documented safe to delete — NOT claude's `--resume`
+  //      transcript, which we deliberately leave untouched.)
+  //   3. The transcript watcher's backfill (persistAssistantTextToChat)
+  //      re-copies old assistant prose into rec.chat on a fresh attach —
+  //      gated by the rec.chatClearAt marker below (filtered in attach.js).
+  // Clearing only rec.chat left paths 2-3 resurrecting the text.
+  const fs = require('fs');
+  const path = require('path');
   try {
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    if (rec) rec.chatClearAt = new Date().toISOString();
     // Prefer ctx.session (passed by attach.handleChatMessage) and fall
     // back to attach.getSession(id) so the slash-todo-inject-style unit
     // tests, which only supply { sessionId, absCwd, reply }, still
@@ -1752,7 +1955,17 @@ function handleClear(ctx) {
     if (!session) {
       try { session = require('./attach').getSession(sessionId); } catch {}
     }
-    if (session) session.emit('state-update', { kind: 'chat-clear' });
+    const evFile = session && session._eventsFile
+      ? session._eventsFile
+      : (rec && rec.absCwd ? path.join(rec.absCwd, '_myco_', 'events.jsonl') : null);
+    if (evFile && fs.existsSync(evFile)) {
+      try { fs.truncateSync(evFile, 0); } catch {}
+    }
+    if (session) {
+      session.buffer = [];                       // nothing to replay on attach
+      session.emit('state-update', { kind: 'chat-clear' });
+    }
+    if (rec) sessionsMod.saveStore();
   } catch {}
   ctx.reply(`✓ cleared ${cleared} chat message${cleared === 1 ? '' : 's'}`);
 }
@@ -1950,102 +2163,127 @@ function handleShare(ctx) {
 // can flip (admins inherit per fr-39). When ON, handleChatMessage
 // blocks any claude-bound chat message that lacks a [run:plan#<id>]
 // marker, with a one-shot reply explaining how to unblock.
-// fr-102: /model — switch the Claude model used for this session.
-//
-//  /model                    → reply with current model + list, emit
-//                              state-update kind:'model-picker' so the
-//                              chat-pane opens the popover.
-//  /model <id>               → owner+admin only; persist rec.modelOverride,
-//                              call session.setModel for the live switch.
-//  /model default | reset    → clear the override (revert to SDK default).
-//
-// The owner+admin gate matches /strict's ladder — model choice is a
-// per-session configuration concern, not destructive in isolation, so
-// admins inherit it. Free-form full IDs are accepted (no client-side
-// whitelist) to dodge the staleness problem; the SDK validates the
-// name server-side and a typo surfaces in the next system/init event.
+// fr:model-gateway — /model is the POPUP-ONLY command for switching the
+// model gateway used by this session. Bare `/model` (or any stray typed
+// suffix, which is IGNORED — no model override, no 400) opens the picker
+// popover. The popup is the single control surface: rows switch via the
+// internal `/model gw:<name>` signal, and the ACTIVE gateway profile's
+// `model` (or the system .env default) governs the effective model. The
+// old per-session `/model <id>` override is RETIRED.
 function handleModel(ctx) {
+  const gatewaysMod = require('./gateways');
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
   if (!rec) {
     ctx.reply('(/model: session not found)');
     return;
   }
   const arg = String((ctx && ctx.args) || '').trim();
-  const current = rec.modelOverride || null;
-  const currentLabel = current || '(default — SDK chooses)';
 
-  if (!arg) {
-    // Bare /model — reply with status + supported aliases, AND fire a
-    // state-update so the live chat pane opens the picker popover.
-    // Anyone attached can read; the picker enforces the owner+admin
-    // gate on click via the existing reply path (the click sends
-    // `/model <id>` which lands in this same handler).
-    const lines = [];
-    lines.push(`**Current model:** \`${currentLabel}\``);
-    lines.push('');
-    lines.push('**Supported aliases:**');
-    for (const m of SUPPORTED_MODELS) {
-      const mark = (current && current === m.id) ? '✓ ' : '  ';
-      lines.push(`${mark}\`${m.id}\` — ${m.desc}`);
+  // The per-session model override is RETIRED — the active gateway governs
+  // the effect model. Purge any lingering rec.modelOverride (from the old
+  // feature or a stray `/model <anything>` input) so it can't override the
+  // gateway model on the next query.
+  if (rec.modelOverride) {
+    rec.modelOverride = null;
+    sessionsMod.saveStore();
+  }
+  // The running AgentSession carries its OWN copy of modelOverride,
+  // snapshotted from rec at spawn — clearing rec alone does NOT clear it.
+  // A stale instance value (e.g. "ds" from the old feature) would still
+  // force sdkOpts.model on the next query. Nuke the live copy too.
+  if (ctx.session && ctx.session.modelOverride) {
+    ctx.session.modelOverride = null;
+  }
+
+  // Popup-internal switch signal: `/model gw:default` resets THIS SESSION to
+  // the system default, `/model gw:<name>` opts THIS SESSION into a saved
+  // per-user profile. The choice is per-session (rec.activeGw), NOT the
+  // legacy per-user `active` pointer — a brand-new session always starts on
+  // the system .env gateway until the user manually switches here, and a
+  // switch in one session never leaks into another.
+  const gwMatch = arg.match(/^gw:(.+)$/i);
+  if (gwMatch) {
+    const gwName = gwMatch[1].trim();
+    if (/^default$/i.test(gwName)) {
+      rec.activeGw = null;
+      if (ctx.session) ctx.session.activeGw = null;   // live instance mirror
+      sessionsMod.saveStore();
+      _emitGatewayChanged(ctx.session, rec);
+      ctx.reply('✓ Gateway reset to system default. Next reply uses the default gateway.');
+    } else {
+      const prof = gatewaysMod.getProfile(rec.user, gwName);
+      if (!prof) {
+        ctx.reply(`(no such saved gateway profile: \`${gwName}\`)`);
+        return;
+      }
+      rec.activeGw = gwName;
+      if (ctx.session) ctx.session.activeGw = gwName; // live instance mirror
+      sessionsMod.saveStore();
+      _emitGatewayChanged(ctx.session, rec);
+      ctx.reply(`✓ Active gateway set to \`${gwName}\`. Next reply uses it.`);
     }
-    lines.push('');
-    lines.push('Use `/model <alias>` to switch, or `/model default` to revert. Full IDs (e.g. `claude-sonnet-4-6`) also accepted.');
-    ctx.reply(lines.join('\n'));
-    if (ctx.session && typeof ctx.session.emit === 'function') {
-      ctx.session.emit('state-update', {
-        kind: 'model-picker',
-        current,
-        supported: SUPPORTED_MODELS,
-      });
-    }
+    // A `gw:` selection is a CHOICE — do NOT re-open the picker here. The
+    // client closed it on click/Enter; re-emitting a model-picker update
+    // would pop it right back open ("Enter 确定后弹窗没有完全关闭").
+    // Only the bare `/model` open-command emits the picker (further down).
     return;
   }
 
-  // Mutating branches — gate on owner+admin.
-  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
-    ctx.reply(`(/model <id> is owner-or-admin only. Session owner is @${rec.user}. Bare \`/model\` (read-only) is open to everyone.)`);
-    return;
-  }
+  // Bare /model (or any other typed suffix, ignored) → open the picker and
+  // report THIS SESSION's active gateway + its configured model
+  // ("按设置显示"). The active is rec.activeGw (per-session), NOT the legacy
+  // per-user `active`.
+  const gwList = gatewaysMod.listProfiles(rec.user);
+  const activeGw = rec.activeGw || null;
+  const activeProf = (gwList && (gwList.profiles || [])).find((p) => p.name === activeGw);
+  // Show model AND request address (请求地址) so the user sees both what
+  // model and which base URL the next query will hit ("按设置显示 + 请求地址也加一下").
+  const gwLabel = activeProf
+    ? `\`${activeProf.name}\`${activeProf.model ? ` (model \`${activeProf.model}\`)` : ' (system model)'}`
+      + (activeProf.baseUrl ? ` · base \`${activeProf.baseUrl}\`` : '')
+    : `\`default\` (system .env → \`${process.env.ANTHROPIC_BASE_URL || 'system gateway'}\`)`;
+  ctx.reply(`**Active gateway:** ${gwLabel}\n\nUse the picker popup (now open) to switch profiles, or **＋ Manage** to add / edit locally.`);
+  // Mark the SESSION's active choice in the picker payload (not listProfiles'
+  // legacy per-user active) so the popup's ✓ reflects this session.
+  if (gwList) gwList.active = activeGw;
+  _emitModelPicker(ctx.session, gwList);
+}
 
-  const argLc = arg.toLowerCase();
-  const isClear = argLc === 'default' || argLc === 'reset' || argLc === 'none' || argLc === 'clear';
-  const next = isClear ? null : arg;
-
-  // Idempotent — no-op chat noise if the user re-picks the current.
-  const sameAsCurrent = (next === current) || (!next && !current);
-  if (sameAsCurrent) {
-    ctx.reply(`(model is already \`${currentLabel}\` — no change.)`);
-    return;
-  }
-
-  // Persist the new override on the session record.
-  rec.modelOverride = next;
-  sessionsMod.saveStore();
-
-  // Live switch via the AgentSession's setModel (best-effort — falls
-  // back to next-iteration sdkOpts.model if the live Query is null).
-  const session = ctx.session;
-  if (session && typeof session.setModel === 'function') {
-    Promise.resolve(session.setModel(next)).catch((err) => {
-      console.error(`[fr-102] /model live setModel rejected: ${err && err.message ? err.message : err}`);
-    });
-  }
-
-  // Broadcast the new state so any open picker pane re-renders the
-  // checkmark on the right row without needing a /model re-fetch.
+// Fire the model-picker state-update with the user's gateway list so the
+// client opens (or refreshes) the picker popover. `current` is always null
+// now — the effective model is governed purely by the active gateway.
+function _emitModelPicker(session, gwList) {
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', {
       kind: 'model-picker',
-      current: next,
+      current: null,
       supported: SUPPORTED_MODELS,
+      gateway: gwList,
+      // The system default base URL (state/.env), so the client can show it
+      // for the `default` choice ("请求地址也加一下").
+      systemBase: process.env.ANTHROPIC_BASE_URL || '',
     });
   }
+}
 
-  ctx.reply(
-    next
-      ? `✓ Model set to \`${next}\`. Takes effect on the next reply.`
-      : `✓ Model override cleared. Next reply uses the SDK default.`
-  );
+// fr:model-gateway — broadcast the ACTIVE gateway's model + base URL after
+// a `/model gw:` switch so the client can refresh its cached
+// _activeGatewayModel / _activeGatewayBase ("按设置显示"). The typed switch
+// does NOT reopen the picker (a gw: selection is a choice, not a request to
+// reopen), so without this the session card kept showing the OLD gateway's
+// model/base ("切换模型没有及时生效" display half). `default` carries the
+// system .env base + null model.
+function _emitGatewayChanged(session, rec) {
+  if (!session || typeof session.emit !== 'function') return;
+  const gatewaysMod = require('./gateways');
+  let model = null, baseUrl = '';
+  if (rec.activeGw) {
+    const prof = gatewaysMod.getProfile(rec.user, rec.activeGw);
+    if (prof) { model = prof.model || null; baseUrl = prof.baseUrl || ''; }
+  } else {
+    baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+  }
+  session.emit('state-update', { kind: 'gateway-changed', model, baseUrl });
 }
 
 // fr-103: refresh the Claude subscription credential.
@@ -2384,6 +2622,571 @@ function handleQStatus(ctx) {
   ctx.reply([header, ...rows, state.paused ? '\n_Use `/qresume` to dispatch the next pending entry._' : ''].filter(Boolean).join('\n'));
 }
 
+// bug-92: /pq — list the session's unanswered user questions so none are
+// forgotten. Read-only (anyone attached). pending = still to be answered;
+// failed = auto-rerun couldn't (or an abort marked it) — re-kick via the
+// unanswered strip's ↻ rerun button (POST /sessions/:id/questions/rerun).
+// ── /harness — Harness² sweep control (P3) ─────────────────────────────────
+//
+// Owner+admin only: starting a sweep spends real money on the model gateway and
+// writes into the project's .claude/, which is the same authority /queue grants.
+//
+// The sweep itself runs as a detached child process (server/src/harness-runner.js);
+// these handlers only start it, read its status, and stop it.
+
+// 1.2 MB beats 1258291 B when a report lists a dozen files.
+function fmtBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function _requireHarnessAuth(ctx) {
+  if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+    const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+    const ownerLabel = rec ? `@${rec.user}` : '(unknown)';
+    ctx.reply(`(/harness is owner+admin only — it spends model budget and rewrites the project's .claude/. Session owner is ${ownerLabel}.)`);
+    return false;
+  }
+  return true;
+}
+
+function handleHarness(ctx) {
+  if (!_requireHarnessAuth(ctx)) return;
+  const runner = require('./harness-runner');
+  const cwd = ctx.absCwd || process.cwd();
+  const args = String(ctx.args || '').trim();
+  const [sub, ...rest] = args.split(/\s+/);
+  const verb = (sub || 'status').toLowerCase();
+  const tail = rest.join(' ').trim();
+
+  if (verb === 'status') {
+    ctx.reply(runner.formatStatus(runner.getStatus(cwd, tail || null)));
+    return;
+  }
+
+  if (verb === 'cancel') {
+    const r = runner.cancelSweep(cwd);
+    if (!r.cancelled) {
+      ctx.reply(`/harness cancel: ${r.reason}${r.id ? ` (sweep ${r.id})` : ''}`);
+      return;
+    }
+    ctx.reply(`✗ cancelled sweep \`${r.id}\`.`);
+    return;
+  }
+
+  if (verb === 'run') {
+    if (!tail) {
+      ctx.reply('Usage: `/harness run [--n2] [--k <1-4>] [--timeout <5h|300m|1800>] <task>`');
+      return;
+    }
+    // Parse optional flags: --n2, --k <n>, --timeout <dur> from the front.
+    let rolloutMode = 'myco';
+    let k = 1;
+    let rolloutTimeoutS = null;
+    let taskText = tail;
+
+    // Strip flags one at a time from the front.
+    let parsing = true;
+    while (parsing) {
+      if (taskText.startsWith('--n2 ') || taskText === '--n2') {
+        rolloutMode = 'n2';
+        taskText = taskText.slice('--n2'.length).trimStart();
+      } else if (/^--k\s+\d+\s?/.test(taskText) || /^--k\s+\d+$/.test(taskText)) {
+        const m = taskText.match(/^--k\s+(\d+)(.*)/s);
+        const kVal = parseInt(m[1], 10);
+        if (kVal < 1 || kVal > 4) {
+          ctx.reply('`--k` must be between 1 and 4. k=2 runs 8 rollouts and 6 improvement sessions.');
+          return;
+        }
+        k = kVal;
+        taskText = (m[2] || '').trimStart();
+      } else if (/^--timeout\s+/.test(taskText)) {
+        // Accepts 1800 / 1800s / 300m / 5h. Bare numbers are seconds.
+        const m = taskText.match(/^--timeout\s+(\d+)\s*([smh]?)(.*)/s);
+        if (!m) {
+          ctx.reply('`--timeout` needs a value like `1800`, `300m` or `5h`.');
+          return;
+        }
+        const unit = m[2] || 's';
+        const mult = unit === 'h' ? 3600 : unit === 'm' ? 60 : 1;
+        const secs = parseInt(m[1], 10) * mult;
+        if (!Number.isFinite(secs) || secs < 60) {
+          ctx.reply('`--timeout` must be at least 60 seconds.');
+          return;
+        }
+        if (secs > 24 * 3600) {
+          ctx.reply('`--timeout` above 24h is refused — that is almost certainly a stuck sweep, not a slow one.');
+          return;
+        }
+        rolloutTimeoutS = secs;
+        taskText = (m[3] || '').trimStart();
+      } else {
+        parsing = false;
+      }
+    }
+
+    if (!taskText) {
+      ctx.reply('Usage: `/harness run [--n2] [--k <1-4>] [--timeout <5h|300m|1800>] <task>` — task text is required.');
+      return;
+    }
+
+    let started;
+    try {
+      started = runner.startSweep({
+        cwd,
+        task: taskText,
+        k,
+        mode: 'parallel',
+        rolloutMode,
+        rolloutTimeoutS,
+        onProgress: (p) => {
+          if (p.stage === 'done') return;
+          // D5: in n2 sweeps the worker is half the story — "which half of
+          // the team is acting" — and dropping it made the pane show two
+          // interleaved agents as one anonymous stream.
+          const bits = [p.stage, p.run, p.worker].filter(Boolean).join(' ');
+          if (!bits) return;
+          try {
+            // D1 fix: bare `session` was not in scope here, causing a
+            // ReferenceError swallowed by the outer try/catch; use ctx.session.
+            // chat-print-persistence fix (2026-11-04): also appendChatMessage
+            // so the progress row survives refresh / reconnect.
+            const progressMsg = { user: 'claude', text: `⚙ harness: ${bits}`,
+              ts: new Date().toISOString(), meta: { kind: 'harness-progress' } };
+            sessionsMod.appendChatMessage(ctx.sessionId, progressMsg);
+            ctx.session.emit('chat', progressMsg);
+          } catch {}
+        },
+      });
+    } catch (e) {
+      ctx.reply(`(/harness run failed: ${e.message})`);
+      return;
+    }
+    if (started.reused) {
+      ctx.reply(`⚙ Sweep \`${started.id}\` is already running here. \`/harness status\` to watch, \`/harness cancel\` to stop.`);
+      return;
+    }
+    ctx.reply([
+      `⚙ Started sweep \`${started.id}\` (k=${k}, parallel${rolloutMode === 'n2' ? ', n2' : ''})${started.pid ? `, pid ${started.pid}` : ''}.`,
+      '',
+      rolloutMode === 'n2'
+        ? '_Team mode: each rollout runs TWO workers sharing a board — expect ≈2× model cost per rollout and ≈2× trajectory tokens. A k=1 sweep runs about 4 rollouts and 3 improvement sessions._'
+        : '_A k=1 sweep runs about 4 rollouts and 3 improvement sessions._',
+      '`/harness status` · `/harness cancel` · results land in `_harness_/sweeps/`',
+    ].join('\n'));
+    return;
+  }
+
+  // ── P4: adopt|diff|rollback ─────────────────────────────────────────────
+  if (verb === 'diff') {
+    const hResult = require('./harness-result');
+    const id = tail || null;
+    const sel = hResult.findSelection(cwd, id);
+    if (!sel) {
+      ctx.reply('No successful selection found. Run `/harness status` to check.');
+      return;
+    }
+    const dir = hResult.harnessDir(sel);
+    if (!dir || !require('fs').existsSync(dir)) {
+      ctx.reply('Chosen workspace directory not found. The sweep result may be incomplete.');
+      return;
+    }
+    const changes = hResult.diffHarness(dir, cwd);
+    ctx.reply(hResult.formatDiff(changes));
+    return;
+  }
+
+  if (verb === 'adopt') {
+    if (!_requireHarnessAuth(ctx)) return;
+    const hResult = require('./harness-result');
+    const id = tail || null;
+    const sel = hResult.findSelection(cwd, id);
+    if (!sel) {
+      ctx.reply('No successful selection found. Run `/harness status` to check.');
+      return;
+    }
+    const dir = hResult.harnessDir(sel);
+    if (!dir || !require('fs').existsSync(dir)) {
+      ctx.reply('Chosen workspace directory not found.');
+      return;
+    }
+    hResult.adoptHarness(dir, cwd).then(async ({ adopted, snapshot }) => {
+      const snapshotFile = await hResult.saveSnapshot(snapshot, cwd, sel.chosen_run_id || id || 'sweep');
+      const n2Files = adopted.filter(f => f.startsWith('.myco_harness/n2/'));
+      ctx.reply([
+        `✓ Adopted harness from sweep — ${adopted.length} file(s) written.`,
+        '',
+        adopted.map(f => `  • \`${f}\``).join('\n'),
+        n2Files.length
+          ? `\n_n2 components installed — the next \`/run-n2\` in this session runs with them._`
+          : '',
+        '',
+        `_Snapshot saved as \`${require('path').basename(snapshotFile)}\`. Use \`/harness rollback\` to undo._`,
+      ].filter(Boolean).join('\n'));
+    }).catch(e => {
+      ctx.reply(`(/harness adopt failed: ${e.message})`);
+    });
+    return;
+  }
+
+  if (verb === 'pull') {
+    if (!_requireHarnessAuth(ctx)) return;
+    const hResult = require('./harness-result');
+    const path    = require('path');
+    const fsp     = require('fs/promises');
+
+    // /harness pull [--all] [--bulk] [--to <dir>] [sweepId] [runLabel]
+    //
+    // adopt installs the HARNESS; this hands back what the AGENT produced.
+    // Default: the selected run. --all: every sibling run with a workspace,
+    // one directory each, so the four candidates can be compared directly
+    // instead of trusting the blind selection sight-unseen.
+    let pullAll = false;
+    let pullBulk = false;
+    let destArg = null;
+    let idArg   = null;
+    let runArg  = null;
+    let text = tail;
+    for (;;) {
+      const m = text.match(/^(--all|--bulk|--to)\s*(\S*)\s*(.*)$/s);
+      if (!m) break;
+      if (m[1] === '--all') { pullAll = true; text = (m[2] + ' ' + m[3]).trim(); continue; }
+      if (m[1] === '--bulk') { pullBulk = true; text = (m[2] + ' ' + m[3]).trim(); continue; }
+      if (!m[2]) { ctx.reply('Usage: `/harness pull [--all] [--bulk] [--to <dir>] [sweepId] [runLabel]` — `--to` needs a value.'); return; }
+      destArg = m[2];
+      text = (m[3] || '').trim();
+    }
+    [idArg, runArg] = text ? text.split(/\s+/) : [];
+
+    const sel = hResult.findSelection(cwd, idArg || null);
+    if (!sel) {
+      ctx.reply('No successful selection found. Run `/harness status` to check.');
+      return;
+    }
+    const chosen = sel.chosen_run_dir;
+    if (!chosen || !require('fs').existsSync(path.join(chosen, 'workspace'))) {
+      ctx.reply('Chosen run workspace not found. The sweep result may be incomplete.');
+      return;
+    }
+
+    const sweepStem = String(idArg || sel.sweep || sel.chosen_run_id || 'sweep')
+      .replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'sweep';
+    const baseDir = destArg ? path.resolve(cwd, destArg)
+                            : path.join(cwd, '_harness_', 'deliverables', sweepStem);
+
+    let targets;
+    if (pullAll) {
+      targets = hResult.siblingRuns(chosen);
+    } else if (runArg) {
+      const all = hResult.siblingRuns(chosen);
+      const hit = all.find(r => path.basename(r) === runArg || path.basename(r).includes(runArg));
+      if (!hit) {
+        ctx.reply('No run matching `' + runArg + '`.\n\n' + all.map(r => '  • `' + path.basename(r) + '`').join('\n'));
+        return;
+      }
+      targets = [hit];
+    } else {
+      targets = [chosen];
+    }
+
+    Promise.all(targets.map(runDir => {
+      // One run → straight into baseDir. Several → one subdirectory per run,
+      // named by the run id, so a side-by-side diff is a plain `diff -r`.
+      const dest = targets.length === 1
+        ? baseDir
+        : path.join(baseDir, hResult.runLabel(runDir));
+      return hResult.pullDeliverables(runDir, dest, { all: pullBulk });
+    })).then(results => {
+      if (!results.length) { ctx.reply('No run workspaces found to pull from.'); return; }
+      const lines = [];
+      let total = 0;
+      for (const r of results) {
+        const rel = path.relative(cwd, r.dest) || '.';
+        if (!r.files.length) {
+          lines.push(`▫ \`${r.label}\` — no agent-produced files (only task inputs and harness).`);
+          continue;
+        }
+        total += r.files.length;
+        lines.push(`📦 \`${r.label}\` → \`${rel}\` — ${r.files.length} file(s)`);
+        for (const f of r.files.slice(0, 40)) {
+          const tag = f.status === 'modified' ? '✏️' : '➕';
+          lines.push(`   ${tag} \`${f.rel}\` (${fmtBytes(f.bytes)})`);
+        }
+        if (r.files.length > 40) lines.push(`   … and ${r.files.length - 40} more`);
+        // Say what was left behind. Silently dropping 20 MB of data would
+        // read as "the agent produced nothing but source", which is a lie.
+        if (r.skipped && r.skipped.length) {
+          const skippedBytes = r.skipped.reduce((a, f) => a + f.bytes, 0);
+          const shown = r.skipped.slice(0, 3).map(f => '`' + f.rel + '`').join(', ');
+          lines.push(`   ⤵ skipped ${r.skipped.length} bulk file(s), ${fmtBytes(skippedBytes)} ` +
+            `(${shown}${r.skipped.length > 3 ? ', …' : ''}) — \`--bulk\` to include`);
+        }
+      }
+      const header = results.length === 1
+        ? `✓ Pulled ${total} agent-produced file(s) from \`${results[0].label}\`.`
+        : `✓ Pulled agent output from ${results.length} run(s) — ${total} file(s).`;
+      const footer = [
+        "_Task inputs and harness files are excluded — these are the agent's own output._",
+      ];
+      if (!pullAll)  footer.push('_`--all` pulls every candidate run for comparison._');
+      if (!pullBulk) footer.push('_`--bulk` also copies datasets and build output._');
+      ctx.reply([header, '', ...lines, '', ...footer].join('\n'));
+    }).catch(e => {
+      ctx.reply(`(/harness pull failed: ${e.message})`);
+    });
+    return;
+  }
+
+  if (verb === 'rollback') {
+    if (!_requireHarnessAuth(ctx)) return;
+    const hResult = require('./harness-result');
+    // tail may be "<sweepId> [snapshotId]" or empty (use latest)
+    const [sweepId, snapshotId] = (tail || '').split(/\s+/);
+    // Try to resolve a sweepId from the latest sweep if not given.
+    const resolvedSweepId = sweepId || (() => {
+      const runner = require('./harness-runner');
+      const st = runner.getStatus(cwd, null);
+      return st && st.id;
+    })();
+    if (!resolvedSweepId) {
+      ctx.reply('Usage: `/harness rollback [sweepId] [snapshotId]`\nNo sweep id given and no recent sweep found.');
+      return;
+    }
+    const snapshot = hResult.loadSnapshot(cwd, resolvedSweepId, snapshotId || null);
+    if (!snapshot) {
+      ctx.reply('No snapshot found for sweep `' + resolvedSweepId + '`. Was `/harness adopt` run?');
+      return;
+    }
+    hResult.rollbackHarness(snapshot, cwd).then(({ restored, removed }) => {
+      const total = restored.length + removed.length;
+      ctx.reply([
+        `↩ Rolled back snapshot \`${snapshot.id}\` — ${total} file(s) restored.`,
+        restored.map(f => `  • \`${f}\` restored`).join('\n'),
+        removed.map(f => `  • \`${f}\` removed`).join('\n'),
+      ].filter(Boolean).join('\n'));
+    }).catch(e => {
+      ctx.reply(`(/harness rollback failed: ${e.message})`);
+    });
+    return;
+  }
+
+  // ── P6: publish to market ─────────────────────────────────────────────
+  if (verb === 'publish') {
+    if (!_requireHarnessAuth(ctx)) return;
+    const hResult  = require('./harness-result');
+    const hMarket  = require('./harness-market');
+    const runner   = require('./harness-runner');
+    const id = tail || null;
+    const sel = hResult.findSelection(cwd, id);
+    if (!sel) {
+      ctx.reply('No successful selection found. Run `/harness status` to check.');
+      return;
+    }
+    const st = runner.getStatus(cwd, id || null);
+    const sweepMeta = {
+      sweepTag: (st && st.namespace) || (id || 'unknown'),
+      task:     sel.task_id || 'unknown',
+      mode:     sel.mode    || 'agg',
+      k:        sel.k       || 1,
+      domain:   sel.domain  || '',
+    };
+    hMarket.publishFromSweep(sel, sweepMeta, ctx.user).then(result => {
+      ctx.reply(`✓ Published harness \`${result.name}\` to market.`);
+    }).catch(e => {
+      ctx.reply(`(/harness publish failed: ${e.message})`);
+    });
+    return;
+  }
+
+  // ── init — generate harness component templates ────────────────────────
+  if (verb === 'init') {
+    const fsp  = require('fs/promises');
+    const path = require('path');
+    const cwd  = ctx.absCwd || process.cwd();
+    const n2   = (tail || '').toLowerCase() === 'n2';
+    const dir  = path.join(cwd, '_harness_', 'template');
+
+    const files = {
+      'systemprompt.md': '# Role\n\n<!-- Agent role and workflow for this project. -->\nYou are an expert software engineer.\n',
+      'tool_guidance.md': '# Tool Guidance\n\n<!-- Project-specific tool usage rules. -->\nRead before editing. Write minimal targeted changes.\n',
+      'guardrails.md': '# Guardrails\n\n<!-- Project-specific prohibitions. -->\nNever push to main directly.\n',
+    };
+    if (n2) {
+      files['worker_a_startup.md'] = '# Worker-A Startup\n\n<!-- Overrides STARTUP_A in prompts-n2-shared.js -->\nInspect the task and choose the simplest split. Reserve your scope and\npublish actionable non-overlapping work for worker-B before implementing.\n';
+      files['worker_b_startup.md'] = '# Worker-B Startup\n\n<!-- Overrides STARTUP_B in prompts-n2-shared.js -->\nExplore the entry point and environment. Share concrete findings, then\nclaim the first available board item and implement it immediately.\n';
+      files['board_guidance.md'] = '# Board Guidance\n\n<!-- Overrides BOARD_COMMANDS + WAITING in prompts-n2-shared.js -->\n<!-- Leave blank to use the canonical Delm board protocol. -->\n';
+    }
+
+    fsp.mkdir(dir, { recursive: true }).then(async () => {
+      const created = [];
+      for (const [name, content] of Object.entries(files)) {
+        const target = path.join(dir, name);
+        try { await fsp.access(target); continue; } catch {}
+        await fsp.writeFile(target, content, 'utf8');
+        created.push(name);
+      }
+      ctx.reply([
+        `✓ Harness template in \`_harness_/template/\`${n2 ? ' (n2 mode)' : ''}.`,
+        created.length
+          ? '\n**Created:**\n' + created.map(f => `  • \`${f}\``).join('\n')
+          : '\n_All files already exist — nothing overwritten._',
+        '\n**Next:** edit the files, then `/harness install _harness_/template`',
+        n2 ? '\n_n2 files tune dual-agent startup strategy and board guidance._' : '',
+      ].filter(Boolean).join('\n'));
+    }).catch(e => ctx.reply(`(/harness init failed: ${e.message})`));
+    return;
+  }
+
+  // ── install — install harness from a local directory ─────────────────
+  if (verb === 'install') {
+    if (!_requireHarnessAuth(ctx)) return;
+    if (!tail) {
+      ctx.reply([
+        'Usage: `/harness install <dir>`',
+        '',
+        'Installs the harness tree at `<dir>` into this session.',
+        'Files: `systemprompt.md`, `guardrails.md`, `tool_guidance.md`, `hooks.json`,',
+        '`sub_agents/`, `skills/`, `scripts/`',
+        'n2 files: `worker_a_startup.md`, `worker_b_startup.md`, `board_guidance.md`',
+        '',
+        'Run `/harness init [n2]` to generate a template first.',
+      ].join('\n'));
+      return;
+    }
+    const path    = require('path');
+    const fs      = require('fs');
+    const hResult = require('./harness-result');
+    const cwd     = ctx.absCwd || process.cwd();
+    const hDir    = path.isAbsolute(tail) ? tail : path.resolve(cwd, tail);
+    if (!fs.existsSync(hDir)) {
+      ctx.reply(`(/harness install: directory not found: \`${tail}\`)`);
+      return;
+    }
+    hResult.adoptHarness(hDir, cwd).then(async ({ adopted, snapshot }) => {
+      const snapshotFile = await hResult.saveSnapshot(snapshot, cwd, `manual-${Date.now()}`);
+      ctx.reply([
+        `✓ Installed harness from \`${tail}\` — ${adopted.length} file(s) written.`,
+        adopted.map(f => `  • \`${f}\``).join('\n'),
+        `_Snapshot saved. Use \`/harness rollback\` to undo._`,
+      ].join('\n\n'));
+    }).catch(e => ctx.reply(`(/harness install failed: ${e.message})`));
+    return;
+  }
+
+  ctx.reply('Usage: `/harness run [--n2] [--k <1-4>] [--timeout <5h|300m|1800>] <task>` · `/harness status [id]` · `/harness cancel` · `/harness diff [id]` · `/harness adopt [id]` · `/harness pull [--all] [--bulk] [--to <dir>]` · `/harness rollback [sweepId]` · `/harness publish [id]` · `/harness init [n2]` · `/harness install <dir>`');
+}
+
+function handleHarnessMarket(ctx) {
+  const hMarket = require('./harness-market');
+  const args    = String(ctx.args || '').trim();
+  const [sub, ...rest] = args.split(/\s+/);
+  const verb = (sub || 'list').toLowerCase();
+  const name = rest.join(' ').trim();
+
+  if (verb === 'list' || !args) {
+    hMarket.listHarnesses(ctx.user).then(items => {
+      if (!items || items.length === 0) {
+        ctx.reply([
+          '_No harness items in the market yet._',
+          '',
+          'After a sweep finishes, run `/harness publish` to share the selected harness.',
+        ].join('\n'));
+        return;
+      }
+      const lines = [
+        `**Harness market — ${items.length} item(s):**\n`,
+      ];
+      for (const item of items) {
+        const domain = item.domain ? ` · ${item.domain}` : '';
+        const task   = item.task   ? ` · task: \`${item.task}\`` : '';
+        lines.push(`• **\`${item.name}\`**${domain}${task}`);
+        if (item.description) lines.push(`  _${item.description}_`);
+      }
+      lines.push('');
+      lines.push('`/harness-market install <name>` to adopt one into this session.');
+      ctx.reply(lines.join('\n'));
+    }).catch(e => ctx.reply(`(/harness-market list failed: ${e.message})`));
+    return;
+  }
+
+  if (verb === 'info') {
+    if (!name) {
+      ctx.reply('Usage: `/harness-market info <name>`');
+      return;
+    }
+    const marketApi = require('./market');
+    marketApi.readMarketItem({ type: 'harness', name }).then(item => {
+      if (!item) {
+        ctx.reply(`No harness named \`${name}\` in the market.`);
+        return;
+      }
+      const { _fileContent, ...safe } = item;
+      const fileList = Object.keys(item.files || {});
+      const lines = [
+        `**${safe.name}**`,
+        safe.description ? `_${safe.description}_` : '',
+        '',
+        `Surface: \`${safe.surface || 'myco'}\``,
+        safe.sweepTag ? `Sweep: \`${safe.sweepTag}\`` : '',
+        safe.task      ? `Task: \`${safe.task}\` (${safe.domain || 'unknown domain'})` : '',
+        safe.mode      ? `Mode: ${safe.mode}, k=${safe.k || 1}` : '',
+        '',
+        `**${fileList.length} file(s):**`,
+        fileList.map(f => `  • \`${f}\``).join('\n'),
+        safe.selectionWhy ? `\n**Why selected:** ${safe.selectionWhy}` : '',
+      ].filter(l => l !== '');
+      ctx.reply(lines.join('\n'));
+    }).catch(e => ctx.reply(`(/harness-market info failed: ${e.message})`));
+    return;
+  }
+
+  if (verb === 'install') {
+    if (!name) {
+      ctx.reply('Usage: `/harness-market install <name>`');
+      return;
+    }
+    if (!require('./sessions').isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+      const rec = require('./sessions').getSessionRecord(ctx.sessionId);
+      ctx.reply(`(/harness-market install is owner+admin only — owner is @${rec ? rec.user : '?'})`);
+      return;
+    }
+    const cwd = ctx.absCwd || process.cwd();
+    hMarket.installIntoSession(name, cwd, ctx.user).then(({ installed, snapshot }) => {
+      ctx.reply([
+        `✓ Installed harness \`${name}\` — ${installed.length} file(s) written.`,
+        '',
+        installed.map(f => `  • \`${f}\``).join('\n'),
+        '',
+        '_Use `/harness diff` to review, `/harness rollback` to undo._',
+      ].join('\n'));
+    }).catch(e => ctx.reply(`(/harness-market install failed: ${e.message})`));
+    return;
+  }
+
+  ctx.reply('Usage: `/harness-market list` · `/harness-market info <name>` · `/harness-market install <name>`');
+}
+
+function handlePQ(ctx) {
+  const pendingQuestions = require('./pendingQuestions');
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/pq: session not found)'); return; }
+  const state = pendingQuestions.getState(rec);
+  const open = state.list.filter((e) => e.status === 'pending' || e.status === 'failed');
+  if (!open.length) {
+    ctx.reply('No unanswered questions. Every user question has an in-flight or answered turn.');
+    return;
+  }
+  const rows = open.map((e) => {
+    const glyph = e.status === 'pending' ? '⏳' : '⚠';
+    const label = String(e.text).replace(/\s+/g, ' ').slice(0, 70);
+    return `  ${glyph} \`${e.qid}\` (${e.status}, try ${e.dispatchCount || 1}) @${e.user}: ${label}`;
+  });
+  ctx.reply([`**Unanswered questions** — ${state.counts.pending} pending · ${state.counts.failed} failed`, ...rows,
+    '\n_Automatic rerun covers backend failures (bounded). Use the ↻ rerun button to re-kick aborted/failed ones._'].join('\n'));
+}
+
 function handleQCancel(ctx) {
   if (!_requireQueueAuth(ctx)) return;
   const runQueue = require('./runQueue');
@@ -2593,9 +3396,10 @@ function _parseShellArgs(str) {
 
 // fr-54: /git <args> — pass-through to the git CLI in the session's
 // workspace. Owner+admin only. Full passthrough — no allowlist of
-// subcommands, no PAT auto-injection. Use /setpat or embed the PAT
-// in the URL (https://x-access-token:<PAT>@github.com/...) for
-// private-repo clone/fetch/push.
+// subcommands. bug-88: `clone <url>` reuses a stored PAT (per-repo
+// → user-level) when the URL has no embedded credentials, so a
+// private clone works right after /setpat without pasting the token
+// into chat. Everything else stays a plain passthrough.
 //
 // Caps: 60s timeout, 1 MB stdout, 16 KB stderr. Output rendered as a
 // markdown code-fenced block with stdout, then stderr (if any), then
@@ -2604,6 +3408,56 @@ function _parseShellArgs(str) {
 // Note: `git config --global` mutates the container's shared $HOME,
 // affecting all sessions. We don't block it (consenting adults) but
 // the help text flags this.
+
+// bug-88: parse a git HTTPS/SSH URL into {provider, owner, repo} for
+// one of the known hosts, or null. Mirrors git-hosts.js's HOST_REGEX
+// classification but works on a bare URL string (detectHost shells out
+// to `git remote get-url origin`, which only works post-clone).
+function _hostFromCloneUrl(url) {
+  const m = String(url || '').match(/(github\.com|gitee\.com|codehub-dg-g\.huawei\.com)[:/]([^/"'\s]+)\/([^/"'\s]+?)(?:\.git)?(?:[\/?#].*)?$/i);
+  if (!m) return null;
+  const host = m[1].toLowerCase();
+  const provider = host === 'gitee.com' ? 'gitee' : (host === 'codehub-dg-g.huawei.com' ? 'codehub' : 'github');
+  const owner = m[2], repo = m[3];
+  if (!owner || !repo) return null;
+  return { provider, owner, repo };
+}
+
+// bug-88: for `clone <url>`, if a PAT is on file for the URL's
+// (provider, owner, repo) — per-repo first, then the user-level slot —
+// rewrite the URL with the token embedded. Returns null (clone runs
+// verbatim) when: the subcommand isn't a bare clone, the URL already
+// carries credentials (user explicitly embedded one), the host isn't
+// recognized, or no token is stored. The token NEVER appears in the
+// echoed `$ git …` line or any output (bug-88 redaction contract).
+function _cloneUrlWithStoredPat(argv, user) {
+  if (!argv || argv[0] !== 'clone' || argv.length < 2) return null;
+  // Find the URL argument: the FIRST https:// arg after `clone` —
+  // flags AND their values (e.g. `--depth 1`) sit between them.
+  // `git clone` accepts flags before or after the URL; taking the
+  // first https:// arg handles both without needing a flag-value
+  // table. If there is none, there's nothing to rewrite.
+  let i = 1;
+  while (i < argv.length && !/^https:\/\//i.test(String(argv[i]))) i++;
+  if (i >= argv.length) return null;
+  const url = String(argv[i]);
+  const restArgs = argv.slice(i + 1);
+  // User already embedded credentials (https://user:pat@host/…) —
+  // respect the explicit identity, don't double-inject.
+  if (/^https:\/\/[^/]*@/i.test(url)) return null;
+  const host = _hostFromCloneUrl(url);
+  if (!host) return null;
+  const token = gitHosts.getToken(user, host.provider, host.owner, host.repo);
+  if (!token) return null;
+  const userLabel = host.provider === 'gitee'
+    ? (gitHosts.getGiteeLogin(user) || user)
+    : 'x-access-token';
+  const withPat = url.replace(/^https:\/\//i, `https://${encodeURIComponent(userLabel)}:${encodeURIComponent(token)}@`);
+  // Rebuild argv with the rewritten URL in place — everything else
+  // (flags, values, trailing target dir) keeps its position.
+  return argv.map((a, idx) => (idx === i ? withPat : a));
+}
+
 function handleGit(ctx) {
   if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
     const rec = sessionsMod.getSessionRecord(ctx.sessionId);
@@ -2613,7 +3467,7 @@ function handleGit(ctx) {
   }
   const argsRaw = String((ctx && ctx.args) || '').trim();
   if (!argsRaw) {
-    ctx.reply('Usage: `/git <subcommand> [args...]` — runs `git <args>` in the session workspace. Example: `/git status`, `/git log --oneline -10`, `/git clone https://github.com/owner/repo`. Use `/setpat <token>` first (or embed a PAT in the URL) for private-repo clone/fetch/push. NOTE: `git config --global` affects all sessions sharing this container.');
+    ctx.reply('Usage: `/git <subcommand> [args...]` — runs `git <args>` in the session workspace. Example: `/git status`, `/git log --oneline -10`, `/git clone https://github.com/owner/repo`. `clone` reuses a stored PAT automatically (`/setpat`) — no need to embed the token in the URL (bug-88). NOTE: `git config --global` affects all sessions sharing this container.');
     return;
   }
   const rec = sessionsMod.getSessionRecord(ctx.sessionId);
@@ -2633,22 +3487,37 @@ function handleGit(ctx) {
     return;
   }
   const { execFile } = require('child_process');
-  execFile('git', argv, {
-    cwd: rec.absCwd,
+  // bug-88: `clone <url>` reuses a stored PAT instead of failing with
+  // "could not read Username" on a private repo. Rewrites argv to embed
+  // the token; returns null (argv unchanged) for every other case.
+  const patArgs = _cloneUrlWithStoredPat(argv, ctx.user);
+  const runArgv = patArgs || argv;
+  execFile('git', runArgv, {
+    // bug-88 (also fr-106 alignment): run from ctx.absCwd when the
+    // dispatcher supplied it — that's the main-project dir when one is
+    // designated (resolveAgentCwd in attach.js). Fall back to rec.absCwd
+    // for direct/legacy callers that don't set ctx.absCwd.
+    cwd: (ctx && ctx.absCwd) || rec.absCwd,
     timeout: 60000,
     maxBuffer: 1024 * 1024,      // 1 MB stdout cap
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },  // never block on creds prompt
   }, (err, stdout, stderr) => {
     const out = String(stdout || '').slice(0, 64 * 1024);
     const erro = String(stderr || '').slice(0, 16 * 1024);
+    // bug-88 redaction: the token lives in runArgv's URL but the echo
+    // line always shows the ORIGINAL user-typed args ($ git clone
+    // https://github.com/o/r), and stdout/stderr are scrubbed of any
+    // accidental token leak as belt-and-braces.
+    const scrub = (s) => String(s || '').replace(/https:\/\/[^/\s]*@/gi, 'https://');
     const lines = [`$ git ${argsRaw}`];
-    if (out.trim()) lines.push('```\n' + out.replace(/\n+$/, '') + '\n```');
-    if (erro.trim()) lines.push('**stderr:**\n```\n' + erro.replace(/\n+$/, '') + '\n```');
+    if (patArgs) lines.push('(using stored PAT for auth — token not shown)');
+    if (out.trim()) lines.push('```\n' + scrub(out).replace(/\n+$/, '') + '\n```');
+    if (erro.trim()) lines.push('**stderr:**\n```\n' + scrub(erro).replace(/\n+$/, '') + '\n```');
     if (err) {
       if (err.killed) lines.push('⚠ git timed out after 60s');
       else if (err.code === 'ENOENT') lines.push('⚠ git not found on PATH');
       else if (typeof err.code === 'number') lines.push(`(exit code ${err.code})`);
-      else lines.push(`⚠ ${err.message}`);
+      else lines.push(`⚠ ${scrub(err.message)}`);
     } else {
       lines.push('(exit 0)');
     }
@@ -2681,6 +3550,469 @@ function listCommands() {
   }));
 }
 
+// ---- Delm agent-n2: /run-n2 and /compare handlers ----
+//
+// Both spawn isolated shadow lanes (see compare-lanes.js) and bridge their
+// agent-events back into THIS session's WS pipeline, so the running single
+// agent session's mode is never mutated. /run-n2 = one dual-agent lane;
+// /compare = one single-agent + one dual-agent lane, with a compare report
+// written on completion.
+
+// delm-10 RLM mode handler. Forms (see the /rlm COMMANDS entry):
+//   /rlm                      — status
+//   /rlm on | /rlm off        — session-level toggle (owner+admin), legacy alias
+//                               for `/rlm session on|off`
+//   /rlm session on|off       — session-level toggle (this session only)
+//   /rlm <task>               — one-shot background RLM lane for a task
+// The only switch is the session flag rec.rlm (the user-level scope,
+// store.rlmUsers + `/rlm user on|off`, was removed).
+function handleRlm(ctx) {
+  const args = String((ctx && ctx.args) || '').trim();
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  if (!rec) { ctx.reply('(/rlm: session not found)'); return; }
+
+  const emitRlmState = (rlm, scope) => {
+    if (ctx.session && typeof ctx.session.emit === 'function') {
+      ctx.session.emit('state-update', { kind: 'rlm-mode-changed', rlm, scope });
+    }
+  };
+
+  // Bare /rlm — status read, no auth needed (mirrors /critic status).
+  if (!args || args === 'status') {
+    const scope = sessionsMod.getRlmScope(rec);
+    // task req c: usage stats — how many times RLM was triggered and the
+    // estimated context it saved this server lifetime.
+    let statsLine = '';
+    try {
+      statsLine = '\n\n' + require('./agents/rlm/stats').statsLine(ctx.sessionId);
+    } catch {}
+    if (scope === 'session') {
+      ctx.reply('🧠 RLM mode is **ON** for this session (session-level) — the next respawn runs with the RLM orchestration prompt (prompt-as-a-variable + recursive sub-agents). `/rlm session off` to revert.' + statsLine);
+    } else {
+      ctx.reply('🧠 RLM mode is **off** for this session. Enable with `/rlm session on` (this session only). Or `/rlm <task>` to run one task through a background RLM lane now.' + statsLine);
+    }
+    return;
+  }
+
+  // /rlm session on|off — session-level toggle (and legacy /rlm on|off).
+  const sessMatch = args.match(/^(?:session\s+)?(on|off)$/);
+  if (sessMatch) {
+    const on = sessMatch[1] === 'on';
+    if (!sessionsMod.isOwnerOrAdmin(ctx.sessionId, ctx.user)) {
+      ctx.reply(`(/rlm session ${on ? 'on' : 'off'} is owner+admin only. Session owner is @${rec.user}.)`);
+      return;
+    }
+    rec.rlm = on;
+    sessionsMod.saveStore();
+    // 2026-11-11 hot toggle: apply to the LIVE session right away — pre-fix
+    // the flag only landed on the next reaper respawn, so an alive session
+    // kept running the plain engine while the badge said RLM ON (the
+    // "RLM 很少被触发" root cause). applyRlmModeToLiveSession arms/disarms
+    // IN PLACE (no kill): attached clients, lane bridges and the run queue
+    // all hold the same session object. Lanes (/run-n2 /compare /rlm <task>)
+    // still read rec.rlm per run — untouched.
+    let appliedNote = '';
+    try {
+      const applied = sessionsMod.applyRlmModeToLiveSession(sessionId, rec);
+      appliedNote = applied && applied.kind === 'deferred-to-respawn'
+        ? ' (no live session — applies on next respawn)'
+        : (applied && applied.kind === 'team-respawned')
+          ? ' (team workers respawned — both now run the new engine)'
+          : (applied && applied.kind === 'applied')
+            ? ' (已热切换 — 本会话下一 turn 立即生效)'
+            : '';
+    } catch (err) {
+      appliedNote = ` (hot-apply failed: ${err.message} — applies on next respawn)`;
+    }
+    emitRlmState(sessionsMod.isRlmEffective(rec), sessionsMod.getRlmScope(rec));
+    ctx.reply(on
+      ? '✓ RLM mode **enabled** for this session (session-level). Effects: single-agent conversations get the RLM kernel engine (persistent variables + rlm_eval + rlm.spawn sub-agents)' + appliedNote + '; agent-n2 sessions get the RLM overlay on both workers; `/run-n2` / `/compare` / `/rlm <task>` lanes pick it up immediately (each lane reads the flag when it starts). Board/team protocol keeps precedence in n2 mode; `/rlm session off` reverts.'
+      : '✓ RLM mode **disabled** for this session' + appliedNote + '. The session returns to the plain prompts; lanes started afterwards run plain too. `/rlm session on` to re-enable.');
+    return;
+  }
+
+  // /rlm user on|off was REMOVED (RLM is session-level only). Point the
+  // user at the session-level command instead of silently no-op'ing.
+  if (/^user\s+(on|off)$/.test(args)) {
+    ctx.reply('(/rlm user on|off 已移除 — RLM 开关仅会话级。用 `/rlm session on|off` 或 `/rlm on|off` 控制本会话。)');
+    return;
+  }
+
+  // /rlm <task> — one-shot background RLM lane (same shape as /run-n2).
+  const task = args;
+  if (!ctx.session || !ctx.session.alive) { ctx.reply('(/rlm: session not running)'); return; }
+  const fs = require('fs');
+  const rlm = require('./agents/rlm');
+  const cwd = (ctx.absCwd || (ctx.session && ctx.session.cwd)) || process.cwd();
+  const dir = rlm.ensureDir(rlm.timestampedDir(cwd, 'run'));
+  const run = rlm.startRlmLane({
+    cwd, user: ctx.user || null, task, dir,
+    mainSession: ctx.session, mainSessionId: ctx.sessionId,
+  });
+  ctx.reply(`▶ /rlm 已启动：RLM lane（prompt-as-a-variable + 递归 sub-agent）跑「${task}」，进度会以 rlm 徽标实时滚动。`);
+  rlm.onRlmLaneTerminal(run.lane, () => {
+    ctx.reply(`✅ /rlm 完成：RLM lane 跑完「${task}」（日志在 \`_myco_/rlm/\`）。`);
+  });
+}
+
+function handleRunN2(ctx) {
+  const task = String((ctx && ctx.args) || '').trim();
+  if (!task) { ctx.reply('Usage: `/run-n2 <task>` — runs <task> through a dual-agent (worker-A + worker-B) team lane.'); return; }
+  if (!ctx.session || !ctx.session.alive) { ctx.reply('(/run-n2: session not running)'); return; }
+  runN2CompareLanes(ctx, task, /* withSingle */ false);
+}
+
+function handleCompare(ctx) {
+  const task = String((ctx && ctx.args) || '').trim();
+  if (!task) { ctx.reply('Usage: `/compare <task>` — runs <task> through a single-agent AND a dual-agent lane side by side.'); return; }
+  if (!ctx.session || !ctx.session.alive) { ctx.reply('(/compare: session not running)'); return; }
+  runN2CompareLanes(ctx, task, /* withSingle */ true);
+}
+
+// Multi-expert team (专家团): /run-experts <task> — run the task through a
+// team lane whose roster is the session's saved experts (rec.experts,
+// created via the Experts UI / POST /sessions/:id/experts). Each expert's
+// role prompt is built from its skills (prompts-team.js expertPrompt) —
+// the board/queue collaboration core is the SAME as /run-n2's. The /run-n2
+// handler + lanes are untouched.
+function handleRunExperts(ctx) {
+  const task = String((ctx && ctx.args) || '').trim();
+  const rec = sessionsMod.getSessionRecord(ctx.sessionId);
+  const experts = (rec && Array.isArray(rec.experts)) ? rec.experts : [];
+  const fmtExpert = (e, i) => `**worker-${String.fromCharCode(65 + i)}** (${e.name})：${(e.skills || []).join(', ') || '(no skills)'}`;
+  if (!task) {
+    if (!experts.length) {
+      ctx.reply('No experts saved for this session yet — create them in the **Experts** panel (each expert = a name + skills picked from the skill market), then `/run-experts <task>`.');
+      return;
+    }
+    ctx.reply(`Saved expert team (${experts.length}):\n${experts.map(fmtExpert).join('\n')}\n\nUsage: \`/run-experts <task>\` runs the task through this team.`);
+    return;
+  }
+  if (!ctx.session || !ctx.session.alive) { ctx.reply('(/run-experts: session not running)'); return; }
+  if (!experts.length) { ctx.reply('(/run-experts: no experts saved — create them in the Experts panel first.)'); return; }
+  if (experts.length > 8) { ctx.reply(`(/run-experts: ${experts.length} experts saved — capped at 8 per run.)`); return; }
+
+  const fs = require('fs');
+  const cl = require('./compare-lanes');
+  const cwd = (ctx.absCwd || (ctx.session && ctx.session.cwd)) || process.cwd();
+  const mainSession = ctx.session;
+  const mainSessionId = ctx.sessionId;
+  const rlmOn = !!(rec && sessionsMod.isRlmEffective(rec));
+
+  // roster: worker-A..worker-N. expertSkills: actor -> [{name, description}]
+  // — each expert's skill dir names resolved against the session's skill
+  // store for name/description (skills.readSkill follows the session-root
+  // symlinks that user/global-scope installs create).
+  const roster = experts.map((_, i) => `worker-${String.fromCharCode(65 + i)}`);
+  const describeAsync = (async () => {
+    const skillsMod = require('./skills');
+    const seen = new Map();
+    for (const skillDir of experts.flatMap((e) => e.skills || [])) {
+      if (seen.has(skillDir)) continue;
+      try {
+        const out = await skillsMod.readSkill(cwd, skillDir);
+        seen.set(skillDir, { name: out.name || skillDir, description: out.description || '' });
+      } catch { seen.set(skillDir, { name: skillDir, description: '' }); }
+    }
+    const es = {};
+    experts.forEach((e, i) => {
+      const actor = roster[i];
+      es[actor] = (e.skills || []).map((d) => seen.get(d) || { name: d, description: '' });
+    });
+    return es;
+  })();
+
+  describeAsync.then((es) => {
+    try {
+      const dir2 = cl.timestampedDir(cwd, 'team');
+      fs.mkdirSync(dir2, { recursive: true });
+      const run = cl.startTeamLane({
+        cwd, user: ctx.user || null, task, dir: dir2,
+        mainSession, mainSessionId, roster, expertSkills: es, rlm: rlmOn,
+      });
+      const getQueue = () => (run.lane && run.lane.board ? run.lane.board.queueState() : []);
+      const stopHeartbeat = cl.startProgressHeartbeat({
+        lane: run.lane,
+        label: `专家团（${experts.length}）`,
+        startedAt: run.startedAt,
+        reply: ctx.reply,
+        getQueue,
+      });
+      let done = false;
+      cl.onLaneTerminal(run.lane, true, () => {
+        if (done) return;
+        done = true;
+        if (stopHeartbeat) stopHeartbeat();
+        run.endedAt = Date.now();
+        ctx.reply(`✅ /run-experts 完成：专家团（${experts.map((e) => e.name).join('、')}）跑「${task}」`);
+      });
+    } catch (err) {
+      ctx.reply(`(/run-experts error: ${err.message})`);
+    }
+  }).catch((err) => ctx.reply(`(/run-experts error: ${err.message})`));
+}
+
+// N-path exploration (路径探索): /run-explore [N] <task> — N parallel
+// explorers (path-1..path-N), each deep-diving ONE candidate solution
+// path, coordinated ONLY through the shared board (decentralized — no
+// central controller). Reuses TeamSession (explore mode) + the standard
+// shadow-lane bridge + progress heartbeat. Workers are forced onto the
+// RLM engine with a SHARED per-task harness key (self-evolution that
+// accumulates across runs). A per-path evidence report is written to
+// _myco_/explore/ on completion.
+const EXPLORE_DEFAULT_PATHS = 4;
+const EXPLORE_MAX_PATHS = 512;
+
+function handleRunExplore(ctx) {
+  const raw = String((ctx && ctx.args) || '').trim();
+  if (!raw) {
+    ctx.reply('Usage: `/run-explore [N] <task>` — N parallel explorers each deep-dive one candidate solution path (default N=4, 2..512). Example: `/run-explore 6 implement a lossless compressor beating X on ratio`.');
+    return;
+  }
+  if (!ctx.session || !ctx.session.alive) { ctx.reply('(/run-explore: session not running)'); return; }
+
+  // Optional leading N: '/run-explore 6 <task>'. A leading token that
+  // parses as a small integer is taken as N; anything else is task text.
+  let nPaths = EXPLORE_DEFAULT_PATHS;
+  let task = raw;
+  const head = raw.split(/\s+/)[0];
+  if (/^\d{1,3}$/.test(head)) {
+    nPaths = Number(head);
+    task = raw.slice(head.length).trim();
+    if (!task) { ctx.reply('Usage: `/run-explore [N] <task>` — N must be followed by the task text.'); return; }
+    if (nPaths < 2 || nPaths > EXPLORE_MAX_PATHS) {
+      ctx.reply(`(/run-explore: N must be 2..${EXPLORE_MAX_PATHS}, got ${nPaths}.)`);
+      return;
+    }
+  }
+
+  const fs = require('fs');
+  const cl = require('./compare-lanes');
+  const cwd = (ctx.absCwd || (ctx.session && ctx.session.cwd)) || process.cwd();
+  const mainSession = ctx.session;
+  const mainSessionId = ctx.sessionId;
+  const run = { task, startedAt: new Date().toISOString() };
+
+  try {
+    const dir = cl.timestampedDir(cwd, 'explore');
+    fs.mkdirSync(dir, { recursive: true });
+    const explore = cl.startExploreLane({
+      cwd, user: ctx.user || null, task, dir,
+      mainSession, mainSessionId, nPaths,
+    });
+    const getQueue = () => (explore.lane && explore.lane.board ? explore.lane.board.queueState() : []);
+    const taskLabel = `路径探索（${nPaths} 路）「${cl.shortTask(task)}」`;
+    const buildFullText = ({ queue }) => {
+      let full = `任务：${String(task || '').replace(/\s+/g, ' ').trim()}`;
+      if (queue && Array.isArray(queue) && queue.length) {
+        const items = queue
+          .map((i) => `  · ${i.subject} [${i.state}${i.owner ? ':' + String(i.owner).replace(/^path-/, 'P') : ''}]`)
+          .join('\n');
+        full += `\n路径/子任务（${queue.length}）：\n${items}`;
+      }
+      return full;
+    };
+    const stopHeartbeat = cl.startProgressHeartbeat({
+      lane: explore.lane,
+      label: taskLabel,
+      startedAt: explore.startedAt,
+      reply: ctx.reply,
+      getQueue,
+      fullText: buildFullText,
+    });
+    ctx.reply(`▶ /run-explore 已启动：${nPaths} 个 explorer（path-1..path-${nPaths}）各深挖一条候选解法路径（去中心化 board 协调 · 共享自演进 harness · 进度会实时滚动）`);
+    let done = false;
+    cl.onLaneTerminal(explore.lane, true, () => {
+      if (done) return;
+      done = true;
+      if (stopHeartbeat) stopHeartbeat();
+      explore.endedAt = Date.now();
+      let reportLine = `✅ /run-explore 完成：${nPaths} 路径探索跑「${cl.shortTask(task)}」`;
+      try {
+        const report = cl.buildExploreReport(run, explore);
+        const file = cl.persistExploreReport(cwd, report);
+        const donePaths = (report.summary.queue || []).filter((i) => i.state === 'done').length;
+        const switches = (report.summary.strategySwitches || []).length;
+        reportLine += `\n📊 **路径探索报告** 已写入 \`_myco_/explore/${String(file).split('/').pop()}\`` +
+          `（路径 item 完成 ${donePaths}/${(report.summary.queue || []).length} · FAIL 证据 ${report.summary.failNotes.length} 条 · 工具 ${report.summary.metrics.toolUse} 次 · 策略切换 ${switches} 次）`;
+      } catch (err) {
+        reportLine += `\n(报告生成失败: ${err.message})`;
+      }
+      ctx.reply(reportLine, {
+        meta: { kind: 'full-text', fullText: buildFullText({ queue: getQueue() }) },
+      });
+    });
+  } catch (err) {
+    ctx.reply(`(/run-explore error: ${err.message})`);
+  }
+}
+
+function runN2CompareLanes(ctx, task, withSingle) {
+  // Lazy require to dodge any require-cycle with the lane modules.
+  const fs = require('fs');
+  const path = require('path');
+  const cl = require('./compare-lanes');
+  const cwd = (ctx.absCwd || (ctx.session && ctx.session.cwd)) || process.cwd();
+  const mainSession = ctx.session;
+  const mainSessionId = ctx.sessionId;
+  const user = ctx.user || null;
+  const run = { task, startedAt: new Date().toISOString() };
+  // §5.1: /run-n2 and /compare lanes read the effective RLM state — a lane
+  // fired while the session (or the user-level switch) is in RLM mode runs
+  // with the RLM overlay (single lane via spawnRlmAgent, n2 lane via
+  // TeamSession's rlm addendum). Lanes are per-run so the flag applies
+  // immediately, no respawn needed.
+  const rec = sessionsMod.getSessionRecord(mainSessionId);
+  const rlmOn = !!(rec && sessionsMod.isRlmEffective(rec));
+
+  // No dual-column overlay: every lane (single AND dual) bridges with
+  // laneTag=null so their events land in the MAIN timeline with worker
+  // badges. /compare runs the lanes SEQUENTIALLY — single first, then the
+  // dual lane — so each gets a clean wall-clock duration for the report.
+  let single = null;
+  let n2 = null;
+
+  const secs = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(1) + 's');
+
+  // Only /compare reaches finalize (and thus this reply), so the report is
+  // ALWAYS the single-vs-dual comparison. /run-n2 is dual-agent ONLY and
+  // never emits a report (see launchN2).
+  const buildReportReply = (report, file) => {
+    const s = report.summary.single;
+    const t = report.summary.n2;
+    const tm = report.timing || {};
+    const lines = [
+      `📊 **对比分析报告** 已写入 \`_myco_/compare/${String(file).split(path.sep).pop()}\``,
+      `- 单 agent：工具 ${s.toolUse} · 输出 ${s.outputChars} 字符 · 运行 ${secs(tm.single)}`,
+      `- 双 agent：工具 ${t.toolUse} · 输出 ${t.outputChars} 字符 · board ${t.boardEvents} · 运行 ${secs(tm.n2)}`,
+    ];
+    const speed = tm.single != null && tm.n2 != null
+      ? `（双 agent ${secs(tm.n2)} vs 单 ${secs(tm.single)}，${tm.n2 <= tm.single ? '双 agent 更快' : '单 agent 更快'}）`
+      : '';
+    lines.push(`- 结论：${report.summary.verdict === 'n2' ? '双 agent 覆盖更充分' : '单 agent 已足够'} ${speed}`);
+    ctx.reply(lines.join('\n'));
+  };
+
+  // Fire ONCE when the LAST lane has reached a terminal state; build +
+  // persist the compare report and notify in-chat.
+  let reported = false;
+  const finalize = () => {
+    if (reported) return;
+    reported = true;
+    try {
+      // Captured as each lane ends so the duration excludes the other lane.
+      const report = cl.buildCompareReport(run, single, n2);
+      const file = cl.persistCompareReport(cwd, report);
+      buildReportReply(report, file);
+    } catch (err) {
+      ctx.reply(`(对比报告生成失败: ${err.message})`);
+    }
+  };
+
+  let stopHeartbeat = null;
+
+  // onLaneTerminal fires the callback on the lane's TERMINAL signal. For
+  // the single lane that's the one turn_result / iteration_aborted / fatal
+  // event; for a team lane it's the team-level team-complete / team-failed
+  // (post-fix: a worker's MID-RUN per-turn turn_result no longer completes
+  // the lane — see compare-lanes.onLaneTerminal; pre-fix it did, and the
+  // "✅ /run-n2 完成" line popped while both agents were still working).
+  // The done-guards stay because the terminal signal can still arrive from
+  // TWO registrations (startN2Lane's own lane-end bookkeeping vs this
+  // handler) — exactly-once per lane either way.
+  let singleDone = false;
+  let n2Done = false;
+
+  const launchN2 = () => {
+    const dir2 = cl.timestampedDir(cwd, withSingle ? 'cmp' : 'n2');
+    fs.mkdirSync(dir2, { recursive: true });
+    n2 = cl.startN2Lane({ cwd, user, task, dir: dir2, mainSession, mainSessionId, laneTag: null, rlm: rlmOn });
+    // A-1/A-2: surface live board sub-queue + per-worker activity so the user
+    // sees the team making progress instead of a silent gap. The label names
+    // the TASK (用户反馈: /run-n2 单流也要表明是什么任务) so concurrent runs
+    // are distinguishable in the chat stream — `双 agent「task」` keeps the
+    // leading `双 agent` prefix the progress-line tests + the /compare
+    // two-phase banner both match on. Only the first few words of the task
+    // are used (用户反馈: ⏳ 双 agent 打印后面不要把 prompt 全加上) so a
+    // long prompt doesn't flood the chat line.
+    const taskLabel = `双 agent（worker-A/B）「${cl.shortTask(task)}」`;
+    const getQueue = () => (n2.lane && n2.lane.board ? n2.lane.board.queueState() : []);
+    // Full-content builder for the hover tooltip (用户需求: 截断行鼠标放上去
+    // 可以看到全部内容). Returns the ENTIRE task prompt + the complete board
+    // queue (not just the 3-item sample the line shows).
+    const buildFullText = ({ queue }) => {
+      let full = `任务：${String(task || '').replace(/\s+/g, ' ').trim()}`;
+      if (queue && Array.isArray(queue) && queue.length) {
+        const items = queue
+          .map((i) => `  · ${i.subject} [${i.state}${i.owner ? ':' + String(i.owner).replace(/^worker-/, '') : ''}]`)
+          .join('\n');
+        full += `\n子任务（${queue.length}）：\n${items}`;
+      }
+      return full;
+    };
+    stopHeartbeat = cl.startProgressHeartbeat({
+      lane: n2.lane,
+      label: taskLabel,
+      startedAt: n2.startedAt,
+      reply: ctx.reply,
+      getQueue,
+      fullText: buildFullText,
+    });
+    // /compare produces the comparison report; /run-n2 is dual-agent ONLY —
+    // it just runs and finishes with a light completion notice, no report.
+    cl.onLaneTerminal(n2.lane, true, () => {
+      if (n2Done) return;
+      n2Done = true;
+      if (stopHeartbeat) { stopHeartbeat(); stopHeartbeat = null; }
+      n2.endedAt = Date.now();
+      if (withSingle) finalize();
+      else ctx.reply(`✅ /run-n2 完成：双 agent 跑「${cl.shortTask(task)}」`, {
+        meta: { kind: 'full-text', fullText: buildFullText({ queue: getQueue() }) },
+      });
+    });
+  };
+
+  try {
+    if (withSingle) {
+      const dir = cl.timestampedDir(cwd, 'cmp');
+      fs.mkdirSync(dir, { recursive: true });
+      if (rlmOn) {
+        // §5.1: /compare's single lane runs the RLM engine when the
+        // session opted in, so the comparison is RLM-vs-RLM-team rather
+        // than plain-vs-team (fair comparison dimension).
+        const rlmMod = require('./agents/rlm');
+        single = rlmMod.startRlmLane({
+          cwd, user, task, dir, mainSession, mainSessionId, laneTag: null,
+        });
+      } else {
+        single = cl.startSingleLane({ cwd, user, task, dir, mainSession, mainSessionId, laneTag: null });
+      }
+      ctx.reply(`▶ /compare 已启动（2 阶段，进度会实时滚动）：①单 agent 跑「${task}」→ ②双 agent（worker-A/B）`);
+      stopHeartbeat = cl.startProgressHeartbeat({
+        lane: single.lane,
+        label: '单 agent',
+        startedAt: single.startedAt,
+        reply: ctx.reply,
+        getQueue: null,
+      });
+      cl.onLaneTerminal(single.lane, false, () => {
+        if (singleDone) return;
+        singleDone = true;
+        if (stopHeartbeat) { stopHeartbeat(); stopHeartbeat = null; }
+        single.endedAt = Date.now();
+        ctx.reply('✅ 单 agent 阶段完成，双 agent 阶段进行中…');
+        launchN2();
+      });
+    } else {
+      ctx.reply(`▶ /run-n2 已启动：双 agent（worker-A + worker-B）跑「${task}」（进度会实时滚动）`);
+      launchN2();
+    }
+  } catch (err) {
+    if (stopHeartbeat) { stopHeartbeat(); stopHeartbeat = null; }
+    ctx.reply(`(/run error: ${err.message})`);
+  }
+}
+
 module.exports = {
   dispatch,
   parseCommand,
@@ -2700,6 +4032,23 @@ module.exports = {
   // fr-105: exposed for unit testing the auto-derive-gitee-login
   // behavior added to /setpat.
   handleSetPat,
+  // Delm agent-n2: exposed for unit testing the /run-n2 + /compare
+  // command wiring (test/slash-n2-compare.test.js).
+  handleRunN2,
+  handleCompare,
+  runN2CompareLanes,
+  // Multi-expert team (专家团): exposed for unit testing the /run-experts
+  // parse + gate logic (test/team-multi-experts.test.js).
+  handleRunExperts,
+  // /run-explore (路径探索): exposed for unit testing N parsing + wiring.
+  handleRunExplore,
+  // delm-10 RLM mode: exposed for unit testing the /rlm parse + gate
+  // logic (test/rlm-mode.test.js).
+  handleRlm,
+  // Research mode + domain knowledge base: exposed for unit testing the
+  // /research and /kb parse + gate logic.
+  handleResearch,
+  handleKb,
   // Exposed for artifacts.js refresh hook + future callers.
   mergePlanItems,
   dedupePlanItems,
@@ -2708,4 +4057,10 @@ module.exports = {
   // fr-54: exposed for unit-testing the shell-style arg splitter
   // /git uses (quoted phrases, escapes, etc.).
   _parseShellArgs,
+  // bug-88: exposed for unit-testing the /git clone PAT-reuse
+  // rewrite (per-repo → user-level lookup, embedded-credential
+  // respect, redaction contract).
+  handleGit,
+  _hostFromCloneUrl,
+  _cloneUrlWithStoredPat,
 };

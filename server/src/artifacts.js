@@ -17,6 +17,7 @@ const path = require('path');
 const { extractArtifact } = require('./extractor');
 const { saveStore, isOwnerOrAdmin } = require('./sessions');
 const runQueue = require('./runQueue');
+const pendingQuestions = require('./pendingQuestions');
 
 const ARTIFACT_TYPES = ['plan', 'arch', 'test'];
 
@@ -1162,6 +1163,16 @@ function register(app, deps) {
     });
   }
 
+  // bug-92: push the unanswered-question state to every attached client.
+  function broadcastPendingQuestions(sessionId, rec) {
+    const session = getPtySession(sessionId);
+    if (!session) return;
+    session.emit('state-update', {
+      kind: 'pending-questions',
+      state: pendingQuestions.getState(rec),
+    });
+  }
+
   // POST /queue/add — append a plan item to the queue. If the queue
   // is otherwise idle (no running entry, not paused), AND this is the
   // first pending entry, immediately dispatch it via the existing
@@ -1275,6 +1286,268 @@ function register(app, deps) {
       }
     }
     res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/n2 — run the NEXT pending queue entry through the DUAL-agent
+  // (agent-n2) lane instead of the single-agent chat dispatch. The user can
+  // build a plan item (queued for single-agent run) and instead run it with
+  // worker-A + worker-B for broader coverage. Reuses the queue lifecycle:
+  // pending → markRunning → (N2 lane completes) → markFinished(success).
+  // Unlike /queue/resume (single agent), this is independent of the paused
+  // flag — it drives the lane directly, then flips the queue entry.
+  app.post('/sessions/:id/queue/n2', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const entry = Array.isArray(ctx.rec.runQueue)
+      ? ctx.rec.runQueue.find((e) => e.status === 'pending')
+      : null;
+    if (!entry) return res.status(409).json({ error: 'no pending queue item to run with agent-n2' });
+    const itemId = entry.itemId;
+    _loadArtifactIntoRecFromFile(ctx.rec, entry.type);
+    const item = findItem(ctx.rec, entry.type, itemId);
+    if (!item) return res.status(404).json({ error: `item ${itemId} no longer exists in the artifact` });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(500).json({ error: 'no live session to dispatch' });
+    const cwd = ctx.root || process.cwd();
+    const task = buildArtifactRunText(entry.type, item, user);
+    runQueue.markRunning(ctx.rec, itemId);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    try {
+      const cl = require('./compare-lanes');
+      const fs = require('fs');
+      const dir = cl.timestampedDir(cwd, 'n2');
+      fs.mkdirSync(dir, { recursive: true });
+      const lane = cl.startN2Lane({ cwd, user, task, dir, mainSession: session, mainSessionId: ctx.id, laneTag: null });
+      let done = false;
+      cl.onLaneTerminal(lane.lane, true, () => {
+        if (done) return;
+        done = true;
+        try {
+          runQueue.markFinished(ctx.rec, itemId, true);
+          saveStore();
+          broadcastRunQueue(ctx.id, ctx.rec);
+        } catch (err) {
+          console.error(`[runQueue-n2] finish-update failed for ${ctx.id} ${itemId}: ${err.message}`);
+        }
+      });
+      console.log(`[runQueue-n2] ${ctx.id} running ${itemId} through dual-agent lane`);
+    } catch (err) {
+      console.error(`[runQueue-n2] ${ctx.id} ${itemId} dispatch failed: ${err.message}`);
+      runQueue.markFinished(ctx.rec, itemId, false);
+      saveStore();
+      broadcastRunQueue(ctx.id, ctx.rec);
+    }
+    res.json({ ok: true, itemId, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/:itemId/rerun — dispatch ONE queue entry immediately,
+  // regardless of whether it's waiting (pending) or terminal (failed /
+  // cancelled). The "↻" button on a failed/waiting chip. Rejects if
+  // something else is already running (we can't run two queue entries
+  // concurrently — the turn_result hook correlates by _activeRunItem).
+  app.post('/sessions/:id/queue/:itemId/rerun', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const entry = ctx.rec.runQueue && ctx.rec.runQueue.find((e) => e.itemId === itemId);
+    if (!entry) return res.status(404).json({ error: 'no such queue entry' });
+    if (entry.status !== 'pending' && !runQueue.TERMINAL_STATUSES.has(entry.status)) {
+      return res.status(409).json({ error: `item ${itemId} is ${entry.status} and cannot be rerun` });
+    }
+    const alreadyRunning = (ctx.rec.runQueue || []).some((e) => e.status === 'running');
+    if (alreadyRunning) {
+      return res.status(409).json({ error: 'another queue task is running — stop it or wait before rerunning' });
+    }
+    // A terminal entry (failed/cancelled) re-runs as a FRESH pending entry
+    // so the prior record stays for audit (addToQueue keeps terminal
+    // entries in place and only rejects non-terminal duplicates). A
+    // pending entry is dispatched as-is.
+    let target = entry;
+    if (runQueue.TERMINAL_STATUSES.has(entry.status)) {
+      try {
+        target = runQueue.addToQueue(ctx.rec, entry.itemId, entry.type, user);
+      } catch (err) {
+        return res.status(409).json({ error: err.message });
+      }
+    }
+    if (ctx.rec.runQueuePaused) runQueue.resumeQueue(ctx.rec);
+    _loadArtifactIntoRecFromFile(ctx.rec, entry.type);
+    const item = findItem(ctx.rec, entry.type, entry.itemId);
+    if (!item) return res.status(404).json({ error: `item ${entry.itemId} no longer exists in the artifact` });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(500).json({ error: 'no live session to dispatch' });
+    runQueue.markRunning(ctx.rec, target.itemId);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    try {
+      console.log(`[runQueue] ${ctx.id} rerun ${target.itemId} (prior status was ${entry.status})`);
+      handleChatMessage(ctx.id, session, user, buildArtifactRunText(target.type, item, user));
+    } catch (err) {
+      console.error(`[runQueue] rerun dispatch failed for ${ctx.id} ${target.itemId}: ${err.message}`);
+    }
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/:itemId/cancel — per-item cancel. Running entry: call
+  // session.interrupt() (like Stop) and mark it cancelled (the terminal
+  // iteration_aborted listener sees a 'cancelled' — not 'running' — entry
+  // and leaves it alone, so no double update). Waiting/failed/cancelled:
+  // drop the entry from the queue. This is the individual counterpart to
+  // the global "Clear pending".
+  app.post('/sessions/:id/queue/:itemId/cancel', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    const itemId = String(req.params.itemId || '').trim();
+    if (!itemId) return res.status(400).json({ error: 'itemId required' });
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const entry = ctx.rec.runQueue && ctx.rec.runQueue.find((e) => e.itemId === itemId);
+    if (!entry) return res.status(404).json({ error: 'no such queue entry' });
+    if (entry.status === 'running') {
+      const session = getPtySession(ctx.id);
+      // stop-vs-run-n2: a lane-dispatched entry (◍ agent-n2 run button)
+      // iterates a SHADOW TeamSession, not the main session — stop the
+      // lane too, or the cancel marks the entry cancelled while the
+      // lane's workers keep running.
+      try { require('./compare-lanes').stopN2Lane(session); } catch {}
+      if (session && typeof session.interrupt === 'function') {
+        try { session.interrupt(); } catch {}
+      }
+      runQueue.markCancelled(ctx.rec, itemId);
+      console.log(`[runQueue] ${ctx.id} cancelled running entry ${itemId} by @${user}`);
+    } else {
+      try {
+        runQueue.removeFromQueue(ctx.rec, itemId, { force: true });
+      } catch (err) {
+        return res.status(409).json({ error: err.message });
+      }
+    }
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /queue/clear-finished — one-click wipe of every TERMINAL entry
+  // (success / failed / cancelled), leaving running + pending intact.
+  // The "一键清空已完成" button. Returns how many were dropped.
+  app.post('/sessions/:id/queue/clear-finished', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'queue mutation requires owner or admin' });
+    }
+    const removed = runQueue.removeFinished(ctx.rec);
+    saveStore();
+    broadcastRunQueue(ctx.id, ctx.rec);
+    res.json({ ok: true, removed, state: runQueue.getQueueState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/rerun — re-kick every failed unanswered
+  // question through the live session (the "↻ rerun" button on the
+  // unanswered strip). Auto-rerun only covers `fatal`; this covers the
+  // manual kick for anything the auto-rerun couldn't (incl. aborted).
+  app.post('/sessions/:id/questions/rerun', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question rerun requires owner or admin' });
+    }
+    const session = getPtySession(ctx.id);
+    const failed = pendingQuestions.getOpen(ctx.rec).filter((e) => e.status === 'failed');
+    if (!session || !failed.length) {
+      res.json({ ok: true, reran: 0, state: pendingQuestions.getState(ctx.rec) });
+      return;
+    }
+    let reran = 0;
+    for (const e of failed) {
+      pendingQuestions.requeue(ctx.rec, e.qid);
+      try {
+        console.log(`[pending-q] ${ctx.id} ${e.qid} manual rerun (label "${String(e.text).slice(0, 60)}")`);
+        session.write(e.text);
+        reran++;
+      } catch (err) {
+        console.error(`[pending-q] manual rerun failed for ${ctx.id} ${e.qid}: ${err.message}`);
+      }
+    }
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, reran, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/clear — 一键清空: drop every OPEN
+  // (pending + failed) unanswered question; answered history is kept.
+  // Running UI: the "一键清空未回答·N" button on the unanswered strip.
+  app.post('/sessions/:id/questions/clear', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question clear requires owner or admin' });
+    }
+    const removed = pendingQuestions.clearOpen(ctx.rec);
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, removed, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/:qid/rerun — 单独重试 ONE unanswered
+  // question through the live session (the ↻ on each chip). Unlike the
+  // bulk /questions/rerun (failed-only), this targets a specific qid.
+  app.post('/sessions/:id/questions/:qid/rerun', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question rerun requires owner or admin' });
+    }
+    const qid = String(req.params.qid || '').trim();
+    if (!qid) return res.status(400).json({ error: 'qid required' });
+    const e = ctx.rec.pendingQuestions && ctx.rec.pendingQuestions.find((x) => x.qid === qid);
+    if (!e) return res.status(404).json({ error: 'no such question' });
+    const session = getPtySession(ctx.id);
+    if (!session) return res.status(500).json({ error: 'no live session to dispatch' });
+    pendingQuestions.requeue(ctx.rec, qid);
+    try {
+      console.log(`[pending-q] ${ctx.id} ${qid} individual rerun (label "${String(e.text || '').slice(0, 60)}")`);
+      session.write(e.text);
+    } catch (err) {
+      console.error(`[pending-q] individual rerun failed for ${ctx.id} ${qid}: ${err.message}`);
+    }
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, state: pendingQuestions.getState(ctx.rec) });
+  });
+
+  // POST /sessions/:id/questions/:qid/clear — 单独清理 ONE question from
+  // the unanswered queue entirely (the × on each chip).
+  app.post('/sessions/:id/questions/:qid/clear', (req, res) => {
+    const ctx = fileApiPreamble(req, res, 'viewer');
+    if (!ctx) return;
+    const user = reqUser(req, ctx);
+    if (!isOwnerOrAdmin(ctx.id, user)) {
+      return res.status(403).json({ error: 'question clear requires owner or admin' });
+    }
+    const qid = String(req.params.qid || '').trim();
+    if (!qid) return res.status(400).json({ error: 'qid required' });
+    const removed = pendingQuestions.removeQuestion(ctx.rec, qid);
+    if (!removed) return res.status(404).json({ error: 'no such question' });
+    saveStore();
+    broadcastPendingQuestions(ctx.id, ctx.rec);
+    res.json({ ok: true, state: pendingQuestions.getState(ctx.rec) });
   });
 
   // POST /sessions/:id/critic — save active critic model

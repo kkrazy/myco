@@ -85,6 +85,36 @@ const DEFAULT_AGENT_REPLAY_BYTES = 16 * 1024;
 // /state-update plumbing all hit the same store.
 const sessions = new Map();
 
+// Shared Stop/interrupt handler for the three interrupt entry points
+// (owner WS frame, viewer WS frame, typed-esc chat token). Replaces the
+// three copy-pasted delm-10 busy-gate blocks.
+//
+// Pre-fix defect (stop-vs-run-n2): a /run-n2 lane runs in a SHADOW
+// TeamSession (mainSession._teamLane) — the MAIN session never
+// iterates, so its isBusy() is false and the delm-10 gate DROPPED the
+// interrupt frame: the Stop button could not stop a /run-n2 run. The
+// gate now passes when EITHER the main session is iterating OR a live
+// team lane is attached; a live lane is stopped first (see
+// stopN2Lane's ordering contract), then the main iteration if any.
+//
+// `who` only shapes the log line (owner / viewer / chat-esc).
+// Returns true when something was actually interrupted (caller emits
+// the ack note), false when the frame was dropped as a no-op.
+function _handleInterrupt(session, sessionId, who) {
+  const cl = require('./compare-lanes');
+  const laneStopped = cl.stopN2Lane(session);
+  const busy = typeof session.isBusy === 'function' ? session.isBusy() : !!session._currentQuery;
+  if (!busy && !laneStopped) {
+    console.log(`[interrupt] ${sessionId || ''} dropped — session not working and no live team lane (delm-10 gate, ${who})`);
+    return false;
+  }
+  // Order: lane workers first (already stopped above), then the main
+  // session's own iteration. Both may be live simultaneously (a lane
+  // spawned mid-conversation).
+  if (busy && typeof session.interrupt === 'function') session.interrupt();
+  return true;
+}
+
 function _isKnownChatUser(word) {
   if (!word) return false;
   const w = word.toLowerCase();
@@ -180,6 +210,17 @@ function _snapshotRunBaseline(absCwd) {
 // fires propagate into chat-pane menu cards.
 function _registerExternalSession(sessionId, session) {
   sessions.set(sessionId, session);
+  // delm-10 stale-working-badge fix: stamp the user's "last seen" time
+  // when a client attaches to the session — attaching IS the user
+  // opening the chat. GET /sessions compares rec.agentSeenAt against
+  // the live session's _lastDoneAt (stamped on the terminal agent
+  // event) to decide the sidebar's "◦ to review" chip; attach clears
+  // it because the user is now watching. Failures are non-fatal (a
+  // missing record just means the session is mid-delete).
+  try {
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    if (rec) { rec.agentSeenAt = Date.now(); sessionsMod.saveStore(); }
+  } catch {}
   if (typeof session.on === 'function') {
     session.on('menu', (menu) => menuMod.handleSessionMenu(sessionId, session, menu));
     // td-33 (B — stage-aware critic): when claude announces a stage
@@ -472,6 +513,42 @@ function _registerExternalSession(sessionId, session) {
     // turn ts) and broadcast the artifact update so all clients
     // see the linked status. One run per turn — _activeRunItem
     // clears after the outcome is stamped.
+    // bug-92: pending-question terminal listener. Registered BEFORE the
+    // run-queue terminal listener below so `session._activeRunItem` is
+    // still set when a plan-run's turn_result lands (my handler uses it
+    // to avoid marking a plan-run turn as "answered a question"). Runs
+    // on the same {turn_result, iteration_aborted, fatal} events the
+    // queue listens for, so a failed/dropped question turn is surfaced
+    // + auto-rerun instead of being silently forgotten.
+    session.on('agent-event', (ev) => {
+      if (!ev || !ev.type) return;
+      const pq = require('./pendingQuestions');
+      const rec = sessionsMod.getSessionRecord(sessionId);
+      if (!rec) return;
+      if (ev.type === 'turn_result') {
+        // A successful, non-run turn answered the head pending question
+        // (FIFO — claude answers queued questions in dispatch order).
+        if (ev.subtype === 'success' && !session._activeRunItem) {
+          const answered = pq.markAnswered(rec);
+          if (answered) { try { sessionsMod.saveStore(); } catch {} _broadcastPendingQuestions(session, rec); }
+        }
+        return;
+      }
+      if (ev.type === 'fatal') {
+        // Backend failure — auto-rerun the head question (bounded).
+        _maybeRerunPendingQuestion(sessionId, session);
+
+        return;
+      }
+      if (ev.type === 'iteration_aborted') {
+        // User-initiated Stop — mark the head question failed + surface
+        // it (a manual "↻ rerun" re-kicks it). Do NOT auto-rerun after a
+        // stop, or we'd fight the user's escalation.
+        const failed = pq.markFailed(rec);
+        if (failed) { try { sessionsMod.saveStore(); } catch {} _broadcastPendingQuestions(session, rec); }
+        return;
+      }
+    });
     // bug-68 (Option B addition 3): a separate agent-event listener
     // for the assistant_text → accept-ack clear hook. The terminal-
     // event listener below filters early to {turn_result,
@@ -825,6 +902,23 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   if (!planArtifact || !Array.isArray(planArtifact.items)) return;
   const item = planArtifact.items.find((it) => it && it.id === itemId);
   if (!item) return;
+  // Auto-tick on success (user report: "tasks all finished, UI printed
+  // completion, but some shared-board items were still unchecked"). The
+  // manual Close button (/artifact/mark in artifacts.js) sets done=true,
+  // but a SUCCESSFUL dispatched run never did — it only stamped
+  // runs[] + a run-summary comment, so the plan row kept its open
+  // state even though the work was verifiably complete. Flip done here
+  // so the checkbox + 🟢 status chip reflect the finished run on every
+  // attached device (the artifact state-update broadcast below carries
+  // it). Deliberately NOT flipped for error/aborted outcomes — a failed
+  // run must leave the item open for re-dispatch. Idempotent: an
+  // already-done item (re-run of a closed item, fr-81 reopen path) is
+  // left untouched, and we don't clobber meta.closedUpstreamAt /
+  // closedRemotely bookkeeping the manual path maintains.
+  if ((turnResultEv.subtype === 'success') && !item.done) {
+    item.done = true;
+    item.doneAt = new Date().toISOString();
+  }
   if (!Array.isArray(item.runs)) item.runs = [];
   // Replace the trailing "running" placeholder with the outcome if
   // present, else append.
@@ -886,6 +980,19 @@ function _stampPlanItemRunOutcome(sessionId, itemId, turnResultEv, startedAt) {
   if (item.comments.length > 50) item.comments = item.comments.slice(-50);
 
   sessionsMod.saveStore();
+  // Mirror the stamped artifact (runs[] + comment + the auto-tick's
+  // done flag) into the version-controlled <cwd>/_myco_/plan.json so
+  // the ticked state survives restarts + migrates to teammates. The
+  // /artifact/mark route does this via persistArtifact; the run-stamp
+  // path previously only saved the in-memory store, so a freshly
+  // ticked item could be reverted when the on-disk mirror was
+  // reloaded (bug-16's persistence-race class).
+  try {
+    const artifactsMod = getArtifactsMod();
+    artifactsMod.__test.writeArtifactToFile(rec, 'plan', planArtifact);
+  } catch (err) {
+    console.error('[plan-run] plan.json file-mirror write failed:', err.message);
+  }
   const session = sessions.get(sessionId);
   if (session && typeof session.emit === 'function') {
     session.emit('state-update', { kind: 'artifact', artifactType: 'plan', artifact: planArtifact });
@@ -911,7 +1018,7 @@ function _advanceRunQueue(sessionId, session, finishedItemId, turnResultEv) {
   session.emit('state-update', { kind: 'runQueue', state: runQueue.getQueueState(rec) });
   if (!success) {
     console.log(`[runQueue] ${sessionId} ${finishedItemId} failed — queue auto-paused. Use /qresume or POST /queue/resume to continue.`);
-    session.emit('chat', {
+    _emitAndPersistChat(sessionId, session, {
       user: ASSISTANT_USER,
       text: `⏸ run-queue paused — \`${finishedItemId}\` did not finish successfully. Use \`/qresume\` to dispatch the next pending item.`,
       ts: new Date().toISOString(),
@@ -946,9 +1053,53 @@ function _advanceRunQueue(sessionId, session, finishedItemId, turnResultEv) {
   handleChatMessage(sessionId, session, runningEntry.addedBy || 'queue', dispatchText);
 }
 
+// Delm n=2: terminal handling for a TeamSession's run-queue, wired once
+// per team by sessions.getOrCreateTeamSession. The team's 'team-complete'
+// event — fired when the board sub-queue is drained and both workers are
+// idle — is the run's success terminal: we synthesize a turn_result and
+// drive the SAME plan.json write-back + queue-advance the single-agent
+// listener uses, so a team run leaves an identical run-summary comment on
+// the plan item and advances to the next pending entry. 'team-failed'
+// (team torn down mid-run) marks the running entry failed + auto-pauses
+// the queue (user /qresume to continue).
+function _wireTeamRunQueue(sessionId, team) {
+  if (team._runQueueWired) return;
+  team._runQueueWired = true;
+  team.on('team-complete', () => {
+    const active = team._activeRunItem;
+    if (!active || !active.itemId) {
+      console.log(`[team-run] ${sessionId} team-complete with no active run item — ignoring`);
+      return;
+    }
+    const ev = { type: 'turn_result', subtype: 'success', result: null, usage: {}, durationMs: null };
+    try { _stampPlanItemRunOutcome(sessionId, active.itemId, ev, active.startedAt); } catch (err) {
+      console.error(`[team-run] stamp outcome failed: ${err.message}`);
+    }
+    try { _advanceRunQueue(sessionId, team, active.itemId, ev); } catch (err) {
+      console.error(`[team-run] auto-advance failed: ${err.message}`);
+    }
+    team._activeRunItem = null;
+  });
+  team.on('team-failed', () => {
+    const active = team._activeRunItem;
+    if (!active || !active.itemId) return;
+    try { _advanceRunQueue(sessionId, team, active.itemId, { type: 'turn_result', subtype: 'error' }); } catch (err) {
+      console.error(`[team-run] failure advance failed: ${err.message}`);
+    }
+    team._activeRunItem = null;
+  });
+}
+
 function killSession(sessionId) {
   const s = sessions.get(sessionId);
-  if (s) { try { s.kill(); } catch {} sessions.delete(sessionId); }
+  if (s) {
+    // stop-vs-run-n2: tear down any live /run-n2 shadow lane with the
+    // session — otherwise the lane's workers + stall watchdog outlive
+    // the killed main session.
+    try { require('./compare-lanes').stopN2Lane(s); } catch {}
+    try { s.kill(); } catch {}
+    sessions.delete(sessionId);
+  }
 }
 
 // Handle a `{t:'menu-pick', n, hash?}` frame from the client — the
@@ -1037,11 +1188,17 @@ function persistAssistantTextToChat(sessionId, newMsgs) {
   for (const c of rec.chat) {
     if (c && c.meta && c.meta.transcriptUuid) seen.add(c.meta.transcriptUuid);
   }
+  // bug-92: if a /clear (rec.chat wipe) happened, never re-copy prose
+  // that predates it back into rec.chat — the watcher re-reads the
+  // transcript from byte 0 on a fresh attach, which would otherwise
+  // resurrect the cleared chat. rec.chatClearAt is set by handleClear.
+  const clearAtMs = rec.chatClearAt ? new Date(rec.chatClearAt).getTime() : 0;
   let mirrored = 0, skipped = 0;
   for (const m of newMsgs) {
     if (!m || m.role !== 'assistant') continue;
     if (!m.text || !m.text.trim()) { skipped++; continue; }
     if (!m.uuid) { skipped++; continue; }
+    if (clearAtMs && m.ts && new Date(m.ts).getTime() <= clearAtMs) { skipped++; continue; }
     if (seen.has(m.uuid)) { skipped++; continue; }
     seen.add(m.uuid);
     const reply = {
@@ -1646,6 +1803,16 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
   // disconnect window. Lossless catch-up with no duplicate render.
   const afterSeq = typeof opts.afterSeq === 'number' && opts.afterSeq >= 0 ? opts.afterSeq : null;
 
+  // team-split-view: ship the team-info (or team-lane-end for a finished
+  // shadow lane) BEFORE the replay frames. The client's split-view event
+  // router gates on state.teamView.active — if the worker-tagged replay
+  // events land first they render into the single stream (and the team
+  // columns rebuild empty), exactly the "toolbar visible but both columns
+  // blank" / "buttons gone after refresh" symptom. Covers three sources:
+  // a real agent-n2 session, a LIVE shadow lane (/run-n2), and a lane
+  // that ended while this client was detached.
+  _shipTeamInfoOnAttach(session, ws, sessionId, afterSeq);
+
   if (afterSeq != null) {
     _shipAgentReplay(session, ws, sessionId, 0, 'catch-up', afterSeq);
     _shipChatHistory(ws, sessionId, 0, 'catch-up', afterSeq);
@@ -1760,13 +1927,16 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     // is a safe no-op when no abort controller is live.
     if (msg.t === 'interrupt' && user) {
       console.log(`[ws-frame] ${sessionId} t=interrupt user=${user}`);
-      if (typeof session.interrupt === 'function') session.interrupt();
-      session.emit('chat', {
-        user: ASSISTANT_USER,
-        text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
-        ts: new Date().toISOString(),
-        meta: { kind: 'interrupt-ack' },
-      });
+      // delm-10 busy gate + run-n2 lane: see _handleInterrupt — a live
+      // /run-n2 shadow lane counts as "working" and is stopped first.
+      if (_handleInterrupt(session, sessionId, `owner ${user}`)) {
+        _emitAndPersistChat(sessionId, session, {
+          user: ASSISTANT_USER,
+          text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
+          ts: new Date().toISOString(),
+          meta: { kind: 'interrupt-ack' },
+        });
+      }
       return;
     }
     if (msg.t === 'menu-pick' && Number.isFinite(msg.n)) {
@@ -1797,6 +1967,10 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     session.off('chat', onChat);
     session.off('state-update', onStateUpdate);
     session.off('exit', onExit);
+    // clarify-reply is registered on this path too (fr-85 r4). Leaving it
+    // dangling leaks one listener per reconnect until Node warns
+    // "MaxListenersExceededWarning ... 11 clarify-reply listeners".
+    session.off('clarify-reply', onClarifyReply);
     _unregisterPresence(sessionId, presenceInfo);
     _broadcastPresence(sessionId);
     // If this was the last client, start the 5-minute grace timer.
@@ -1826,6 +2000,97 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
 //      /artifact route uses (artifacts.js).
 //   4. tool-progress state-update — in-flight openToolCalls so the
 //      "waiting on Tool · 47s" indicator paints immediately on attach.
+//
+// team-split-view reattach handshake. Ships on EVERY attach (initial +
+// reconnect, owner + viewer), BEFORE the agent-replay frames:
+//   - Real agent-n2 session → `t:'team-info'` with the live board
+//     snapshot. Idempotent — reconnects repaint the shared-board pane
+//     from server truth.
+//   - LIVE shadow lane (session._teamLanes from compare-lanes
+//     startN2Lane/startTeamLane) → `state-update kind:'team-info'` with
+//     teamLane:true, the same shape the lane's live emit used at
+//     start, so a refresh mid-/run-n2 re-enters split mode and the
+//     worker-tagged replay events (bridged into session.buffer)
+//     route into the columns.
+//   - ENDED shadow lane → `state-update kind:'team-info'` with
+//     teamLane:true + ended:true, so a client that was detached while
+//     the lane finished (or a fresh page load after the run) rebuilds
+//     the split view as a FROZEN record of the completed run — the
+//     worker history re-populates from agent-replay (bridged +
+//     persisted events), and the client shows an "ended" badge instead
+//     of tearing the columns down.
+// multi-lane (2026-10-22): a session can hold SEVERAL /run-n2 lanes
+// (each with its own 看板). Initial attach ships EVERY lane in start
+// order (live + ended, each tagged laneId/task so the client can build
+// its per-run picker); the LAST frame decides the initially-selected
+// lane (newest, matching the live-emit behaviour). In catch-up mode
+// (afterSeq) only lane-END shapes ship — a live lane's info frame was
+// already delivered before the disconnect, and the client's split DOM
+// survives reconnects (team-lane-end is the only state transition it
+// can have missed).
+function _shipTeamInfoOnAttach(session, ws, sessionId, afterSeq) {
+  if (!ws || ws.readyState !== ws.OPEN) return;
+  const send = (obj) => {
+    try { ws.send(JSON.stringify(obj)); } catch (err) {
+      console.error(`[team-info] ${sessionId} failed to ship: ${err && err.message}`);
+    }
+  };
+  if (session.mode === 'agent-n2' && typeof session.boardSnapshot === 'function') {
+    if (afterSeq != null) return; // client already holds the team-info state
+    const roster = Array.isArray(session.roster) ? session.roster : [];
+    send({
+      t: 'team-info',
+      mode: 'agent-n2',
+      roster,
+      board: session.boardSnapshot(),
+      events: typeof session.board.uiEventLog === 'function' ? session.board.uiEventLog() : [],
+    });
+    return;
+  }
+  const cl = require('./compare-lanes');
+  const lanes = cl.listLanes(session)
+    .filter((r) => r && r.lane && typeof r.lane.boardSnapshot === 'function');
+  if (!lanes.length) return;
+  if (afterSeq != null) {
+    // Catch-up: ship every ENDED lane's end transition (its live info
+    // frame was already delivered pre-disconnect). Live lanes need
+    // nothing — their info frame predates the disconnect.
+    for (const laneRec of lanes) {
+      if (laneRec.ended) {
+        send({ t: 'state-update', kind: 'team-lane-end', teamLane: true, laneId: laneRec.laneId, task: laneRec.task });
+      }
+    }
+    return;
+  }
+  for (const laneRec of lanes) {
+    send({
+      t: 'state-update',
+      kind: 'team-info',
+      mode: 'agent-n2',
+      teamLane: true,
+      laneId: laneRec.laneId,
+      task: laneRec.task,
+      ended: Boolean(laneRec.ended),
+      roster: Array.isArray(laneRec.roster) ? laneRec.roster : ['worker-A', 'worker-B'],
+      board: laneRec.lane.boardSnapshot(),
+      events: _laneUiEventLog(laneRec),
+    });
+  }
+}
+
+// The lane's board may be dead (TeamSession killed) by the time an ended
+// lane re-announces — its DelmBoard survives on the laneRec and still
+// serves uiEventLog() from the in-memory _log (hydrated from board.jsonl).
+// Guard every hop: a missing board just means an empty feed, never a
+// failed attach.
+function _laneUiEventLog(laneRec) {
+  try {
+    const board = laneRec && laneRec.lane && laneRec.lane.board;
+    if (board && typeof board.uiEventLog === 'function') return board.uiEventLog();
+  } catch {}
+  return [];
+}
+
 function _sendAttachSnapshot(session, ws) {
   if (!ws || ws.readyState !== ws.OPEN) return;
   try {
@@ -1836,11 +2101,38 @@ function _sendAttachSnapshot(session, ws) {
   try {
     ws.send(JSON.stringify({ t: 'mode-snapshot', mode: session._lastMode || 'default' }));
   } catch {}
+  // §5.2: ship the session's EFFECTIVE RLM flag + scope on initial attach
+  // so the 🧠 RLM chip renders on refresh / device switch — the
+  // rlm-mode-changed broadcast only reaches clients attached at toggle
+  // time. Scope ('session' | null) is session-level only (the user-level
+  // switch was removed).
+  try {
+    const recRlm = sessionsMod.getSessionRecord(session.sessionId);
+    if (recRlm) {
+      ws.send(JSON.stringify({
+        t: 'state-update',
+        kind: 'rlm-mode-changed',
+        rlm: typeof sessionsMod.isRlmEffective === 'function' ? sessionsMod.isRlmEffective(recRlm) : recRlm.rlm === true,
+        scope: typeof sessionsMod.getRlmScope === 'function' ? sessionsMod.getRlmScope(recRlm) : undefined,
+      }));
+    }
+  } catch {}
+  // task req c: replay the session's live RLM usage stats on attach so
+  // the 🧠 badge tooltip is populated on refresh / device switch — the
+  // kind:'rlm-stats' broadcast only reaches clients attached at the time
+  // of the rlm_eval / spawn / collect.
+  try {
+    const rlmStats = require('./agents/rlm/stats');
+    ws.send(JSON.stringify({
+      t: 'state-update',
+      kind: 'rlm-stats',
+      stats: rlmStats.getStats(session.sessionId),
+    }));
+  } catch {}
   try {
     const sessionId = session.sessionId;
     const rec = sessionsMod.getSessionRecord(sessionId);
-    if (!rec) return;
-    
+    if (!rec) return;    
     // Broadcast active critic model state on connection
     if (rec.criticModel) {
       ws.send(JSON.stringify({ t: 'state-update', kind: 'critic-model-changed', modelId: rec.criticModel }));
@@ -1919,6 +2211,47 @@ function _sendAttachSnapshot(session, ws) {
   } catch (err) {
     console.error(`[attach-snapshot] runQueue init failed: ${err.message}`);
   }
+  // bug-92: ship the pending-question state on attach the same way, so
+  // the "unanswered questions" strip is correct on the FIRST frame.
+  try {
+    const sessionId = session.sessionId;
+    const rec = sessionsMod.getSessionRecord(sessionId);
+    if (rec) {
+      const pq = require('./pendingQuestions');
+      ws.send(JSON.stringify({ t: 'state-update', kind: 'pending-questions', state: pq.getState(rec) }));
+    }
+  } catch (err) {
+    console.error(`[attach-snapshot] pending-questions init failed: ${err.message}`);
+  }
+  // claude-running: the client rebuilds the status strip purely from the
+  // replayed agent-events; if the replay tail ends on a NON-terminal event
+  // (e.g. assistant_text after an interrupted turn, or a chrome event
+  // further back than the 16 KB replay window), a fresh attach wrongly
+  // shows the Stop button as "running" even though the agent is idle —
+  // "刷新后按钮从没状态变成了stop". Ship the AUTHORITATIVE live-turn state
+  // (a Query stream is live iff `_currentQuery` is set; it is cleared when
+  // the iteration fully drains) so the client can retire a stale running
+  // strip. Sent LAST so the client applies it after the replay frames.
+  // working-status fix (2026-10-23): agent-n2 TeamSessions have no
+  // `_currentQuery` slot (each worker owns its own Query), so the old
+  // `!!session._currentQuery` read reported running=false even while
+  // both workers were iterating — the client's Stop gate
+  // (state.claudeRunning) then dropped every interrupt for a live
+  // team session. Use the same busy contract _handleInterrupt and
+  // GET /sessions use: session.isBusy() when exposed (AgentSession
+  // _iterating / TeamSession roster.some(worker.isBusy)), falling
+  // back to _currentQuery.
+  try {
+    // working-status fix (2026-10-23): the payload is inline so the
+    // derivation sits inside the frame (see the bug-37 contract test:
+    // the window starts at `kind: 'claude-running'`).
+    ws.send(JSON.stringify({
+      t: 'state-update', kind: 'claude-running',
+      running: (typeof session.isBusy === 'function')
+        ? !!session.isBusy()
+        : !!session._currentQuery
+    }));
+  } catch {}
 }
 
 // Read-only share-link attach. Streams chat history + transcript +
@@ -1945,6 +2278,11 @@ function attachViewerWebSocket(session, ws, opts = {}) {
   // batches would start blank — they'd only see events going forward
   // from the moment of attach, not the recent backfill.
   // 2026-05-17 round 5: catch-up mode honored for viewers too.
+  // team-split-view: same reattach handshake as the owner path, and
+  // for the same reason — the team-info must precede the replay
+  // frames or the viewer's worker-tagged events land in the single
+  // stream with the columns left empty.
+  _shipTeamInfoOnAttach(session, ws, sessionId, afterSeq);
   if (afterSeq != null) {
     _shipAgentReplay(session, ws, sessionId, 0, 'catch-up', afterSeq);
     _shipChatHistory(ws, sessionId, 0, 'catch-up', afterSeq);
@@ -2023,13 +2361,15 @@ function attachViewerWebSocket(session, ws, opts = {}) {
     // menus). Logged distinctly so audit trail shows who interrupted.
     if (msg.t === 'interrupt' && user) {
       console.log(`[ws-frame] ${sessionId} t=interrupt user=${user} (viewer)`);
-      if (typeof session.interrupt === 'function') session.interrupt();
-      session.emit('chat', {
-        user: ASSISTANT_USER,
-        text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
-        ts: new Date().toISOString(),
-        meta: { kind: 'interrupt-ack' },
-      });
+      // delm-10 busy gate + run-n2 lane — same as the owner path.
+      if (_handleInterrupt(session, sessionId, `viewer ${user}`)) {
+        _emitAndPersistChat(sessionId, session, {
+          user: ASSISTANT_USER,
+          text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
+          ts: new Date().toISOString(),
+          meta: { kind: 'interrupt-ack' },
+        });
+      }
     }
   }
 
@@ -2065,6 +2405,82 @@ function attachViewerWebSocket(session, ws, opts = {}) {
 //   * Bare digit `1`-`9` while a pendingMenu is open → handleMenuPick
 //     so the SDK promise resolves AND the chat row is stamped.
 //   * EVERYTHING ELSE → session.write(body) so claude consumes it.
+
+// bug-92: record a user's simple question so a failed/dropped turn can't
+// let it go forgotten. Classified at the session.write forward point —
+// by then slash/mention/accept/clarify/login/run-team have all returned,
+// so this is exactly "plain question / instruction → main claude".
+function _trackPendingQuestion(sessionId, session, user, text) {
+  if (!text || !String(text).trim()) return;
+  if (user === ASSISTANT_USER) return;
+  if (_hasRunMarker(text)) return;             // plan-run dispatch, not a question
+  const pq = require('./pendingQuestions');
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  if (!rec) return;
+  const added = pq.addQuestion(rec, String(text).trim(), user);
+  if (!added) return;
+  try { sessionsMod.saveStore(); } catch {}
+  _broadcastPendingQuestions(session, rec);
+}
+
+// Emit the current pending-question state to every attached client via a
+// state-update on the live AgentSession (the WS attach path fans
+// session 'state-update' events out to every connected client).
+function _broadcastPendingQuestions(session, rec) {
+  const pq = require('./pendingQuestions');
+  const state = pq.getState(rec);
+  if (session && typeof session.emit === 'function') {
+    try { session.emit('state-update', { kind: 'pending-questions', state }); } catch {}
+  }
+}
+
+// On a fatal turn, mark the head pending question failed and, if it still
+// has auto-rerun budget, re-arm + re-dispatch it via session.write.
+function _maybeRerunPendingQuestion(sessionId, session) {
+  const pq = require('./pendingQuestions');
+  const rec = sessionsMod.getSessionRecord(sessionId);
+  if (!rec || !session || typeof session.write !== 'function') return;
+  const entry = pq.markFailed(rec);
+  if (!entry) return;
+  if (!pq.canRetry(entry)) {
+    // Budget exhausted — leave it 'failed', surfaced for a manual rerun.
+    try { sessionsMod.saveStore(); } catch {}
+    _broadcastPendingQuestions(session, rec);
+    return;
+  }
+  pq.requeue(rec, entry.qid);
+  try { sessionsMod.saveStore(); } catch {}
+  _broadcastPendingQuestions(session, rec);
+  // Re-dispatch the same question (already persisted to rec.chat at ask
+  // time — no duplicate chat row, just feed the agent again).
+  try {
+    console.log(`[pending-q] ${sessionId} ${entry.qid} rerun attempt ${entry.dispatchCount} (label "${String(entry.text).slice(0, 60)}")`);
+    session.write(entry.text);
+  } catch (err) {
+    console.error(`[pending-q] rerun dispatch failed for ${sessionId}: ${err.message}`);
+  }
+}
+
+// chat-print-persistence fix (2026-11-04): the chat-persistence
+// contract (CLAUDE.md §"Chat persistence & cross-device consistency")
+// requires EVERY row that reaches a live client as a `chat` WS frame
+// to ALSO land in rec.chat — rec.chat is the only record that
+// survives refresh / tab-switch / reconnect / container restart.
+// Several call sites used to emit 'chat' WITHOUT appendChatMessage,
+// so their notes showed live but silently vanished on the next
+// attach (the "partial info lost" report). Central helper: persist
+// first, then broadcast, so every emit is durable by construction.
+// Failure of the persist is logged but never blocks the live emit —
+// same precedence the assistant_text backstop uses.
+function _emitAndPersistChat(sessionId, session, msg) {
+  try {
+    sessionsMod.appendChatMessage(sessionId, msg);
+  } catch (err) {
+    console.error(`[persist-chat] ${sessionId} failed to persist chat row: ${err && err.message ? err.message : err}`);
+  }
+  session.emit('chat', msg);
+}
+
 function handleChatMessage(sessionId, session, user, text, opts = {}) {
   const readOnly = !!opts.readOnly;
   // Phase 9 step 3: guest / share-token viewers can post discussion
@@ -2120,9 +2536,30 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     text,
     ts: new Date().toISOString(),
   };
+  // k8s crash fix (2026-10-23): later code in this function writes
+  // `message.meta.<key>` (fromUserInput stamp below) but `message.meta`
+  // was never initialized for the plain user-row path — the stamp threw
+  // `TypeError: Cannot set properties of undefined (setting
+  // 'fromUserInput')` and killed the whole server process (pod
+  // CrashLoopBackOff on 7.242.106.252). Initialize meta up front so
+  // every later assignment is safe.
+  if (!message.meta) message.meta = {};
+  // Delm n=1 (2026-10-23): input-history provenance fix. Stamp every
+  // row that went through the canonical user-typed path with
+  // meta.fromUserInput:true. The composer's ArrowUp/ArrowDown recall
+  // hydrates ONLY from these rows (see _hydrateChatInputHistory in
+  // web/public/app.js), so rows generated server-side — the run-queue
+  // auto-dispatch ([run:plan#x] [◆ Todo · submitted by @user] bodies
+  // via _advanceRunQueue / _enqueueAndKickIfIdle), the fr-103
+  // login-callback echo, etc. — never surface when the user flips
+  // through their own previously-typed inputs.
+  if (user !== ASSISTANT_USER) message.meta.fromUserInput = true;
   const mentionTarget = _detectMentionTarget(text);
   if (mentionTarget && user !== ASSISTANT_USER) {
-    message.meta = { kind: 'mention', mentionUser: mentionTarget };
+    // Delm n=1: MERGE, not replace — the fromUserInput provenance flag
+    // set above must survive the mention rewrite (a mention is still a
+    // user-typed input and belongs in arrow-key recall).
+    message.meta = Object.assign({ fromUserInput: true }, { kind: 'mention', mentionUser: mentionTarget });
     if (mentionTarget === 'all') message.meta.broadcast = true;
   }
   // r4 (fr-85): clarify tag — the message gets meta.kind='clarify'
@@ -2133,7 +2570,11 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
   // usual session.write path — claude doesn't know it's a "clarify";
   // only the routing of the resulting reply changes.
   if (opts && opts.meta && opts.meta.kind === 'clarify' && user !== ASSISTANT_USER) {
-    message.meta = { kind: 'clarify', selected: String(opts.meta.selected || '') };
+    // Delm n=1: MERGE, not replace — keep the fromUserInput flag even
+    // though the clarify text gets an LLM-facing wrap. The popover
+    // question is still a user-typed input; arrow-key recall should
+    // surface it (text unwrapped below, so no LLM wrap leaks in).
+    message.meta = Object.assign({ fromUserInput: true }, { kind: 'clarify', selected: String(opts.meta.selected || '') });
     // r2: prefer the client-generated questionTs (round-tripped via
     // opts.meta.questionTs) so the clarify-reply WS frame carries
     // the SAME ts the client's popover is awaiting. Fallback to
@@ -2154,6 +2595,12 @@ function handleChatMessage(sessionId, session, user, text, opts = {}) {
     // nudge, so the wording is now a hard MAX and the server also
     // truncates the reply to ≤ 3 sentences in agent-session.js
     // (_capClarifyReply) as a guaranteed backstop.
+    // Delm n=1: keep the RAW user question as the recall text — the
+    // LLM-facing wrap goes to a separate field so meta.fromUserInput
+    // rows hydrate arrow-key recall with exactly what the user typed
+    // (see _hydrateChatInputHistory in web/public/app.js — it prefers
+    // recallText over text when present).
+    message.meta.recallText = text;
     message.text = `[Clarification request — answer in 2-3 sentences MAX. Be terse: no preamble, no restating the question, no bullet lists, no headings. Plain prose only.] ${text}`;
   }
   // [run:<type>#<id>] marker: the chat-pane's ▶ Run button on a
@@ -2546,7 +2993,7 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
   // body text the user wants claude to act on. Forward as-is.
   const body = text;
   if (!session.alive) {
-    session.emit('chat', {
+    _emitAndPersistChat(sessionId, session, {
       user: ASSISTANT_USER,
       text: '(this Claude session has exited — reopen the session to continue)',
       ts: new Date().toISOString(),
@@ -2557,7 +3004,7 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
   if (!input) return;
 
   if (input.startsWith('/')) {
-    session.emit('chat', {
+    _emitAndPersistChat(sessionId, session, {
       user: ASSISTANT_USER,
       text: '(unknown chat command `/' + input.split(/\s+/)[0].slice(1) + '` — `/help` lists what\'s available)',
       ts: new Date().toISOString(),
@@ -2572,18 +3019,27 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
   const key = input.toLowerCase();
   if (key === 'esc' || key === 'escape' || key === 'ctrl-c' || key === '^c') {
     console.log(`[chat→agent] ${user}: <interrupt:${input}>`);
-    if (typeof session.interrupt === 'function') session.interrupt();
-    session.emit('chat', {
-      user: ASSISTANT_USER,
-      text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
-      ts: new Date().toISOString(),
-    });
+    // delm-10 busy gate + run-n2 lane — see _handleInterrupt.
+    if (_handleInterrupt(session, sessionId, `chat-esc ${user}`)) {
+      _emitAndPersistChat(sessionId, session, {
+        user: ASSISTANT_USER,
+        text: '(interrupt sent — the in-flight Claude turn was aborted. Type your next message to continue from where the conversation left off.)',
+        ts: new Date().toISOString(),
+        meta: { kind: 'interrupt-ack' },
+      });
+    } else {
+      _emitAndPersistChat(sessionId, session, {
+        user: ASSISTANT_USER,
+        text: '(nothing to stop — this session\'s Claude is not currently working)',
+        ts: new Date().toISOString(),
+      });
+    }
     return;
   }
   const noopKeys = new Set(['enter', 'return', 'space', 'tab', 'shift-tab', 'shift+tab']);
   if (noopKeys.has(key)) {
     console.log(`[chat→agent] ${user}: <key-noop:${input}> (SDK has no terminal-key equivalent)`);
-    session.emit('chat', {
+    _emitAndPersistChat(sessionId, session, {
       user: ASSISTANT_USER,
       text: `(\`${input}\` has no meaning in an agent-mode session — claude consumes messages, not keystrokes. Type a question / instruction instead, or \`esc\` to interrupt.)`,
       ts: new Date().toISOString(),
@@ -2613,7 +3069,7 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
       const totalPending = session.pendingMenus.size;
       console.log(`[chat→agent] ${user}: menu pick ${asDigit} (chat shorthand, hash=${hash.slice(-12)}, oldestOf=${totalPending})`);
       if (totalPending > 1) {
-        session.emit('chat', {
+        _emitAndPersistChat(sessionId, session, {
           user: ASSISTANT_USER,
           text: `(picked option ${asDigit} for the OLDEST of ${totalPending} pending menus. To target a specific menu, click its button directly — the bare-digit shortcut always picks the head of the queue.)`,
           ts: new Date().toISOString(),
@@ -2624,7 +3080,25 @@ function handleChatPostfixes(sessionId, session, user, text, message) {
     }
   }
 
+  // Delm n=2: a run dispatch on a TeamSession fans out to BOTH workers via
+  // dispatchTask — they split the plan item on the board sub-queue. Real-
+  // time chat still goes to worker-A only via session.write() below; the
+  // team's team-complete event (wired in _wireTeamRunQueue) is the run's
+  // terminal signal, not this write. Re-derive the run marker here because
+  // handleChatPostfixes is a separate function from handleChatMessage
+  // (where `runMatch` is computed).
+  const runDispatchMatch = text.match(/\[run:(plan|test|arch|td|fr|bug)#([A-Za-z0-9_-]+)\]/);
+  if (session && session.mode === 'agent-n2' && runDispatchMatch && user !== ASSISTANT_USER) {
+    console.log(`[team-run] ${sessionId}: ${user} run dispatch ${runDispatchMatch[2]} → worker-A + worker-B`);
+    session.dispatchTask(input);
+    return;
+  }
+
   // Normal forward — pushes into the SDK streaming-input queue.
+  // bug-92: track the user's simple question BEFORE dispatch so a
+  // failed / dropped turn can't silently lose it. Skipped for run
+  // markers + agent-internal rows (see _trackPendingQuestion guard).
+  try { _trackPendingQuestion(sessionId, session, user, text); } catch {}
   console.log(`[chat→agent] ${user}: ${input.substring(0, 80)}`);
   session.write(input);
 }
@@ -2638,8 +3112,11 @@ async function runAssistant(sessionId, session, lastMessage) {
   // safe default.
   const scrollback = '';
   const cwd = sessionsMod.loadStore().sessions[sessionId]?.absCwd || null;
+  // Task B: pass the session's active gateway profile so the /btw assistant
+  // uses the same custom model selected via /model gw:.
+  const rec = sessionsMod.getSessionRecord(sessionId);
 
-  const answer = await askAssistant({ cwd, chatHistory, scrollback, lastMessage });
+  const answer = await askAssistant({ cwd, chatHistory, scrollback, lastMessage, gw: { user: rec && rec.user, activeGw: rec && rec.activeGw } });
   const reply = {
     user: ASSISTANT_USER,
     text: answer || '(no response)',
@@ -3248,6 +3725,10 @@ module.exports = {
   attachViewerWebSocket,
   handleChatMessage,
   _registerExternalSession,
+  // Delm n=2: wires a TeamSession's run-queue terminal handling, invoked
+  // by sessions.getOrCreateTeamSession. Exposed for the team-runqueue
+  // regression test.
+  _wireTeamRunQueue,
   // bug-82: exported for the regression test that wires multiple stub
   // "devices" to a session and asserts the chat-accept handler
   // broadcasts critique-resolved to all of them.
@@ -3291,8 +3772,18 @@ module.exports = {
   // "Ask Critic on a skipped verdict must not re-fire stale prior
   // stage" repro.
   _broadcastSyntheticSkipVerdict,
+  // chat-print-persistence fix (2026-11-04): exposed for the
+  // regression test that asserts every live chat row also lands in
+  // rec.chat (survives refresh / reconnect — the "partial info lost"
+  // report).
+  _emitAndPersistChat,
   // Re-export menu helpers so callers that historically grabbed them off
   // ptyMod continue to find them.
   handleSessionMenu: menuMod.handleSessionMenu,
   broadcastMenuToChat: menuMod.broadcastMenuToChat,
+  // team-split-view: reattach handshake exposed for the regression test
+  // (test/team-split-view.test.js) — locks "live lane re-announces,
+  // ended lane ships team-lane-end, catch-up skips, plain session
+  // ships nothing".
+  __test: { _shipTeamInfoOnAttach },
 };

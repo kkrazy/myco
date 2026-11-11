@@ -65,6 +65,12 @@ function ensureSessionLists(rec) {
 // We default unmatched tools to 'ask' (not auto-deny) so the user can
 // actually decide per-dialog instead of having to /allow-then-retry
 // every novel tool Claude wants to run.
+//
+// MYCO_ALLOW_ALL=1 (state-dir .env or docker run -e) short-circuits the
+// whole allow/deny evaluation to 'allow' — for containerised deploys
+// where the operator wants zero permission prompts. An explicit deny
+// rule still fires first so /deny remains a working kill-switch even in
+// this mode.
 function decide(rec, tool, input) {
   if (!rec || !tool) return 'ask';
   ensureSessionLists(rec);
@@ -73,6 +79,7 @@ function decide(rec, tool, input) {
   for (const p of rec.denyList) {
     if (matchesPattern(p, tool, input)) return 'deny';
   }
+  if (String(process.env.MYCO_ALLOW_ALL || '').trim() === '1') return 'allow';
   for (const p of rec.allowList) {
     if (matchesPattern(p, tool, input)) return 'allow';
   }

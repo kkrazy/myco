@@ -1,0 +1,14 @@
+{
+  "name": "myco-tb4-bench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Terminal-Bench 4.0 harness that reuses myco's own tool-capable single-agent and run-n2 engines (server/src/*.js) behind blocking POST endpoints; verification runs each task's official TB4 verifier",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.142",
+    "zod": "^4.0.0"
+  }
+}

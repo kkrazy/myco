@@ -343,8 +343,10 @@ t('static guard: sign-out moved INTO the config modal (handled by a button insid
   // from 4000 → 8000 chars: fr-87 r2's admin merge inserted a new
   // section (~5KB of form HTML) between #config-pats-section and
   // #config-account-section. The sign-out button now lives further
-  // past the modal-open tag.
-  const window = html.slice(modalStart, modalStart + 8000);
+  // past the modal-open tag. Bumped 8000 → 12000 again for the per-user
+  // model-gateway section (fr: model gateway UI) which inserts another
+  // ~2KB between PATs and the account/sign-out section.
+  const window = html.slice(modalStart, modalStart + 12000);
   assert.ok(/sign.?out|signout|log.?out|logout/i.test(window),
     '#config-modal must contain a sign-out button/link — moved out of the legacy confirm() prompt');
 });

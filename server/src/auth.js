@@ -79,9 +79,17 @@ function _ensureLoaded() {
 //   - $STATE_DIR/allowed-github-users.txt exists (PAT login available; no
 //     OAuth App registration needed)
 //   - MYCO_TEST_OAUTH_BYPASS is set (test seam)
+//   - MYCO_AUTH_REQUIRED is enabled (force login — lets a deployment with
+//     no GitHub OAuth and no allowlist show the login screen anyway, e.g.
+//     a CodeHub-token-only deployment). The env value must treat '0'/'false'
+//     as OFF — process.env values are strings and '0' is truthy in JS, so a
+//     bare truthiness check would wrongly leave the gate off when the
+//     operator intended to disable it.
 // When none of these are set we fall back to the open "single-user default"
 // mode used in local dev — no login required.
 function isAuthRequired() {
+  const authReq = process.env.MYCO_AUTH_REQUIRED && !['0', 'false'].includes(String(process.env.MYCO_AUTH_REQUIRED).toLowerCase());
+  if (authReq) return true;
   if (process.env.MYCO_TEST_OAUTH_BYPASS) return true;
   if (process.env.MYCO_GH_CLIENT_ID) return true;
   try { return fs.existsSync(ALLOWLIST_FILE); } catch { return false; }
@@ -205,11 +213,38 @@ function loadAllowlist() {
   return out;
 }
 
+// Admission check. When the allowlist is disabled via
+// MYCO_DISABLE_ALLOWLIST (or no file exists → open mode) any sanitized
+// login passes; enforcement decisions stay centralized in
+// isAllowlistConfigured() so both gates (PAT + OAuth callback) behave
+// identically.
 function isAllowed(login) {
   const safe = sanitize(login);
   if (!safe) return false;
+  if (isAllowlistDisabled()) return true;
   return loadAllowlist().has(safe);
 }
+
+// True iff an explicit invitation allowlist file exists on disk. The
+// login gate only enforces isAllowed() when an allowlist is actually
+// configured — in "open" mode (auth required via MYCO_AUTH_REQUIRED but
+// no allowed-github-users.txt), any valid provider login is admitted.
+//
+// MYCO_DISABLE_ALLOWLIST=1 temporarily switches enforcement OFF while
+// leaving the file on disk untouched — a deployment can flip back to
+// invitation mode by clearing the flag (or setting it to 0/false),
+// with no re-seeding needed. Same '0'/'false'-is-OFF string semantics
+// as MYCO_AUTH_REQUIRED above.
+function isAllowlistDisabled() {
+  return Boolean(process.env.MYCO_DISABLE_ALLOWLIST) &&
+    !['0', 'false'].includes(String(process.env.MYCO_DISABLE_ALLOWLIST).toLowerCase());
+}
+
+function isAllowlistConfigured() {
+  if (isAllowlistDisabled()) return false;
+  try { return fs.existsSync(ALLOWLIST_FILE); } catch { return false; }
+}
+
 
 // ── share tokens ────────────────────────────────────────────────────────────
 // Share tokens ARE the session ID — links like /?s=<sessionId> survive
@@ -269,6 +304,8 @@ module.exports = {
   revokeSession,
   loadAllowlist,
   isAllowed,
+  isAllowlistConfigured,
+  isAllowlistDisabled,
   createShareToken,
   shareTokenInfo,
   revokeShareTokensForSession,

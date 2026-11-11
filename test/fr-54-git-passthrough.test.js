@@ -107,10 +107,13 @@ t('handleGit gates on owner/admin (matches /queue precedent)', () => {
     'handleGit must call sessionsMod.isOwnerOrAdmin to gate guests');
 });
 
-t('handleGit runs git in the session workspace (rec.absCwd)', () => {
+t('handleGit runs git in the session workspace (ctx.absCwd → rec.absCwd fallback)', () => {
   const body = _handleGitBody();
-  assert.ok(/cwd:\s*rec\.absCwd/.test(body),
-    'must spawn git with cwd: rec.absCwd so it runs in the session workspace');
+  // bug-88 (extending fr-106): cwd prefers ctx.absCwd (the main-project
+  // dir the dispatcher resolves) and falls back to rec.absCwd (the
+  // session workspace) for direct callers. Both anchors must be present.
+  assert.ok(/cwd:\s*\(ctx && ctx\.absCwd\) \|\| rec\.absCwd/.test(body),
+    'must spawn git with cwd: (ctx && ctx.absCwd) || rec.absCwd — project dir when designated, session workspace otherwise (bug-88 + fr-106)');
 });
 
 t('handleGit uses execFile (no shell interpolation)', () => {

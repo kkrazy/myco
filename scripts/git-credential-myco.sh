@@ -15,8 +15,8 @@
 # Post-fix this helper is registered via `git config --global
 # credential.helper /path/to/git-credential-myco.sh` (done at container
 # boot in docker/docker-entrypoint.sh). Every HTTPS git operation
-# against github.com / gitee.com then transparently picks up the
-# stored token.
+# against github.com / gitee.com / codehub-dg-g.huawei.com then
+# transparently picks up the stored token.
 #
 # Git's credential-fill protocol:
 #   git invokes us with the action as $1 ("get" | "store" | "erase").
@@ -33,8 +33,22 @@
 #   workspace, so this is correct for any git invocation that
 #   originates from a session.
 #
+#   bug-92 (reaped-session fallback): the cwd-derived user is a
+#   BEST-EFFORT signal, not a hard gate. The session reaper can delete
+#   a workspace while its git operation is still in flight, in which
+#   case $(pwd) no longer matches /wks/<user>/ and the old code emit()
+#   nothing → git fails with "could not read Username" in ~0.2s even
+#   though a valid codehub token IS on file. So when cwd fails to
+#   resolve a user, we FALL BACK to scanning every entry in the token
+#   store for a credential that matches this (provider, path). If all
+#   candidates collapse to a single distinct token we emit it; if there
+#   are multiple distinct tokens that is genuinely ambiguous (which
+#   identity?), so we emit nothing rather than guess.
+#
 # Outside a session cwd (e.g. user shelled into the container manually
-# and `cd /tmp; git push`), the helper emits nothing → safe fallthrough.
+# and `cd /tmp; git push`), the helper emits nothing → safe fallthrough
+# (unless a store-wide unique match exists, which restoring the
+# credential was the whole point of).
 
 set -eu
 
@@ -87,10 +101,11 @@ const stdinPath = process.env.MYCO_STDIN_PATH;
 function emit() { /* nothing */ }
 
 // 1. Derive myco-user from cwd: /wks/<user>/...
-//    Any other shape → emit nothing.
+//    Optional — the session reaper can remove the workspace mid-flight,
+//    in which case cwd does NOT match and we fall back to a store-wide
+//    scan below (bug-92) instead of giving up.
 const cwdMatch = String(myCwd || "").match(/\/wks\/([^/]+)\//);
-if (!cwdMatch) { emit(); process.exit(0); }
-const mycoUser = cwdMatch[1];
+const mycoUser = cwdMatch ? cwdMatch[1] : null;
 
 // 2. Parse git stdin (key=value lines).
 let raw;
@@ -102,85 +117,100 @@ for (const line of raw.split("\n")) {
   ctx[line.slice(0, eq)] = line.slice(eq + 1);
 }
 
-// 3. Map host → provider. github.com → github; gitee.com → gitee.
+// 3. Map host → provider. github.com → github; gitee.com → gitee;
+//    codehub-dg-g.huawei.com → codehub (Huawei intranet GitLab-family).
 //    Anything else → emit nothing (provider not supported by myco).
 const host = String(ctx.host || "").toLowerCase();
 let provider = null;
 if (host === "github.com" || host.endsWith(".github.com")) provider = "github";
 else if (host === "gitee.com" || host.endsWith(".gitee.com")) provider = "gitee";
+else if (host === "codehub-dg-g.huawei.com" || host.endsWith(".codehub-dg-g.huawei.com")) provider = "codehub";
 if (!provider) { emit(); process.exit(0); }
 
 // 4. Load the token store. Tolerate missing file (no /setpat yet).
 let store;
 try { store = JSON.parse(fs.readFileSync(tokensFile, "utf8")); }
 catch { emit(); process.exit(0); }
-const userEntry = store && store[mycoUser];
-if (!userEntry || typeof userEntry !== "object") { emit(); process.exit(0); }
+if (!store || typeof store !== "object") { emit(); process.exit(0); }
 
 // 5. Parse path → owner/repo for the per-repo lookup. Git sends
 //    path=owner/repo.git OR path=owner/repo. Strip .git suffix.
 //    If path missing / malformed → fall back to user-level only.
-let token = null;
 const cleanPath = String(ctx.path || "").replace(/\.git$/, "").replace(/^\/+/, "");
 const parts = cleanPath.split("/").filter(Boolean);
-if (parts.length >= 2) {
-  const owner = parts[0];
-  const repo = parts[1];
-  // Per-repo PAT first (matches git-tokens.js getToken precedence).
-  const repoKey = provider + "/" + owner + "/" + repo;
-  if (userEntry[repoKey]) token = userEntry[repoKey];
-}
-// User-level fallback (bare provider key).
-if (!token && userEntry[provider]) token = userEntry[provider];
+const hasPath = parts.length >= 2;
 
-if (!token) { emit(); process.exit(0); }
+// Resolve one (token, username) pair for a single store entry, for the
+// current (provider, path) context. Mirrors git-tokens.js precedence:
+// per-repo PAT first, then the user-level provider key. The emitted
+// username depends on provider — github always uses the sentinel
+// "x-access-token"; gitee and codehub validate the login against the
+// PAT owning account, so we resolve a stored login and fall back to the
+// user key last. Returns null when this entry holds no usable token.
+function resolveForUser(userKey, entry) {
+  if (!entry || typeof entry !== "object") return null;
+  let token = null;
+  if (hasPath) {
+    const repoKey = provider + "/" + parts[0] + "/" + parts[1];
+    if (entry[repoKey]) token = entry[repoKey];
+  }
+  if (!token && entry[provider]) token = entry[provider];
+  if (!token) return null;
 
-// 6. Resolve the emitted username per provider.
-//
-//    bug-91 fix: pre-fix the helper unconditionally wrote
-//    "username=x-access-token" for EVERY provider. That works for
-//    github (which ignores the username and accepts x-access-token as
-//    the sentinel), but gitee validates the username against the
-//    tokens owning account and rejects mismatches with
-//    "The token username invalid" -> 403.
-//
-//    Post-fix branching:
-//      github -> "x-access-token" (unchanged; the GitHub convention)
-//      gitee  -> per-repo login override -> user-level login override -> mycoUser
-//
-//    The overrides live at:
-//      store[user]["gitee/<owner>/<repo>.login"]  (per-repo)
-//      store[user].giteeLogin                     (user-level)
-//    Populated by the /setgiteelogin slash command; mirrors
-//    getGiteeLogin() in server/src/git-tokens.js.
-let username;
-if (provider === "github") {
-  username = "x-access-token";
-} else if (provider === "gitee") {
-  let login = null;
-  // Per-repo login override (if we resolved owner + repo above).
-  if (parts.length >= 2) {
-    const perRepoLoginKey = "gitee/" + parts[0] + "/" + parts[1] + ".login";
-    if (typeof userEntry[perRepoLoginKey] === "string" && userEntry[perRepoLoginKey]) {
-      login = userEntry[perRepoLoginKey];
+  let username;
+  if (provider === "github") {
+    username = "x-access-token";
+  } else if (provider === "gitee") {
+    let login = null;
+    if (hasPath) {
+      const k = "gitee/" + parts[0] + "/" + parts[1] + ".login";
+      if (typeof entry[k] === "string" && entry[k]) login = entry[k];
     }
+    if (!login && typeof entry.giteeLogin === "string" && entry.giteeLogin) login = entry.giteeLogin;
+    if (!login) login = userKey; // final fallback: the owning myco account
+    username = login;
+  } else if (provider === "codehub") {
+    // codehub (Huawei GitLab-family) validates the credential username
+    // against the PAT owning account (like gitee). Resolve a stored
+    // login override (per-repo, then user-level), else fall back to the
+    // owning account key. In single-user mode codehubLogin carries the
+    // real account (e.g. s00791175) and the myco-user is just "default".
+    let login = null;
+    if (hasPath) {
+      const k = "codehub/" + parts[0] + "/" + parts[1] + ".login";
+      if (typeof entry[k] === "string" && entry[k]) login = entry[k];
+    }
+    if (!login && typeof entry.codehubLogin === "string" && entry.codehubLogin) login = entry.codehubLogin;
+    if (!login) login = userKey;
+    username = login;
+  } else {
+    // Unknown provider (guard only — step 3 already returned for these).
+    return null;
   }
-  // User-level login override.
-  if (!login && typeof userEntry.giteeLogin === "string" && userEntry.giteeLogin) {
-    login = userEntry.giteeLogin;
-  }
-  // Final fallback: the myco-user. Matches the common case where the
-  // operator uses the same login on gitee as their myco account.
-  if (!login) login = mycoUser;
-  username = login;
-} else {
-  // Unknown provider (host mapped above but code path here should not
-  // fire — the provider gate at step 3 already returned). Defensive.
-  emit(); process.exit(0);
+  return { token: token, username: username };
 }
 
-process.stdout.write("username=" + username + "\n");
-process.stdout.write("password=" + token + "\n");
+// 6. Pick the credential source.
+//    Normal path: cwd resolved a myco-user → use exactly that entry.
+//    Fallback (bug-92): cwd gone/reaped → scan every user; emit only
+//    if every matching credential collapses to ONE distinct token.
+let picked = null;
+if (mycoUser) {
+  picked = resolveForUser(mycoUser, store[mycoUser]);
+} else {
+  const seen = new Set();
+  const candidates = [];
+  for (const userKey of Object.keys(store)) {
+    const r = resolveForUser(userKey, store[userKey]);
+    if (r && !seen.has(r.token)) { seen.add(r.token); candidates.push(r); }
+  }
+  if (candidates.length === 1) picked = candidates[0];
+}
+
+if (!picked) { emit(); process.exit(0); }
+
+process.stdout.write("username=" + picked.username + "\n");
+process.stdout.write("password=" + picked.token + "\n");
 ' 2>/dev/null || true
 
 # Always exit 0. Git treats non-zero as "this helper crashed, skip its

@@ -102,6 +102,46 @@ Static SPA — Express serves with `Cache-Control: no-store`, so a tab refresh a
 
 The integration contract is intentionally narrow so adding a third backend in the future is a self-contained adapter, not a fork.
 
+### Team lanes and N-path exploration
+
+`TeamSession` (`server/src/team-session.js`) wraps N `AgentSession`s
+around ONE shared `DelmBoard` — the only coordination channel between
+workers. Slash-command "lanes" (`/run-n2`, `/run-experts`,
+`/run-explore`, `/compare`) spin these up as isolated shadow sessions
+bridged into the main chat pane (`compare-lanes.js`); the main session's
+mode is never mutated.
+
+`/run-explore` (`prompts-explore.js`) targets hard algorithm-design
+tasks: instead of splitting one approach's implementation across two
+workers, N explorers (`path-1`..`path-N`) each deep-dive ONE candidate
+solution path:
+
+```mermaid
+flowchart TB
+  subgraph lane [Explore Lane — isolated shadow lane]
+    lead["path-1 (seeder)<br/>analyzes task → publishes up to N directions"]
+    p2["path-2 … path-N<br/>each claims one path, deep-dives"]
+    board[("DelmBoard<br/>queue / FACT / FAIL<br/>the only coordination channel")]
+  end
+  hs[("Shared Continual-Harness store<br/>explore-task-&lt;sha1(task)&gt;<br/>rlm.addPrompt self-authored rules")]
+  lead --> board
+  p2 --> board
+  lead -. rules composed back in on respawn .- hs
+  p2 -. rules composed back in on respawn .- hs
+```
+
+Decentralization is the same Delm board protocol (queue policy, claim
+semantics, FAIL/FACT notes reused verbatim from `prompts-n2-shared.js`).
+Self-evolution rides on the RLM Continual Harness with a **shared
+per-task store key** (`explore-task-<sha1-12 of task>`): rules one
+explorer authors via `rlm.addPrompt` are composed into every worker's
+prompt on respawn and into every FUTURE run of the same task text.
+Explore workers are forced onto the RLM engine (the harness channel only
+exists there); non-explore lanes keep their existing prompt/engine
+wiring byte-identical. A per-path evidence report (done summaries +
+FAIL notes + per-path journal metrics) is written to
+`_myco_/explore/` at run end.
+
 ---
 
 ## State

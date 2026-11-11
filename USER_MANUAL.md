@@ -112,6 +112,70 @@ chat history is the same.
 **Owner / admin**: `/admin <login>` · `/git <args>` · `/queue`
 `/qcancel` `/qclear` `/qresume` · `/setpat <token>`
 
+**Owner / admin**: `/run-n2 <task>` · `/compare <task>` ·
+`/run-explore [N] <task>` ·
+`/rlm` · `/rlm session on|off` · `/rlm <task>`
+
+## N-path exploration — `/run-explore`
+
+For hard algorithm-design problems where two workers (run-n2) both
+converge on the same approach. `/run-explore [N] <task>` (default N=4,
+2..8) spins up N parallel explorers — `path-1` … `path-N` — each
+**deep-diving one candidate solution path** (one algorithm family /
+representation / architecture direction):
+
+- **Decentralized** — coordination happens only through the shared board
+  (same Delm protocol as run-n2): `path-1` seeds up to N candidate
+  directions as open items; every explorer claims one and goes deep.
+  A dead end is closed with a `done` + FAIL note carrying the
+  measurements, never abandoned silently; peers absorb each other's
+  FACT notes.
+- **Self-evolving** — explorers run the RLM engine with a **shared
+  per-task Continual-Harness store**: rules an explorer adds via
+  `rlm.addPrompt` accumulate across all workers *and across future
+  runs of the same task text*, so the team gets better every run.
+- **Converges** — once every path is done, the first explorer to notice
+  reserves the integration item and writes a SOLUTION comparison with
+  the numbers.
+
+Progress rolls into the chat pane (per-path claim state visible in the
+board pane); a per-path evidence report lands in `_myco_/explore/`
+when the run finishes. Stop button and multi-lane boards work the same
+as `/run-n2`.
+
+## RLM mode — the switch
+
+RLM (Recursive Language Model) upgrades the agent from
+"window + compaction" to a **REPL + variables** engine and adds a
+**Continual Harness**. It is a session-level switch:
+
+- **Session level** — `/rlm session on` (legacy `/rlm on`): only THIS
+  session runs in RLM mode. `/rlm session off` reverts. Takes effect on
+  the next respawn; `/run-n2` / `/compare` / `/rlm <task>` lanes pick
+  it up immediately. (The former user-level scope, `/rlm user on|off`,
+  was removed — each session opts in individually.)
+  immediately.
+
+`/rlm` alone shows the current status and which scope drives it.
+
+What RLM mode actually turns on (single-agent chats AND the two
+`/run-n2` workers alike):
+
+1. **REPL + variables** — a persistent kernel (`rlm_eval(code)` MCP
+   tool) keeps your working context as VARIABLES (`state.task/done/
+   next/blockers`) that survive turns, compaction and restarts
+   (snapshot/restore). The agent holds variables, not a fat transcript.
+   Programmatic sub-agents: `rlm.spawn()` + `rlm.collect()` fold back
+   only the answers, never the sub-transcripts.
+2. **Continual Harness** — the framework is runtime-CRUD: the agent
+   adds durable self-authored rules to its own prompt with
+   `rlm.addPrompt(rule, evidence)` (persisted under
+   `_myco_/rlm/<session>/harness/`, composed back in on every respawn).
+   `rlm.listPrompts()` reads them back.
+
+When the switch is **off**, sessions keep the plain prompts and no
+kernel — the old behaviour is fully preserved.
+
 ## Troubleshooting
 
 | Symptom | Fix |

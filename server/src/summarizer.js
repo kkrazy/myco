@@ -59,6 +59,10 @@ async function generateAndStore(sessionId, rec) {
     userMessage: excerpt,
     maxTokens: 60,
     timeoutMs: 10000,
+    // Task B: when the host has no ANTHROPIC_API_KEY, fall back to the
+    // local claude (session's active gateway profile if one is active) so
+    // summaries keep generating. No-op when a key is configured.
+    localFallback: { user: rec.user, activeGw: rec.activeGw, cwd: rec.absCwd },
   });
   if (!summary) return;
 

@@ -1,0 +1,103 @@
+{{- $envMode := include "myco.envMode" . }}
+{{- if eq $envMode "none" }}
+{{- fail "envFile 或 envFromSecret 必须提供一个（--set-file envFile=<.env 路径> 最省事）" }}
+{{- end }}
+# myco Deployment —— 单副本，固定调度到 {{ .Values.storage.node }}，hostNetwork 占宿主 80。
+# 与 Docker 部署（docs/deploy/docker.md §4.2）的映射：
+#   hostAliases      <- --add-host（内网网关 6 条映射）
+#   envFrom Secret   <- -e NO_PROXY/... + state/.env
+#   volumes (Local)  <- -v state:/data home:/root wks:/wks
+#   hostNetwork      <- -p 80:80 -p 443:443
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  replicas: 1                    # 状态目录单写方设计，禁止多副本
+  strategy:
+    type: Recreate               # Local PV 单节点，RollingUpdate 会卡在挂载等待
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      # master 默认带 control-plane:NoSchedule 污点，而本 chart 的设计就是
+      # 固定调度 master(252)——必须容忍该污点才能落地。
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet   # hostNetwork 下仍用集群 DNS
+      {{- end }}
+      hostAliases:
+        {{- toYaml .Values.hostAliases | nindent 8 }}
+      containers:
+        - name: myco
+          image: {{ include "myco.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ if eq $envMode "envFile" }}{{ .Release.Name }}-env{{ else }}{{ .Values.envFromSecret }}{{ end }}
+          env:
+            # 镜像默认值显式声明（Dockerfile ENV 同款）
+            - name: HOST
+              value: "127.0.0.1"
+            - name: PORT
+              value: "3000"
+            - name: SHELL
+              value: "/bin/bash"
+          ports:
+            - name: http
+              containerPort: 80     # Caddy（hostNetwork 下即宿主端口）
+            - name: app
+              containerPort: 3000   # node 主进程（Caddy 反代目标）
+          # 探活走 Caddy→node 反代链路；/auth/check 无需登录凭据，
+          # 200 即证明 node + Caddy 都活着。
+          livenessProbe:
+            httpGet:
+              path: /auth/check
+              port: 80
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /auth/check
+              port: 80
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data           # state：sessions.json, .env, git-tokens.json…
+            - name: home
+              mountPath: /root           # .claude 配置, .gitconfig
+            - name: wks
+              mountPath: /wks            # 会话工作区
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-data
+        - name: home
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-home
+        - name: wks
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-wks
+        - name: caddyfile
+          configMap:
+            name: {{ .Release.Name }}-caddyfile

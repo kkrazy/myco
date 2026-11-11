@@ -358,7 +358,7 @@ t('/setpat: errors when session cwd has no github/gitee remote', async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'myco-td4-setpat-nogit-'));
   const ctx = makeCtx({ args: 'plausible-token-abc123', absCwd: root });
   await sc.dispatch(ctx, '/setpat plausible-token-abc123');
-  assert.ok(/no github\.com or gitee\.com remote/i.test(ctx._replies[0]), `got: ${ctx._replies[0]}`);
+  assert.ok(/no github\.com \/ gitee\.com \/ codehub-dg-g\.huawei\.com remote/i.test(ctx._replies[0]), `got: ${ctx._replies[0]}`);
 });
 
 t('/setpat: validates token, stores per-repo, confirms login in reply', async () => {
